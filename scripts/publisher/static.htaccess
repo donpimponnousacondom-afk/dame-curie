@@ -1,0 +1,11 @@
+Options -Indexes -ExecCGI -Includes
+DirectoryIndex index.html
+<FilesMatch ".*">
+    SetHandler default-handler
+</FilesMatch>
+<FilesMatch "\.(php[0-9]*|phtml|phar|cgi|fcgi|py|pl|rb|sh|shtml|shtm|asp|aspx)$">
+    ForceType text/plain
+</FilesMatch>
+<FilesMatch "^\.curie-publisher-">
+    Require all denied
+</FilesMatch>

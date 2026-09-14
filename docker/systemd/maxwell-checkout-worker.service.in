@@ -1,0 +1,26 @@
+[Unit]
+Description=Maxwell @INSTANCE@ checkout snapshot reader
+CollectMode=inactive-or-failed
+
+[Service]
+Type=exec
+User=@CHECKOUT_OWNER@
+ExecStart=/usr/local/bin/python3.14 -I "@READER@" "@CHECKOUT_ROOT@"
+WorkingDirectory=/
+StandardInput=socket
+StandardOutput=inherit
+StandardError=journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateNetwork=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+RuntimeMaxSec=15s
+TimeoutStopSec=2s
+KillMode=control-group
+MemoryMax=128M
+TasksMax=16

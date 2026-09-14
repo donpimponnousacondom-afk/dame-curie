@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maxwell</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0c;--card:#0f0f12;--bdr:#1c1c22;--bdr2:#2a2a32;
+  --fg:#e4e4e8;--fg2:#8a8a96;--fg3:#4a4a56;--accent:#e4e4e8;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--fg);font-family:Inter,system-ui,sans-serif;line-height:1.6;min-height:100vh;-webkit-font-smoothing:antialiased}
+::selection{background:var(--fg);color:var(--bg)}
+a{color:inherit;text-decoration:none}
+.page{max-width:680px;margin:0 auto;padding:140px 24px 80px}
+
+/* hero */
+.tag{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fg3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:20px}
+h1{font-family:'JetBrains Mono',monospace;font-size:clamp(40px,9vw,64px);font-weight:700;letter-spacing:-.04em;line-height:1;margin-bottom:28px}
+.lead{font-size:17px;color:var(--fg2);max-width:540px;margin-bottom:36px}
+.lead em{color:var(--fg);font-style:normal;font-weight:500}
+.links{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px}
+.links a{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;border:1px solid var(--bdr);border-radius:8px;font-size:13px;font-weight:500;color:var(--fg);transition:border-color .2s,background .2s}
+.links a:hover{border-color:var(--bdr2);background:var(--card)}
+.links a.accent{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.links a.accent:hover{background:#fff}
+
+/* sections */
+.sep{height:1px;background:var(--bdr);margin:72px 0}
+h2{font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--fg3);margin-bottom:24px;font-weight:600}
+
+/* features */
+ul{list-style:none}
+li{padding:18px 0;border-bottom:1px solid var(--bdr);display:grid;grid-template-columns:120px 1fr;gap:24px;align-items:baseline;font-size:14px}
+li:last-child{border-bottom:0}
+li strong{color:var(--fg);font-weight:600;font-family:'JetBrains Mono',monospace;font-size:13px}
+li span{color:var(--fg2)}
+
+/* commands */
+pre{background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:22px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.8;color:var(--fg2)}
+pre .cmd{color:var(--fg);font-weight:600}
+pre .cm{color:var(--fg3)}
+
+/* stack */
+.stack{font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.9;color:var(--fg2)}
+.stack .c{color:var(--fg3);display:block;margin-top:10px}
+.stack .c:first-child{margin-top:0}
+
+/* warning */
+.warn{border:1px solid var(--bdr);border-radius:10px;padding:16px 20px;font-size:13px;color:var(--fg2);line-height:1.6}
+.warn strong{color:var(--fg)}
+
+footer{margin-top:64px;padding-top:32px;border-top:1px solid var(--bdr);font-size:12px;color:var(--fg3);display:flex;gap:14px;align-items:center}
+footer a{transition:color .2s}
+footer a:hover{color:var(--fg)}
+
+@media(max-width:600px){
+  .page{padding:96px 18px 48px}
+  li{grid-template-columns:1fr;gap:6px}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="tag">the world's buggiest bot of today</div>
+<h1>maxwell</h1>
+<p class="lead">A selfbot that talks, thinks, and remembers. <em>Not an assistant — just someone in the chat who happens to have access to an LLM, a shell, and zero self-preservation instincts. Somehow it still works. Most of the time.</em></p>
+<div class="links">
+  <a class="accent" href="https://github.com/Z3ki/Maxwell-bot" target="_blank">source code</a>
+  <a href="/admin/">dashboard</a>
+</div>
+
+<div class="sep"></div>
+
+<h2>what it does</h2>
+<ul>
+  <li><strong>talks</strong><span>text, images, audio, video, files — responds like a person.</span></li>
+  <li><strong>remembers</strong><span>short and long-term memory (incl. fresh AI/tech news from feeds).</span></li>
+  <li><strong>tools</strong><span>image gen, web search, shell, sites, and more. Auto-looks up current events when needed.</span></li>
+  <li><strong>voice</strong><span>joins calls, listens, replies with TTS.</span></li>
+</ul>
+
+<div class="sep"></div>
+
+<h2>commands</h2>
+<pre><span class="cmd">,help</span>          show all commands
+<span class="cmd">,plugin</span>        manage plugins (list/enable/disable)
+<span class="cmd">,stop</span>          cancel response
+<span class="cmd">,vc join</span>       connect to voice
+<span class="cmd">,context add</span>   store a fact
+<span class="cmd">,prompt</span>        set server prompt
+<span class="cmd">,drug [min]</span>    chaos mode</pre>
+
+<div class="sep"></div>
+
+<h2>stack</h2>
+<div class="stack">
+  <span class="c"># runtime</span>
+  python 3.14 &middot; discord.py-self &middot; aiohttp
+  <span class="c"># ai</span>
+  openai-compatible API &middot; openrouter &middot; riva TTS
+  <span class="c"># infra</span>
+  docker &middot; pm2 &middot; caddy &middot; ffmpeg
+</div>
+
+<div class="sep"></div>
+
+<div class="warn">
+  <strong>this is a selfbot.</strong> discord.py-self and self_bot=True. this violates discord's terms of service. your account can get banned. you've been warned.
+</div>
+
+<footer>
+  <a href="https://github.com/Z3ki/Maxwell-bot" target="_blank">github</a>
+  <span>&middot;</span>
+  <a href="/admin/">dashboard</a>
+</footer>
+
+</div>
+</body>
+</html>

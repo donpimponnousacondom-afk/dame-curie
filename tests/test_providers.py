@@ -1,0 +1,1440 @@
+import asyncio
+import copy
+import json
+from unittest.mock import AsyncMock
+
+import pytest
+
+from providers import (
+    OllamaProvider,
+    ProviderUsageExhaustedError,
+    USAGE_EXHAUSTED_MESSAGE,
+    _is_content_policy_block,
+    _is_policy_block_text,
+)
+
+
+@pytest.fixture(autouse=True)
+def no_provider_retry_wait(monkeypatch):
+    monkeypatch.setattr("providers.asyncio.sleep", AsyncMock())
+
+
+class _FakeAsyncStream:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+
+    async def iter_any(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _sse_chunks_for(body):
+    if not isinstance(body, dict):
+        return []
+    choices = body.get("choices") or []
+    if not choices:
+        return []
+    message = choices[0].get("message") or {}
+    delta = {"role": message.get("role", "assistant")}
+    if "content" in message:
+        delta["content"] = message.get("content") or ""
+    if message.get("reasoning_content"):
+        delta["reasoning_content"] = message["reasoning_content"]
+    if message.get("tool_calls"):
+        delta["tool_calls"] = [
+            {"index": i, **tc} for i, tc in enumerate(message["tool_calls"])
+        ]
+    frame = {"choices": [{"index": 0, "delta": delta, "finish_reason": "stop"}]}
+    return [f"data: {json.dumps(frame)}\n\ndata: [DONE]\n\n".encode("utf-8")]
+
+
+class FakeResponse:
+    status = 200
+    headers = {}
+
+    def __init__(self):
+        self.content = _FakeAsyncStream(_sse_chunks_for(self._json_body()))
+
+    def _json_body(self):
+        return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self, *, content_type=None):
+        return self._json_body()
+
+    async def text(self):
+        return ""
+
+
+class FakeNoneJsonResponse(FakeResponse):
+    """Returns None from json() — simulates a malformed/empty 200 response."""
+
+    def _json_body(self):
+        return None
+
+
+class FakeToolCallResponse(FakeResponse):
+    def _json_body(self):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{"id": "1"}],
+                    }
+                }
+            ]
+        }
+
+
+class FakeReasoningOnlyResponse(FakeResponse):
+    def _json_body(self):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_content": "pong",
+                    }
+                }
+            ]
+        }
+
+
+class FakeEmptyResponse(FakeResponse):
+    """HTTP 200 with a valid assistant envelope but no usable output."""
+
+    def _json_body(self):
+        return {"choices": [{"message": {"role": "assistant", "content": ""}}]}
+
+
+class FakeErrorResponse(FakeResponse):
+    def __init__(self, status, text):
+        self.status = status
+        self._text = text
+        self.content = _FakeAsyncStream([])
+
+    async def text(self):
+        return self._text
+
+
+class FakeSession:
+    def __init__(self, response=None):
+        self.payloads = []
+        self.urls = []
+        self.closed = False
+        self.response = response or FakeResponse()
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.urls.append(url)
+        self.payloads.append(copy.deepcopy(json))
+        return self.response
+
+
+class FakeSequenceSession(FakeSession):
+    def __init__(self, responses):
+        super().__init__()
+        self.responses = list(responses)
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.urls.append(url)
+        self.payloads.append(copy.deepcopy(json))
+        return self.responses.pop(0)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "inclusionai/ling-3.0-flash",
+        "inclusionai/ling-3.0-flash-fin:free",
+        "inclusionai/ling-3.0-flash-sante:free",
+    ],
+)
+def test_openrouter_native_reasoning_and_sampling_defaults(model):
+    provider = OllamaProvider("https://openrouter.ai/api/v1", model, 8192, 0.6)
+    messages = [{"role": "user", "content": "hi"}]
+
+    payload = provider._request_payload(provider._endpoints[0], messages)
+
+    assert payload == {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "max_tokens": 8192,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+
+def test_openrouter_aux_override_does_not_mutate_main(caplog):
+    provider = OllamaProvider(
+        "https://openrouter.ai/api/v1", "inclusionai/ling-3.0-flash-fin:free",
+        8192, 0.6, top_p=0.9, top_k=30,
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        messages = [{"role": "user", "content": "hi"}]
+        await provider.generate_response(
+            messages, temperature=0.2, disable_reasoning=True,
+        )
+        await provider.generate_chat_completion(messages)
+
+    with caplog.at_level("INFO", logger="providers"):
+        asyncio.run(run())
+
+    aux, main = session.payloads
+    assert aux["reasoning"] == {"enabled": False}
+    assert aux["temperature"] == 0.2
+    assert main["temperature"] == 0.6
+    assert "reasoning" not in main
+    for payload in session.payloads:
+        assert payload["top_p"] == 0.9
+        assert payload["top_k"] == 30
+        assert "reasoning_effort" not in payload
+        assert "thinking" not in payload
+    assert "reasoning_disabled=True" in caplog.text
+    assert "reasoning_disabled=False" in caplog.text
+
+
+def test_openrouter_reasoning_override_restores_native_default():
+    provider = OllamaProvider(
+        "https://openrouter.ai/api/v1", "inclusionai/ling-3.0-flash-fin:free",
+        8192, 0.6, disable_reasoning=True,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+    endpoint = provider._endpoints[0]
+
+    disabled = provider._request_payload(endpoint, messages)
+    native = provider._request_payload(endpoint, messages, disable_reasoning=False)
+
+    assert disabled["reasoning"] == {"enabled": False}
+    assert not {"reasoning", "reasoning_effort", "thinking"}.intersection(native)
+    assert endpoint.disable_reasoning is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://localhost:11434/v1", "https://openrouter.ai.example.test/v1"],
+)
+def test_non_openrouter_reasoning_disable_protocol_is_preserved(base_url):
+    provider = OllamaProvider(base_url, "model", 8192, 0.6, disable_reasoning=True)
+    payload = provider._request_payload(provider._endpoints[0], [])
+
+    assert payload["reasoning_effort"] == "none"
+    assert payload["reasoning"] == {"effort": "none"}
+    assert payload["thinking"] == {"type": "disabled", "budget_tokens": 0}
+
+
+def test_reasoning_protocol_uses_selected_endpoint():
+    provider = OllamaProvider(
+        "http://localhost:11434/v1", "local-model", 8192, 0.6,
+        disable_reasoning=True,
+        fallback_base_url="https://openrouter.ai/api/v1",
+        fallback_model="inclusionai/ling-3.0-flash-fin:free",
+        fallback_disable_reasoning=True,
+    )
+    primary, fallback = provider._endpoints
+
+    local = provider._request_payload(primary, [])
+    routed = provider._request_payload(fallback, [])
+
+    assert local["reasoning_effort"] == "none"
+    assert routed["reasoning"] == {"enabled": False}
+    assert "reasoning_effort" not in routed
+    assert "thinking" not in routed
+
+
+def test_generate_chat_completion_model_override():
+    provider = OllamaProvider("http://example.test", "base-model", 10, 0.5)
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}],
+            model="rem-model",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "ltm_list",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.payloads[0]["model"] == "rem-model"
+    assert (
+        session.payloads[0]["max_tokens"] == 10
+    )  # configured max_tokens always included
+    assert session.payloads[0]["tools"][0]["function"]["name"] == "ltm_list"
+
+
+def test_generate_chat_completion_usage_exhausted_error():
+    provider = OllamaProvider("http://example.test", "base-model", 10, 0.5)
+    provider.available = True
+    session = FakeSession(
+        FakeErrorResponse(
+            429,
+            '{"error":{"code":"model_cooldown","message":"All credentials are cooling down"}}',
+        )
+    )
+    provider._session = session
+
+    async def run():
+        with pytest.raises(ProviderUsageExhaustedError) as exc_info:
+            await provider.generate_chat_completion([{"role": "user", "content": "hi"}])
+        assert exc_info.value.user_message == USAGE_EXHAUSTED_MESSAGE
+
+    asyncio.run(run())
+    assert len(session.payloads) == 1
+
+
+def test_generate_chat_completion_falls_back_to_secondary_provider():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fallback-key",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(503, "down"),
+            FakeErrorResponse(503, "down"),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+    ]
+    assert session.payloads[0]["model"] == "primary-model"
+    assert session.payloads[1]["model"] == "primary-model"
+    assert session.payloads[2]["model"] == "fallback-model"
+    assert (
+        session.payloads[0]["max_tokens"] == 10
+    )  # configured max_tokens always included
+    assert session.payloads[2]["max_tokens"] == 10
+    assert session.payloads[2]["reasoning"] == {"effort": "none"}
+
+
+def test_generate_chat_completion_retries_primary_before_fallback():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fallback-key",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(503, "down"),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://primary.test/v1/chat/completions",
+    ]
+    assert session.payloads[0]["model"] == "primary-model"
+    assert session.payloads[1]["model"] == "primary-model"
+
+
+def test_empty_200_gets_non_streaming_recovery_within_total_budget():
+    """Empty-content recovery uses remaining attempts, never extra requests."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        empty_response_retries=1,
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeEmptyResponse(),
+            FakeEmptyResponse(),
+            FakeEmptyResponse(),
+            FakeEmptyResponse(),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        return await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+
+    message = asyncio.run(run())
+    assert message["content"] == "ok"
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+        "http://primary.test/v1/chat/completions",
+    ]
+    assert session.payloads[4]["stream"] is False
+
+
+def test_prefer_fallback_routes_first_request_to_fallback():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_response(
+            [{"role": "user", "content": "hi"}],
+            prefer_fallback=True,
+        )
+        assert message == "ok"
+
+    asyncio.run(run())
+    assert session.urls == ["http://fallback.test/v1/chat/completions"]
+    assert session.payloads[0]["model"] == "fallback-model"
+
+
+def test_prefer_fallback_fails_over_to_primary():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(404, '{"error":{"message":"fallback unavailable"}}'),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}],
+            fast_fallback=True,
+            prefer_fallback=True,
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == [
+        "http://fallback.test/v1/chat/completions",
+        "http://primary.test/v1/chat/completions",
+    ]
+    assert session.payloads[0]["model"] == "fallback-model"
+    assert session.payloads[1]["model"] == "primary-model"
+
+
+def test_429_rate_limit_skips_to_fallback_without_doomed_retry():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fallback-key",
+    )
+    provider.available = True
+    # A transient retry waits even when routing to a healthy fallback.
+    provider._cooldown_seconds = 60
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                429,
+                '{"error":{"code":429,"message":"xiaomi/mimo-v2.5 is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    # Only one primary call (the 429), then fallback after transient backoff.
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+    ]
+    assert session.payloads[0]["model"] == "primary-model"
+    assert session.payloads[1]["model"] == "fallback-model"
+    # Primary is now cooling: a follow-up call must skip straight to fallback.
+    session2 = FakeSequenceSession([FakeResponse()])
+    provider._session = session2
+
+    async def run2():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run2())
+    assert session2.urls == ["http://fallback.test/v1/chat/completions"]
+
+
+def test_append_tool_call_arguments_accepts_dict():
+    """GLM-style providers send arguments as an object, not a JSON string."""
+    from providers import _append_tool_call_arguments, _extract_partial_reasoning
+
+    slot = {"function": {"name": "send_message", "arguments": ""}}
+    _append_tool_call_arguments(
+        slot,
+        {"reasoning": "replying", "content": "hello"},
+    )
+    args = slot["function"]["arguments"]
+    assert isinstance(args, str)
+    parsed = json.loads(args)
+    assert parsed["content"] == "hello"
+    assert _extract_partial_reasoning(args) == "replying"
+    assert _extract_partial_reasoning(parsed) == "replying"
+
+
+def test_append_tool_call_arguments_concatenates_strings():
+    from providers import _append_tool_call_arguments
+
+    slot = {"function": {"name": "send_message", "arguments": ""}}
+    _append_tool_call_arguments(slot, '{"reasoning": "')
+    _append_tool_call_arguments(slot, 'hi", "content": "yo"}')
+    assert slot["function"]["arguments"] == '{"reasoning": "hi", "content": "yo"}'
+
+
+def test_read_sse_native_tool_call_with_object_arguments():
+    """A single SSE delta with arguments as a dict must not TypeError."""
+    from providers import _read_sse_response
+
+    frame = {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "send_message",
+                                "arguments": {
+                                    "reasoning": "answering",
+                                    "content": "hi",
+                                },
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+    class Resp:
+        content = _FakeAsyncStream(
+            [f"data: {json.dumps(frame)}\n\ndata: [DONE]\n\n".encode("utf-8")]
+        )
+
+    async def run():
+        return await _read_sse_response(Resp())
+
+    merged = asyncio.run(run())
+    calls = merged["choices"][0]["message"]["tool_calls"]
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "send_message"
+    parsed = json.loads(calls[0]["function"]["arguments"])
+    assert parsed["content"] == "hi"
+
+
+def test_generate_response_returns_native_tool_calls():
+    """generate_response now supports native tool_calls instead of rejecting them."""
+    provider = OllamaProvider("http://example.test", "base-model", 10, 0.5)
+    provider.available = True
+    provider._session = FakeSession(FakeToolCallResponse())
+
+    async def run():
+        content = await provider.generate_response([{"role": "user", "content": "hi"}])
+        # Content may be empty when the model only emits tool_calls
+        assert content == ""
+        assert len(provider._last_tool_calls) == 1
+        assert provider._last_tool_calls[0]["id"] == "1"
+
+    asyncio.run(run())
+
+
+def test_context_overflow_clamp_survives_retry():
+    provider = OllamaProvider(
+        "http://example.test", "base-model", 12000, 0.5, retry_attempts=2
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                400,
+                "maximum context length is 10000 tokens. you requested about 13000 tokens",
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def no_wait_retry(*args, **kwargs):
+        return True
+
+    provider._retry_after_attempt = no_wait_retry
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.payloads[0]["max_tokens"] == 12000
+    assert session.payloads[1]["max_tokens"] == 8488
+
+
+def test_none_json_body_retries_and_falls_back():
+    """A 200 response with a None/missing JSON body should not crash with
+    AttributeError — it should retry/fallback like any other failed response."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fallback-key",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeNoneJsonResponse(),  # primary attempt 1 — None body
+            FakeNoneJsonResponse(),  # primary attempt 2 — None body
+            FakeResponse(),  # fallback attempt 3 — success
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+    ]
+
+
+def test_degraded_endpoint_skips_to_fallback_without_retry():
+    """A 400 'DEGRADED function cannot be invoked' should cool the endpoint and
+    fall back immediately — no wasted retries on the same degraded endpoint."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fallback-key",
+    )
+    provider.available = True
+    provider._cooldown_seconds = 60
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                400,
+                '{"status":400,"title":"Bad Request","detail":"Function id \'abc\': DEGRADED function cannot be invoked"}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    # Only ONE primary call (the DEGRADED 400) then immediate fallback — no
+    # second doomed primary retry, no 2s wait.
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+    ]
+    assert session.payloads[0]["model"] == "primary-model"
+    assert session.payloads[1]["model"] == "fallback-model"
+    # Primary is now cooling: a follow-up call must skip straight to fallback.
+    session2 = FakeSequenceSession([FakeResponse()])
+    provider._session = session2
+
+    async def run2():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run2())
+    assert session2.urls == ["http://fallback.test/v1/chat/completions"]
+
+
+def test_vision_model_used_for_images():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "deepseek-v4-flash",
+        10,
+        0.5,
+        api_key="pk",
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fk",
+        vision_model="mimo-v2.5",
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[{"b64": "abc", "mime_type": "image/png"}],
+            model="deepseek-v4-flash",
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
+    assert session.payloads[0]["model"] == "mimo-v2.5"
+    content = session.payloads[0]["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert any(part.get("type") == "image_url" for part in content)
+
+
+def test_kimi_k27_vision_enables_thinking():
+    """kimi-k2.7-code rejects reasoning_effort=none and otherwise streams
+    reasoning-only with empty content. Vision must pin thinking=enabled."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "glm-5.2",
+        10,
+        0.7,
+        vision_model="kimi-k2.7-code",
+        vision_disable_reasoning=False,
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[{"b64": "abc", "mime_type": "image/png"}],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    payload = session.payloads[0]
+    assert payload["model"] == "kimi-k2.7-code"
+    assert payload.get("thinking") == {"type": "enabled"}
+    assert "reasoning_effort" not in payload
+
+
+def test_vision_model_not_used_for_text():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "deepseek-v4-flash",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fk",
+        vision_model="mimo-v2.5",
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.payloads[0]["model"] == "deepseek-v4-flash"
+
+
+def test_image_unsupported_skips_text_only_primary():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "deepseek-v4-flash",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fk",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                400,
+                '{"error":{"message":"unknown variant `image_url`, expected `text`"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[{"b64": "abc", "mime_type": "image/png"}],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+    ]
+    assert session.payloads[0]["model"] == "deepseek-v4-flash"
+    assert session.payloads[1]["model"] == "fallback-model"
+
+
+def test_reasoning_only_response_is_not_treated_as_empty():
+    provider = OllamaProvider("http://example.test", "deepseek-v4-flash", 10, 0.5)
+    provider.available = True
+    session = FakeSession(FakeReasoningOnlyResponse())
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "pong"
+
+    asyncio.run(run())
+    assert len(session.payloads) == 1
+
+
+def test_reasoning_only_not_promoted_for_non_deepseek_models():
+    # Regression: commit 010b0db promoted reasoning_content->content for ALL
+    # models when content was null. For a cut-off/interrupted reasoning model
+    # (grok, ollama-native, minimax-m3) that sent the chain-of-thought to
+    # Discord as the user-visible reply. Non-deepseek models must NOT have
+    # reasoning promoted — it falls through to the empty-response path instead
+    # (leaking the scratchpad beats no answer at all, never sending it).
+    provider = OllamaProvider(
+        "http://example.test",
+        "grok-4.6",
+        10,
+        0.5,
+        empty_response_retries=0,
+    )
+    provider.available = True
+    session = FakeSession(FakeReasoningOnlyResponse())
+    provider._session = session
+    provider.retry_attempts = 1  # no retries: assert the single-shot behavior
+
+    async def run():
+        # Non-deepseek reasoning-only with no tool_calls must NOT be promoted
+        # to content. It falls through to the empty-response path and raises.
+        with pytest.raises(RuntimeError):
+            await provider.generate_chat_completion([{"role": "user", "content": "hi"}])
+
+    asyncio.run(run())
+    assert len(session.payloads) == 1
+
+
+def test_403_region_error_skips_to_fallback_without_retry():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "deepseek-v4-flash",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        fallback_api_key="fk",
+    )
+    provider.available = True
+    provider._cooldown_seconds = 60
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                403,
+                '{"type":"error","error":{"type":"RegionError","message":"China opt in"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.urls == [
+        "http://primary.test/v1/chat/completions",
+        "http://fallback.test/v1/chat/completions",
+    ]
+    assert session.payloads[1]["model"] == "fallback-model"
+
+
+def test_video_parts_are_not_attached():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "deepseek-v4-flash",
+        10,
+        0.5,
+        vision_model="mimo-v2.5",
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[
+                {"b64": "vid", "mime_type": "video/mp4"},
+                {"b64": "img", "mime_type": "image/png"},
+            ],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    content = session.payloads[0]["messages"][0]["content"]
+    types = [p.get("type") for p in content if isinstance(p, dict)]
+    assert "image_url" in types
+    assert "video_url" not in types
+    assert session.payloads[0]["model"] == "mimo-v2.5"
+
+
+# ---- deterministic 4xx handling: failover, media fallback, temperature ----
+
+
+def test_openrouter_image_unsupported_routes_to_another_endpoint():
+    """404 'No endpoints found that support image input' must not kill the turn."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "text-only-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                404,
+                '{"error":{"message":"No endpoints found that support image input","code":404}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[{"b64": "img", "mime_type": "image/png"}],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert len(session.payloads) == 2
+    # Second attempt went to a different endpoint, still carrying the image.
+    assert session.urls[0] != session.urls[1]
+    parts = session.payloads[1]["messages"][0]["content"]
+    assert any(p.get("type") == "image_url" for p in parts if isinstance(p, dict))
+
+
+def test_media_unsupported_everywhere_falls_back_to_text_only():
+    """When no endpoint accepts the image, answer the text instead of failing."""
+    provider = OllamaProvider("http://primary.test/v1", "text-only-model", 10, 0.5)
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                404,
+                '{"error":{"message":"No endpoints found that support image input"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "what is this"}],
+            media=[{"b64": "img", "mime_type": "image/png"}],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert len(session.payloads) == 2
+    retried = session.payloads[1]["messages"][0]["content"]
+    assert isinstance(retried, str)
+    assert "what is this" in retried
+    assert "attachment(s) omitted" in retried
+
+
+def test_unhandled_4xx_fails_over_instead_of_raising():
+    """404 model-unavailable on primary used to kill the turn outright."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "dead-slug",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                404,
+                '{"error":{"message":"This model is unavailable for free.","code":404}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert len(session.payloads) == 2
+    assert session.payloads[1]["model"] == "fallback-model"
+
+
+def test_unhandled_4xx_single_endpoint_still_raises():
+    """With nowhere to fail over to, the error must surface."""
+    provider = OllamaProvider("http://primary.test/v1", "dead-slug", 10, 0.5)
+    provider.available = True
+    session = FakeSession(FakeErrorResponse(404, '{"error":{"message":"gone"}}'))
+    provider._session = session
+
+    async def run():
+        with pytest.raises(RuntimeError, match="Provider API error: 404"):
+            await provider.generate_chat_completion([{"role": "user", "content": "hi"}])
+
+    asyncio.run(run())
+    assert len(session.payloads) == 1
+
+
+def test_temperature_constraint_is_learned_and_resent():
+    """'only 0.6 is allowed' must resend at 0.6, not burn retries."""
+    provider = OllamaProvider("http://primary.test/v1", "picky-model", 10, 0.9)
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                400,
+                '{"error":{"message":"Upstream request failed: [invalid_request_error] '
+                'invalid temperature: only 0.6 is allowed for this model"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    assert session.payloads[0]["temperature"] == 0.9
+    assert session.payloads[1]["temperature"] == 0.6
+    # Learned, so the next call starts at the accepted value.
+    assert provider._endpoint_temperatures["primary"] == 0.6
+
+
+def test_media_incapable_endpoint_is_remembered_across_calls():
+    """A text-only fallback shouldn't be re-offered images on every turn."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="text-only-fallback",
+        vision_base_url="http://vision.test/v1",
+        vision_model="vision-model",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                404,
+                '{"error":{"message":"No endpoints found that support image input"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+    # Pretend the vision endpoint is the one that answered second.
+    provider._media_incapable.add("fallback")
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[{"b64": "img", "mime_type": "image/png"}],
+        )
+        assert message["content"] == "ok"
+
+    asyncio.run(run())
+    # Never routed the image to the known text-only fallback.
+    assert all("fallback.test" not in url for url in session.urls)
+
+
+def test_media_incapable_is_learned_from_a_404():
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="text-only-fallback",
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                404,
+                '{"error":{"message":"No endpoints found that support image input"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        await provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}],
+            media=[{"b64": "img", "mime_type": "image/png"}],
+        )
+
+    asyncio.run(run())
+    assert "primary" in provider._media_incapable
+
+
+@pytest.mark.parametrize("attempts", [1, 2])
+def test_failover_respects_total_attempt_budget(attempts):
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        retry_attempts=attempts,
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                404,
+                '{"error":{"message":"This model is unavailable for free."}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert message["content"] == "ok"
+
+    if attempts == 1:
+        with pytest.raises(RuntimeError, match="Provider API error: 404"):
+            asyncio.run(run())
+    else:
+        asyncio.run(run())
+        assert "fallback.test" in session.urls[1]
+    assert len(session.urls) == attempts
+
+
+@pytest.mark.parametrize("attempts", [1, 2])
+def test_media_strip_retry_respects_total_attempt_budget(attempts):
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        retry_attempts=attempts,
+    )
+    provider.available = True
+    session = FakeSequenceSession(
+        [
+            FakeErrorResponse(
+                400,
+                '{"error":{"message":"unknown variant `image_url`, expected `text`"}}',
+            ),
+            FakeResponse(),
+        ]
+    )
+    provider._session = session
+
+    async def run():
+        message = await provider.generate_chat_completion(
+            [{"role": "user", "content": "what is this"}],
+            media=[{"b64": "img", "mime_type": "image/png"}],
+        )
+        assert message["content"] == "ok"
+
+    if attempts == 1:
+        with pytest.raises(RuntimeError, match="Provider API error: 400"):
+            asyncio.run(run())
+    else:
+        asyncio.run(run())
+        retried = session.payloads[1]["messages"][-1]["content"]
+        assert isinstance(retried, str)
+        assert "attachment(s) omitted" in retried
+    assert len(session.payloads) == attempts
+
+
+def test_retry_loop_cannot_spin_forever_on_endless_deterministic_400s():
+    """The while loop must still terminate when every reply is a fresh 400."""
+    provider = OllamaProvider(
+        "http://primary.test/v1",
+        "primary-model",
+        10,
+        0.5,
+        fallback_base_url="http://fallback.test/v1",
+        fallback_model="fallback-model",
+        retry_attempts=3,
+    )
+    provider.available = True
+
+    class EndlessErrorSession(FakeSession):
+        def post(self, url, json=None, timeout=None, headers=None):
+            self.urls.append(url)
+            self.payloads.append(copy.deepcopy(json))
+            return FakeErrorResponse(400, '{"error":{"message":"nope"}}')
+
+    session = EndlessErrorSession()
+    provider._session = session
+
+    async def run():
+        with pytest.raises(RuntimeError):
+            await provider.generate_chat_completion([{"role": "user", "content": "hi"}])
+
+    asyncio.run(run())
+    assert len(session.urls) <= 3 + 2 * len(provider._endpoints) + 2
+
+
+GEMINI_PROMPT_BLOCK = (
+    "The prompt could not be submitted. The prompt contains sensitive words that "
+    "violate Google's (https://policies.google.com/terms/generative-ai/use-policy). "
+    "Try rephrasing the prompt. If you think this was an error, "
+    "(https://ai.google.dev/gemini-api/docs/troubleshooting)."
+)
+
+
+def test_policy_block_text_detected_and_normal_replies_are_not():
+    """Gemini hands the prompt block back as a 200 body; Maxwell relayed it."""
+    assert _is_policy_block_text(GEMINI_PROMPT_BLOCK)
+    assert _is_policy_block_text("the prompt could not be submitted")
+    # Ordinary replies, including plain model refusals, must not trip it.
+    assert not _is_policy_block_text("yo whats good")
+    assert not _is_policy_block_text("I cannot fulfill this request.")
+    assert not _is_policy_block_text("")
+
+
+def test_content_policy_http_error_detected_without_false_positives():
+    assert _is_content_policy_block(400, GEMINI_PROMPT_BLOCK)
+    assert _is_content_policy_block(400, '{"blockReason":"PROHIBITED_CONTENT"}')
+    # Adjacent 400s that have their own handlers must not be swallowed here.
+    assert not _is_content_policy_block(400, "maximum context length is 8192 tokens")
+    assert not _is_content_policy_block(400, "DEGRADED function cannot be invoked")
+    assert not _is_content_policy_block(400, "unknown variant `image_url`")
+    assert not _is_content_policy_block(429, GEMINI_PROMPT_BLOCK)
+
+
+def test_policy_block_fails_over_once_and_never_returns_the_notice():
+    """One shot at the blocked model, then the fallback answers.
+
+    Regression: the notice was posted to Discord verbatim, and the blocked
+    endpoint was retried instead of being handed straight to the fallback.
+    """
+    provider = OllamaProvider(
+        base_url="http://primary.test",
+        model="gemini-3.7-flash-low",
+        max_tokens=256,
+        temperature=0.7,
+        fallback_base_url="http://fallback.test",
+        fallback_model="grok-4.6",
+        retry_attempts=3,
+    )
+    provider.available = True
+
+    calls = []
+
+    class _BlockedResponse(FakeResponse):
+        def _json_body(self):
+            return {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": GEMINI_PROMPT_BLOCK,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+    class _AnswerResponse(FakeResponse):
+        def _json_body(self):
+            return {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "real answer"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+    class PolicyBlockSession(FakeSession):
+        def post(self, url, json=None, timeout=None, headers=None):
+            calls.append(url)
+            self.urls.append(url)
+            self.payloads.append(copy.deepcopy(json))
+            return _BlockedResponse() if "primary.test" in url else _AnswerResponse()
+
+    provider._session = PolicyBlockSession()
+
+    async def run():
+        return await provider.generate_chat_completion(
+            [{"role": "user", "content": "something spicy"}]
+        )
+
+    message = asyncio.run(run())
+
+    assert message["content"] == "real answer"
+    assert not _is_policy_block_text(message["content"])
+    assert sum("primary.test" in u for u in calls) == 1, calls
+    assert sum("fallback.test" in u for u in calls) == 1, calls
+
+
+def test_audio_attaches_as_input_audio_when_enabled():
+    provider = OllamaProvider(
+        "http://example.test", "omni-model", 10, 0.5, enable_audio_input=True
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        await provider.generate_chat_completion(
+            [{"role": "user", "content": "[User attached media]"}],
+            media=[{"b64": "AAA", "mime_type": "audio/mpeg"}],
+        )
+
+    asyncio.run(run())
+    parts = session.payloads[0]["messages"][0]["content"]
+    audio = [p for p in parts if isinstance(p, dict) and p.get("type") == "input_audio"]
+    assert audio == [
+        {"type": "input_audio", "input_audio": {"data": "AAA", "format": "mp3"}}
+    ]
+
+
+def test_audio_is_not_attached_when_disabled():
+    provider = OllamaProvider(
+        "http://example.test", "text-model", 10, 0.5, enable_audio_input=False
+    )
+    provider.available = True
+    session = FakeSession()
+    provider._session = session
+
+    async def run():
+        await provider.generate_chat_completion(
+            [{"role": "user", "content": "listen to this"}],
+            media=[{"b64": "AAA", "mime_type": "audio/mpeg"}],
+        )
+
+    asyncio.run(run())
+    content = session.payloads[0]["messages"][0]["content"]
+    assert content == "listen to this"

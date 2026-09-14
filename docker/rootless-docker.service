@@ -1,0 +1,25 @@
+[Unit]
+Description=Private rootless Docker engine for Maxwell
+Documentation=https://docs.docker.com/engine/security/rootless/
+After=network-online.target
+StartLimitBurst=3
+StartLimitIntervalSec=60s
+
+[Service]
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+ExecStart=/usr/share/docker.io/contrib/dockerd-rootless.sh --host=unix://%t/docker.sock
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutStartSec=0
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+Type=notify
+NotifyAccess=all
+KillMode=mixed
+
+[Install]
+WantedBy=default.target

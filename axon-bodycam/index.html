@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Axon Bodycam POV Generator</title>
+<style>
+  :root {
+    --axon-green: #00e676;
+    --axon-dark: #0a0e0a;
+    --panel-bg: rgba(10,14,10,0.92);
+    --accent: #00e676;
+    --warn: #ff3d00;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #050805;
+    color: #c8e6c9;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 20px;
+    background: var(--panel-bg);
+    border-bottom: 1px solid #1b5e20;
+    z-index: 10;
+    flex-shrink: 0;
+  }
+  .logo {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--axon-green);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+  .logo span { color: #fff; }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #ff3d00;
+    animation: pulse-dot 1s infinite;
+  }
+  .status-dot.live { background: var(--axon-green); }
+  @keyframes pulse-dot { 50% { opacity:0.4; } }
+  .rec-btn {
+    background: var(--warn);
+    color: #fff;
+    border: none;
+    padding: 6px 18px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 3px;
+    transition: background 0.2s;
+  }
+  .rec-btn:hover { background: #d50000; }
+  .rec-btn.recording { background: #ff3d00; animation: blink-rec 0.6s infinite; }
+  @keyframes blink-rec { 50% { opacity:0.5; } }
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
+  .viewfinder {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: #000;
+    overflow: hidden;
+  }
+  .camera-frame {
+    width: 82vmin;
+    height: 62vmin;
+    max-width: 1200px;
+    max-height: 900px;
+    position: relative;
+    border: 3px solid #1b5e20;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,230,118,0.08), inset 0 0 60px rgba(0,0,0,0.8);
+  }
+  .camera-frame canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: block;
+  }
+  #sceneCanvas { z-index: 1; }
+  #noiseCanvas { z-index: 2; pointer-events: none; mix-blend-mode: overlay; opacity: 0.35; }
+  #vignetteCanvas { z-index: 3; pointer-events: none; mix-blend-mode: multiply; }
+  #flareCanvas { z-index: 4; pointer-events: none; mix-blend-mode: screen; }
+  .rec-indicator {
+    position: absolute;
+    top: 12px; left: 12px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: #fff;
+    display: none;
+  }
+  .rec-indicator.active { display: flex; }
+  .rec-indicator .dot {
+    width: 10px; height: 10px;
+    background: #ff3d00;
+    border-radius: 50%;
+    animation: blink-rec 0.6s infinite;
+  }
+  .timestamp {
+    position: absolute;
+    bottom: 10px; left: 12px;
+    z-index: 5;
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    letter-spacing: 1px;
+  }
+  .side-panel {
+    width: 280px;
+    background: var(--panel-bg);
+    border-left: 1px solid #1b5e20;
+    padding: 16px;
+    overflow-y: auto;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  .panel-title {
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--axon-green);
+    margin-bottom: 12px;
+    border-bottom: 1px solid #1b5e20;
+    padding-bottom: 6px;
+  }
+  .control-group {
+    margin-bottom: 14px;
+  }
+  .control-group label {
+    display: block;
+    font-size: 11px;
+    color: #81c784;
+    margin-bottom: 4px;
+    letter-spacing: 1px;
+  }
+  .control-group input[type="range"] {
+    width: 100%;
+    accent-color: var(--axon-green);
+    cursor: pointer;
+  }
+  .control-group .val {
+    font-size: 11px;
+    color: #a5d6a7;
+    float: right;
+  }
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .btn {
+    background: #1b5e20;
+    color: #c8e6c9;
+    border: 1px solid #2e7d32;
+    padding: 6px 12px;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 3px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: background 0.2s;
+  }
+  .btn:hover { background: #2e7d32; }
+  .btn.active { background: var(--axon-green); color: #000; border-color: var(--axon-green); }
+  .scene-select {
+    width: 100%;
+    background: #0d1a0d;
+    color: #c8e6c9;
+    border: 1px solid #1b5e20;
+    padding: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .scene-select option { background: #0d1a0d; }
+  .preset-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .preset-btn {
+    background: #0d1a0d;
+    border: 1px solid #1b5e20;
+    color: #a5d6a7;
+    padding: 8px 4px;
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    border-radius: 3px;
+    text-align: center;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: all 0.2s;
+  }
+  .preset-btn:hover { border-color: var(--axon-green); color: #fff; }
+  .preset-btn.active { border-color: var(--axon-green); background: #1b5e20; color: var(--axon-green); }
+  .info-text {
+    font-size: 10px;
+    color: #558b2f;
+    line-height: 1.5;
+    margin-top: 10px;
+  }
+  .bottom-bar {
+    height: 32px;
+    background: var(--panel-bg);
+    border-top: 1px solid #1b5e20;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    font-size: 10px;
+    color: #558b2f;
+    gap: 20px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  .bottom-bar .stat { color: var(--axon-green); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><span>AXON</span> BODYCAM POV</div>
+  <div class="status-dot" id="statusDot"></div>
+  <span style="font-size:11px;color:#81c784" id="statusText">OFFLINE</span>
+  <button class="rec-btn" id="recBtn" onclick="toggleRecord()">REC</button>
+  <span style="font-size:11px;color:#ff3d00;margin-left:auto" id="timeDisplay">00:00:00</span>
+</div>
+<div class="main">
+  <div class="viewfinder">
+    <div class="camera-frame" id="cameraFrame">
+      <canvas id="sceneCanvas"></canvas>
+      <canvas id="noiseCanvas"></canvas>
+      <canvas id="vignetteCanvas"></canvas>
+      <canvas id="flareCanvas"></canvas>
+      <div class="rec-indicator" id="recIndicator"><div class="dot"></div>REC</div>
+      <div class="timestamp" id="timestamp">--:--:--</div>
+    </div>
+  </div>
+  <div class="side-panel">
+    <div class="panel-title">Scene Presets</div>
+    <select class="scene-select" id="sceneSelect" onchange="changeScene()">
+      <option value="alley">Wet Urban Alley</option>
+      <option value="parking">Parking Garage</option>
+      <option value="street">Night Street</option>
+      <option value="backlot">Backlot</option>
+    </select>
+    <div class="panel-title" style="margin-top:16px">Controls</div>
+    <div class="control-group">
+      <label>Flashlight <span class="val" id="flashVal">70%</span></label>
+      <input type="range" min="0" max="100" value="70" id="flashSlider" oninput="updateFlash(this.value)">
+    </div>
+    <div class="control-group">
+      <label>Rain Intensity <span class="val" id="rainVal">60%</span></label>
+      <input type="range" min="0" max="100" value="60" id="rainSlider" oninput="updateRain(this.value)">
+    </div>
+    <div class="control-group">
+      <label>Noise / ISO <span class="val" id="noiseVal">50%</span></label>
+      <input type="range" min="0" max="100" value="50" id="noiseSlider" oninput="updateNoise(this.value)">
+    </div>
+    <div class="control-group">
+      <label>Fisheye Distortion <span class="val" id="fisheyeVal">80%</span></label>
+      <input type="range" min="0" max="100" value="80" id="fisheyeSlider" oninput="updateFisheye(this.value)">
+    </div>
+    <div class="control-group">
+      <label>Chest Bob <span class="val" id="bobVal">40%</span></label>
+      <input type="range" min="0" max="100" value="40" id="bobSlider" oninput="updateBob(this.value)">
+    </div>
+    <div class="control-group">
+      <label>Jitter <span class="val" id="jitterVal">30%</span></label>
+      <input type="range" min="0" max="100" value="30" id="jitterSlider" oninput="updateJitter(this.value)">
+    </div>
+    <div class="control-group">
+      <label>Motion Blur <span class="val" id="motionVal">20%</span></label>
+      <input type="range" min="0" max="100" value="20" id="motionSlider" oninput="updateMotion(this.value)">
+    </div>
+    <div class="panel-title" style="margin-top:14px">Effects</div>
+    <div class="btn-row">
+      <button class="btn" id="btnVignette" onclick="toggleEffect('vignette')">Vignette</button>
+      <button class="btn" id="btnChromatic" onclick="toggleEffect('chromatic')">Chromatic</button>
+      <button class="btn" id="btnFlare" onclick="toggleEffect('flare')">Lens Flare</button>
+      <button class="btn" id="btnWashout" onclick="toggleEffect('washout')">Washout</button>
+    </div>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn" id="btnHands" onclick="toggleHands()">Gloved Hands</button>
+      <button class="btn" id="btnHDR" onclick="toggleHDR()">HDR Clip</button>
+    </div>
+    <div class="info-text">
+      Axon Bodycam POV Simulation v1.0<br>
+      Chest-mounted 120° fisheye<br>
+      Real-time canvas rendering<br>
+      Press REC to start/stop recording
+    </div>
+  </div>
+</div>
+<div class="bottom-bar">
+  <span>RES: <span class="stat" id="resStat">--</span></span>
+  <span>FPS: <span class="stat" id="fpsStat">--</span></span>
+  <span>PARTICLES: <span class="stat" id="particleStat">--</span></span>
+  <span>MODE: <span class="stat">CANVAS</span></span>
+</div>
+
+<script>
+// === State ===
+let recording = false;
+let recStart = 0;
+let recInterval = null;
+let scene = 'alley';
+let flashPower = 0.7;
+let rainIntensity = 0.6;
+let noiseLevel = 0.5;
+let fisheyeAmount = 0.8;
+let chestBob = 0.4;
+let jitterAmount = 0.3;
+let motionBlur = 0.2;
+let effects = { vignette:true, chromatic:true, flare:true, washout:false };
+let showHands = false;
+let hdrClip = false;
+let time = 0;
+let lastFrame = 0;
+let fpsFrames = 0;
+let fpsTime = 0;
+let fps = 0;
+
+// === Canvas setup ===
+const frame = document.getElementById('cameraFrame');
+const sceneC = document.getElementById('sceneCanvas');
+const noiseC = document.getElementById('noiseCanvas');
+const vignetteC = document.getElementById('vignetteCanvas');
+const flareC = document.getElementById('flareCanvas');
+const sCtx = sceneC.getContext('2d');
+const nCtx = noiseC.getContext('2d');
+const vCtx = vignetteC.getContext('2d');
+const fCtx = flareC.getContext('2d');
+
+function resizeCanvases() {
+  const w = frame.clientWidth;
+  const h = frame.clientHeight;
+  [sceneC, noiseC, vignetteC, flareC].forEach(c => {
+    c.width = w; c.height = h;
+  });
+  document.getElementById('resStat').textContent = w + 'x' + h;
+}
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+
+// === Rain particles ===
+let raindrops = [];
+function initRain(count) {
+  raindrops = [];
+  const w = sceneC.width, h = sceneC.height;
+  for (let i = 0; i < count; i++) {
+    raindrops.push({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      speed: 8 + Math.random() * 12,
+      len: 10 + Math.random() * 20,
+      opacity: 0.2 + Math.random() * 0.4
+    });
+  }
+}
+initRain(200);
+
+function updateRain(count) {
+  const diff = count - raindrops.length;
+  if (diff > 0) {
+    for (let i = 0; i < diff; i++) {
+      raindrops.push({
+        x: Math.random() * sceneC.width,
+        y: Math.random() * -sceneC.height,
+        speed: 8 + Math.random() * 12,
+        len: 10 + Math.random() * 20,
+        opacity: 0.2 + Math.random() * 0.4
+      });
+    }
+  } else if (diff < 0) {
+    raindrops.length = count;
+  }
+}
+
+// === Scene rendering ===
+function drawScene(ctx, w, h, t) {
+  // Base: dark urban alley
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#0a0f14');
+  grad.addColorStop(0.5, '#0d1218');
+  grad.addColorStop(1, '#080c0f');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Wet asphalt reflections
+  ctx.fillStyle = 'rgba(30,60,80,0.15)';
+  ctx.fillRect(0, h * 0.7, w, h * 0.3);
+
+  // Brick walls on sides
+  drawBrickWall(ctx, 0, 0, w * 0.15, h * 0.7, '#2a1515', '#3d1f1f');
+  drawBrickWall(ctx, w * 0.85, 0, w * 0.15, h * 0.7, '#2a1515', '#3d1f1f');
+
+  // Trash bins
+  drawTrashBin(ctx, w * 0.12, h * 0.55, 30, 50);
+  drawTrashBin(ctx, w * 0.88, h * 0.58, 25, 42);
+
+  // Puddle reflections
+  drawPuddle(ctx, w * 0.3, h * 0.78, 80, 8);
+  drawPuddle(ctx, w * 0.65, h * 0.82, 60, 6);
+
+  // Flashlight beam from top-right (chest mount POV)
+  drawFlashlight(ctx, w, h, t);
+
+  // Rain streaks on lens
+  drawRainOnLens(ctx, w, h, t);
+
+  // Wet surface highlights
+  drawWetHighlights(ctx, w, h);
+}
+
+function drawBrickWall(ctx, x, y, w, h, base, dark) {
+  ctx.fillStyle = base;
+  ctx.fillRect(x, y, w, h);
+  const bw = 20, bh = 10;
+  ctx.fillStyle = dark;
+  for (let row = 0; row < h / bh; row++) {
+    for (let col = -1; col < w / bw + 1; col++) {
+      const bx = x + col * bw + (row % 2 ? bw / 2 : 0);
+      const by = y + row * bh;
+      ctx.fillRect(bx + 1, by + 1, bw - 2, bh - 2);
+    }
+  }
+  // Mortar lines
+  ctx.strokeStyle = '#1a0a0a';
+  ctx.lineWidth = 1;
+  for (let row = 0; row <= h / bh; row++) {
+    ctx.beginPath();
+    ctx.moveTo(x, y + row * bh);
+    ctx.lineTo(x + w, y + row * bh);
+    ctx.stroke();
+  }
+}
+
+function drawTrashBin(ctx, x, y, w, h) {
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - 2, y - 4, w + 4, 5);
+  // Lid
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(x - 3, y - 6, w + 6, 4);
+  // Reflection
+  ctx.fillStyle = 'rgba(0,230,118,0.03)';
+  ctx.fillRect(x + 2, y + 5, w - 4, h - 10);
+}
+
+function drawPuddle(ctx, x, y, w, h) {
+  ctx.fillStyle = 'rgba(40,70,90,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y, w / 2, h / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Reflection highlight
+  ctx.fillStyle = 'rgba(100,180,220,0.08)';
+  ctx.beginPath();
+  ctx.ellipse(x, y - 1, w / 3, h / 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawFlashlight(ctx, w, h, t) {
+  const bx = w * 0.85 + Math.sin(t * 0.5) * 5;
+  const by = h * 0.15;
+  const r = 200 + flashPower * 150;
+  const grad = ctx.createRadialGradient(bx, by, 10, bx, by, r);
+  grad.addColorStop(0, `rgba(255,248,220,${0.15 + flashPower * 0.2})`);
+  grad.addColorStop(0.3, `rgba(255,220,150,${0.08 + flashPower * 0.1})`);
+  grad.addColorStop(0.7, `rgba(200,180,100,${0.03 + flashPower * 0.05})`);
+  grad.addColorStop(1, 'rgba(100,80,40,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(bx, by, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Beam cone
+  ctx.save();
+  ctx.translate(bx, by);
+  ctx.rotate(-0.3 + Math.sin(t * 0.3) * 0.05);
+  const beamGrad = ctx.createLinearGradient(0, 0, r * 0.8, 0);
+  beamGrad.addColorStop(0, `rgba(255,250,230,${0.05 + flashPower * 0.08})`);
+  beamGrad.addColorStop(1, 'rgba(200,180,120,0)');
+  ctx.fillStyle = beamGrad;
+  ctx.beginPath();
+  ctx.moveTo(0, -15);
+  ctx.lineTo(r * 0.8, -80);
+  ctx.lineTo(r * 0.8, 80);
+  ctx.lineTo(0, 15);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawRainOnLens(ctx, w, h, t) {
+  ctx.strokeStyle = 'rgba(200,220,255,0.1)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 15; i++) {
+    const rx = (Math.sin(t * 0.7 + i * 1.3) * 0.4 + 0.5) * w;
+    const ry = ((t * 2 + i * 37) % h);
+    ctx.beginPath();
+    ctx.moveTo(rx, ry);
+    ctx.lineTo(rx + 2, ry + 8);
+    ctx.stroke();
+  }
+}
+
+function drawWetHighlights(ctx, w, h) {
+  // Scattered wet reflections
+  for (let i = 0; i < 8; i++) {
+    const x = (Math.sin(i * 2.1 + time * 0.3) * 0.3 + 0.5) * w;
+    const y = h * 0.75 + Math.cos(i * 1.7) * 20;
+    const r = 15 + Math.sin(i) * 10;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(150,200,220,${0.03 + Math.sin(time + i) * 0.01})`);
+    g.addColorStop(1, 'rgba(100,150,180,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// === Noise overlay ===
+function drawNoise(ctx, w, h, level) {
+  const imageData = ctx.createImageData(w, h);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 2 * level * 60;
+    data[i] = n;
+    data[i + 1] = n;
+    data[i + 2] = n;
+    data[i + 3] = level * 40;
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// === Vignette ===
+function drawVignette(ctx, w, h) {
+  const grad = ctx.createRadialGradient(w / 2, h / 2, h * 0.3, w / 2, h / 2, h * 0.8);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.7)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+}
+
+// === Lens flare ===
+function drawLensFlare(ctx, w, h, t) {
+  const bx = w * 0.85 + Math.sin(t * 0.5) * 5;
+  const by = h * 0.15;
+  const flares = [
+    { dx: 0, dy: 0, r: 12, a: 0.3 },
+    { dx: -40, dy: -30, r: 6, a: 0.15 },
+    { dx: 50, dy: 20, r: 4, a: 0.1 },
+    { dx: -20, dy: 40, r: 8, a: 0.08 },
+    { dx: 30, dy: -50, r: 3, a: 0.12 },
+  ];
+  flares.forEach(f => {
+    const g = ctx.createRadialGradient(bx + f.dx, by + f.dy, 0, bx + f.dx, by + f.dy, f.r);
+    g.addColorStop(0, `rgba(255,255,220,${f.a * flashPower})`);
+    g.addColorStop(1, 'rgba(255,255,200,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(bx + f.dx, by + f.dy, f.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  // Streaks
+  ctx.strokeStyle = `rgba(255,255,220,${0.05 * flashPower})`;
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(bx - 30 + i * 10, by - 60);
+    ctx.lineTo(bx + 40 + i * 5, by + 60);
+    ctx.stroke();
+  }
+}
+
+// === Chromatic aberration ===
+function applyChromatic(ctx, w, h, amount) {
+  if (amount < 0.01) return;
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  const offset = Math.floor(amount * 8);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      const shift = Math.floor(Math.sin(x * 0.02 + y * 0.01) * offset);
+      const rIdx = idx + shift * 4;
+      const bIdx = idx - shift * 4;
+      if (rIdx >= 0 && rIdx < data.length) data[idx] = data[rIdx];
+      if (bIdx >= 0 && bIdx < data.length) data[idx + 2] = data[bIdx];
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// === HDR clipping simulation ===
+function applyHDRClip(ctx, w, h, clip) {
+  if (!clip) return;
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] > 200) data[i] = 255;
+    if (data[i + 1] > 200) data[i + 1] = 255;
+    if (data[i + 2] > 200) data[i + 2] = 255;
+    if (data[i] < 20) data[i] = 0;
+    if (data[i + 1] < 20) data[i + 1] = 0;
+    if (data[i + 2] < 20) data[i + 2] = 0;
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// === Gloved hands ===
+function drawHands(ctx, w, h, t) {
+  if (!showHands) return;
+  const hx = w * 0.5 + Math.sin(t * 0.8) * 30;
+  const hy = h * 0.85 + Math.cos(t * 0.6) * 10;
+  // Left hand
+  ctx.fillStyle = 'rgba(40,40,40,0.7)';
+  ctx.beginPath();
+  ctx.ellipse(hx - 40, hy, 18, 12, -0.2 + Math.sin(t) * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  // Right hand
+  ctx.beginPath();
+  ctx.ellipse(hx + 40, hy, 18, 12, 0.2 + Math.sin(t + 1) * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  // Finger details
+  ctx.strokeStyle = 'rgba(60,60,60,0.5)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(hx - 40 + i * 6 - 8, hy - 8);
+    ctx.lineTo(hx - 40 + i * 6 - 8, hy - 16);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(hx + 40 + i * 6 - 8, hy - 8);
+    ctx.lineTo(hx + 40 + i * 6 - 8, hy - 16);
+    ctx.stroke();
+  }
+}
+
+// === Main render loop ===
+function render(timestamp) {
+  const dt = timestamp - lastFrame;
+  lastFrame = timestamp;
+  time += dt * 0.001;
+
+  // FPS
+  fpsFrames++;
+  if (timestamp - fpsTime > 1000) {
+    fps = fpsFrames;
+    fpsFrames = 0;
+    fpsTime = timestamp;
+    document.getElementById('fpsStat').textContent = fps;
+  }
+
+  const w = sceneC.width;
+  const h = sceneC.height;
+  if (w === 0 || h === 0) { requestAnimationFrame(render); return; }
+
+  // Chest bob offset
+  const bobX = Math.sin(time * 3.5) * chestBob * 3;
+  const bobY = Math.abs(Math.sin(time * 3.5)) * chestBob * 2;
+  const jitterX = (Math.random() - 0.5) * jitterAmount * 4;
+  const jitterY = (Math.random() - 0.5) * jitterAmount * 4;
+
+  // Motion blur trail
+  sCtx.fillStyle = 'rgba(5,8,5,0.3)';
+  sCtx.fillRect(0, 0, w, h);
+
+  sCtx.save();
+  sCtx.translate(bobX + jitterX, bobY + jitterY);
+
+  // Draw scene
+  drawScene(sCtx, w, h, time);
+
+  // Hands
+  drawHands(sCtx, w, h, time);
+
+  sCtx.restore();
+
+  // Apply chromatic aberration to scene
+  if (effects.chromatic) applyChromatic(sCtx, w, h, fisheyeAmount * 0.5);
+
+  // HDR clip
+  if (hdrClip) applyHDRClip(sCtx, w, h, true);
+
+  // Noise overlay
+  nCtx.clearRect(0, 0, w, h);
+  drawNoise(nCtx, w, h, noiseLevel);
+
+  // Vignette
+  vCtx.clearRect(0, 0, w, h);
+  if (effects.vignette) drawVignette(vCtx, w, h);
+
+  // Lens flare
+  fCtx.clearRect(0, 0, w, h);
+  if (effects.flare) drawLensFlare(fCtx, w, h, time);
+
+  // Washout effect
+  if (effects.washout) {
+    sCtx.fillStyle = `rgba(255,250,230,${0.05 + Math.sin(time * 2) * 0.03})`;
+    sCtx.fillRect(0, 0, w, h);
+  }
+
+  // Update timestamp
+  if (recording) {
+    const elapsed = Math.floor((timestamp - recStart) / 1000);
+    const hrs = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+    const mins = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+    const secs = String(elapsed % 60).padStart(2, '0');
+    document.getElementById('timeDisplay').textContent = `${hrs}:${mins}:${secs}`;
+    document.getElementById('timestamp').textContent = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  }
+
+  requestAnimationFrame(render);
+}
+
+// === UI Controls ===
+function toggleRecord() {
+  recording = !recording;
+  const btn = document.getElementById('recBtn');
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  const ind = document.getElementById('recIndicator');
+  if (recording) {
+    btn.classList.add('recording');
+    btn.textContent = 'STOP';
+    dot.classList.add('live');
+    txt.textContent = 'REC';
+    ind.classList.add('active');
+    recStart = performance.now();
+  } else {
+    btn.classList.remove('recording');
+    btn.textContent = 'REC';
+    dot.classList.remove('live');
+    txt.textContent = 'OFFLINE';
+    ind.classList.remove('active');
+  }
+}
+
+function updateFlash(v) { flashPower = v / 100; document.getElementById('flashVal').textContent = v + '%'; }
+function updateRain(v) { rainIntensity = v / 100; document.getElementById('rainVal').textContent = v + '%'; updateRain(Math.floor(rainIntensity * 400)); }
+function updateNoise(v) { noiseLevel = v / 100; document.getElementById('noiseVal').textContent = v + '%'; }
+function updateFisheye(v) { fisheyeAmount = v / 100; document.getElementById('fisheyeVal').textContent = v + '%'; }
+function updateBob(v) { chestBob = v / 100; document.getElementById('bobVal').textContent = v + '%'; }
+function updateJitter(v) { jitterAmount = v / 100; document.getElementById('jitterVal').textContent = v + '%'; }
+function updateMotion(v) { motionBlur = v / 100; document.getElementById('motionVal').textContent = v + '%'; }
+
+function toggleEffect(name) {
+  effects[name] = !effects[name];
+  const btn = document.getElementById('btn' + name.charAt(0).toUpperCase() + name.slice(1));
+  btn.classList.toggle('active', effects[name]);
+}
+
+function toggleHands() {
+  showHands = !showHands;
+  document.getElementById('btnHands').classList.toggle('active', showHands);
+}
+
+function toggleHDR() {
+  hdrClip = !hdrClip;
+  document.getElementById('btnHDR').classList.toggle('active', hdrClip);
+}
+
+function changeScene() {
+  scene = document.getElementById('sceneSelect').value;
+}
+
+// === Start ===
+requestAnimationFrame(render);
+
+// Fetch backend status
+fetch('/bot/axon-bodycam/api/status')
+  .then(r => r.json())
+  .then(d => {
+    document.getElementById('statusDot').classList.add('live');
+    document.getElementById('statusText').textContent = 'LIVE';
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>

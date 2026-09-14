@@ -1,0 +1,24 @@
+[Unit]
+Description=Curie public site mirror and image archive
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=maxwell-curie
+Group=maxwell-curie
+WorkingDirectory=/opt/maxwell-publisher
+ExecStart=/usr/local/bin/python3.14 -B -m scripts.publisher --config /srv/maxwell-publisher/curie/config/publisher.toml
+Restart=on-failure
+RestartSec=30
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/maxwell-publisher/curie/staging /srv/maxwell-publisher/curie/state
+InaccessiblePaths=-/srv/maxwell/curie/data -/srv/maxwell/curie/config -/srv/maxwell/curie/logs -/srv/maxwell/curie/shell
+
+[Install]
+WantedBy=multi-user.target
