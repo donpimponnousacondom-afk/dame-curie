@@ -1,0 +1,256 @@
+name: maxwell-${INSTANCE_ID:?Set INSTANCE_ID in deploy.env}
+
+x-host-timezone: &host-timezone
+  type: bind
+  source: /etc/localtime
+  target: /etc/maxwell-localtime
+  read_only: true
+  bind:
+    create_host_path: false
+
+x-app: &app
+  image: ${APP_IMAGE:?Set a versioned APP_IMAGE in deploy.env}
+  init: true
+  user: "0:0"
+  read_only: true
+  restart: unless-stopped
+  stop_grace_period: 45s
+  entrypoint:
+    - /bin/sh
+    - -ec
+    - python /opt/maxwell/check_embeddings.py && exec "$$@"
+    - --
+  depends_on:
+    ollama:
+      condition: service_healthy
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  environment: &app-environment
+    TZ: ":/etc/maxwell-localtime"
+    MAXWELL_ENV_FILE: /config/bot.env
+    MAXWELL_CONTAINER_MODE: "true"
+    MAXWELL_INSTANCE_ID: ${INSTANCE_ID}
+    MAXWELL_HOST_INSTANCE_DIR: ${INSTANCE_DIR:?Set INSTANCE_DIR in deploy.env}
+    MAXWELL_BACKEND_NETWORK: maxwell-${INSTANCE_ID}-backends
+    DOCKER_HOST: unix:///run/maxwell/docker.sock
+  volumes:
+    - *host-timezone
+    - &app-config
+      type: bind
+      source: ${INSTANCE_DIR}/config
+      target: /config
+      read_only: true
+      bind:
+        create_host_path: false
+    - &app-prompts
+      type: bind
+      source: ${INSTANCE_DIR}/config/prompts
+      target: /config/prompts
+      bind:
+        create_host_path: false
+    - &app-data
+      type: bind
+      source: ${INSTANCE_DIR}/data
+      target: /state/data
+      bind:
+        create_host_path: false
+    - &app-sites
+      type: bind
+      source: ${INSTANCE_DIR}/sites
+      target: /state/sites
+      bind:
+        create_host_path: false
+    - &app-shell
+      type: bind
+      source: ${INSTANCE_DIR}/shell
+      target: /state/shell
+      bind:
+        create_host_path: false
+    - &app-docker
+      type: bind
+      source: ${ENGINE_SOCKET:?Set the private rootless ENGINE_SOCKET}
+      target: /run/maxwell/docker.sock
+      bind:
+        create_host_path: false
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    - /app/temp:rw,nosuid,nodev,size=256m,mode=1777
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - frontend
+    - backends
+    - embeddings
+
+x-ollama: &ollama
+  image: ollama/ollama:0.33.3@sha256:32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2
+  init: true
+  user: "0:0"
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  volumes:
+    - *host-timezone
+    - type: volume
+      source: ollama-models
+      target: /root/.ollama
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+  pids_limit: 256
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  ollama-pull:
+    <<: *ollama
+    restart: "no"
+    environment:
+      TZ: ":/etc/maxwell-localtime"
+      OLLAMA_HOST: 127.0.0.1:11434
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ollama serve >/tmp/ollama-pull.log 2>&1 &
+        server=$$!
+        trap 'kill "$$server" 2>/dev/null || true; wait "$$server" 2>/dev/null || true' EXIT
+        remaining=60
+        until ollama list >/dev/null 2>&1; do
+          kill -0 "$$server"
+          remaining=$$((remaining - 1))
+          test "$$remaining" -gt 0
+          sleep 1
+        done
+        if ! ollama show qwen3-embedding:0.6b >/dev/null 2>&1; then
+          ollama pull qwen3-embedding:0.6b
+        fi
+    mem_limit: 1g
+    cpus: 2
+    networks:
+      - model-download
+
+  ollama:
+    <<: *ollama
+    restart: unless-stopped
+    environment:
+      TZ: ":/etc/maxwell-localtime"
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: "-1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    command: ["serve"]
+    mem_limit: 6g
+    cpus: 12
+    healthcheck:
+      test: ["CMD", "ollama", "show", "qwen3-embedding:0.6b"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+    networks:
+      - embeddings
+
+  bot:
+    <<: *app
+    environment:
+      <<: *app-environment
+      MAXWELL_STARTUP_GIT_SOCKET: /run/maxwell-checkout/snapshot.sock
+    volumes:
+      - *host-timezone
+      - *app-config
+      - *app-prompts
+      - *app-data
+      - *app-sites
+      - *app-shell
+      - type: bind
+        source: /srv/maxwell-checkout/${INSTANCE_ID}
+        target: /run/maxwell-checkout
+        read_only: true
+        bind:
+          create_host_path: false
+      - *app-docker
+    command: ["python", "bot.py"]
+    mem_limit: 4g
+    cpus: 4
+    pids_limit: 256
+
+  api:
+    <<: *app
+    command: ["python", "api/api_server.py"]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), timeout=2).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  web:
+    image: ${WEB_IMAGE:?Set a versioned WEB_IMAGE in deploy.env}
+    init: true
+    read_only: true
+    user: "0:0"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:${WEB_PORT:?Set a unique WEB_PORT}:8080"
+    environment:
+      TZ: ":/etc/maxwell-localtime"
+    volumes:
+      - *host-timezone
+      - type: bind
+        source: ${INSTANCE_DIR}/sites
+        target: /srv/sites
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /data:rw,nosuid,nodev,size=16m,mode=0700
+      - /config:rw,nosuid,nodev,size=16m,mode=0700
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/admin/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - frontend
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  frontend:
+  backends:
+    name: maxwell-${INSTANCE_ID}-backends
+  embeddings:
+    internal: true
+  model-download:
+
+volumes:
+  ollama-models:

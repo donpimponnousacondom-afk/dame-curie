@@ -1,0 +1,34 @@
+maxwell.example.com {
+	root * /var/www/maxwell
+	header X-Frame-Options "DENY"
+	header X-Content-Type-Options "nosniff"
+	header Referrer-Policy "strict-origin-when-cross-origin"
+
+	# Backend routes. Mutating API routes require Maxwell admin auth.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8765
+	}
+	handle /data/* {
+		reverse_proxy 127.0.0.1:8765
+	}
+
+	# Admin UI loads directly. The app prompts for Maxwell admin credentials
+	# before calling protected API routes.
+	@admin path /admin /admin/*
+	handle @admin {
+		file_server
+	}
+
+	# A generated site's own backend server (site_server.py). This MUST come
+	# before anything that serves /bot/* as static files, or the file server
+	# answers 404 first. maxwell-api looks the slug up in its registry and
+	# proxies to that site's container on loopback.
+	handle /bot/*/api/* {
+		reverse_proxy 127.0.0.1:8765
+	}
+
+	# Prefer serving generated bot sites from a separate origin.
+	header /bot/* -X-Frame-Options
+
+	file_server
+}

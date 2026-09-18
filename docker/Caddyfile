@@ -1,0 +1,29 @@
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy strict-origin-when-cross-origin
+
+	redir /admin /admin/ 308
+
+	route {
+		@backend path_regexp backend ^/(api/|data/|bot/[^/]+/api(/|$))
+		handle @backend {
+			reverse_proxy api:8765
+		}
+
+		handle_path /bot/* {
+			root * /srv/sites
+			file_server
+		}
+
+		handle {
+			root * /srv/web
+			header X-Frame-Options DENY
+			file_server
+		}
+	}
+}

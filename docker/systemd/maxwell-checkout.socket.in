@@ -1,0 +1,15 @@
+[Unit]
+Description=Maxwell @INSTANCE@ checkout snapshot socket
+
+[Socket]
+ListenStream=/srv/maxwell-checkout/@INSTANCE@/snapshot.sock
+SocketUser=maxwell-@INSTANCE@
+SocketGroup=maxwell-@INSTANCE@
+SocketMode=0600
+DirectoryMode=0711
+Accept=yes
+MaxConnections=2
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

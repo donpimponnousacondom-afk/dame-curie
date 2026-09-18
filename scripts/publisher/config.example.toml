@@ -1,0 +1,14 @@
+source = "/srv/example/public"
+staging = "/srv/example-publisher/staging"
+state = "/srv/example-publisher/state"
+key = "/srv/example-publisher/ssh_key"
+known_hosts = "/srv/example-publisher/known_hosts"
+private_paths = ["/srv/example/public/operator-private"]
+host = "static.example.invalid"
+user = "publisher"
+port = 22
+site_root = "/srv/example-static/dame"
+image_root = "/srv/example-static/images"
+rescan_seconds = 60.0
+settle_seconds = 0.3
+timeout_seconds = 120
