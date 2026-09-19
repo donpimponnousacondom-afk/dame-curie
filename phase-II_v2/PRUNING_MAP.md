@@ -2,9 +2,9 @@
 
 ## Current implementation queue — later root decisions
 
-- V2 foundation is being provisioned under the separate grant in `PROVISIONING.md`; Discord and Ollama/model-pull remain held.
-- **Email: source removal reviewed and integrated** as `9b01074`/`70b8ceb`, from isolated branch `work/prune-email-20260919`; shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure remain. Main-only UI follow-up and refreshed image acceptance are being completed; see `EMAIL_REMOVAL.md`.
-- **Remote inference naming: in progress**, isolated branch `work/openai-inference-names-20260919`. `OPENAI_*` means the compatible remote protocol, not OpenAI's service; configured endpoints stay unchanged and local Ollama embeddings remain separate.
+- V2 foundation is provisioned under the separate grant in `PROVISIONING.md`; API/web are healthy, while Discord and Ollama/model-pull remain held. Full activation is not accepted.
+- **Email: source removal reviewed and integrated** as `9b01074`/`70b8ceb`, from isolated branch `work/prune-email-20260919`; shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure remain. Main-only UI follow-up landed in `df6c97e`; final images include the cut. See `EMAIL_REMOVAL.md` and the separate staged acceptance in `PROVISIONING.md`.
+- **Remote inference naming: reviewed and integrated** as `b2f5380`, from isolated branch `work/openai-inference-names-20260919`. `OPENAI_*` means the compatible remote protocol, not OpenAI's service. Eighteen configured private V2 keys were atomically migrated from the 22-key map without changing values; local Ollama embeddings remain separate. See `INFERENCE_NAMING.md`.
 - **Logging: next implementation priority after the foundation**, using the reviewed Hortator/Screen proposal in `LOGGING_PLAN.md`; legacy logging and functional memory stay.
 - **Twitter/X: next queued pruning cut after email**, explicitly selected by root. Use a separate worktree and review its tools/admin commands/client/mentions/control edges before integration. Preserve generic web fetching, Twitter Card metadata, shared media/inbox/notification code, provider routing and V1 state. No X implementation has started.
 - Telegram is disabled and selected for later removal. Other removals/refactors remain separately scoped.

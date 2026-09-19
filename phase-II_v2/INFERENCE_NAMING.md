@@ -101,4 +101,10 @@ Validation performed in the assigned worktree:
 - Python **3.14.4** compile-only of all **32 changed Python files**, using parent interpreter `/home/codexy/deepseek/dame-curie/.venv/bin/python` with `-I -B -X pycache_prefix=/home/codexy/deepseek/dame-curie-worktrees/openai-inference-names/.validation-cache -m py_compile` and explicit source paths; no application/test imports or execution.
 - Node **v25.9.0** `--check` passed for `ecosystem.config.js`. Dashboard changes are text-only and source-reviewed; no browser/build/runtime claim.
 
-No tests/collection, installs, network/provider/Discord requests, Docker/services/Screen commands, private configuration/state/log reads, V1 changes, merge/rebase/push, or runtime acceptance occurred. Generated compile caches are not deliverables or committed source.
+No tests/collection, installs, network/provider/Discord requests, Docker/services/Screen commands, private configuration/state/log reads, V1 changes, merge/rebase/push, or runtime acceptance occurred in that child assignment. Generated compile caches are not deliverables or committed source.
+
+## Coordinator integration and private migration
+
+Flash and Luna independently reviewed the actual `85eafb1` diff without a source blocker. Coordinator cherry-picked it cleanly as `b2f5380` after email integration, preserving removal of the mail control/secret and the staged `ENABLE_RAG=false` fixture expectation. Combined source passed Python3.14 compilation, Node syntax, Bash parser and whitespace checks; no tests were run.
+
+Coordinator then atomically migrated the **18 configured** keys from the 22-key map in private V2 `bot.env`. Unset entries stayed unset and explicit blanks stayed blank; dotenv serialization was round-trip compared before replacement. All unrelated values, including four embedding settings and the shared compat bearer, were unchanged; the obsolete disabled email flag was removed. The primary inference key is configured. Discord credentials remained blank and RAG disabled; V1 was not changed. No private values were printed or committed. Refreshed images and permitted network acceptance are recorded in `PROVISIONING.md`.

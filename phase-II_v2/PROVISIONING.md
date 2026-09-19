@@ -1,4 +1,4 @@
-# dame-curie V2 provisioning — in progress
+# dame-curie V2 foundation — provisioned, activation held
 
 ## Current authorization and hard stops
 
@@ -38,7 +38,7 @@ V1 UID re-resolved as `1003`; all Docker calls used its explicit private socket.
 
 - Created `/srv/dame-curie/config/bot.env` and a fresh `/srv/dame-curie/data/bot_control.json`, service-owned mode0600. Transferred 79 allowlisted provider environment fields and nine provider-control fields from V1 configuration only; no personality/history/admin state was copied. Only the provider settings in V1 `data/bot_control.json` were selected. Discord credentials and inherited ownership/path settings were excluded.
 - Preserved four embedding settings under `DAME_CURIE_EMBED_*`; `ENABLE_RAG=false`. Main/companion/OAuth/Telegram credentials are blank. Autonomy and REM are disabled; fresh control has `bot_enabled=false` and the explicit wake phrase `dame curie`. A fresh dashboard password is stored only in private `bot.env` (username `root`).
-- Selected loopback web port18081 was unbound at preflight; actual binding acceptance remains pending. No remote publisher is configured or activated.
+- Selected loopback web port18081 was unbound at preflight; final inspection confirmed `127.0.0.1:18081` and successful HTTP checks. No remote publisher is configured or activated.
 - Compose2.39.4 parsed the staging overlay and selected only `api`/`web` by default. Validation as the new service account initially failed because `/home/codexy` is private0700; reran static validation as the checkout owner. No home permission was weakened. The deployment source must live separately under `/opt/dame-curie`.
 - Luna identified that the existing lifecycle wrapper ignored overlays and would bypass the hold. The targeted fix adds optional literal `DAME_CURIE_STAGING=true|false`, defaulting to **true**, includes the overlay, and limits staged restart to API/web. Ownership checks permit only the exact base file or base+known-staging file list in the same checkout. Down selects all profiles only for cleanup. Both public Docker examples now default to staging/RAG-disabled operation.
 - Luna re-reviewed the wrapper/template/ownership fix without a remaining source blocker. Existing test fixtures were aligned, not expanded or executed. Moving an already-active instance back into staging would require an authorized all-profile down first; changing the flag and running up does not stop inactive-profile containers. This new V2 instance has never run those services.
@@ -54,6 +54,39 @@ V1 UID re-resolved as `1003`; all Docker calls used its explicit private socket.
 - A network-disabled, read-only-rootfs one-off app container initialized fresh source-default personality, empty server prompt mapping and `dame-curie-rag.db`. Integrity check returned `ok`; `vectors`, `user_entities`, `embed_cache`, `embed_backfill`, `graph_nodes` and `graph_edges` each had zero rows. No embedding request/model generation or V1 memory transfer occurred.
 - All five Compose services were created through the verified staging wrapper using both profiles for **create only**. Bot, Ollama and model-pull were inspected as `created`, `StartedAt=0001-01-01T00:00:00Z`, restart policy `no`. No entrypoint from any of those three ran.
 
-## Pending acceptance
+## Final source/configuration checkpoint
 
-Finish source integration/private key migration, rebuild final app/web images, and verify permitted API/web support startup and bounded remote-provider calls. Record final image/container states and loopback binding; preserve empty local model cache and inactive Discord/RAG. Logging research/reviews are complete, implementation remains next. **No Discord, RAG or terminal-interaction readiness is claimed.**
+- Remote inference cut `85eafb1` passed independent Flash/Luna reviews and was integrated cleanly as `b2f5380`. Combined Python3.14 compilation, Node syntax, Bash parser and whitespace checks passed. Existing email and staging fixes were retained; no tests were executed.
+- Atomically renamed 18 configured private V2 keys from the 22-entry `OLLAMA_*` → `OPENAI_*` map. Missing keys stayed missing; explicit blanks and all values were preserved. The shared compat bearer and four embedding settings were unchanged; removed the obsolete disabled email flag. Source-default inference now requires an explicit remote URL/model and assumes no vendor. See `INFERENCE_NAMING.md`.
+- Built final app `dame-curie-app:b2f5380` (`sha256:e78fd663b29f4c8fbd5a7d98cd11c1a1af4563f3d444cb9165b2aad73cced8c9`) and web `dame-curie-web:b2f5380` (`sha256:7521271f14e8c9e6d587caa6344cb489419de71319a024631a7fa85965fd9935`) from the exact committed archive. Updated private deploy references and recreated app/web containers using create only.
+- Replaced `/opt/dame-curie` with a clean integrated archive and fresh operator venv, so removed mail source was not left behind by an overlay extraction. Bootstrap source is retained separately at `/opt/dame-curie-bootstrap-8876dc4`, without private configuration; this is not a validated state backup/rollback procedure.
+- Created the isolated `dame-curie-shell` container with its exact ownership, image/source hash, mounts, security and resource contract. It remains unstarted; site-runtime has no container because fresh V2 has no sites.
+- The new local model volume contained zero entries. The first coordinator startup command used reversed CLI arguments and was rejected by argparse before any runtime action; no source defect or service crash occurred. Correct operator order is `instance.py dame-curie up`.
+
+## Verified staged handoff
+
+Final code/image revision: **`b2f538017edb3a8aa0b1d800e994a11f5944da07`**. Subsequent handoff changes are documentation-only, not an automatic rebuild/restart or a claim that deployed archives follow Git HEAD.
+
+| Resource | Final observed state |
+| --- | --- |
+| `dame-curie-api-1` | Running, healthy; final app image; restart `unless-stopped` |
+| `dame-curie-web-1` | Running, healthy; final web image; `8080/tcp` → **`127.0.0.1:18081`**; restart `unless-stopped` |
+| `dame-curie-bot-1` | Created, never started, restart `no`; final app image |
+| `dame-curie-ollama-1` | Created, never started, restart `no` |
+| `dame-curie-ollama-pull-1` | Created, never started, restart `no` |
+| `dame-curie-shell` | Created, never started, restart `no`; isolated shell image |
+| Site runtimes | Image ready; no site containers or published site directories |
+
+The four unstarted containers retain `StartedAt=0001-01-01T00:00:00Z`. The pinned Ollama manifest remains `ollama/ollama:0.33.3@sha256:32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2`; its container image ID is `sha256:2a5d0462221131b2313d838e99c30cf4190a5207236f065b246acd11ae718e85`.
+
+- Canonical staged `up` completed, with API and web healthchecks passing. `/`, `/admin/` and `/api/health` returned200; health identified `dame-curie-api`. Anonymous `/api/control` returned401; private Basic authentication returned200 with `bot_enabled=false`. These are HTTP checks, not interactive browser acceptance.
+- The final app's actual `Config` and renamed provider supplied the configured primary endpoint/model, headers and request builder for a bounded synthetic completion. The corrected check returned HTTP200 and five visible response characters. There were **two** requests, each capped at512 output tokens: the first received HTTP200 but the coordinator's reader mistook a partial/keepalive chunk for complete JSON; the replacement consumed the bounded complete body. No production-code change was needed. No redirects, tools, retries inside either request, bot entrypoint, Discord request or embedding call occurred; only one configured primary endpoint was exercised.
+- Final private-file checks: `bot.env`, `deploy.env` and the SQLite database are UID/GID1005 mode0600; main/companion/API-OAuth/Telegram credentials are blank and RAG false. SQLite integrity remains `ok`; all six memory/graph tables have zero rows, the local model volume has zero entries, and no sites are published.
+- Site-runtime offline `pip check` passed. App `pip check` **failed** on the voice extension's declared `discord-py` distribution dependency; the lock intentionally installs `discord.py-self==2.1.0` into that shared namespace, and the existing installer reinstalls the fork after extras. No competing package, metadata shim or relaxed pin was added. This is not a clean dependency/voice acceptance result.
+- Final V2 engine ID matched the original private engine. Protected V1 still reported19 running containers during the final bounded inventory. No V1 exec, lifecycle/configuration mutation or DB/history migration occurred.
+
+## Still deliberately unaccepted
+
+**Discord remains held; RAG remains disabled and cold.** Root must explicitly authorize activation, resolve/accept the voice packaging/transport issue, establish embedding readiness, enable RAG and configure Discord credentials personally. No full bot, voice, media, auxiliary-provider, real-site, multi-instance or backup/rollback acceptance is claimed. The checkout snapshot socket is not deployed; its bind directory is empty.
+
+Logging is next: the Hortator/Screen proposal is researched and independently reviewed, but implementation and real Screen interaction/replay acceptance have not occurred. Twitter/X is queued as the next separate pruning cut; Telegram remains disabled for later removal. Existing logger and functional memory paths were preserved. Existing suites were not collected or run; no new tests or remote publication were added.

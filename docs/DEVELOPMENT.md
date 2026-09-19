@@ -4,7 +4,7 @@
 
 **Python 3.14 is mandatory.** The host's system interpreter is unrelated to the project's required version and must not be replaced. Do not install project packages into the system Python tree or use a system-package bypass flag.
 
-Application/site images currently declare Python 3.14.4. The inherited shell image installs distro `python3`; its actual interpreter version has not been verified and is a future acceptance check, not proof of compliance. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
+Application/site images declare Python3.14.4; the provisioned shell/site images each reported Python3.14.4 during network-disabled checks. The service-readable `/opt/dame-curie/.venv` is an operator-only Python3.14.4 environment; app dependencies live in the image. These checks do not establish full bot, voice, RAG or site behavior. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
 
 | Name | Meaning |
 | --- | --- |
@@ -28,6 +28,10 @@ python3.14 -m venv .venv
 Do not use `--clear`, `--system-site-packages`, an unrelated existing environment or generic `python3 -m venv`. Verify the selected interpreter is 3.14 before project work. Invoke `.venv/bin/python` and `.venv/bin/python -m pip` explicitly rather than relying on an activated shell or global pip. Dependency installation needs a separate compatible assignment and reviewed requirements/pins; the Vulture-only grant does not authorize installing the application's or entire development requirements. Do not weaken pins or automatically upgrade dependencies.
 
 If root later chooses uv, verify its local availability and document the exact 3.14 selection/environment path before use. This page does not pretend a second unverified workflow is configured.
+
+## Provisioned image evidence and dependency caveat
+
+The final app/web release is built from code revision `b2f5380`; later handoff commits are documentation-only. Site-runtime's offline `pip check` passed. The app check did **not** pass: `discord-ext-voice-recv==0.5.2a179` declares `discord-py`, while the lock intentionally installs `discord.py-self==2.1.0` into the shared `discord` namespace. The installer also explicitly reinstalls the self-fork after optional extras. Do not install the competing distribution or relax pins to silence metadata checking. Voice compatibility and a clean/explicitly resolved packaging contract remain prerequisites for future Discord activation; this round performed no Discord or voice probe. Successful API/primary-inference checks do not resolve that caveat.
 
 ## Source and review
 

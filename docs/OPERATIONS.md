@@ -30,6 +30,17 @@ Keep Discord credentials blank and `ENABLE_RAG=false` while bot/Ollama/model-pul
 
 Moving an already-running full instance back into staging requires an explicitly authorized all-profile down first. Merely changing the flag and calling up does not stop services in now-inactive profiles. No such transition occurred in the fresh V2 provisioning.
 
+## Staged V2 operator entrypoint
+
+The verified deployment source is `/opt/dame-curie`, not the private coordinator home. Its operator venv is Python3.14 and is not the application environment; app dependencies live in the image. With a separately granted V2 lifecycle assignment, the canonical argument order is:
+
+```sh
+sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
+  /opt/dame-curie/scripts/instance.py dame-curie up
+```
+
+The private `/srv/dame-curie/deploy.env` selects the engine socket, versioned app/web images, loopback port18081 and `DAME_CURIE_STAGING=true`. This is an operator recipe, not permission to run it. Do not execute it for source-only review, change the flag, or use raw base-only Compose to bypass the activation holds. Dashboard authentication is stored in private `config/bot.env`; never print it into a report. The server-loopback UI is `http://127.0.0.1:18081/admin/`, not a public deployment.
+
 ## Read-only discovery
 
 Run steps separately. If any step fails or yields an unexpected target, stop before the next one. The quoted angle-bracket tokens below are placeholders to replace with **already approved/observed values**, not defaults to guess.
