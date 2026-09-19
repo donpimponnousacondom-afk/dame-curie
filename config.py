@@ -32,10 +32,7 @@ from dotenv.main import load_dotenv
 
 APP_ROOT = Path(__file__).resolve().parent
 ENV_FILE = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
-# .env is the SOURCE OF TRUTH — always override whatever PM2/the shell
-# injected. PM2 caches the env from first start and `--update-env` does
-# NOT re-read the .env file, so without override=True every restart kept
-# stale values (e.g. the old OPENAI_FALLBACK_MODEL) forever.
+# Runtime configuration overrides the inherited process environment.
 load_dotenv(ENV_FILE, override=True)
 
 
@@ -127,7 +124,7 @@ def _has_binary(name: str) -> bool:
     """True if ``name`` is runnable: on PATH, or beside this interpreter.
 
     The second case matters for venv installs started by absolute
-    interpreter path (PM2 does exactly that): the venv's bin/ holds the
+    interpreter path: the venv's bin/ holds the
     console scripts but is not on PATH.
     """
     if not name:
@@ -289,9 +286,9 @@ class Config:
     CREATOR_ID = os.getenv("CREATOR_ID", "1482143139828596916").strip() or "1482143139828596916"
     BOT_NAME = os.getenv("BOT_NAME", "Dame Curie").strip() or "Dame Curie"
 
-    # Host access. Kept on by default for parity with older installs, but
-    # this is THE security-relevant switch: `shell` runs commands as the bot
-    # user. validate() warns loudly at startup so it is never a surprise.
+    # Shell stays on by default inside the outer bot container, sharing the
+    # bot user's permissions and mounted state rather than an inner sandbox.
+    # validate() warns at startup about that access.
     ENABLE_SHELL = _feature_env("ENABLE_SHELL")
 
     # RAG vector memory. Needs a reachable embedding endpoint (see
@@ -480,7 +477,7 @@ class Config:
         ("ENABLE_FETCH_URL", "fetch_url"),
         ("ENABLE_YOUTUBE", "YouTube"),
         ("ENABLE_AVATAR", "avatar changes"),
-        ("ENABLE_SHELL", "shell (docker sandbox)"),
+        ("ENABLE_SHELL", "shell (outer container)"),
         ("ENABLE_RAG", "RAG vector memory"),
         ("ENABLE_AUTONOMY", "autonomy engine"),
         ("REM_ENABLED", "REM dreaming pass"),
@@ -536,9 +533,9 @@ class Config:
             )
         if cls.ENABLE_SHELL:
             _log.warning(
-                "ENABLE_SHELL is on — the model can run commands on this host "
-                "as the bot user. Set ENABLE_SHELL=false in .env if you did "
-                "not mean to grant that."
+                "ENABLE_SHELL is on — the model can run commands inside the bot container "
+                "with the bot's permissions and mounted state. Set ENABLE_SHELL=false "
+                "in .env if you did not mean to grant that."
             )
         # TTS engine sanity check
         if cls.TTS_ENGINE not in {"auto", "local", "riva", "gtts", "fish"}:

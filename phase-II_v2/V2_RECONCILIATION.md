@@ -4,7 +4,7 @@
 
 Coordinator-only work under `REDESIGN_PLAN.md`, after independent source review. This record is not activation permission. No bot entrypoint, Discord/provider/model request, Ollama/model-pull start, model warm/download, V1 operation, publisher invocation or existing Screen access is permitted or performed.
 
-**Current state: two candidate images built; isolated validation rejected the home/workspace alias, and its narrow image fix has source review. Rebuild/rerun and release/lifecycle/private-file mutation remain pending.** Old API/web are still running. Source and image evidence are not whole-bot, voice, media, RAG, provider, multi-instance or terminal acceptance.
+**Current state: the corrected image/workspace alias passed its bounded isolated rerun. A final comments/label/warning-only configuration cleanup is being frozen; canonical source/lifecycle/private-file cutover remains pending.** Old API/web are still running. Source and image evidence are not whole-bot, voice, media, RAG, provider, multi-instance or terminal acceptance.
 
 ## Fresh identity and ownership observations
 
@@ -67,6 +67,16 @@ Three short-lived neutral-name `--rm` containers ran **only explicit Python stan
 **The image is not accepted for cutover.** The source correction removes HOME from the pre-dependency ENV, uses `ln -sT` so an occupied target fails rather than nesting, and sets the same runtime HOME only after alias creation. Luna passed that exact diff; dependency pins, final HOME, outer-container execution and workspace paths are unchanged. The fix must be committed into a new frozen archive, rebuilt and rerun before any source/lifecycle cutover. The failed probes do not demonstrate shell-tool, package or application acceptance. No failed candidate was selected in private deploy.env.
 
 Host coreutils help separately confirmed `mv --exchange --no-copy -T` and `ln -sT` support for the later clean release replacement/construction; no exchange has occurred yet.
+
+## Corrected alias rerun and renewed private preflight
+
+The reviewed fix landed as `0112692c01649294740b043c4a381a3c18e94d8f`. Frozen build `bash-519` completed and was collected with exit0, producing `dame-curie-app:0112692`, ID `sha256:50ac130f2074975fcc2f1d06e94d0d1694f29ca9787009694527f4f97291bd97`; scalar inspection matched that ID and revision. Its isolated neutral-name `--rm` stdlib/Bash rerun used the same no-private-mount/network-none/read-only/capability/resource restrictions. Observed Python3.14.4, namespace UID/GID0, Docker marker, **actual HOME symlink to `/state/shell`**, Bash HOME `/home/dame-curie` and physical cwd `/state/shell`, exit0, empty stderr and successful synthetic tmpfs write. Public SHA256 comparisons for six selected deployed Python files matched reviewed source; no application modules were loaded. This accepts that narrow image/alias gate, not the shell tool's whole dispatch path or application behavior.
+
+A clean public archive of that exact revision was prepared at `/opt/dame-curie-release-0112692.NpsHYewR`, root-owned0755 on device2307, with no venv copied into it. Canonical `/opt/dame-curie` and its existing venv remain unchanged; this staging directory has not been selected or swapped.
+
+A second sanitized read-only preflight re-resolved account/socket/engine and confirmed the same exact six original containers, canonical ownership labels and all never-started holds. Private paths and the existing operations-lock file passed ownership/privacy gates. Deployment selectors/staging remain valid; Discord blank, RAG false, canonical Dame/creator IDs and exactly root's owner allowlist all passed. Bot control remains false. The previously ambiguous autonomy control is **absent**, not enabled; its environment is false. Personality differs from both the current source literal and that literal plus one LF: preserve it without assuming it is a source default or rewriting policy. The wrapper's clean PATH resolves the approved `/usr/bin/docker`.
+
+While checking the identity consumers, the coordinator found stale config comments, a `shell (docker sandbox)` display label and an active warning claiming host execution. The narrow source correction changes only comments/docstring/display/warning text, preserves dotenv override and all flag/provider/path/identity logic, and has independent Luna functional source signoff. It also removes retired PM2 examples from those comments/docstrings. Freeze this last wording slice into the selected artifact rather than mislabeling a previous image as later source.
 
 ## Reviewed next sequence
 
