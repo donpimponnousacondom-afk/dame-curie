@@ -1,4 +1,3 @@
-import configparser
 import importlib.util
 import io
 import json
@@ -267,54 +266,3 @@ def test_relative_repository_is_rejected_without_git(monkeypatch):
     with pytest.raises(ValueError, match="absolute"):
         snapshot.capture_snapshot(Path("relative"))
     run.assert_not_called()
-
-
-def test_rendered_unit_names_match_accept_yes_and_preserve_boundary():
-    replacements = {
-        "@INSTANCE@": "dame-curie", "@CHECKOUT_OWNER@": "codexy",
-        "@READER@": "/usr/local/libexec/dame-curie-checkout-snapshot.py",
-        "@CHECKOUT_ROOT@": "/opt/dame-curie",
-    }
-    names = {
-        "dame-curie-checkout.socket.in": "dame-curie-checkout.socket",
-        "dame-curie-checkout-worker.service.in": "dame-curie-checkout@.service",
-    }
-    rendered = {}
-    for template, destination in names.items():
-        text = (ROOT / "docker" / "systemd" / template).read_text()
-        for marker, value in replacements.items():
-            text = text.replace(marker, value)
-        assert "@" not in text
-        unit = configparser.ConfigParser(interpolation=None)
-        unit.read_string(text)
-        rendered[destination] = unit
-    socket_name, service_name = names.values()
-    assert service_name == socket_name.removesuffix(".socket") + "@.service"
-    socket_unit = rendered[socket_name]["Socket"]
-    assert socket_unit["ListenStream"] == "/srv/dame-curie-checkout/dame-curie/snapshot.sock"
-    assert socket_unit["SocketUser"] == socket_unit["SocketGroup"] == "dame-curie"
-    assert socket_unit["SocketMode"] == "0600"
-    assert socket_unit["DirectoryMode"] == "0711"
-    assert socket_unit["Accept"] == "yes"
-    assert socket_unit["MaxConnections"] == "2"
-    assert "Service" not in socket_unit
-    worker = rendered[service_name]["Service"]
-    assert worker["User"] == "codexy"
-    assert worker["Type"] == "exec"
-    assert worker["StandardInput"] == "socket"
-    assert worker["StandardOutput"] == "inherit"
-    assert worker["StandardError"] == "journal"
-    assert worker["ExecStart"] == (
-        '/opt/dame-curie/.venv/bin/python -I '
-        '"/usr/local/libexec/dame-curie-checkout-snapshot.py" '
-        '"/opt/dame-curie"'
-    )
-    for key in ("NoNewPrivileges", "PrivateNetwork", "PrivateTmp"):
-        assert worker[key] == "yes"
-    assert worker["ProtectSystem"] == "strict"
-    assert worker["ProtectHome"] == "read-only"
-    assert worker["CapabilityBoundingSet"] == worker["AmbientCapabilities"] == ""
-    assert worker["RuntimeMaxSec"] == "15s"
-    assert worker["TasksMax"] == "16"
-    assert worker["MemoryMax"] == "128M"
-    assert worker["RestrictAddressFamilies"] == "AF_UNIX"

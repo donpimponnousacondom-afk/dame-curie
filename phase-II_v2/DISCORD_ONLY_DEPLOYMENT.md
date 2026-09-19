@@ -20,13 +20,14 @@ Baseline: `43ce047`, branch `work/discord-only-deploy-20260919`. This is deploym
 | `/srv/<instance>/data` | `/state/data` | writable |
 | `/srv/<instance>/sites` | `/state/sites` | writable |
 | `/srv/<instance>/shell` | `/state/shell` | writable |
-| `/srv/dame-curie-checkout/<instance>` | `/run/dame-curie-checkout` | read-only, existing snapshot bridge only |
 
 All binds retain `create_host_path: false`. `/tmp` and `/app/temp` retain bounded writable tmpfs mounts. The bot example keeps `DATA_DIR=/state/data`, `DAME_CURIE_SITE_DIR=/state/sites`, `DAME_CURIE_SHELL_DIR=/state/shell`, and `DAME_CURIE_PROMPTS_DIR=/config/prompts`.
 
 The entire existing authoring tree, including shared `_images`, stays under the same sites mount. No publisher path, sync configuration/template/code, remote URL selection or file replication behavior was changed. `scripts/publisher/**` is untouched. The public `DAME_CURIE_PUBLIC_BASE_URL` template now uses the existing reserved synthetic origin `https://dame-curie.example.invalid`, labeled as a remote asset origin, rather than advertising the deleted localhost server. The key/path contract and all private configured values are preserved; this is not selection of a real publication destination or permission to point at V1.
 
-The existing startup snapshot socket mount was preserved, not replaced with a host command-execution interface. Its provisioning/readiness was not investigated.
+The initial `ac5f196` slice retained the startup snapshot bridge, but independent review identified its unprovisioned host-directory/listener dependency as a startup blocker. The separate follow-up removes the Compose socket export and `/srv/dame-curie-checkout/<instance>` bind, plus the socket-activation templates. No replacement host service, checkout mount or metadata bridge is introduced.
+
+With `DAME_CURIE_STARTUP_GIT_SOCKET` unset, the existing `capture_running_build` checks for local Git and otherwise honestly reports unknown checkout commit/branch/date/subject/dirty state. Archive-built images contain no `.git`, so **`!build` checkout metadata remains unknown**; process start time and Python version remain observable. The image's OCI revision/build fields are separate operator evidence, not a live checkout snapshot, and are not substituted into that command. `response_observability.py`, the optional outbound socket client and pure CLI `scripts/checkout_snapshot.py` remain unchanged. The coordinator must remove any stale private `DAME_CURIE_STARTUP_GIT_SOCKET` value: a nonblank configured socket still selects the explicit socket path and does not fall back after a connection failure.
 
 ## Staging and lifecycle semantics
 
@@ -82,7 +83,8 @@ Compatibility is deliberately narrow:
 These are source definitions, **not claims of runtime deletion**:
 
 - Compose `api` service, its command and socket healthcheck; Compose `web` service, its loopback port, healthcheck and public site bind.
-- Caddy/web image stage and `docker/Caddyfile`; bot copies/allowlist entries for dashboard assets and deleted API/site/X modules. `docker_runtime.py` remains in the app for shared non-orchestration path helpers.
+- Caddy/web image stage, `docker/Caddyfile` and active `examples/Caddyfile.example` inbound API/admin/site-routing example; bot copies/allowlist entries for dashboard assets and deleted API/site/X modules. `docker_runtime.py` remains in the app for shared non-orchestration path helpers. Publisher templates, including `scripts/publisher/static.htaccess`, remain untouched.
+- Startup checkout bridge Compose socket export/bind and `docker/systemd/dame-curie-checkout.socket.in` / `dame-curie-checkout-worker.service.in`. Full source reads confirmed that the socket's `ListenStream`/`Accept=yes` and worker's `StandardInput=socket` exist solely to activate that bridge reader. No host listener is provisioned or replaced.
 - Docker CLI image stage/copy; bot engine socket bind, `DOCKER_HOST`, daemon-host path and backend-network environment selectors.
 - Nested shell image scaffold `docker/Dockerfile`.
 - Local per-site Python/FastAPI/uvicorn/Flask image scaffold `docker/site-runtime/Dockerfile` and its bot build-context copy.
@@ -96,7 +98,7 @@ The previous V2 runtime may still own API/web/shell/site containers, old fronten
 
 ## Shared integration seams
 
-- Web/API lane owns source deletion and narrow replacement non-serving modules. `docker_runtime.py` is intentionally retained in both explicit app COPY and allowlist: the coordinator confirmed its `container_mode`, `confined_path` and `STATE_ROOT` consumers in knowledge-graph/asset/export code. Removing an engine socket/CLI does not make those path helpers dead. Any further replacement module names supplied by that lane must also be copied/allowlisted before an image build; no shared asset helper may be dropped merely because its old filename mentioned a site.
+- Web/API lane owns source deletion and narrow replacement non-serving modules. `docker_runtime.py` is intentionally retained in both explicit app COPY and allowlist: the coordinator confirmed its `container_mode`, `confined_path` and `STATE_ROOT` consumers in knowledge-graph/asset/export code. Removing an engine socket/CLI does not make those path helpers dead. The coordinator subsequently confirmed no replacement source module is needed from the web lane; its knowledge-graph path logic remains inline. Future `job_routing.py` COPY/allowlist integration belongs to the coordinator after routing lands. No shared asset helper may be dropped merely because its old filename mentioned a site.
 - Shell lane owns direct command execution, cancellation, output delivery and preservation of common authorization/taint checks. Its confirmed home/cwd is `/home/dame-curie`; the image provides a symlink to the original `/state/shell` bind, not a duplicate host mount. Container filesystem writability is supplied here; no command/path allowlist was added.
 - Coordinator owns final `config.py`, root `.env.example`, `doctor.py` and cross-lane removals. At baseline `doctor.py` still probes default Docker and references admin settings; `scripts/migrate_instance.py` still emits removed site-server registry/container metadata. Those require integration review, not execution. Companion/X/Telegram example fields are outside this lane's deployment-field edit.
 - Logging lane owns the `scripts/instance.py` logging-format seam. Signatures, imports, `log_format` forwarding, logs dispatch and TTY/run-as handling were left intact.
@@ -109,4 +111,5 @@ The previous V2 runtime may still own API/web/shell/site containers, old fronten
 - Updated existing lifecycle/deployment fixtures narrowly: non-staging callers now state that mode explicitly, restart targets bot only, down expects orphan cleanup, and obsolete Caddy/site-runtime tests/assertions were retired. The existing legacy deploy fixture is deliberately retained to exercise old-manifest compatibility in a later authorized test run.
 - Passed compile-only checks for changed `scripts/instance.py`, `tests/test_instance_ops.py` and `tests/test_docker_deployment.py` using `/home/codexy/deepseek/dame-curie/.venv/bin/python -I -B -X pycache_prefix=/home/codexy/deepseek/dame-curie-worktrees/discord-only-deploy/.validation-cache -m py_compile` with those explicit absolute files.
 - Passed `bash -n` for changed `install.sh` and `scripts/build_for_human.sh`, and `git diff --check`. No JavaScript was added or modified; the PM2 definition was deleted.
+- Bridge follow-up: retired only the existing mount-specific deployment test and listener-template rendering test (plus its unused `configparser` import); no replacement cases or absence assertions. Passed compile-only checks for the changed `tests/test_checkout_snapshot.py` and `tests/test_docker_deployment.py` with the same isolated interpreter/cache command, plus full follow-up diff review and `git diff --check`. CLI reader/client tests and application code were not changed or executed.
 - No application imports, test collection/execution, YAML library/Compose validation, builds, installs, network calls, Docker/sudo/runtime/Screen operations, private reads or nested agents. Compile and parser checks do not establish image readiness, shell/media correctness, runtime isolation or deployment acceptance.

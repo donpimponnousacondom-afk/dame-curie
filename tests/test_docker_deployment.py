@@ -53,22 +53,6 @@ def test_outer_container_privilege_boundary():
             assert mount["source"] != "/var/run/docker.sock"
 
 
-def test_only_bot_receives_private_live_git_socket_directory():
-    services = deployment()["services"]
-    mounts = {item["target"]: item for item in services["bot"]["volumes"]}
-    assert mounts["/run/dame-curie-checkout"] == {
-        "type": "bind", "source": "/srv/dame-curie-checkout/${INSTANCE_ID}",
-        "target": "/run/dame-curie-checkout", "read_only": True,
-        "bind": {"create_host_path": False},
-    }
-    assert services["bot"]["environment"]["DAME_CURIE_STARTUP_GIT_SOCKET"] == "/run/dame-curie-checkout/snapshot.sock"
-    for name, service in services.items():
-        assert all("/home/" not in item["source"] and ".git" not in item["source"] for item in service.get("volumes", []))
-        if name != "bot":
-            assert "DAME_CURIE_STARTUP_GIT_SOCKET" not in service.get("environment", {})
-            assert all(item["target"] != "/run/dame-curie-checkout" for item in service.get("volumes", []))
-
-
 def test_image_uses_allowlisted_source_and_locked_dependencies():
     dockerfile = (ROOT / "docker/app.Dockerfile").read_text()
     assert "python:3.14.4-slim-trixie" in dockerfile
