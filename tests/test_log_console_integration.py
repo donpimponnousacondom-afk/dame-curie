@@ -34,7 +34,7 @@ def test_jsonl_cli_follows_logs_without_lock_or_container_mutation(monkeypatch):
     command, env = follower.call_args.args
     assert command[-4:] == ["logs", "--follow", "--tail", "100"]
     assert env is app.env
-    assert follower.call_args.kwargs == {"output_format": "jsonl"}
+    assert follower.call_args.kwargs == {"output_format": "jsonl", "no_keys": False}
 
 
 @pytest.mark.parametrize("action", ["up", "start", "stop", "restart", "down", "backup", "restore"])
@@ -143,7 +143,7 @@ def test_logs_main_passes_parsed_terminal_intent_even_with_options_before_action
     monkeypatch.setattr(instance, "lifecycle", lifecycle)
     instance.main()
     account_lookup.assert_called_once_with("dame-curie-fixture", for_logs=True)
-    lifecycle.assert_called_once_with(app, "logs", log_format=format)
+    lifecycle.assert_called_once_with(app, "logs", log_format=format, no_keys=False)
     assert sys.dont_write_bytecode
 
 

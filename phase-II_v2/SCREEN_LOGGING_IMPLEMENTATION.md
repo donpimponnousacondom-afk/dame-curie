@@ -1,0 +1,99 @@
+# Append-only Screen viewer implementation
+
+Status: **implemented and source-reviewed; terminal/runtime acceptance NOT performed**.
+Branch: `work/screen-logging-20260919`; baseline: `43ce047d9d5985a78a9cf3899e0302acc36383d6`.
+Worktree: `/home/codexy/deepseek/dame-curie-worktrees/screen-logging`.
+
+## Delivered scope
+
+- Opt-in `logs --format screen`, with `--no-keys` accepted only for that action/mode, before identity/configuration discovery.
+- `scripts/instance.py` changes only the log-format/CLI forwarding seam. The existing selected Compose command, project/environment selection and `logs --follow --tail 100` remain intact.
+- `scripts/log_filter.py` selects a separate screen path before legacy stream selection. `auto`, `console`, `plain`, JSONL v1, legacy text adaptation, legacy key parsing and repaint rendering are unchanged. No default-mode switch.
+- Seven `scripts/log_console/append*.py` modules own the bounded append loop, TTY lease/writer, independent receive history, rendering/snapshots, controls and exact health repetition folding. `input.py` adds a separate finite `AppendKeys` parser without changing `KeyBuffer`.
+- Two existing exact-kwargs assertions in `tests/test_log_console_integration.py` now include forwarded `no_keys=False`, under the coordinator's narrow alignment instruction. No cases/assertions/tests were added or run.
+- No producer, publisher, incident-persistence, memory, deployment, parent-ledger or logging-plan edits. No external reference source reads were needed; the reviewed plan and local source supplied the contract.
+
+## Actual operator behavior
+
+Screen output appends newline-terminated blocks on the normal screen. Only viewer-owned SGR color/reset sequences are emitted: no alternate buffer, cursor positioning, erasure, carriage-return status, title or redraw. Severity, adapted scope, kind, viewer-local `receive#`, present typed image request ID and concise field tokens are distinguished. Full timestamps/provenance remain inspectable; unknown levels and absent IDs are not invented.
+
+Both input and output must be TTYs for color. An explicit allowlist of common terminal names enables basic SGR; `NO_COLOR`, dumb/unknown terminal types and either non-TTY descriptor disable it. Keys also require foreground ownership and no `--no-keys`. No implicit `/dev/tty` is opened. Redirected output remains control-neutralized, known-pattern-redacted plaintext; legacy plain remains **not** a safe-redaction export.
+
+Implemented local keys:
+
+| Keys | Behavior |
+| --- | --- |
+| `+`, `=`, `-` | Lower/raise DEBUG–CRITICAL minimum, clamped; unknown severity is visible at INFO but labelled UNKNOWN. |
+| `s b p d t c w a`, `o` | Scope filters and received Ollama visibility; Ollama starts hidden, `a` remains subagent. |
+| `f` | Toggle folding, explicitly replay up to five matches; expansion raises effective detail to JSON. |
+| `T`, `P` | Tool/provider summary → sanitized JSON metadata → retained evidence previews; freeze matching candidates and pin newest. Follow remains follow. |
+| `r`, `e` | Pause and replay at most twenty records oldest-to-newest. `r` applies filters; `e` deliberately ignores severity/scope/Ollama filters and includes warnings/errors/recognized failures. |
+| `[`, `]`, `L`, `l` | Older/newer navigation within a frozen set of at most 500 candidate IDs. Evicted targets report unavailable, never re-anchor to new arrivals. |
+| Enter, `n`, `N` | Pause and inspect/page the same immutable sanitized snapshot. Page admission failure does not advance selection/page state. Boundary notices do not rebuild pinned evidence. |
+| Space | Pause display, not ingress. Cancel whole unsent LIVE blocks; a partial block may finish. Resume reports receive/unavailable/cancelled counts and replays at most twenty retained unseen matches. |
+| `i`, `0`, `h`, `?` | Local counters/correlation coverage; reset controls without clearing history; pin/page help. Help replaces the one selected snapshot. |
+| `q`, Ctrl-C, Ctrl-D | Viewer/follower exit only. EOF, TERM/HUP/QUIT also exit; Ctrl-Z restores and exits, not suspend. |
+
+Esc is reserved, not a resume key. CSI/SS3/OSC/DCS-style strings, Alt sequences and bracketed paste carry state across reads; Unicode bytes are not ASCII-decoded into commands. Prefix state is capped at 64 bytes and incomplete sequences expire after two seconds into a sticky **keys disabled** notice. Subsequent bytes do not dispatch commands; ISIG Ctrl-C still exits. Long/incomplete paste can therefore disable keys rather than resume dispatch. Unmarked pasted ASCII is indistinguishable from typed commands: use `--no-keys` when this matters. Complete arrows are ignored, not mapped onto navigation.
+
+Only the existing typed `image.request.start/done` payload supplies an image request ID. Other text remains adapted text, not native request/job/turn evidence. Traceback fragments are retained separately, with no same-service grouping or inherited IDs. Provider timing prose is not retroactively correlated. Scope attribution remains the existing imperfect logger/service heuristic.
+
+## Admission, pressure and shutdown
+
+| Resource | Implemented bound/policy |
+| --- | --- |
+| Binary ingress | Read at most 16 KiB and normalize at most 16 completed records per iteration. Individual framed record cap is **64 KiB**; the pending byte buffer stays at most 80 KiB, below the plan's 2 MiB ceiling. Split UTF-8 is decoded only after framing; overlong bodies are discarded to their delimiter. |
+| Normalization | Nesting ceiling 32 and container ceiling 4096 before recursive adaptation; serialized record ceiling 256 KiB, otherwise explicit omission. |
+| Shared history | At most 500 independent normalized records and 2 MiB ASCII-serialized evidence. Error selection indexes this ring; no second error payload ring. |
+| Selected/help snapshot | At most 512 KiB sanitized UTF-8, built incrementally, plus at most 500 frozen candidate IDs. Geometry/text stay pinned. No unbounded offset/page cache. |
+| Evidence pages | At most 6000 characters and 80 rows; content wraps to selected geometry with `| ` prefixes. Below 4×4, evidence paging reports insufficient geometry rather than pretending to fit; resize then reselect. Live detail previews are additionally capped. |
+| Rendered queue | At most 128 blocks / 256 KiB, including a single partially written block; individual block cap 64 KiB. One nonblocking writer uses offsets and writes at most 16 KiB per iteration. |
+| Repetitions | At most 500 groups, keys at most 256 bytes. Only the exact existing local successful-health recognizer folds; first occurrence is eligible immediately, then an out-of-band 30-second/flush summary gives count, first/last receive numbers and original timestamps. History is unaffected. |
+| Keyboard/wait | At most 64 input bytes per iteration; polling idle wait at most 100 ms, shortened for the EOF deadline. Signal stop state bypasses the output queue. |
+
+LIVE blocks preserve receive order among those admitted and not dropped. Priority REPLAY/pages/help/notices are labelled out-of-band and can precede queued LIVE blocks, never the middle of a partially written block. Whole unsent LIVE blocks may be evicted under pressure. Cumulative affected-count/first-last receive ranges are explicitly **not** assertions that every sequence in the range was lost. Replay/page record omissions and out-of-band omitted blocks have separate counters; rejected controls get a deferred busy notice when output can be admitted.
+
+Resume uses the **completed LIVE display watermark**, not the newest received event. The retained catch-up can include a partial pre-pause row or previously explicit replay: conservative duplication is preferable to claiming unseen evidence was shown. It reports limited catch-up omissions rather than dumping an unlimited backlog.
+
+The new follower uses binary `Popen` stdout, DEVNULL stdin even in keyless mode, and its own session/process group. No bot stdin or global logging-handler replacement is involved. `waitid(WNOWAIT)` observes exit without reaping/releasing the owned PID before group cleanup. Foreground ownership is checked before each key read and each loop; SIGTTIN/SIGTTOU interrupt rather than allowing Python to retry job-control I/O indefinitely.
+
+The terminal lease saves exact input/output `F_GETFL` values before either descriptor changes, covering descriptors that share an open-file description. It preserves/enables ISIG cbreak and restores termios without draining, then best-effort color reset, fd flags and saved signal handlers. Cleanup callbacks remain independent if one restoration fails. The writer has stopped before restoration. Quit/signals abandon queued output instead of waiting for a blocked terminal.
+
+Only after terminal restoration does the owned follower receive TERM, with a five-second wait, then KILL and a one-second reap grace on timeout. Repeated exit signals cannot interrupt that bounded cleanup; handlers are restored afterwards. Cleanup failure is surfaced even on another exception path. Clean source EOF gets at most 250 ms to flush admitted output; unresolved output/evidence admission loss and unexpected/nonzero source exit are errors, not lossless success. Broken pipe/requested exit are separate outcomes. SIGKILL cannot restore terminal state.
+
+## Important conservative omissions and limits
+
+**Sticky evidence omission is deliberate and screen-only.** A framing gap/record over 64 KiB, oversized service attribution, excessive nesting/container structure or exhaustion of bounded multiline-redaction contexts can destroy knowledge of whether following text continues a secret/configuration block. This session then displays an explicit `evidence disabled: redaction continuity lost` notice and substitutes omission records until the viewer is restarted. It does not reset into potentially private fragments. A single malformed structured record or over-budget serialized record is omitted rather than raw-fallback. This conservative policy can suppress otherwise harmless later evidence and requires independent acceptance; it does not affect legacy modes or original producer logging.
+
+Known-pattern redaction occurs **after original log persistence**. The viewer cannot discover the bot's registered secret values or prove arbitrary tool output/private message prose is safe to publish. The existing `safety.py` dependency on `error_reporting.redact_sensitive_text` is explicit: source inspection confirms standard-library imports and unconfigured `_store=None`; no store is constructed/bound/read by this viewer. Original incidents and REM/RAG writes are untouched.
+
+Regular-file redirection uses the same bounded byte queue/poll path and emits an explicit warning: **filesystem writes can still block despite O_NONBLOCK**. No terminal responsiveness claim is made for a stalled filesystem. Unsupported nonblocking setup fails rather than silently using the old synchronous interactive renderer. Linux/POSIX termios, fcntl, poll and waitid behavior needs disposable acceptance. These retention bounds are not a measured RSS or hard real-time latency guarantee. Existing per-codepoint width logic is not full grapheme correctness, and header wrapping/very narrow terminals require visual acceptance.
+
+## Checks actually performed
+
+- Read AGENTS, the full redesign/logging plans, the required local orientation documents and the relevant parser/safety/control/lifecycle call paths. No other-checkout research.
+- Loaded `implement-tyranny` and `implement-sanity`; manually reviewed the actual changes, including isolation, bounded state, malformed-input paths, partial-write ordering, immutable selection, signal restoration and cleanup. Fixed issues found during that review; this is **self-review**, not independent approval.
+- Explicit compile-only validation succeeded for the ten changed implementation Python files plus the single narrowly aligned existing test source, using `/home/codexy/deepseek/dame-curie/.venv/bin/python -I -B -X pycache_prefix=/home/codexy/deepseek/dame-curie-worktrees/screen-logging/.validation-cache -m py_compile` with eleven explicit absolute paths. Bytecode is isolated to this worktree and is not staged.
+- `git diff --check` passed. No Ruff/type-checker/test/collection/import/runtime pass is claimed.
+- No Docker, sudo, services, Screen/PTY, network, application/test execution/imports, dependency installation, private configuration/state/log reads, new tests, nested agents or remote Git operations. No deployment effect.
+
+## Separate terminal acceptance still required
+
+These are **future coordinator-only acceptance steps, not executed checks or new test code**. Use disposable synthetic viewer-only processes/PTYs, an explicit import allowlist including the audited redactor helper, no private mounts/tokens/network, and an independently owned synthetic producer. Do not invoke `scripts/instance.py` for synthetic input: it performs identity/configuration/runtime discovery.
+
+1. Verify ordinary PTY and disposable Screen append history: no alternate buffer/repaint; default/remapped Screen prefix, Space then Screen copy mode, detach/reattach. Record byte output and visual behavior rather than infer it from source.
+2. Exercise no-keys, piped input/output, regular-file output, `TERM=dumb`, an unknown terminal name and `NO_COLOR`; verify no key reader or control sequences in non-TTY output. Confirm old formats remain selectable with unchanged behavior.
+3. Check every exit path (q/Ctrl-C/Ctrl-D, input/source EOF, TERM/HUP/QUIT/TSTP, deliberate viewer exception, foreground loss) against saved termios and fd flags, including shared input/output open descriptions. Confirm only the viewer-owned follower is stopped and the independent producer survives.
+4. Block/throttle terminal output and burst source input, both following and paused. Measure retained buffers/RSS trend, actual quit/restoration latency, partial SGR/write behavior, gap notices, rejected-page retry behavior, EOF grace and TERM/KILL cleanup limits.
+5. Split UTF-8, CSI/SS3/OSC/DCS/Alt and paste markers across reads; include malformed/long/expired sequences and delayed suffixes. Confirm no suffix dispatch and sticky disabled-key behavior. Do not claim unmarked-paste protection.
+6. Exercise filters, f/T/P/r/e, frozen navigation, eviction, help and repeated page commands during arrivals and resize. Verify unfiltered e, no candidate jumps, no page advance after rejected admission, conservative bounded resume catch-up and tiny-terminal behavior.
+7. Feed synthetic known-pattern credentials/config/private-key fragments, hostile controls, invalid bytes, malformed JSON and boundary-sized records. Verify redaction before retained replay, explicit omissions, sticky continuity-loss policy and no raw fallback. No real secret/log input.
+8. Interleave synthetic image IDs, provider/job prose, independent traceback fragments and exact health repetitions. Verify only actual image IDs appear, no proximity correlation, no broad failure folding and truthful LIVE/REPLAY ordering/counters.
+
+## Cross-lane integration risks / unimplemented seam
+
+- Logging lands first. Deployment edits overlap `Instance.compose`, `lifecycle` and main CLI forwarding: preserve `log_format`/`no_keys` parameters and the logs call while changing unrelated service selection. API/web removal must not erase historical web parsing/filter support or silently narrow selected log sources.
+- Do not switch auto/console to screen until independent source review and terminal acceptance. This host-side viewer does not require application-image producer edits.
+- **No native operational producer schema/transport, journal, ledger or store reader was authorized or implemented.** Full request start/retry/failure, job/turn propagation, provider metrics and producer-before-persistence allowlisting require a separate explicit contract. Successful metrics IDs cannot identify preceding calls; generic tools finishing in INFO are not assumed successful.
+- Preserve publisher/syncer, outbound selection, functional REM/RAG, incident dedup/redaction and delivery metrics across other lanes. This viewer adds no handler takeover or alternate functional data sink.
+- Independent reviewer and disposable terminal acceptance findings remain integration gates; compilation alone is not runtime correctness, losslessness or deployment readiness.

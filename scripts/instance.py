@@ -142,7 +142,7 @@ class Instance:
             raise RuntimeError(f"Docker {args[0]} failed or wrote diagnostics; inspect the private engine directly")
         return result.stdout
 
-    def compose(self, *args: str, log_format: str = "auto") -> None:
+    def compose(self, *args: str, log_format: str = "auto", no_keys: bool = False) -> None:
         command = ["docker", "compose", "--project-name", self.project,
                    "--project-directory", str(CHECKOUT), "--env-file", "/dev/null",
                    "-f", str(CHECKOUT / "compose.yaml")]
@@ -154,7 +154,7 @@ class Instance:
                 from log_filter import follow_logs
             else:
                 from scripts.log_filter import follow_logs
-            follow_logs(command, self.env, output_format=log_format)
+            follow_logs(command, self.env, output_format=log_format, no_keys=no_keys)
         else:
             result = subprocess.run(command, env=self.env)
             if result.returncode:
@@ -224,7 +224,7 @@ def quiesce(instance: Instance, running: list[dict]) -> list[dict]:
     return containers
 
 
-def lifecycle(instance: Instance, action: str, *, log_format: str = "auto") -> None:
+def lifecycle(instance: Instance, action: str, *, log_format: str = "auto", no_keys: bool = False) -> None:
     if action in {"stop", "down"}:
         containers = quiesce(instance, [])
         if action == "down":
@@ -241,7 +241,7 @@ def lifecycle(instance: Instance, action: str, *, log_format: str = "auto") -> N
         elif action in {"up", "start"}:
             instance.compose("up", "-d", "--wait", "--wait-timeout", "300")
         else:
-            instance.compose("logs", "--follow", "--tail", "100", log_format=log_format)
+            instance.compose("logs", "--follow", "--tail", "100", log_format=log_format, no_keys=no_keys)
 
 
 def archive_outside(path: Path, instance: Instance) -> Path:
@@ -339,11 +339,14 @@ def main() -> None:
     parser.add_argument("instance")
     parser.add_argument("action", choices=("up", "start", "stop", "restart", "logs", "down", "backup", "restore"))
     parser.add_argument("archive", nargs="?", type=Path)
-    parser.add_argument("--format", dest="log_format", choices=("auto", "console", "plain", "jsonl"),
-                        help="logs only: auto/console use a capable input+output TTY, otherwise legacy plain; jsonl emits every received line")
+    parser.add_argument("--format", dest="log_format", choices=("auto", "console", "plain", "jsonl", "screen"),
+                        help="logs only: screen is opt-in append-only; auto/console retain full-screen TTY selection; plain/jsonl unchanged")
+    parser.add_argument("--no-keys", action="store_true", help="logs --format screen only: disable keyboard controls")
     args = parser.parse_args()
     if args.log_format is not None and args.action != "logs":
         parser.error("--format is only available for logs")
+    if args.no_keys and (args.action != "logs" or args.log_format != "screen"):
+        parser.error("--no-keys requires logs --format screen")
     if (args.action in {"backup", "restore"}) != (args.archive is not None):
         parser.error("backup/restore require an archive path; other commands do not")
     if args.action == "logs":
@@ -353,7 +356,7 @@ def main() -> None:
         account = service_account(args.instance)
     instance = Instance(args.instance, account)
     if args.action == "logs":
-        lifecycle(instance, args.action, log_format=args.log_format or "auto")
+        lifecycle(instance, args.action, log_format=args.log_format or "auto", no_keys=args.no_keys)
         return
     lock_path = instance.path / ".operations.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
