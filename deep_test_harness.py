@@ -12,11 +12,10 @@ Features tested:
   5. RAG Vector Memory & Context Budgeting (SQLite vector DB, similarity, entity memory, tier budget)
   6. Autonomy Engine & Turn-Taking (4 stages, 8 room states, floor verdicts, blacklists, solo)
   7. Chess Engine & Board Mechanics (SAN/UCI, alpha-beta negamax, FEN, image rendering)
-  8. Sites & Backend Datastores (Site building, KV store, append lists, container lifecycle)
   9. X (Twitter) Client (Backends fallback, rate limits, GraphQL, mention poller)
  10. Inbox System (Notices, requests)
  11. Security Guardrails & Response Guard (Taint gates, repetition scrubbing, echo loops, code safety)
- 12. API Server & Dashboard Controls (HTTP Basic auth, login, /api/control clamping, RAG endpoints)
+ 12. Default Controls
  13. Concurrency Safety & Bot Commands (,stop, ,prompt, ,solo, ,drug, ,jailbreak, ,context, ,rem, ,x, ,vc)
 """
 
@@ -42,7 +41,6 @@ logging.basicConfig(level=logging.ERROR)
 # Import Maxwell modules
 import config  # noqa: E402
 import control_defaults  # noqa: E402
-from api.state import _sanitize_control  # noqa: E402
 import rag_memory  # noqa: E402
 import context_budget  # noqa: E402
 import providers  # noqa: E402
@@ -50,7 +48,6 @@ import tool_schemas  # noqa: E402
 import tool_registry  # noqa: E402
 import bot_tools  # noqa: E402
 import chess_game  # noqa: E402
-import site_backend  # noqa: E402
 import x_client  # noqa: E402
 import inbox  # noqa: E402
 import response_guard  # noqa: E402
@@ -546,52 +543,6 @@ class DeepTestHarness:
         self.run_sync_test("Chess rules, negamax engine & image generation", test_chess_gameplay_and_engine)
 
     # =========================================================================
-    # SUITE 8: Sites & Backend Datastore
-    # =========================================================================
-    def test_suite_sites(self):
-        self.current_suite = "Sites & Backend Datastore"
-        print(f"\n\033[1;34m=== SUITE 8: {self.current_suite} ===\033[0m")
-
-        temp_data_dir = self.make_temp_dir()
-
-        def test_site_backend_kv_and_items():
-            slug = "deep-test-site"
-
-            # Key-Value store
-            site_backend.kv_set(temp_data_dir, slug, "visitor_count", 10)
-            val = site_backend.kv_get(temp_data_dir, slug, "visitor_count")
-            assert val == 10
-
-            # Atomic increment
-            new_val = site_backend.kv_bump(temp_data_dir, slug, "visitor_count", 5)
-            assert new_val == 15
-
-            # Items list
-            item1 = site_backend.items_add(temp_data_dir, slug, "guestbook", {"user": "Alice", "msg": "Hello!"})
-            item2 = site_backend.items_add(temp_data_dir, slug, "guestbook", {"user": "Bob", "msg": "Nice site!"})
-            assert item1["id"] is not None
-            assert item2["id"] is not None
-
-            items = site_backend.items_list(temp_data_dir, slug, "guestbook", limit=10)
-            assert len(items) == 2
-            assert items[0]["data"]["user"] == "Alice"
-            assert items[1]["data"]["user"] == "Bob"
-
-            # Delete item
-            del_ok = site_backend.items_delete(temp_data_dir, slug, "guestbook", item_id=item1["id"])
-            assert del_ok == 1
-            items_after = site_backend.items_list(temp_data_dir, slug, "guestbook", limit=10)
-            assert len(items_after) == 1
-            assert items_after[0]["id"] == item2["id"]
-
-            # Token bucket rate limiter
-            bucket = site_backend.RateLimiter(rate=2.0, burst=5)
-            assert bucket.allow("client_ip_1") is True
-            return "Site backend Key-Value, atomic bump & items list datastore verified"
-
-        self.run_sync_test("Site backend datastore (KV, atomic counter, items list)", test_site_backend_kv_and_items)
-
-    # =========================================================================
     # SUITE 9: X (Twitter) Client & Rate Limiting
     # =========================================================================
     async def test_suite_x_client(self):
@@ -746,25 +697,11 @@ class DeepTestHarness:
         self.run_sync_test("Indirect prompt injection taint gate", test_taint_gating)
 
     # =========================================================================
-    # SUITE 12: API Server & Dashboard Controls
+    # SUITE 12: Default Controls
     # =========================================================================
-    def test_suite_api(self):
-        self.current_suite = "API Server & Controls"
+    def test_suite_controls(self):
+        self.current_suite = "Default Controls"
         print(f"\n\033[1;34m=== SUITE 12: {self.current_suite} ===\033[0m")
-
-        def test_control_sanitization_and_clamping():
-            raw_input = {
-                "autonomy_floor_cooldown_seconds": 999999,  # exceeds max 3600 -> clamped
-                "autonomy_interval_seconds": 5,             # below min 30 -> clamped
-                "autonomy_enabled": "true",                 # string -> bool
-                "scrub_repetitions": False,
-            }
-            sanitized = _sanitize_control(raw_input)
-            assert sanitized["autonomy_floor_cooldown_seconds"] <= 3600
-            assert sanitized["autonomy_interval_seconds"] >= 30
-            assert sanitized["autonomy_enabled"] is True
-            assert sanitized["scrub_repetitions"] is False
-            return "Control keys clamped to bounds & typed appropriately"
 
         def test_default_control_completeness():
             defaults = control_defaults.DEFAULT_CONTROL
@@ -776,7 +713,6 @@ class DeepTestHarness:
             assert "x_posts_per_hour" in defaults
             return f"{len(defaults)} canonical default control keys verified"
 
-        self.run_sync_test("Control state sanitization, typing & clamping", test_control_sanitization_and_clamping)
         self.run_sync_test("Default control dictionary completeness", test_default_control_completeness)
 
     # =========================================================================
@@ -826,7 +762,7 @@ class DeepTestHarness:
 
         t_start = time.perf_counter()
 
-        # Run all 13 test suites
+        # Run all test suites
         self.test_suite_config()
         self.test_suite_providers()
         self.test_suite_tools()
@@ -834,11 +770,10 @@ class DeepTestHarness:
         await self.test_suite_rag_memory()
         self.test_suite_autonomy()
         self.test_suite_chess()
-        self.test_suite_sites()
         await self.test_suite_x_client()
         await self.test_suite_inbox()
         self.test_suite_security_guards()
-        self.test_suite_api()
+        self.test_suite_controls()
         await self.test_suite_bot_commands()
 
         total_dur = (time.perf_counter() - t_start) * 1000

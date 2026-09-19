@@ -504,11 +504,6 @@ class Config:
         "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
     )
     DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
-    DAME_CURIE_API_HOST = os.getenv("DAME_CURIE_API_HOST", "127.0.0.1")
-    DAME_CURIE_API_PORT = _int_env("DAME_CURIE_API_PORT", 8765, min_value=1, max_value=65535)
-    DAME_CURIE_CORS_ORIGIN = os.getenv(
-        "DAME_CURIE_CORS_ORIGIN", DAME_CURIE_PUBLIC_BASE_URL.rstrip("/")
-    )
 
     # -------------------------------------------------------------------------
     # X (Twitter). Two cookies out of a logged-in browser tab are the whole
@@ -532,11 +527,9 @@ class Config:
     X_TIMEOUT_SECONDS = _int_env("X_TIMEOUT_SECONDS", 20, min_value=5, max_value=120)
     X_GRAPHQL_FILE = os.getenv("X_GRAPHQL_FILE", "").strip()
 
-    # Admin / owner allowlists. Re-exported here so Config is the single
+    # Owner allowlist. Re-exported here so Config is the single
     # source of truth; bot_tools.refresh_owner_ids() still does a runtime
     # reload but the initial parse lives here.
-    DAME_CURIE_ADMIN_USER = os.getenv("DAME_CURIE_ADMIN_USER", "admin").strip()
-    DAME_CURIE_ADMIN_PASSWORD = os.getenv("DAME_CURIE_ADMIN_PASSWORD", "").strip()
     DAME_CURIE_OWNER_IDS: ClassVar[set[str]] = {
         item.strip()
         for item in os.getenv("DAME_CURIE_OWNER_IDS", "").split(",")
@@ -608,11 +601,6 @@ class Config:
 
         _log = logging.getLogger("maxwell.config")
 
-        if not cls.DAME_CURIE_ADMIN_PASSWORD:
-            _log.warning(
-                "DAME_CURIE_ADMIN_PASSWORD is empty — the admin API will return "
-                "503 on every request. Set a real password in .env."
-            )
         if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(
                 "DAME_CURIE_OWNER_IDS is empty — admin commands (`,prompt`, "

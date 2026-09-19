@@ -658,9 +658,15 @@ def refresh_site(bot: Any, slug: str) -> str:
     url = f"{public_base}/bot/{slug}/" if public_base else f"/bot/{slug}/"
     code_dir = None
     try:
-        import site_server
+        import docker_runtime as runtime
 
-        candidate = site_server.code_dir(data_dir, slug)
+        if not re.fullmatch(r"[a-z0-9-]{2,30}", slug):
+            raise ValueError("bad site slug")
+        candidate = Path(data_dir) / "site_servers" / slug
+        if runtime.container_mode():
+            runtime.confined_path(candidate, ("data",))
+            if Path(data_dir) != runtime.STATE_ROOT / "data":
+                raise ValueError("container site data must use /state/data")
         if candidate.is_dir():
             code_dir = candidate
     except Exception:
