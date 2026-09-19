@@ -654,7 +654,7 @@ def test_explicit_maintenance_database_never_reads_or_migrates_siblings(
     insert(original)
     original._db.close()
     target = tmp_path / "selected.db"
-    (tmp_path / "maxwell_rag.db").rename(target)
+    (tmp_path / "dame-curie-rag.db").rename(target)
     (tmp_path / "long_term_memory.txt").write_text("do not import this fact")
     (tmp_path / "prompts.json").write_text("malformed sidecar")
 
@@ -668,7 +668,7 @@ def test_explicit_maintenance_database_never_reads_or_migrates_siblings(
     manager = rag.RAGMemoryManager(str(tmp_path / "unused"), db_path=target)
     assert manager.embedding_status()["total"] == 1
     assert not (tmp_path / "unused").exists()
-    assert not (tmp_path / "maxwell_rag.db").exists()
+    assert not (tmp_path / "dame-curie-rag.db").exists()
     manager._db.close()
 
 

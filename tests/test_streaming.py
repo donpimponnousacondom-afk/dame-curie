@@ -4,7 +4,7 @@ in isolation — it imports the real module so any bug in the consumer is caught
 here, not in a mock-only test that wouldn't have caught the request_start * 1000
 unit mismatch from the first edit.
 
-Run: cd /root/maxwell && python3 tests/test_streaming.py
+Run from the checkout with its own interpreter: .venv/bin/python tests/test_streaming.py
 """
 
 import asyncio
@@ -12,7 +12,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, "/root/maxwell")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import providers  # noqa: E402  -- production module under test
 

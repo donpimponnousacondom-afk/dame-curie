@@ -12,23 +12,23 @@ from bot_tools import ShellTool, _ensure_sandbox_image, _sandbox_source_hash
 
 @pytest.fixture(autouse=True)
 def isolated_environment(monkeypatch):
-    monkeypatch.setenv("MAXWELL_CONTAINER_MODE", "true")
-    monkeypatch.setenv("MAXWELL_INSTANCE_ID", "alice")
-    monkeypatch.setenv("MAXWELL_HOST_INSTANCE_DIR", "/srv/maxwell/alice")
-    monkeypatch.setenv("MAXWELL_SHELL_DIR", "/state/shell")
-    monkeypatch.delenv("MAXWELL_SHELL_FULL_HOST", raising=False)
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "true")
+    monkeypatch.setenv("DAME_CURIE_INSTANCE_ID", "dame-curie-alice")
+    monkeypatch.setenv("DAME_CURIE_HOST_INSTANCE_DIR", "/srv/dame-curie-alice")
+    monkeypatch.setenv("DAME_CURIE_SHELL_DIR", "/state/shell")
+    monkeypatch.delenv("DAME_CURIE_SHELL_FULL_HOST", raising=False)
     monkeypatch.setattr(bot_tools, "_run_docker_cmd", AsyncMock(side_effect=AssertionError("unmocked Docker call")))
     monkeypatch.setattr(bot_tools.asyncio, "create_subprocess_exec", AsyncMock(side_effect=AssertionError("live subprocess forbidden")))
 
 
-def shell_info(instance="alice", running=True, mode="isolated"):
+def shell_info(instance="dame-curie-alice", running=True, mode="isolated"):
     return {
         "Id": "container-id",
         "Image": "image-id",
         "State": {"Running": running},
-        "Config": {"User": "root", "WorkingDir": "/home/maxwell", "Cmd": ["sleep", "infinity"], "Entrypoint": None, "Labels": {
-            "maxwell.instance": instance, "maxwell.kind": "shell",
-            "maxwell.shell.mode": mode, "maxwell.shell.init": "1",
+        "Config": {"User": "root", "WorkingDir": "/home/dame-curie", "Cmd": ["sleep", "infinity"], "Entrypoint": None, "Labels": {
+            "dame-curie.instance": instance, "dame-curie.kind": "shell",
+            "dame-curie.shell.mode": mode, "dame-curie.shell.init": "1",
         }},
         "NetworkSettings": {"Networks": {"bridge": {}}},
         "HostConfig": {
@@ -39,14 +39,14 @@ def shell_info(instance="alice", running=True, mode="isolated"):
             "CapAdd": ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "NET_RAW", "NET_BIND_SERVICE"],
             "SecurityOpt": ["no-new-privileges:true"],
         },
-        "Mounts": [{"Type": "bind", "Source": f"/srv/maxwell/{instance}/shell", "Destination": "/home/maxwell", "RW": True}],
+        "Mounts": [{"Type": "bind", "Source": f"/srv/{instance}/shell", "Destination": "/home/dame-curie", "RW": True}],
     }
 
 
-def image_info(instance="alice", source=None):
+def image_info(instance="dame-curie-alice", source=None):
     return {"Id": "image-id", "Config": {"Labels": {
-        "maxwell.instance": instance, "maxwell.kind": "shell-image",
-        "maxwell.shell.source": source or _sandbox_source_hash(),
+        "dame-curie.instance": instance, "dame-curie.kind": "shell-image",
+        "dame-curie.shell.source": source or _sandbox_source_hash(),
     }}}
 
 
@@ -56,15 +56,15 @@ def docker_result(value):
 
 def test_separate_instance_names(monkeypatch):
     shell = ShellTool(bot=None)
-    assert shell.CONTAINER_NAME == "maxwell-alice-shell"
-    assert shell.IMAGE_NAME == "maxwell-alice-shell-image"
-    monkeypatch.setenv("MAXWELL_INSTANCE_ID", "bob")
-    assert shell.CONTAINER_NAME == "maxwell-bob-shell"
-    assert shell.IMAGE_NAME == "maxwell-bob-shell-image"
+    assert shell.CONTAINER_NAME == "dame-curie-alice-shell"
+    assert shell.IMAGE_NAME == "dame-curie-alice-shell-image"
+    monkeypatch.setenv("DAME_CURIE_INSTANCE_ID", "dame-curie-bob")
+    assert shell.CONTAINER_NAME == "dame-curie-bob-shell"
+    assert shell.IMAGE_NAME == "dame-curie-bob-shell-image"
 
 
 def test_full_host_rejected_before_docker(monkeypatch):
-    monkeypatch.setenv("MAXWELL_SHELL_FULL_HOST", "true")
+    monkeypatch.setenv("DAME_CURIE_SHELL_FULL_HOST", "true")
     shell = ShellTool(bot=None)
     shell._run_docker = AsyncMock()
     with pytest.raises(ValueError, match="forbidden"):
@@ -83,7 +83,7 @@ def test_rootful_or_failed_daemon_refused(options, stderr):
 
 def test_wrong_label_never_removed_started_or_executed():
     shell = ShellTool(bot=None)
-    shell._run_docker = AsyncMock(side_effect=[docker_result(["name=rootless"]), docker_result([shell_info("bob")])])
+    shell._run_docker = AsyncMock(side_effect=[docker_result(["name=rootless"]), docker_result([shell_info("dame-curie-bob")])])
     with pytest.raises(ValueError, match="not owned"):
         asyncio.run(shell._ensure_container())
     assert [call.args[0] for call in shell._run_docker.call_args_list] == ["info", "inspect"]
@@ -100,11 +100,11 @@ def test_container_run_uses_host_translated_bind_and_labels(monkeypatch):
     ])
     assert asyncio.run(shell._ensure_container()) == "container-id"
     args = shell._run_docker.call_args_list[2].args
-    assert "/srv/maxwell/alice/shell:/home/maxwell:rw" in args
-    assert "maxwell.instance=alice" in args
-    assert "maxwell.kind=shell" in args
-    assert args[args.index("--name") + 1] == "maxwell-alice-shell"
-    assert args[-1] == "maxwell-alice-shell-image"
+    assert "/srv/dame-curie-alice/shell:/home/dame-curie:rw" in args
+    assert "dame-curie.instance=dame-curie-alice" in args
+    assert "dame-curie.kind=shell" in args
+    assert args[args.index("--name") + 1] == "dame-curie-alice-shell"
+    assert args[-1] == "dame-curie-alice-shell-image"
     assert args[args.index("--network") + 1] == "bridge"
     assert "--privileged" not in args
     assert not any("docker.sock" in arg or ":/host" in arg for arg in args)
@@ -122,9 +122,9 @@ def test_export_rejects_unexpected_container(mutation):
     elif mutation == "image":
         info["Image"] = "foreign-image"
     elif mutation == "mode":
-        info["Config"]["Labels"]["maxwell.shell.mode"] = "full"
+        info["Config"]["Labels"]["dame-curie.shell.mode"] = "full"
     elif mutation == "source":
-        info["Mounts"][0]["Source"] = "/srv/maxwell/bob/shell"
+        info["Mounts"][0]["Source"] = "/srv/dame-curie-bob/shell"
     else:
         info["HostConfig"]["SecurityOpt"] = []
     shell = ShellTool(bot=None)
@@ -169,27 +169,27 @@ def test_owned_mode_transition_removes_by_id(monkeypatch):
 def test_image_build_is_namespaced_labeled_and_hashed(monkeypatch):
     docker = AsyncMock(side_effect=[((b"", b"No such image"), 1), ((b"", b""), 0)])
     monkeypatch.setattr(bot_tools, "_run_docker_cmd", docker)
-    asyncio.run(_ensure_sandbox_image("maxwell-alice-shell-image"))
+    asyncio.run(_ensure_sandbox_image("dame-curie-alice-shell-image"))
     args = docker.call_args.args
-    assert args[:3] == ("build", "-t", "maxwell-alice-shell-image")
-    assert "maxwell.instance=alice" in args
-    assert "maxwell.kind=shell-image" in args
-    assert f"maxwell.shell.source={_sandbox_source_hash()}" in args
+    assert args[:3] == ("build", "-t", "dame-curie-alice-shell-image")
+    assert "dame-curie.instance=dame-curie-alice" in args
+    assert "dame-curie.kind=shell-image" in args
+    assert f"dame-curie.shell.source={_sandbox_source_hash()}" in args
     assert args[args.index("-f") + 1].endswith("docker/Dockerfile")
 
 
 def test_wrong_image_owner_not_overwritten(monkeypatch):
-    docker = AsyncMock(return_value=docker_result([image_info("bob")]))
+    docker = AsyncMock(return_value=docker_result([image_info("dame-curie-bob")]))
     monkeypatch.setattr(bot_tools, "_run_docker_cmd", docker)
     with pytest.raises(ValueError, match="not owned"):
-        asyncio.run(_ensure_sandbox_image("maxwell-alice-shell-image"))
+        asyncio.run(_ensure_sandbox_image("dame-curie-alice-shell-image"))
     assert docker.call_count == 1
 
 
 def test_legacy_names_and_workspace_preserved(monkeypatch):
-    monkeypatch.delenv("MAXWELL_CONTAINER_MODE")
+    monkeypatch.delenv("DAME_CURIE_CONTAINER_MODE")
     shell = ShellTool(bot=None)
-    assert shell.CONTAINER_NAME == shell.IMAGE_NAME == "maxwell-shell"
+    assert shell.CONTAINER_NAME == shell.IMAGE_NAME == "dame-curie-shell"
     assert bot_tools._shell_workspace() == Path(bot_tools.__file__).parent / "shelldocker"
 
 
@@ -232,14 +232,14 @@ def test_timeout_cleanup_refuses_replaced_container():
 
 
 def test_legacy_export_checks_mode_and_bind(monkeypatch):
-    monkeypatch.delenv("MAXWELL_CONTAINER_MODE")
+    monkeypatch.delenv("DAME_CURIE_CONTAINER_MODE")
     info = shell_info()
-    info["Config"]["Labels"] = {"maxwell.shell.mode": "isolated", "maxwell.shell.init": "1"}
+    info["Config"]["Labels"] = {"dame-curie.shell.mode": "isolated", "dame-curie.shell.init": "1"}
     info["Mounts"][0]["Source"] = str(bot_tools._shell_workspace())
     shell = ShellTool(bot=None)
     shell._run_docker = AsyncMock(return_value=docker_result([info]))
     assert asyncio.run(shell._verify_export_container()) == "container-id"
-    info["Config"]["Labels"]["maxwell.shell.mode"] = "full"
+    info["Config"]["Labels"]["dame-curie.shell.mode"] = "full"
     shell._run_docker = AsyncMock(return_value=docker_result([info]))
     with pytest.raises(ValueError, match="mode"):
         asyncio.run(shell._verify_export_container())
@@ -251,7 +251,7 @@ def test_image_inspect_denial_does_not_build(monkeypatch):
     with pytest.raises(RuntimeError, match="permission denied"):
         asyncio.run(_ensure_sandbox_image())
     assert docker.call_count == 1
-    assert docker.call_args.args == ("image", "inspect", "maxwell-alice-shell-image")
+    assert docker.call_args.args == ("image", "inspect", "dame-curie-alice-shell-image")
 
 
 def test_owned_outdated_image_rebuilt_with_current_hash(monkeypatch):
@@ -259,4 +259,4 @@ def test_owned_outdated_image_rebuilt_with_current_hash(monkeypatch):
     monkeypatch.setattr(bot_tools, "_run_docker_cmd", docker)
     asyncio.run(_ensure_sandbox_image())
     assert docker.call_count == 2
-    assert f"maxwell.shell.source={_sandbox_source_hash()}" in docker.call_args.args
+    assert f"dame-curie.shell.source={_sandbox_source_hash()}" in docker.call_args.args

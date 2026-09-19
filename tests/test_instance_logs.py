@@ -102,10 +102,10 @@ def test_every_other_line_is_unchanged_and_immediate(line):
 
 
 def test_colored_compose_prefix_and_gin_fields_keep_original_latest_line():
-    first = health_line(service="maxwell-curie-ollama-1")
-    first = first.replace("maxwell-curie-ollama-1", "\x1b[36mmaxwell-curie-ollama-1\x1b[0m")
-    latest = health_line(30, service="maxwell-curie-ollama-1")
-    latest = latest.replace("maxwell-curie-ollama-1", "\x1b[1;36mmaxwell-curie-ollama-1\x1b[0m")
+    first = health_line(service="dame-curie-ollama-1")
+    first = first.replace("dame-curie-ollama-1", "\x1b[36mdame-curie-ollama-1\x1b[0m")
+    latest = health_line(30, service="dame-curie-ollama-1")
+    latest = latest.replace("dame-curie-ollama-1", "\x1b[1;36mdame-curie-ollama-1\x1b[0m")
     latest = latest.replace("200", "\x1b[97;42m200\x1b[0m")
     assert render([(0, first), (30, latest)]) == (
         first + latest.rstrip("\n") + " [1 additional repeats in 30s; latest occurrence shown]\n"
@@ -167,7 +167,7 @@ def test_interrupt_flushes_pending_summary_before_propagating():
 
 def test_actual_logs_action_delegates_without_lifecycle_mutations(monkeypatch):
     app = instance.Instance.__new__(instance.Instance)
-    app.project = "maxwell-fixture"
+    app.project = "dame-curie"
     app.env = {"DOCKER_HOST": "unix:///synthetic/docker.sock"}
     app.inventory = Mock(return_value=[])
     app.docker = Mock(side_effect=AssertionError("no lifecycle mutation"))

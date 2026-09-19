@@ -27,23 +27,23 @@ except ImportError:
 
 
 CORS_ORIGIN = os.getenv(
-    "MAXWELL_CORS_ORIGIN",
-    os.getenv("MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"),
+    "DAME_CURIE_CORS_ORIGIN",
+    os.getenv("DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"),
 ).rstrip("/")
-API_HOST = os.getenv("MAXWELL_API_HOST", "127.0.0.1")
-API_PORT = max(1, min(_int_env_safe("MAXWELL_API_PORT", 8765), 65535))
+API_HOST = os.getenv("DAME_CURIE_API_HOST", "127.0.0.1")
+API_PORT = max(1, min(_int_env_safe("DAME_CURIE_API_PORT", 8765), 65535))
 BASE_SITE_DIR = Path(
-    os.getenv("MAXWELL_SITE_DIR", APP_ROOT / "public" / "bot")
+    os.getenv("DAME_CURIE_SITE_DIR", APP_ROOT / "public" / "bot")
 ).resolve()
 
-ADMIN_USER = os.getenv("MAXWELL_ADMIN_USER", "").strip()
-ADMIN_PASSWORD = os.getenv("MAXWELL_ADMIN_PASSWORD", "").strip()
+ADMIN_USER = os.getenv("DAME_CURIE_ADMIN_USER", "").strip()
+ADMIN_PASSWORD = os.getenv("DAME_CURIE_ADMIN_PASSWORD", "").strip()
 
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "").strip()
 DISCORD_REDIRECT_URI = os.getenv(
     "DISCORD_REDIRECT_URI",
-    "https://maxwell.z3ki.dev/api/auth/discord/callback",
+    "",
 ).strip()
 DISCORD_ALLOWED_USER_IDS = {
     uid.strip()

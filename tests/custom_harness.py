@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(0, "/root/maxwell")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot_tools
 from bot import MaxwellBot

@@ -22,9 +22,9 @@ def external(tmp_path, monkeypatch):
     prompts = tmp_path / "prompts"
     prompts.mkdir()
     (prompts / "personality.txt").write_text("Original personality", encoding="utf-8")
-    monkeypatch.setenv("MAXWELL_PROMPTS_DIR", str(prompts))
+    monkeypatch.setenv("DAME_CURIE_PROMPTS_DIR", str(prompts))
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("MAXWELL_ENV_FILE", "/dev/null")
+    monkeypatch.setenv("DAME_CURIE_ENV_FILE", "/dev/null")
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
     return prompts
 
@@ -45,9 +45,9 @@ def test_store_isolation_and_external_reload(tmp_path):
 
 
 def test_factory_keys_external_directory(tmp_path, monkeypatch):
-    monkeypatch.setenv("MAXWELL_PROMPTS_DIR", str(tmp_path / "a"))
+    monkeypatch.setenv("DAME_CURIE_PROMPTS_DIR", str(tmp_path / "a"))
     a = get_prompt_store(tmp_path)
-    monkeypatch.setenv("MAXWELL_PROMPTS_DIR", str(tmp_path / "b"))
+    monkeypatch.setenv("DAME_CURIE_PROMPTS_DIR", str(tmp_path / "b"))
     assert get_prompt_store(tmp_path) is not a
 
 
@@ -91,7 +91,7 @@ def test_bot_personality_construction_reloads(tmp_path, external):
     namespace = {"datetime": datetime, "timezone": timezone, "re": re, "get_prompt_store": get_prompt_store}
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
     bot = SimpleNamespace(
-        config=SimpleNamespace(DATA_DIR=str(tmp_path), MAXWELL_PROMPTS_DIR=str(external)),
+        config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR=str(external)),
         _BIRTHDAY=datetime(2026, 5, 21, tzinfo=timezone.utc),
     )
     construct = namespace["_get_personality"]
@@ -129,7 +129,7 @@ def test_control_write_lock_does_not_block_loop(tmp_path, external, monkeypatch,
 
     monkeypatch.setattr(api, "DATA_DIR", tmp_path / "runtime")
     if not external_mode:
-        monkeypatch.setenv("MAXWELL_PROMPTS_DIR", "")
+        monkeypatch.setenv("DAME_CURIE_PROMPTS_DIR", "")
     main_thread = threading.get_ident()
 
     async def run():
@@ -214,7 +214,7 @@ def test_prompt_tools_share_external_store(tmp_path, external):
 
 @pytest.mark.parametrize("explicit,expected", [(None, "data_gf"), ("/tmp/custom-gf", "/tmp/custom-gf")])
 def test_gf_data_dir(explicit, expected):
-    env = dict(os.environ, MAXWELL_ENV_FILE="/dev/null", PYTHON_DOTENV_DISABLED="1", BOT_PERSONA_TYPE="mommy_gf")
+    env = dict(os.environ, DAME_CURIE_ENV_FILE="/dev/null", PYTHON_DOTENV_DISABLED="1", BOT_PERSONA_TYPE="mommy_gf")
     env.pop("DATA_DIR", None)
     if explicit is not None:
         env["DATA_DIR"] = explicit

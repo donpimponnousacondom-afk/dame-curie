@@ -394,14 +394,14 @@ class ToolConcurrency:
 
     def __init__(self, **limits: int) -> None:
         defaults = {
-            "provider": int(os.getenv("MAXWELL_CONCURRENCY_PROVIDER", "8")),
-            "media": int(os.getenv("MAXWELL_CONCURRENCY_MEDIA", "3")),
-            "tts": int(os.getenv("MAXWELL_CONCURRENCY_TTS", "2")),
-            "shell": int(os.getenv("MAXWELL_CONCURRENCY_SHELL", "2")),
-            "site": int(os.getenv("MAXWELL_CONCURRENCY_SITE", "3")),
-            "web": int(os.getenv("MAXWELL_CONCURRENCY_WEB", "8")),
-            "agent": int(os.getenv("MAXWELL_CONCURRENCY_AGENT", "2")),
-            "default": int(os.getenv("MAXWELL_CONCURRENCY_DEFAULT", "16")),
+            "provider": int(os.getenv("DAME_CURIE_CONCURRENCY_PROVIDER", "8")),
+            "media": int(os.getenv("DAME_CURIE_CONCURRENCY_MEDIA", "3")),
+            "tts": int(os.getenv("DAME_CURIE_CONCURRENCY_TTS", "2")),
+            "shell": int(os.getenv("DAME_CURIE_CONCURRENCY_SHELL", "2")),
+            "site": int(os.getenv("DAME_CURIE_CONCURRENCY_SITE", "3")),
+            "web": int(os.getenv("DAME_CURIE_CONCURRENCY_WEB", "8")),
+            "agent": int(os.getenv("DAME_CURIE_CONCURRENCY_AGENT", "2")),
+            "default": int(os.getenv("DAME_CURIE_CONCURRENCY_DEFAULT", "16")),
         }
         defaults.update(limits)
         self._limits = dict(defaults)

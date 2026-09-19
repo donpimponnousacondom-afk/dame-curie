@@ -21,10 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Allow root for full filesystem access when requested. Home dir kept for compatibility.
-RUN useradd -m -s /bin/bash maxwell || true
-RUN echo "maxwell ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true
+RUN useradd -m -s /bin/bash dame-curie || true
+RUN echo "dame-curie ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true
 
 USER root
-WORKDIR /home/maxwell
+WORKDIR /home/dame-curie
 
 CMD ["sleep", "infinity"]

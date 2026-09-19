@@ -10,8 +10,9 @@ import stat
 import tempfile
 from contextlib import ExitStack
 
-INSTANCE_ROOT = Path("/srv/maxwell")
+INSTANCE_ROOT = Path("/srv")
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
+INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
 
 
 def checked_path(path: Path) -> Path:
@@ -72,9 +73,9 @@ def migrated_registry(source: dict, instance: str) -> dict:
         running = old.get("running", False)
         sites[slug] = dict(old, version=2, instance=instance, running=running,
                            port=8000,
-                           container=f"maxwell-{instance}-site-{slug}",
-                           image=f"maxwell-{instance}-siteimg-{slug}" if packages else f"maxwell-{instance}-site-runtime",
-                           network=f"maxwell-{instance}-backends")
+                           container=f"{instance}-site-{slug}",
+                           image=f"{instance}-siteimg-{slug}" if packages else f"{instance}-site-runtime",
+                           network=f"{instance}-backends")
     return {"version": 2, "instance": instance, "sites": sites}
 
 
@@ -119,7 +120,7 @@ def populate(stages: list[Path], sources: list[Path], inventories: list[list[Pat
 def migrate(instance: str, data: Path, sites: Path, shell: Path, *, stopped: bool) -> None:
     if not stopped:
         raise ValueError("--stopped acknowledgement is required")
-    if not SLUG.fullmatch(instance):
+    if not INSTANCE.fullmatch(instance) or len(instance) > 30:
         raise ValueError("invalid instance ID")
     target = checked_path(INSTANCE_ROOT / instance)
     sources = [checked_path(path) for path in (data, sites, shell)]

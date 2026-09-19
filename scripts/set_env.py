@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely update KEY=VALUE entries in Maxwell dotenv files."""
+"""Safely update KEY=VALUE entries in dame-curie dotenv files."""
 
 from __future__ import annotations
 

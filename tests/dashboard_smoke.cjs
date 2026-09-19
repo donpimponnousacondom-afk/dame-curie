@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
-const { chromium } = require(process.env.MAXWELL_TEST_PLAYWRIGHT);
+const { chromium } = require(process.env.DAME_CURIE_TEST_PLAYWRIGHT);
 
 (async () => {
   const origin = process.argv[2];
   const browser = await chromium.launch({
-    executablePath: process.env.MAXWELL_TEST_CHROMIUM,
+    executablePath: process.env.DAME_CURIE_TEST_CHROMIUM,
     headless: true,
     args: ['--no-sandbox', '--disable-background-networking'],
   });

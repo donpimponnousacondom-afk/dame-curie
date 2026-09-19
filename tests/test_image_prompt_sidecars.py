@@ -51,8 +51,8 @@ def image_case(request, monkeypatch, tmp_path, caplog):
     profile = request.param
     root = tmp_path / "site"
     config = SimpleNamespace(
-        MAXWELL_SITE_DIR=str(root), MAXWELL_PUBLIC_BASE_URL=LOCAL,
-        MAXWELL_SITE_PUBLIC_BASE_URL="https://redroom.zombiedawn.net/dame",
+        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_PUBLIC_BASE_URL=LOCAL,
+        DAME_CURIE_SITE_PUBLIC_BASE_URL="https://redroom.zombiedawn.net/dame",
         IMAGE_GEN_PROTOCOL="pollinations" if profile == "pollinations" else "images",
         IMAGE_GEN_BASE_URL="https://normal.example.invalid/v1", IMAGE_GEN_API_KEY=KEY,
         IMAGE_GEN_MODEL="normal-model", IMAGE_GEN_QUALITY="low", IMAGE_GEN_TIMEOUT=90,

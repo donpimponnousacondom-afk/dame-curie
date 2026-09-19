@@ -10,7 +10,7 @@ This page defines a safe investigation procedure. It does not grant deployment a
 | Planned V2 | **`dame-curie`** | A separate private rootless engine owned by that account | Root's target decision; account/engine creation and existence not verified here |
 | Future replicas | Explicitly assigned distinct accounts | One private engine per identity | Design intent, not tested V2 replication |
 
-The account, Compose project, application instance key, image reference and database root are different fields. Do not guess one from a pretty container name. The current V1 Compose project is `maxwell-curie`; V2's proposed full instance/project slug is `dame-curie`, pending source alignment. Do not silently make its user `dame-curie-v2` or `dame-curie-dame-curie`.
+The account, Compose project, application instance key, image reference and database root are different fields. Do not guess one from a pretty container name. The observed V1 Compose project is `maxwell-curie`; V2 source now uses the full instance/project slug `dame-curie`, with replicas `dame-curie-<identity>` and private roots `/srv/<full-instance>`. This source convention does not prove a V2 engine exists. Do not silently make its user `dame-curie-v2` or `dame-curie-dame-curie`.
 
 The intended local rootless endpoint is `unix:///run/user/<service-uid>/docker.sock`, with UID resolved from the **approved service account**, not copied from a historical document. Socket/engine availability and ownership must be established for the actual target. No default-rootful fallback is acceptable. Separate engines do not protect against shared host mounts, credentials, database roots, exposed ports or remote publisher destinations; those need their own boundaries.
 

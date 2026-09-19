@@ -19,7 +19,7 @@ def test_one_bot_and_api_share_whole_private_state():
         assert mounts["/config"]["read_only"] is True
         assert "read_only" not in mounts["/config/prompts"]
         assert all(not item["bind"]["create_host_path"] for item in mounts.values())
-        assert service["environment"]["MAXWELL_ENV_FILE"] == "/config/bot.env"
+        assert service["environment"]["DAME_CURIE_ENV_FILE"] == "/config/bot.env"
         assert "env_file" not in service
         assert "ports" not in service
         assert "container_name" not in service
@@ -31,12 +31,12 @@ def test_core_services_use_the_host_timezone_file_without_a_fixed_offset():
     assert set(services) == {"bot", "api", "ollama", "ollama-pull", "web"}
     for service in services.values():
         mounts = {item["target"]: item for item in service["volumes"]}
-        assert mounts["/etc/maxwell-localtime"] == {
+        assert mounts["/etc/dame-curie-localtime"] == {
             "type": "bind", "source": "/etc/localtime",
-            "target": "/etc/maxwell-localtime", "read_only": True,
+            "target": "/etc/dame-curie-localtime", "read_only": True,
             "bind": {"create_host_path": False},
         }
-        assert service["environment"]["TZ"] == ":/etc/maxwell-localtime"
+        assert service["environment"]["TZ"] == ":/etc/dame-curie-localtime"
         assert "/etc/localtime" not in mounts
         assert all(not path.startswith("/usr/share/zoneinfo/") for path in mounts)
 
@@ -58,24 +58,24 @@ def test_private_socket_and_no_host_privilege():
 def test_only_bot_receives_private_live_git_socket_directory():
     services = deployment()["services"]
     mounts = {item["target"]: item for item in services["bot"]["volumes"]}
-    assert mounts["/run/maxwell-checkout"] == {
-        "type": "bind", "source": "/srv/maxwell-checkout/${INSTANCE_ID}",
-        "target": "/run/maxwell-checkout", "read_only": True,
+    assert mounts["/run/dame-curie-checkout"] == {
+        "type": "bind", "source": "/srv/dame-curie-checkout/${INSTANCE_ID}",
+        "target": "/run/dame-curie-checkout", "read_only": True,
         "bind": {"create_host_path": False},
     }
-    assert services["bot"]["environment"]["MAXWELL_STARTUP_GIT_SOCKET"] == "/run/maxwell-checkout/snapshot.sock"
+    assert services["bot"]["environment"]["DAME_CURIE_STARTUP_GIT_SOCKET"] == "/run/dame-curie-checkout/snapshot.sock"
     for name, service in services.items():
         assert all("/home/" not in item["source"] and ".git" not in item["source"] for item in service.get("volumes", []))
         if name != "bot":
-            assert "MAXWELL_STARTUP_GIT_SOCKET" not in service.get("environment", {})
-            assert all(item["target"] != "/run/maxwell-checkout" for item in service.get("volumes", []))
+            assert "DAME_CURIE_STARTUP_GIT_SOCKET" not in service.get("environment", {})
+            assert all(item["target"] != "/run/dame-curie-checkout" for item in service.get("volumes", []))
     assert set(services["api"]["environment"]).issubset(services["bot"]["environment"])
 
 
 def test_web_only_mounts_public_sites_and_host_timezone_and_binds_loopback():
     web = deployment()["services"]["web"]
     mounts = {item["target"]: item for item in web["volumes"]}
-    assert set(mounts) == {"/srv/sites", "/etc/maxwell-localtime"}
+    assert set(mounts) == {"/srv/sites", "/etc/dame-curie-localtime"}
     assert mounts["/srv/sites"]["source"] == "${INSTANCE_DIR}/sites"
     assert mounts["/srv/sites"]["read_only"] is True
     assert web["ports"][0].startswith("127.0.0.1:")
@@ -115,7 +115,7 @@ def test_image_uses_allowlisted_source_and_locked_dependencies():
     assert "docker:26.1.5-cli" not in dockerfile
     assert "COPY . " not in dockerfile
     assert "COPY *.py" not in dockerfile
-    assert "--no-deps -r /opt/maxwell/requirements.lock" in dockerfile
+    assert "--no-deps -r /opt/dame-curie/requirements.lock" in dockerfile
     lines = (ROOT / "docker/app.Dockerfile.dockerignore").read_text().splitlines()
     assert lines[0] == "**"
     allowed = [line[1:] for line in lines if line.startswith("!")]
@@ -153,18 +153,18 @@ def test_bot_template_keeps_operational_paths_consistent():
         if line and not line.startswith("#")
     )
     assert settings["DATA_DIR"] == "/state/data"
-    assert settings["MAXWELL_SITE_DIR"] == "/state/sites"
-    assert settings["MAXWELL_PROMPTS_DIR"] == "/config/prompts"
-    assert settings["MAXWELL_SHELL_FULL_HOST"] == "false"
-    assert settings["MAXWELL_API_PORT"] == "8765"
+    assert settings["DAME_CURIE_SITE_DIR"] == "/state/sites"
+    assert settings["DAME_CURIE_PROMPTS_DIR"] == "/config/prompts"
+    assert settings["DAME_CURIE_SHELL_FULL_HOST"] == "false"
+    assert settings["DAME_CURIE_API_PORT"] == "8765"
     assert settings["DISCORD_TOKEN"] == ""
     assert settings["OLLAMA_API_KEY"] == ""
-    assert settings["MAXWELL_ADMIN_PASSWORD"] == ""
+    assert settings["DAME_CURIE_ADMIN_PASSWORD"] == ""
     assert settings["ENABLE_RAG"] == "true"
-    assert settings["MAXWELL_EMBED_BASE_URL"] == "http://ollama:11434"
-    assert settings["MAXWELL_EMBED_MODEL"] == "qwen3-embedding:0.6b"
-    assert settings["MAXWELL_EMBED_DIM"] == "1024"
-    assert settings["MAXWELL_EMBED_API_KEY"] == ""
+    assert settings["DAME_CURIE_EMBED_BASE_URL"] == "http://ollama:11434"
+    assert settings["DAME_CURIE_EMBED_MODEL"] == "qwen3-embedding:0.6b"
+    assert settings["DAME_CURIE_EMBED_DIM"] == "1024"
+    assert settings["DAME_CURIE_EMBED_API_KEY"] == ""
 
 
 def test_ollama_is_private_and_has_persistent_per_project_models():
@@ -214,7 +214,7 @@ def test_pull_is_one_shot_and_runtime_waits_for_download_and_embedding():
         assert service["entrypoint"] == [
             "/bin/sh",
             "-ec",
-            'python /opt/maxwell/check_embeddings.py && exec "$$@"',
+            'python /opt/dame-curie/check_embeddings.py && exec "$$@"',
             "--",
         ]
         assert "embeddings" in service["networks"]
@@ -223,17 +223,17 @@ def test_pull_is_one_shot_and_runtime_waits_for_download_and_embedding():
 def test_image_contains_readiness_gate_and_explicit_build_provenance():
     dockerfile = (ROOT / "docker/app.Dockerfile").read_text()
     assert (
-        "COPY docker/check_embeddings.py /opt/maxwell/check_embeddings.py" in dockerfile
+        "COPY docker/check_embeddings.py /opt/dame-curie/check_embeddings.py" in dockerfile
     )
     assert (
         "!docker/check_embeddings.py"
         in (ROOT / "docker/app.Dockerfile.dockerignore").read_text().splitlines()
     )
     for field in ("COMMIT", "BRANCH", "DATE", "SUBJECT", "DIRTY"):
-        key = f"MAXWELL_BUILD_{field}"
+        key = f"DAME_CURIE_BUILD_{field}"
         assert f"ARG {key}=unknown" in dockerfile
         assert f"{key}=${{{key}}}" in dockerfile
-    assert "org.opencontainers.image.revision=${MAXWELL_BUILD_COMMIT}" in dockerfile
+    assert "org.opencontainers.image.revision=${DAME_CURIE_BUILD_COMMIT}" in dockerfile
     assert ".git" not in (ROOT / "docker/app.Dockerfile.dockerignore").read_text()
 
 

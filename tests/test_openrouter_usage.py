@@ -54,7 +54,7 @@ def usage_tool(monkeypatch):
     monkeypatch.setattr("bot_tools._get_shared_session", get_session)
     monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-stale-env-key")
     monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "synthetic-unrelated-compat-key")
-    monkeypatch.setenv("MAXWELL_USAGE_URL", "https://untrusted.example.invalid/usage")
+    monkeypatch.setenv("DAME_CURIE_USAGE_URL", "https://untrusted.example.invalid/usage")
     return UsageTool(bot), session, response, get_session, data
 
 

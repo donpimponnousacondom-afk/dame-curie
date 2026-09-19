@@ -114,7 +114,7 @@ def test_shell_tool_runs_without_author_gate():
 
 
 def test_shell_tool_truncates_captured_output_to_max_output(monkeypatch):
-    monkeypatch.setenv("MAXWELL_SHELL_MAX_OUTPUT", "100")
+    monkeypatch.setenv("DAME_CURIE_SHELL_MAX_OUTPUT", "100")
     class FakeBot:
         def _is_admin(self, user_id):
             return True
@@ -396,7 +396,7 @@ def test_reasoning_log_clamps_long_fields():
 
 
 def test_send_file_works_for_non_admin_user():
-    """Regression: send_file used to require MAXWELL_OWNER_IDS, which blocked
+    """Regression: send_file used to require DAME_CURIE_OWNER_IDS, which blocked
     any non-admin user from receiving a file back. The tool is an output
     channel, not a privileged action — it must work for everyone."""
 
@@ -433,7 +433,7 @@ def test_shell_export_requires_registered_enabled_tool(tmp_path, monkeypatch):
         bot = SimpleNamespace(tools=tools, config=SimpleNamespace(ENABLE_SHELL=enabled))
         message = FakeMessage()
         tool = SendFileTool(bot=bot)
-        for path in ["/home/maxwell/generated.txt", str(tmp_path / "generated.txt")]:
+        for path in ["/home/dame-curie/generated.txt", str(tmp_path / "generated.txt")]:
             result = asyncio.run(tool.execute(message, path=path))
             assert "registered enabled" in result
         assert not message.files
@@ -452,11 +452,11 @@ def test_shell_export_generated_bound_file(tmp_path, monkeypatch):
     shell._verify_export_container = AsyncMock(return_value="verified-container-id")
     monkeypatch.setattr(bot_tools, "_run_docker_cmd", AsyncMock(side_effect=AssertionError("no Docker copy")))
     message = FakeMessage()
-    result = asyncio.run(SendFileTool(bot=bot).execute(message, path="/home/maxwell/generated.txt"))
+    result = asyncio.run(SendFileTool(bot=bot).execute(message, path="/home/dame-curie/generated.txt"))
     assert result == "__FILE_SENT__ Sent file: generated.txt (9 bytes)"
     assert message.files[0].fp.read() == b"generated"
     shell._verify_export_container.assert_awaited_once()
-    assert asyncio.run(shell._send_container_file(message, "/home/maxwell/generated.txt")) == "generated.txt"
+    assert asyncio.run(shell._send_container_file(message, "/home/dame-curie/generated.txt")) == "generated.txt"
     assert message.files[1].fp.read() == b"generated"
 
 
@@ -477,7 +477,7 @@ def test_shell_export_rejects_traversal_symlink_and_arbitrary_copy(tmp_path, mon
     docker = AsyncMock(side_effect=AssertionError("arbitrary docker cp forbidden"))
     monkeypatch.setattr(bot_tools, "_run_docker_cmd", docker)
     tool = SendFileTool(bot=bot)
-    for path in ["/host/etc/shadow", "/etc/passwd", "/tmp/generated.txt", "/home/maxwellish/outside.txt", "/home/maxwell/../outside.txt", "/home/maxwell//etc/passwd", "/home/maxwell/escape.txt", "/home/maxwell/parent/outside.txt"]:
+    for path in ["/host/etc/shadow", "/etc/passwd", "/tmp/generated.txt", "/home/dame-curieish/outside.txt", "/home/dame-curie/../outside.txt", "/home/dame-curie//etc/passwd", "/home/dame-curie/escape.txt", "/home/dame-curie/parent/outside.txt"]:
         message = FakeMessage()
         assert asyncio.run(tool.execute(message, path=path)).startswith("Error")
         assert asyncio.run(shell._send_container_file(message, path)) is None
@@ -496,7 +496,7 @@ def test_shell_export_rejects_stale_wrong_mode(tmp_path, monkeypatch):
     bot.tools["shell"] = shell
     shell._verify_export_container = AsyncMock(side_effect=ValueError("shell container mode does not match configuration"))
     message = FakeMessage()
-    result = asyncio.run(SendFileTool(bot=bot).execute(message, path="/home/maxwell/generated.txt"))
+    result = asyncio.run(SendFileTool(bot=bot).execute(message, path="/home/dame-curie/generated.txt"))
     assert "mode does not match" in result
     assert not message.files
 
@@ -539,6 +539,6 @@ def test_shell_export_rejects_symlink_swapped_after_resolve(tmp_path, monkeypatc
 
     monkeypatch.setattr(os, "open", swap_open)
     message = FakeMessage()
-    result = asyncio.run(SendFileTool(bot=bot).execute(message, path="/home/maxwell/nested/file.txt"))
+    result = asyncio.run(SendFileTool(bot=bot).execute(message, path="/home/dame-curie/nested/file.txt"))
     assert result.startswith("Error")
     assert not message.files

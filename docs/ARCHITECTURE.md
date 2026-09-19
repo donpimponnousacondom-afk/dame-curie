@@ -1,6 +1,6 @@
 # dame-curie architecture and naming boundary
 
-This is a source map and target isolation contract, not proof of a deployed V2 system. V1 already works; V2 is intended to remove accumulated workarounds before adding features.
+This is a source map and intended isolation contract, not proof of a deployed V2 system. V1 already works; V2 is intended to remove accumulated workarounds before adding features.
 
 ## Components in this checkout
 
@@ -17,21 +17,24 @@ This is a source map and target isolation contract, not proof of a deployed V2 s
 
 One Linux service account and private rootless Docker engine per bot identity. The planned first V2 account is **dame-curie**; protected V1 uses **maxwell-curie**. Additional identities must have explicitly assigned separate accounts/engines rather than a second bot writer in the first identity's state.
 
-Each identity owns its configuration, credentials, prompts, databases, generated sites, shell workspace, model storage and publisher state. Explicitly separate host mounts, exposed ports and remote publisher destinations. Future V2 identities may deliberately use the same immutable source/image artifact in their separate engines; this does not share their mutable bot state or authorize reusing the deployed V1 image namespace. V2's `dame-curie-*` repositories remain distinct from protected V1's `maxwell-*` repositories. Record image content IDs/digests separately from mutable tags. No image was built, copied, retagged or provisioned by this documentation decision.
+Each identity owns its configuration, credentials, prompts, databases, generated sites, shell workspace, model storage and publisher state. Explicitly separate host mounts, exposed ports and remote publisher destinations. Future V2 identities may deliberately use the same immutable source/image artifact in their separate engines; this does not share their mutable bot state or authorize reusing the deployed V1 image namespace. V2's `dame-curie-*` repositories remain distinct from protected V1's `maxwell-*` repositories. Record image content IDs/digests separately from mutable tags. No image was built, copied, retagged or provisioned by this cut-off.
 
-The existing source contains ownership/socket/private-root checks. That is evidence of design, not V2 runtime acceptance. The observed running-only V1 inventory does not cover stopped objects, all volumes/networks, other engines or remote resources.
+The source contains ownership/socket/private-root checks. That is evidence of design, not V2 runtime acceptance. The observed running-only V1 inventory does not cover stopped objects, all volumes/networks, other engines or remote resources.
 
-## Target naming rules
+## Selected source conventions
 
 - Canonical project/files/URLs/resource namespace: `dame-curie`.
-- Planned initial service account: `dame-curie`; proposed initial full instance/Compose slug: `dame-curie`, not a duplicated prefix.
+- Full instance/account/Compose slug: `dame-curie`, or `dame-curie-<identity>` for a replica, up to 30 characters. Accounts and resource prefixes derive directly from that slug, without duplicating the project name.
+- Private host root: `/srv/<full-instance>`. Each account requires its own UID-derived rootless socket; the image-internal engine path is `/run/dame-curie/docker.sock`.
 - Shell/Python configuration identifiers: `DAME_CURIE_*`. Hyphenated shell/Python variable names are not the spelling to use.
-- Target app/web image repositories: `dame-curie-app`, `dame-curie-web`; selectors must remain separate from protected `maxwell-*` images.
-- Target custom ownership label namespace: `dame-curie.*`; keep Docker's reserved Compose/OCI labels unchanged.
-- Target RAG basename: `dame-curie-rag.db`, shared consistently by bot/API inside the identity-owned data root. No live database rename/copy is implied.
-- Neutral filenames and paths (`bot.env`, `.env`, `.venv`, `/config`, `/state/data`, `/api`, `/bot`) need no cosmetic replacement. Their purpose, ownership and configuration must remain explicit.
-- Root's short URL component `dame` is intentional. It does not authorize sharing V1's live publishing destination.
+- App/web image repositories: `dame-curie-app`, `dame-curie-web`; selectors remain separate from protected `maxwell-*` images.
+- Custom ownership label namespace: `dame-curie.*`; Docker's reserved Compose/OCI labels are unchanged.
+- RAG basename: `dame-curie-rag.db`, shared consistently by bot/API inside the identity-owned data root. No live database rename/copy is implied.
+- Shell home: `/home/dame-curie`. Shared read-only checkout convention: `/opt/dame-curie`; host wrappers require its `.venv/bin/python`.
+- Startup snapshot socket: host `/srv/dame-curie-checkout/<full-instance>/snapshot.sock`, exposed inside the bot at `/run/dame-curie-checkout/snapshot.sock`. The service-user socket boundary and checkout-owner reader remain distinct roles.
+- Neutral filenames and paths (`bot.env`, `.env`, `.venv`, `/config`, `/state/data`, `/api`, `/bot`) need no cosmetic replacement. Their purpose, ownership and configuration remain explicit.
+- Root's short URL component `dame` is intentional. It does not authorize sharing V1's live publishing destination. Publisher state belongs under the identity's private root; the remote example is deliberately synthetic and distinct.
 
-Runtime-producing defaults, consumers, labels, path guards and templates must change coherently; no legacy-name compatibility alias may silently reconnect V2 to V1. Harmless historical prose, ordinary `max()`/`max_tokens`, persona content and unrelated identifiers are not a global replacement target. No new real domain, mailbox or Discord identity is inferred from the project rename.
+Runtime-producing defaults, consumers, labels, path guards and templates were aligned together; no legacy-name compatibility alias was added to reconnect V2 to V1. Harmless historical prose, ordinary `max()`/`max_tokens`, persona content and unrelated internal identifiers are not a global replacement target. No new real domain, mailbox or Discord identity was inferred.
 
-These are target conventions. Consult `STATUS.md` for implementation state; until the source cut-off and isolated acceptance are complete, do not run V2.
+These conventions are implemented in source, not provisioned on the host. Consult `STATUS.md` for review limits and outstanding pruning/acceptance work. Do not run V2 without a separate compatible assignment.

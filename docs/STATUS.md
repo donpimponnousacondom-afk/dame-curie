@@ -1,29 +1,34 @@
 # dame-curie status
 
-Updated 2026-09-19. This ledger concerns the fresh V2 checkout, not the archived V1 rollout history.
+Updated 2026-09-19. This ledger concerns the fresh V2 checkout, not the archived V1 rollout history. **The naming/documentation checkpoint is source-reviewed; V2 is not deployment-ready.**
 
-## Completed observations
+## Completed boundaries and observations
 
-- Root confirms V1 is functional and running. Its service account is `maxwell-curie`.
-- Root authorized metadata-only Docker observation as that account. The coordinator observed 19 running containers in its private local engine: four core services, fourteen site backends and one shell workspace. Bot/API reference `maxwell-app:0468dde`; web references `maxwell-web:1b96027`. Immutable IDs, observed labels, timestamps and limitations are recorded in `../phase-II_v2/DOCKER_INVENTORY.md`; no old commit was looked up.
-- Root fixed the intended V2 service account as exactly `dame-curie`, using a separate private rootless engine. Its provisioning/existence has not been verified here.
-- Local Python 3.14.4 and standard-library venv help were checked without creating an environment, installing dependencies or importing application code. `uv` was not found on this session PATH; host-wide availability was not investigated.
-- The tyranny skill's templates now target Python 3.14, its application is explicitly scoped to authorized new/rewritten code, and obsolete hook-version examples were removed without inventing replacements. No project dependency/configuration pins or installed hooks were changed.
-- Source inventories identified coupled environment names, DB basenames, resource labels, shell paths, operator wrappers and publisher boundaries. Their proposed mapping is in `../phase-II_v2/CUTOFF_PLAN.md`. Reviewer overclaims were challenged; no source repair was made.
+- Root confirms V1 is functional and running under `maxwell-curie`. The authorized metadata-only observation recorded 19 running containers: four core services, fourteen site backends and one shell workspace. Immutable IDs, observed revision/version labels, timestamps and limitations are in `../phase-II_v2/DOCKER_INVENTORY.md`. No old commit was looked up.
+- Root selected exactly `dame-curie` as the V2 service account, with its own private rootless Docker engine. Account/engine existence, provisioning and isolation have not been verified here.
+- Documentation checkpoint `47cd6f1` quarantined 21 inherited documents/assets and rebuilt the active README, agent contract, security, operations, development and architecture guidance. The old contract is not named `AGENTS.md`; LICENSE and tokenizer provenance remain in place.
+- Python 3.14.4 and standard-library venv help were checked without creating an environment, installing dependencies or importing application code. `uv` was not found on this session PATH; host-wide availability was not investigated.
 
-## Documentation cut-off
+## Source naming checkpoint
 
-Inherited project/operation guides and their assets were moved intact to `legacy/v1/`; the old agent contract uses a non-active filename. Active README, agent contract, security, operations, development and architecture guidance are rebuilt around the current boundaries. Legal/license material and tokenizer provenance remain in place. The archive is not a default search source or a live runbook.
+- Full instance/account/Compose identity is `dame-curie`, or `dame-curie-<identity>` for a future replica, up to 30 characters. Selectors derive the account directly and the private host root as `/srv/<full-instance>`; they do not double the prefix or accept a legacy instance alias.
+- Coupled operational env/config keys, custom ownership labels, image/resource names, shell/socket paths, PM2 selectors and publisher markers/templates use the new namespace. Bot and API agree on `dame-curie-rag.db`. Neutral `/api`, `/bot`, configuration filenames and the intentional short URL `dame` remain.
+- Baked V1 URL/mailbox selections were removed from runtime defaults. Examples use reserved synthetic destinations or explicit empty configuration, not invented real identities. Persona/internal identifiers, real Discord IDs, model choices and harmless historical prose were not globally rewritten.
+- Host wrappers select checkout `.venv/bin/python`; installer/doctor version checks require Python 3.14. The shell image's distro-provided interpreter remains unverified; application/site image declarations remain 3.14.4.
+- Root approved moving both V1-specific DNS provisioning scripts unchanged into `legacy/v1/email_integration/`. Bot email functionality remains. Build-context and static-tool exclusions keep the quarantine out of those ordinary source paths.
+- Existing fixtures/import paths were aligned in 45 test files; no new tests, cases or assertions were added. None were collected or run. Root's unchanged `implement-sanity` skill is included as the review twin of `implement-tyranny`.
+- Mapping and review evidence: `../phase-II_v2/CUTOFF_PLAN.md` and `../phase-II_v2/SOURCE_REVIEW.md`.
 
-## Still pending
+## Review limits and next decisions
 
-- Application/deployment/template namespace changes. **Code still contains inherited Maxwell selectors; target names in these new docs are not implemented-runtime evidence.**
-- Final agreement/implementation of full instance identifier, private-root layout, all producer/consumer pairs, explicit configuration and any publisher destination changes. Do not infer permission to reuse a V1 remote root.
-- Reproducible isolated V2 validation and multi-instance acceptance. No current test count/pass baseline, image build or V2 runtime acceptance is established.
-- Backup/rollback readiness confirmation from root's separate backup work. No backup path or content was read here.
+- Flash implementation/static review and Luna max adversarial review do not establish runtime correctness. An infrastructure child ran generic-Python AST and shell/JavaScript parser checks on an earlier edit; those are not isolated Python 3.14 validation or final-snapshot acceptance. No linter/type-checker/test pass is claimed.
+- Broader feature pruning remains root's next assignment. An inherited provider-resilience test still references retired/missing documentation; its purpose was not rewritten to preserve obsolete documentation checks.
+- Future validation needs a separately authorized, reproducible, synthetic/private-read-isolated environment. No image build, current suite baseline or V2 multi-instance acceptance is established.
+- Real V2 configuration, private mounts/state, ports and publisher destinations need explicit assignment and verification. Names alone do not isolate mutable state. No permission to reuse a V1 remote destination is implied.
+- Backup/rollback readiness remains unconfirmed; no backup content was read.
 
 ## Actions not performed
 
-No application/test execution or collection; no new tests; no source behavior changes in this documentation slice; no real login/provider probes, user/engine provisioning, image build/pull/retag/prune, deployment, service/container restart/stop/removal, production configuration/state reads, or remote publication. No other-project, Git-history or internet archaeology.
+No application imports/execution or test collection/execution; no new tests, real login/provider probes, dependency installation, user/engine provisioning, builds/pulls/retags/pruning, deployment, service/container lifecycle changes, migrations, production configuration/state reads or remote publication. No other-project, upstream or deleted-history research.
 
-Current work remains local on `dev/phaseII_v2`. Documentation/source commits do not synchronize production.
+Work remains local on `dev/phaseII_v2`. Source/documentation commits do not synchronize production or authorize startup.

@@ -77,9 +77,9 @@ def _run(code, env=None):
     child_env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(("REM_", "ENABLE_", "OLLAMA_", "MAXWELL_", "DISCORD_"))
+        if not k.startswith(("REM_", "ENABLE_", "OLLAMA_", "DAME_CURIE_", "DISCORD_"))
     }
-    child_env["MAXWELL_ENV_FILE"] = os.devnull
+    child_env["DAME_CURIE_ENV_FILE"] = os.devnull
     child_env.update(env or {})
     result = subprocess.run(
         [sys.executable, "-c", code],

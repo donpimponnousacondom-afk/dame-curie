@@ -26,8 +26,8 @@ def bot(tmp_path):
     control = {"create_site_quota_per_user": 50}
     return SimpleNamespace(
         config=SimpleNamespace(
-            MAXWELL_SITE_DIR=str(site_dir),
-            MAXWELL_PUBLIC_BASE_URL="https://maxwell.example.com",
+            DAME_CURIE_SITE_DIR=str(site_dir),
+            DAME_CURIE_PUBLIC_BASE_URL="https://dame-curie.example.invalid",
             DATA_DIR=str(data_dir),
         ),
         _sites={},

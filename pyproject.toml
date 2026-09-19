@@ -9,6 +9,7 @@
 line-length = 88
 target-version = "py314"
 extend-exclude = [
+    "legacy",
     "bot.py.bak",
     ".pi-lens",
     ".pi-subagents",
@@ -77,4 +78,4 @@ ignore_missing_imports = true
 warn_redundant_casts = true
 warn_unused_ignores = false
 check_untyped_defs = false
-exclude = "(bot\\.py\\.bak|shelldocker|\\.pi-lens|\\.pi-subagents|temp)"
+exclude = "(bot\\.py\\.bak|shelldocker|\\.pi-lens|\\.pi-subagents|temp|(^|/)legacy/)"

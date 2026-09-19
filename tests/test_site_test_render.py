@@ -209,12 +209,12 @@ def test_find_obscura_honours_the_env_override(tmp_path, monkeypatch):
     binary = tmp_path / "obscura"
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
-    monkeypatch.setenv("MAXWELL_OBSCURA_BIN", str(binary))
+    monkeypatch.setenv("DAME_CURIE_OBSCURA_BIN", str(binary))
     assert site_test.find_obscura() == str(binary)
 
 
 def test_find_obscura_ignores_a_bad_override(tmp_path, monkeypatch):
-    monkeypatch.setenv("MAXWELL_OBSCURA_BIN", str(tmp_path / "missing"))
+    monkeypatch.setenv("DAME_CURIE_OBSCURA_BIN", str(tmp_path / "missing"))
     # Falls through to PATH, which on a box without obscura is None.
     assert site_test.find_obscura() in (
         None,

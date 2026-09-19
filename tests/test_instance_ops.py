@@ -22,37 +22,37 @@ SPEC.loader.exec_module(ops)
 
 
 def deployment_text():
-    return "\n".join(("INSTANCE_ID=curie", "INSTANCE_DIR=/srv/maxwell/curie",
-                      "ENGINE_SOCKET=/run/user/1001/docker.sock", "APP_IMAGE=maxwell-app:test",
-                      "WEB_IMAGE=maxwell-web:test", "WEB_PORT=8081"))
+    return "\n".join(("INSTANCE_ID=dame-curie", "INSTANCE_DIR=/srv/dame-curie",
+                      "ENGINE_SOCKET=/run/user/1001/docker.sock", "APP_IMAGE=dame-curie-app:test",
+                      "WEB_IMAGE=dame-curie-web:test", "WEB_PORT=8081"))
 
 
-def container(name, *, running=True, kind="", instance="curie"):
-    labels = {"maxwell.instance": instance, "maxwell.kind": kind} if kind else {
-        "com.docker.compose.project": f"maxwell-{instance}",
+def container(name, *, running=True, kind="", instance="dame-curie"):
+    labels = {"dame-curie.instance": instance, "dame-curie.kind": kind} if kind else {
+        "com.docker.compose.project": instance,
         "com.docker.compose.service": name,
         "com.docker.compose.project.config_files": str(ops.CHECKOUT / "compose.yaml"),
     }
-    return {"Id": name, "Name": f"/maxwell-{instance}-{name}",
+    return {"Id": name, "Name": f"/{instance}-{name}",
             "Config": {"Labels": labels}, "State": {"Running": running}}
 
 
 def instance(tmp_path):
     app = ops.Instance.__new__(ops.Instance)
-    app.name = "curie"
-    app.project = "maxwell-curie"
-    app.path = tmp_path / "curie"
+    app.name = "dame-curie"
+    app.project = "dame-curie"
+    app.path = tmp_path / "dame-curie"
     app.path.mkdir()
     for root in ops.ROOTS:
         (app.path / root).mkdir()
-    app.values = {"APP_IMAGE": "maxwell-app:test"}
+    app.values = {"APP_IMAGE": "dame-curie-app:test"}
     app.env = {"DOCKER_HOST": "unix:///private/docker.sock"}
     return app
 
 
 def tar_bytes(entries):
     output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w", pax_headers={"maxwell.instance": "curie"}) as archive:
+    with tarfile.open(fileobj=output, mode="w", pax_headers={"dame-curie.instance": "dame-curie"}) as archive:
         for root in ops.ROOTS:
             info = tarfile.TarInfo(root)
             info.type = tarfile.DIRTYPE
@@ -67,7 +67,7 @@ def tar_bytes(entries):
 
 
 def test_parse_settings_is_literal_and_complete():
-    assert ops.parse_settings(deployment_text())["INSTANCE_ID"] == "curie"
+    assert ops.parse_settings(deployment_text())["INSTANCE_ID"] == "dame-curie"
 
 
 @pytest.mark.parametrize("extra", ["EVIL=1", "APP_IMAGE=other", "export APP_IMAGE=x"])
@@ -79,27 +79,27 @@ def test_deployment_rejects_unknown_duplicate_and_shell(extra):
 @pytest.mark.parametrize("value", ["$(touch /tmp/no)", "`id`", '"quoted"', "a;b", "a b", "a\\b"])
 def test_deployment_rejects_expansion(value):
     with pytest.raises(ValueError):
-        ops.parse_settings(deployment_text().replace("maxwell-app:test", value))
+        ops.parse_settings(deployment_text().replace("dame-curie-app:test", value))
 
 
 def test_inventory_ignores_other_instance_and_requires_labels():
     own = container("bot")
-    assert ops.select_owned([own, container("bot", instance="uni")], "curie", "maxwell-curie") == [own]
+    assert ops.select_owned([own, container("bot", instance="uni")], "dame-curie", "dame-curie") == [own]
     own["Config"]["Labels"] = {}
     with pytest.raises(ValueError, match="ownership"):
-        ops.select_owned([own], "curie", "maxwell-curie")
+        ops.select_owned([own], "dame-curie", "dame-curie")
 
 
 @pytest.mark.parametrize("service", ["ollama", "ollama-pull"])
 def test_inventory_accepts_owned_embedding_services(service):
     own = container(service)
     foreign = container(service, instance="other")
-    assert ops.select_owned([foreign, own], "curie", "maxwell-curie") == [own]
+    assert ops.select_owned([foreign, own], "dame-curie", "dame-curie") == [own]
 
 
 def test_inventory_rejects_unknown_compose_service():
     with pytest.raises(ValueError, match="unexpected service"):
-        ops.select_owned([container("unexpected")], "curie", "maxwell-curie")
+        ops.select_owned([container("unexpected")], "dame-curie", "dame-curie")
 
 
 def test_stop_quiesces_embedding_clients_before_server(tmp_path):
@@ -114,7 +114,7 @@ def test_inventory_rejects_foreign_checkout():
     own = container("bot")
     own["Config"]["Labels"]["com.docker.compose.project.config_files"] = "/elsewhere/compose.yaml"
     with pytest.raises(ValueError, match="checkout"):
-        ops.select_owned([own], "curie", "maxwell-curie")
+        ops.select_owned([own], "dame-curie", "dame-curie")
 
 
 def test_docker_rejects_stderr_even_with_exit_zero(tmp_path, monkeypatch):
@@ -171,7 +171,7 @@ def test_start_alias_rejects_failed_inventory(tmp_path, action):
 @pytest.mark.parametrize("lock_busy", [False, True])
 def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, action, lock_busy):
     events = Mock()
-    app = SimpleNamespace(path=Path("/synthetic/curie"), inventory=events.inventory, compose=events.compose)
+    app = SimpleNamespace(path=Path("/synthetic/dame-curie"), inventory=events.inventory, compose=events.compose)
     account = object()
     service_account = Mock(return_value=account)
     constructor = Mock(return_value=app)
@@ -181,7 +181,7 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
         open=Mock(return_value=123), fdopen=file_open,
         O_CREAT=os.O_CREAT, O_RDWR=os.O_RDWR, O_NOFOLLOW=os.O_NOFOLLOW,
     )
-    monkeypatch.setattr(ops.sys, "argv", ["instance.py", "curie", action])
+    monkeypatch.setattr(ops.sys, "argv", ["instance.py", "dame-curie", action])
     monkeypatch.setattr(ops, "service_account", service_account)
     monkeypatch.setattr(ops, "Instance", constructor)
     monkeypatch.setattr(ops, "os", file_api)
@@ -192,8 +192,8 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
             ops.main()
     else:
         ops.main()
-    service_account.assert_called_once_with("curie")
-    constructor.assert_called_once_with("curie", account)
+    service_account.assert_called_once_with("dame-curie")
+    constructor.assert_called_once_with("dame-curie", account)
     file_api.open.assert_called_once_with(
         app.path / ".operations.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
     )
@@ -208,7 +208,7 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
 def test_start_alias_cli_rejects_archive_before_identity_lookup(monkeypatch, capsys, action):
     service_account = Mock(side_effect=AssertionError("identity must not be inspected"))
     monkeypatch.setattr(ops, "service_account", service_account)
-    monkeypatch.setattr(ops.sys, "argv", ["instance.py", "curie", action, "/synthetic/archive.tar"])
+    monkeypatch.setattr(ops.sys, "argv", ["instance.py", "dame-curie", action, "/synthetic/archive.tar"])
     with pytest.raises(SystemExit) as error:
         ops.main()
     assert error.value.code == 2
@@ -275,20 +275,20 @@ def test_backup_stop_failure_still_resumes_and_removes_partial(tmp_path):
 def test_archive_rejects_unsafe_paths_and_types(name, kind, target):
     with tarfile.open(fileobj=tar_bytes([(name, kind, target)])) as archive:
         with pytest.raises(ValueError):
-            ops.validate_archive(archive, "curie")
+            ops.validate_archive(archive, "dame-curie")
 
 
 def test_archive_accepts_confined_symlink_and_numeric_owner():
     entries = [("shell/file", tarfile.REGTYPE, ""), ("shell/link", tarfile.SYMTYPE, "file")]
     with tarfile.open(fileobj=tar_bytes(entries)) as archive:
-        ops.validate_archive(archive, "curie")
+        ops.validate_archive(archive, "dame-curie")
 
 
 def test_archive_rejects_members_under_links():
     entries = [("shell/link", tarfile.SYMTYPE, "directory"), ("shell/link/file", tarfile.REGTYPE, "")]
     with tarfile.open(fileobj=tar_bytes(entries)) as archive:
         with pytest.raises(ValueError, match="descends"):
-            ops.validate_archive(archive, "curie")
+            ops.validate_archive(archive, "dame-curie")
 
 
 def test_restore_refuses_nonempty_or_existing_containers(tmp_path):
@@ -338,7 +338,7 @@ def test_private_directory_rejects_shared_permissions(tmp_path):
 
 @pytest.mark.parametrize("options,accepted", [(["name=rootless", "name=seccomp"], True), (["name=seccomp"], False), ([], False)])
 def test_engine_rootless_security_info_is_required(monkeypatch, options, accepted):
-    account = SimpleNamespace(pw_uid=1001, pw_dir="/home/maxwell-curie")
+    account = SimpleNamespace(pw_uid=1001, pw_dir="/home/dame-curie")
     monkeypatch.setattr(ops, "require_private", Mock())
     monkeypatch.setattr(ops.Path, "read_text", Mock(return_value=deployment_text()))
     monkeypatch.setattr(ops.Path, "is_symlink", Mock(return_value=False))
@@ -352,19 +352,19 @@ def test_engine_rootless_security_info_is_required(monkeypatch, options, accepte
     docker = Mock(return_value=json.dumps({"SecurityOptions": options}))
     monkeypatch.setattr(ops.Instance, "docker", docker)
     if accepted:
-        app = ops.Instance("curie", account)
+        app = ops.Instance("dame-curie", account)
         assert app.env["DOCKER_HOST"] == "unix:///run/user/1001/docker.sock"
         assert app.env["COMPOSE_DISABLE_ENV_FILE"] == "1"
     else:
         with pytest.raises(ValueError, match="not rootless"):
-            ops.Instance("curie", account)
+            ops.Instance("dame-curie", account)
     docker.assert_called_once_with("info", "--format", "{{json .}}")
 
 
 def test_archive_rejects_cross_identity_restore():
     with tarfile.open(fileobj=tar_bytes([])) as archive:
         with pytest.raises(ValueError, match="identity"):
-            ops.validate_archive(archive, "uni")
+            ops.validate_archive(archive, "dame-curie-uni")
 
 
 def test_backup_catches_child_created_while_bot_stops(tmp_path, monkeypatch):
@@ -397,9 +397,9 @@ def test_down_catches_child_created_while_bot_stops(tmp_path):
 
 def test_inventory_rejects_conflicting_instance_labels():
     own = container("bot")
-    own["Config"]["Labels"]["maxwell.instance"] = "uni"
+    own["Config"]["Labels"]["dame-curie.instance"] = "dame-curie-uni"
     with pytest.raises(ValueError, match="conflicting"):
-        ops.select_owned([own], "curie", "maxwell-curie")
+        ops.select_owned([own], "dame-curie", "dame-curie")
 
 
 @pytest.fixture
@@ -418,7 +418,7 @@ def actual_archive(tmp_path):
         connection.execute("CREATE TABLE fixture (value TEXT)")
         connection.execute("INSERT INTO fixture VALUES ('offline sample')")
     program = ops.ARCHIVE_PROGRAM.replace('Path("/instance")', f"Path({str(source)!r})")
-    result = subprocess.run([sys.executable, "-c", program, "curie"], capture_output=True)
+    result = subprocess.run([sys.executable, "-c", program, "dame-curie"], capture_output=True)
     assert result.returncode == 0, result.stderr.decode()
     assert result.stderr == b""
     return source, result.stdout
@@ -427,8 +427,8 @@ def actual_archive(tmp_path):
 def test_actual_archive_and_restore_roundtrip(tmp_path, actual_archive):
     source, content = actual_archive
     with tarfile.open(fileobj=io.BytesIO(content)) as archive:
-        ops.validate_archive(archive, "curie")
-        assert archive.pax_headers["maxwell.instance"] == "curie"
+        ops.validate_archive(archive, "dame-curie")
+        assert archive.pax_headers["dame-curie.instance"] == "dame-curie"
         assert archive.getmember("shell/relative-link").issym()
         assert any(member.islnk() for member in archive.getmembers())
         assert all(member.uid == os.getuid() and member.gid == os.getgid() for member in archive.getmembers())

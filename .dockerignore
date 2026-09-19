@@ -11,6 +11,8 @@ venv/
 data/
 logs/
 .git/
+legacy/
+phase-II_v2/
 *.log
 avatar.b64
 public/bot/

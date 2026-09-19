@@ -1,4 +1,4 @@
-# Runtime for site backends written by Maxwell (see site_server.py).
+# Runtime for site backends written by dame-curie (see site_server.py).
 #
 # Sized for what people actually build: a site with accounts, a database, and
 # other people connected to it at the same time. Both server styles are here —

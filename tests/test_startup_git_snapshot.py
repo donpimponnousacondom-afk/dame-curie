@@ -50,8 +50,8 @@ def snapshot_server(replies):
 def test_real_socket_snapshot_is_frozen_until_next_boot(monkeypatch, tmp_path):
     changed = {**SNAPSHOT, "commit": "b" * 40, "branch": "another-branch", "dirty": True}
     with snapshot_server([json.dumps(SNAPSHOT).encode(), json.dumps(changed).encode()]) as (path, connections):
-        monkeypatch.setenv("MAXWELL_STARTUP_GIT_SOCKET", path)
-        monkeypatch.setenv("MAXWELL_BUILD_COMMIT", "c" * 40)
+        monkeypatch.setenv("DAME_CURIE_STARTUP_GIT_SOCKET", path)
+        monkeypatch.setenv("DAME_CURIE_BUILD_COMMIT", "c" * 40)
         first = observability.capture_running_build(tmp_path)
         report = first.format()
         assert first.commit == SNAPSHOT["commit"]
@@ -67,7 +67,7 @@ def test_real_socket_snapshot_is_frozen_until_next_boot(monkeypatch, tmp_path):
 
 def test_actual_version_dispatch_only_uses_frozen_boot_snapshot(monkeypatch, tmp_path):
     with snapshot_server([json.dumps(SNAPSHOT).encode()]) as (path, connections):
-        monkeypatch.setenv("MAXWELL_STARTUP_GIT_SOCKET", path)
+        monkeypatch.setenv("DAME_CURIE_STARTUP_GIT_SOCKET", path)
         frozen = observability.capture_running_build(tmp_path)
     sent = []
 
@@ -106,8 +106,8 @@ def test_missing_malformed_or_oversized_response_is_rejected(reply):
 
 
 def test_configured_socket_failure_never_falls_back_to_image_or_other_checkout(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAXWELL_STARTUP_GIT_SOCKET", str(Path(__file__).resolve().parents[1] / "no-git.sock"))
-    monkeypatch.setenv("MAXWELL_BUILD_COMMIT", "c" * 40)
+    monkeypatch.setenv("DAME_CURIE_STARTUP_GIT_SOCKET", str(Path(__file__).resolve().parents[1] / "no-git.sock"))
+    monkeypatch.setenv("DAME_CURIE_BUILD_COMMIT", "c" * 40)
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(observability.subprocess, "run", Mock(side_effect=AssertionError("fell back to another checkout")))
     with pytest.raises(FileNotFoundError):

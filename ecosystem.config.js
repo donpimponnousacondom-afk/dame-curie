@@ -1,4 +1,4 @@
-// PM2 process definitions for Maxwell.
+// PM2 process definitions for dame-curie.
 //
 // ENV IS LOADED BY PYTHON, NOT HERE. config.py and api/storage.py both call
 // load_dotenv(override=True) on every process start, so the local .env file
@@ -11,16 +11,17 @@
 // PYTHONUNBUFFERED (live logs). Everything else belongs in .env.
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
-const appRoot = process.env.MAXWELL_APP_ROOT || __dirname;
+const appRoot = process.env.DAME_CURIE_APP_ROOT || __dirname;
 
 // Ollama is only managed here when this machine actually has it. A fresh
 // install that talks to a hosted endpoint would otherwise get a crash-looping
 // `ollama serve` process it never asked for. Force either way with
-// MAXWELL_PM2_OLLAMA=true|false.
+// DAME_CURIE_PM2_OLLAMA=true|false.
 function hasOllama() {
-	const forced = (process.env.MAXWELL_PM2_OLLAMA || "").toLowerCase();
+	const forced = (process.env.DAME_CURIE_PM2_OLLAMA || "").toLowerCase();
 	if (forced === "true" || forced === "1") return true;
 	if (forced === "false" || forced === "0") return false;
 	return (process.env.PATH || "")
@@ -28,10 +29,9 @@ function hasOllama() {
 		.some((dir) => dir && fs.existsSync(path.join(dir, "ollama")));
 }
 
-// Prefer the venv interpreter setup.sh creates, so `pm2 start` picks up the
-// same dependencies a manual `python3 bot.py` would.
-const venvPython = path.join(appRoot, ".venv", "bin", "python3");
-const python = fs.existsSync(venvPython) ? venvPython : "python3";
+// The checkout .venv is the only supported host interpreter; no global fallback.
+const venvPython = path.join(appRoot, ".venv", "bin", "python");
+const logsRoot = path.join(process.env.PM2_HOME || path.join(os.homedir(), ".pm2"), "logs");
 
 // Load .env for GF token if present (so PM2 gf app can inherit it without
 // --update-env quirks). Parse the value like dotenv does: quoted values and
@@ -65,9 +65,9 @@ if (!gfToken) gfToken = process.env.GF_DISCORD_TOKEN || "";
 
 const apps = [
 	{
-		name: "maxwell-bot",
+		name: "dame-curie-bot",
 		script: "bot.py",
-		interpreter: python,
+		interpreter: venvPython,
 		cwd: appRoot,
 		instances: 1,
 		exec_mode: "fork",
@@ -89,8 +89,8 @@ const apps = [
 		},
 		log_date_format: "YYYY-MM-DD HH:mm:ss Z",
 		merge_logs: true,
-		error_file: "/root/.pm2/logs/maxwell-bot-error.log",
-		out_file: "/root/.pm2/logs/maxwell-bot-out.log",
+		error_file: path.join(logsRoot, "dame-curie-bot-error.log"),
+		out_file: path.join(logsRoot, "dame-curie-bot-out.log"),
 		log_type: "json",
 	},
 	{
@@ -121,9 +121,9 @@ const apps = [
 		merge_logs: true,
 	},
 	{
-		name: "maxwell-api",
+		name: "dame-curie-api",
 		script: "api/api_server.py",
-		interpreter: python,
+		interpreter: venvPython,
 		cwd: appRoot,
 		instances: 1,
 		exec_mode: "fork",
@@ -144,16 +144,16 @@ const apps = [
 		},
 		log_date_format: "YYYY-MM-DD HH:mm:ss Z",
 		merge_logs: true,
-		error_file: "/root/.pm2/logs/maxwell-api-error.log",
-		out_file: "/root/.pm2/logs/maxwell-api-out.log",
+		error_file: path.join(logsRoot, "dame-curie-api-error.log"),
+		out_file: path.join(logsRoot, "dame-curie-api-out.log"),
 		log_type: "json",
 	},
 	// Mommy GF companion - second self-bot on same harness, mommy persona
 	// Runs same bot.py but with GF token and isolated data dir. Direct comms via partner IDs.
 	...(gfToken ? [{
-		name: "maxwell-gf",
+		name: "dame-curie-gf",
 		script: "bot.py",
-		interpreter: python,
+		interpreter: venvPython,
 		cwd: appRoot,
 		instances: 1,
 		autorestart: true,
@@ -171,7 +171,7 @@ const apps = [
 			BOT_PERSONA_TYPE: "mommy_gf",
 			DATA_DIR: "data_gf",
 			GF_USER_ID: "1496154562715848763",
-			MAXWELL_USER_ID: "1382894657624866889",
+			DAME_CURIE_USER_ID: "1382894657624866889",
 			PARTNER_USER_ID: "1382894657624866889",
 		},
 		log_date_format: "YYYY-MM-DD HH:mm:ss Z",

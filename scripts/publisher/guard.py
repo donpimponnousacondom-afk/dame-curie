@@ -10,7 +10,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import PurePosixPath
 
 
-MARKER = ".curie-publisher-owner"
+MARKER = ".dame-curie-publisher-owner"
 FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 RENAME_NOREPLACE = 1
 
@@ -82,7 +82,7 @@ def child_directory(root, name, expected):
 def claim_name(token):
     if str(uuid.UUID(token)) != token:
         raise Refused()
-    return ".curie-publisher-claim-" + token
+    return ".dame-curie-publisher-claim-" + token
 
 
 @contextmanager

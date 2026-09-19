@@ -1,0 +1,15 @@
+[Unit]
+Description=dame-curie @INSTANCE@ checkout snapshot socket
+
+[Socket]
+ListenStream=/srv/dame-curie-checkout/@INSTANCE@/snapshot.sock
+SocketUser=@INSTANCE@
+SocketGroup=@INSTANCE@
+SocketMode=0600
+DirectoryMode=0711
+Accept=yes
+MaxConnections=2
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

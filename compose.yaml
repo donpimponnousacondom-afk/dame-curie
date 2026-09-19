@@ -1,9 +1,9 @@
-name: maxwell-${INSTANCE_ID:?Set INSTANCE_ID in deploy.env}
+name: ${INSTANCE_ID:?Set INSTANCE_ID in deploy.env}
 
 x-host-timezone: &host-timezone
   type: bind
   source: /etc/localtime
-  target: /etc/maxwell-localtime
+  target: /etc/dame-curie-localtime
   read_only: true
   bind:
     create_host_path: false
@@ -18,7 +18,7 @@ x-app: &app
   entrypoint:
     - /bin/sh
     - -ec
-    - python /opt/maxwell/check_embeddings.py && exec "$$@"
+    - python /opt/dame-curie/check_embeddings.py && exec "$$@"
     - --
   depends_on:
     ollama:
@@ -28,13 +28,13 @@ x-app: &app
   cap_drop:
     - ALL
   environment: &app-environment
-    TZ: ":/etc/maxwell-localtime"
-    MAXWELL_ENV_FILE: /config/bot.env
-    MAXWELL_CONTAINER_MODE: "true"
-    MAXWELL_INSTANCE_ID: ${INSTANCE_ID}
-    MAXWELL_HOST_INSTANCE_DIR: ${INSTANCE_DIR:?Set INSTANCE_DIR in deploy.env}
-    MAXWELL_BACKEND_NETWORK: maxwell-${INSTANCE_ID}-backends
-    DOCKER_HOST: unix:///run/maxwell/docker.sock
+    TZ: ":/etc/dame-curie-localtime"
+    DAME_CURIE_ENV_FILE: /config/bot.env
+    DAME_CURIE_CONTAINER_MODE: "true"
+    DAME_CURIE_INSTANCE_ID: ${INSTANCE_ID}
+    DAME_CURIE_HOST_INSTANCE_DIR: ${INSTANCE_DIR:?Set INSTANCE_DIR in deploy.env}
+    DAME_CURIE_BACKEND_NETWORK: ${INSTANCE_ID}-backends
+    DOCKER_HOST: unix:///run/dame-curie/docker.sock
   volumes:
     - *host-timezone
     - &app-config
@@ -71,7 +71,7 @@ x-app: &app
     - &app-docker
       type: bind
       source: ${ENGINE_SOCKET:?Set the private rootless ENGINE_SOCKET}
-      target: /run/maxwell/docker.sock
+      target: /run/dame-curie/docker.sock
       bind:
         create_host_path: false
   tmpfs:
@@ -115,7 +115,7 @@ services:
     <<: *ollama
     restart: "no"
     environment:
-      TZ: ":/etc/maxwell-localtime"
+      TZ: ":/etc/dame-curie-localtime"
       OLLAMA_HOST: 127.0.0.1:11434
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -142,7 +142,7 @@ services:
     <<: *ollama
     restart: unless-stopped
     environment:
-      TZ: ":/etc/maxwell-localtime"
+      TZ: ":/etc/dame-curie-localtime"
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: "-1"
       OLLAMA_MAX_LOADED_MODELS: "1"
@@ -166,7 +166,7 @@ services:
     <<: *app
     environment:
       <<: *app-environment
-      MAXWELL_STARTUP_GIT_SOCKET: /run/maxwell-checkout/snapshot.sock
+      DAME_CURIE_STARTUP_GIT_SOCKET: /run/dame-curie-checkout/snapshot.sock
     volumes:
       - *host-timezone
       - *app-config
@@ -175,8 +175,8 @@ services:
       - *app-sites
       - *app-shell
       - type: bind
-        source: /srv/maxwell-checkout/${INSTANCE_ID}
-        target: /run/maxwell-checkout
+        source: /srv/dame-curie-checkout/${INSTANCE_ID}
+        target: /run/dame-curie-checkout
         read_only: true
         bind:
           create_host_path: false
@@ -212,7 +212,7 @@ services:
     ports:
       - "127.0.0.1:${WEB_PORT:?Set a unique WEB_PORT}:8080"
     environment:
-      TZ: ":/etc/maxwell-localtime"
+      TZ: ":/etc/dame-curie-localtime"
     volumes:
       - *host-timezone
       - type: bind
@@ -247,7 +247,7 @@ services:
 networks:
   frontend:
   backends:
-    name: maxwell-${INSTANCE_ID}-backends
+    name: ${INSTANCE_ID}-backends
   embeddings:
     internal: true
   model-download:

@@ -1,11 +1,11 @@
 [Unit]
-Description=Maxwell @INSTANCE@ checkout snapshot reader
+Description=dame-curie @INSTANCE@ checkout snapshot reader
 CollectMode=inactive-or-failed
 
 [Service]
 Type=exec
 User=@CHECKOUT_OWNER@
-ExecStart=/usr/local/bin/python3.14 -I "@READER@" "@CHECKOUT_ROOT@"
+ExecStart=@CHECKOUT_ROOT@/.venv/bin/python -I "@READER@" "@CHECKOUT_ROOT@"
 WorkingDirectory=/
 StandardInput=socket
 StandardOutput=inherit

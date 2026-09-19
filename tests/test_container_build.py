@@ -16,7 +16,7 @@ def image_metadata(monkeypatch):
         "DIRTY": "false",
     }
     for field, value in values.items():
-        monkeypatch.setenv(f"MAXWELL_BUILD_{field}", value)
+        monkeypatch.setenv(f"DAME_CURIE_BUILD_{field}", value)
     return values
 
 
@@ -24,7 +24,7 @@ def image_metadata(monkeypatch):
 def test_image_metadata_is_never_reported_as_checkout_state(
     image_metadata, monkeypatch, tmp_path, dirty
 ):
-    monkeypatch.setenv("MAXWELL_BUILD_DIRTY", dirty)
+    monkeypatch.setenv("DAME_CURIE_BUILD_DIRTY", dirty)
     monkeypatch.setattr(
         observability.subprocess,
         "run",
@@ -37,7 +37,7 @@ def test_image_metadata_is_never_reported_as_checkout_state(
     assert "Checkout at boot:" in report
     assert image_metadata["COMMIT"] not in report
     assert snapshot.started_at.endswith("+00:00")
-    monkeypatch.setenv("MAXWELL_BUILD_COMMIT", "b" * 40)
+    monkeypatch.setenv("DAME_CURIE_BUILD_COMMIT", "b" * 40)
     assert snapshot.format() == report
 
 
@@ -63,7 +63,7 @@ def test_source_checkout_git_takes_precedence_over_image_metadata(
 
 def test_unspecified_container_build_metadata_stays_unknown(monkeypatch, tmp_path):
     for field in ("COMMIT", "BRANCH", "DATE", "SUBJECT", "DIRTY"):
-        monkeypatch.setenv(f"MAXWELL_BUILD_{field}", "unknown")
+        monkeypatch.setenv(f"DAME_CURIE_BUILD_{field}", "unknown")
     snapshot = observability.capture_running_build(Path(tmp_path))
     assert (
         snapshot.commit

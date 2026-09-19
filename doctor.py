@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Maxwell install check: what works, what doesn't, and what to do about it.
 
-    python3 doctor.py            # report
-    python3 doctor.py --probe    # also call the model + embedding endpoints
+    .venv/bin/python doctor.py            # report
+    .venv/bin/python doctor.py --probe    # also call the model + embedding endpoints
 
 Exits non-zero only when something actually stops the bot from starting —
 missing optional features are reported, not treated as failures.
@@ -41,11 +41,11 @@ def line(state: str, label: str, detail: str = "") -> None:
 
 def check_python() -> None:
     head("Python")
-    if sys.version_info >= (3, 11):
+    if sys.version_info[:2] == (3, 14):
         line("ok", f"Python {sys.version.split()[0]}")
     else:
-        line("bad", f"Python {sys.version.split()[0]}", "3.11+ required")
-        problems.append("upgrade to Python 3.11 or newer")
+        line("bad", f"Python {sys.version.split()[0]}", "3.14 required")
+        problems.append("use the project's Python 3.14 environment")
 
 
 def check_core_packages() -> None:
@@ -61,13 +61,13 @@ def check_core_packages() -> None:
         if find_spec(module):
             line("ok", package)
         else:
-            line("bad", package, f"pip install {package}")
-            problems.append(f"pip install {package}")
+            line("bad", package, f".venv/bin/python -m pip install {package}")
+            problems.append(f".venv/bin/python -m pip install {package}")
 
 
 def check_env_file() -> None:
     head("Configuration")
-    env_file = Path(os.getenv("MAXWELL_ENV_FILE", APP_ROOT / ".env"))
+    env_file = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
     if env_file.is_file():
         line("ok", ".env found", str(env_file))
     else:
@@ -88,14 +88,14 @@ def check_required_settings(cfg) -> None:
     else:
         line("bad", "model endpoint incomplete", "set OLLAMA_BASE_URL and OLLAMA_MODEL")
         problems.append("set OLLAMA_BASE_URL and OLLAMA_MODEL in .env")
-    if cfg.MAXWELL_OWNER_IDS:
-        line("ok", "MAXWELL_OWNER_IDS set", f"{len(cfg.MAXWELL_OWNER_IDS)} owner(s)")
+    if cfg.DAME_CURIE_OWNER_IDS:
+        line("ok", "DAME_CURIE_OWNER_IDS set", f"{len(cfg.DAME_CURIE_OWNER_IDS)} owner(s)")
     else:
-        line("warn", "MAXWELL_OWNER_IDS empty", "admin commands will be denied to everyone")
-    if cfg.MAXWELL_ADMIN_PASSWORD:
+        line("warn", "DAME_CURIE_OWNER_IDS empty", "admin commands will be denied to everyone")
+    if cfg.DAME_CURIE_ADMIN_PASSWORD:
         line("ok", "dashboard password set")
     else:
-        line("warn", "MAXWELL_ADMIN_PASSWORD empty", "the admin API will answer 503")
+        line("warn", "DAME_CURIE_ADMIN_PASSWORD empty", "the admin API will answer 503")
 
 
 def check_system_tools() -> None:
@@ -261,7 +261,7 @@ def probe(cfg) -> None:
         if state != "ok":
             print(
                 f"    {DIM}RAG memory degrades to recent-history context. Fix with "
-                f"`ollama pull qwen3-embedding:0.6b`, point MAXWELL_EMBED_BASE_URL at "
+                f"`ollama pull qwen3-embedding:0.6b`, point DAME_CURIE_EMBED_BASE_URL at "
                 f"another endpoint, or set ENABLE_RAG=false.{RESET}"
             )
 
@@ -302,9 +302,9 @@ def main() -> int:
         for item in problems:
             print(f"  {RED}→{RESET} {item}")
         return 1
-    print(f"  {GREEN}Ready.{RESET} Start with: python3 bot.py")
+    print(f"  {GREEN}Ready.{RESET} Start with: .venv/bin/python bot.py")
     if not args.probe:
-        print(f"  {DIM}Run `python3 doctor.py --probe` to test the endpoints too.{RESET}")
+        print(f"  {DIM}Run `.venv/bin/python doctor.py --probe` to test the endpoints too.{RESET}")
     return 0
 
 

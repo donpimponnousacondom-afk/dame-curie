@@ -27,7 +27,7 @@ def isolated_reporting(monkeypatch):
         handler for handler in root.handlers
         if not isinstance(handler, reporting.IncidentLoggingHandler)
     ])
-    monkeypatch.setenv("MAXWELL_CONTAINER_MODE", "false")
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "false")
     monkeypatch.setattr(api, "_API_GLOBAL_LIMITER", None)
     monkeypatch.setattr(api, "_API_CONCURRENCY_SEM", asyncio.Semaphore(8))
     monkeypatch.setattr(site_server, "_LIFECYCLE_LOCK", asyncio.Lock())
@@ -88,7 +88,7 @@ def test_remove_retains_all_received_attempts_without_extra_actions(store, monke
     with pytest.raises(site_server.SiteServerExecutionError) as raised:
         asyncio.run(site_server._remove_container("demo"))
     assert str(raised.value) == (
-        "could not remove backend container maxwell-site-demo: " + retry_err.strip()[:300]
+        "could not remove backend container dame-curie-site-demo: " + retry_err.strip()[:300]
     )
     incident = store.get(0)
     assert all(text in incident.details for text in (first_out, first_err, retry_out, retry_err))
@@ -245,7 +245,7 @@ def test_unhealthy_start_keeps_full_received_logs_but_model_tail_unchanged(store
     assert stdout in incident.details and stderr in incident.details
     assert "container-id" in incident.details and "run warning" in incident.details
     assert site_server._remove_container.await_count == 2
-    assert docker.await_args_list[1].args == ("logs", "--tail", "30", "maxwell-site-demo")
+    assert docker.await_args_list[1].args == ("logs", "--tail", "30", "dame-curie-site-demo")
     assert asyncio.run(site_server.logs(prepared_start, "demo")) == tail
     assert docker.await_count == 3
     assert store.get(1) is None
@@ -385,9 +385,9 @@ def test_caught_normal_4xx_is_not_an_incident(api_reporting, status):
 
 @pytest.mark.parametrize("operation", ["logs", "restart"])
 def test_container_pm2_refusals_do_not_evict_incidents(api_reporting, monkeypatch, operation):
-    monkeypatch.setenv("MAXWELL_CONTAINER_MODE", "true")
-    monkeypatch.setenv("MAXWELL_ADMIN_USER", "synthetic-admin")
-    monkeypatch.setenv("MAXWELL_ADMIN_PASSWORD", "synthetic-password")
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "true")
+    monkeypatch.setenv("DAME_CURIE_ADMIN_USER", "synthetic-admin")
+    monkeypatch.setenv("DAME_CURIE_ADMIN_PASSWORD", "synthetic-password")
     spawn = AsyncMock(side_effect=AssertionError("unsupported PM2 command executed"))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     ids = [reporting.capture_incident("synthetic.failure", f"real incident {index}") for index in range(10)]
@@ -470,8 +470,8 @@ def test_api_intentional_cancellation_is_not_an_incident(api_reporting):
 @pytest.mark.parametrize("authenticated", [False, True])
 def test_incident_history_is_never_exported_by_data_route(api_reporting, monkeypatch, authenticated):
     reporting.capture_incident("synthetic", "PRIVATE-DIAGNOSTIC-NEVER-PUBLIC")
-    monkeypatch.setenv("MAXWELL_ADMIN_USER", "synthetic-admin")
-    monkeypatch.setenv("MAXWELL_ADMIN_PASSWORD", "synthetic-password")
+    monkeypatch.setenv("DAME_CURIE_ADMIN_USER", "synthetic-admin")
+    monkeypatch.setenv("DAME_CURIE_ADMIN_PASSWORD", "synthetic-password")
     credentials = base64.b64encode(b"synthetic-admin:synthetic-password").decode()
     headers = {"Authorization": "Basic " + credentials} if authenticated else {}
     request = make_mocked_request(

@@ -10,7 +10,7 @@ from scripts import migrate_instance as migration
 @pytest.fixture
 def layout(tmp_path, monkeypatch):
     monkeypatch.setattr(migration, "INSTANCE_ROOT", tmp_path / "instances")
-    target = migration.INSTANCE_ROOT / "curie"
+    target = migration.INSTANCE_ROOT / "dame-curie"
     for part in ("data", "sites", "shell", "config/prompts"):
         (target / part).mkdir(parents=True)
     (target / "config/bot.env").write_text("OPERATOR=independent\n")
@@ -22,7 +22,7 @@ def layout(tmp_path, monkeypatch):
 
 def execute(layout, stopped=True):
     _, sources = layout
-    migration.migrate("curie", *sources, stopped=stopped)
+    migration.migrate("dame-curie", *sources, stopped=stopped)
 
 
 def test_migrate_preserves_source_and_externalizes_prompts(layout):
@@ -56,11 +56,11 @@ def test_registry_retargets_and_preserves_desired_state(layout):
     (data / "site_servers.json").write_text(json.dumps(original))
     execute(layout)
     registry = json.loads((target / "data/site_servers.json").read_text())
-    assert registry["version"] == 2 and registry["instance"] == "curie"
+    assert registry["version"] == 2 and registry["instance"] == "dame-curie"
     active = registry["sites"]["demo"]
-    assert active["container"] == "maxwell-curie-site-demo"
-    assert active["image"] == "maxwell-curie-siteimg-demo"
-    assert active["network"] == "maxwell-curie-backends"
+    assert active["container"] == "dame-curie-site-demo"
+    assert active["image"] == "dame-curie-siteimg-demo"
+    assert active["network"] == "dame-curie-backends"
     assert active["port"] == 8000 and active["running"] is True
     assert active["env"] == original["demo"]["env"]
     assert registry["sites"]["idle"]["running"] is False
@@ -177,4 +177,4 @@ def test_invalid_instance_refused(layout, value):
 def test_parent_traversal_refused(layout):
     _, sources = layout
     with pytest.raises(ValueError, match="traversal"):
-        migration.migrate("curie", sources[0] / ".." / sources[0].name, *sources[1:], stopped=True)
+        migration.migrate("dame-curie", sources[0] / ".." / sources[0].name, *sources[1:], stopped=True)

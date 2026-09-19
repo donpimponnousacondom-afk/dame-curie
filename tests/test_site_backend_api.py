@@ -288,7 +288,7 @@ def test_proxy_refuses_a_malformed_slug(data_dir):
     assert resp.status == 404
 
 
-@pytest.mark.parametrize("host,port", [("127.0.0.1", 8801), ("maxwell-curie-site-guest", 8000)])
+@pytest.mark.parametrize("host,port", [("127.0.0.1", 8801), ("dame-curie-site-guest", 8000)])
 def test_proxy_uses_verified_target(data_dir, monkeypatch, host, port):
     """The resolver picks the destination — a request cannot supply a host."""
     seen = {}
@@ -381,7 +381,7 @@ def test_proxy_streams_instead_of_buffering(data_dir, monkeypatch):
     assert order == ["upstream0", "client", "upstream1", "client", "upstream2", "client"]
 
 
-@pytest.mark.parametrize("host,port", [("127.0.0.1", 8801), ("maxwell-curie-site-guest", 8000)])
+@pytest.mark.parametrize("host,port", [("127.0.0.1", 8801), ("dame-curie-site-guest", 8000)])
 def test_websocket_upgrade_takes_the_socket_path(data_dir, monkeypatch, host, port):
     """Multiplayer depends on this branch being reached, not the HTTP one."""
     monkeypatch.setattr(api.site_server, "target_for", lambda dd, slug: (host, port))

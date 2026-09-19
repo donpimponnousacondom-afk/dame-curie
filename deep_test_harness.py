@@ -176,7 +176,7 @@ class DeepTestHarness:
             assert hasattr(cfg, "ENABLE_SHELL")
             assert hasattr(cfg, "ENABLE_RAG")
             assert hasattr(cfg, "ENABLE_AUTONOMY")
-            assert isinstance(cfg.MAXWELL_OWNER_IDS, set)
+            assert isinstance(cfg.DAME_CURIE_OWNER_IDS, set)
             return "Config class exposes required features and attributes"
 
         def test_env_parsing_helpers():
@@ -832,7 +832,7 @@ class DeepTestHarness:
     # =========================================================================
     async def run_all(self):
         print("\n" + "=" * 80)
-        print(" MAXWELL DEEP TESTING HARNESS - FULL COMPREHENSIVE SUITE ")
+        print(" dame-curie DEEP TESTING HARNESS - FULL COMPREHENSIVE SUITE ")
         print("=" * 80)
 
         t_start = time.perf_counter()

@@ -76,23 +76,23 @@ def api_runtime(tmp_path):
     env = {
         **os.environ,
         "HOME": str(tmp_path / "home"),
-        "MAXWELL_ENV_FILE": "/dev/null",
+        "DAME_CURIE_ENV_FILE": "/dev/null",
         "PYTHON_DOTENV_DISABLED": "1",
         "DATA_DIR": str(tmp_path / "data"),
-        "MAXWELL_SITE_DIR": str(tmp_path / "sites"),
-        "MAXWELL_PROMPTS_DIR": str(tmp_path / "prompts"),
-        "MAXWELL_CONTAINER_MODE": "true",
-        "MAXWELL_INSTANCE_ID": "synthetic",
-        "MAXWELL_ADMIN_USER": USER,
-        "MAXWELL_ADMIN_PASSWORD": PASSWORD,
-        "MAXWELL_API_HOST": "127.0.0.1",
-        "MAXWELL_API_PORT": str(port),
-        "MAXWELL_PUBLIC_BASE_URL": origin,
-        "MAXWELL_CORS_ORIGIN": origin,
+        "DAME_CURIE_SITE_DIR": str(tmp_path / "sites"),
+        "DAME_CURIE_PROMPTS_DIR": str(tmp_path / "prompts"),
+        "DAME_CURIE_CONTAINER_MODE": "true",
+        "DAME_CURIE_INSTANCE_ID": "dame-curie-synthetic",
+        "DAME_CURIE_ADMIN_USER": USER,
+        "DAME_CURIE_ADMIN_PASSWORD": PASSWORD,
+        "DAME_CURIE_API_HOST": "127.0.0.1",
+        "DAME_CURIE_API_PORT": str(port),
+        "DAME_CURIE_PUBLIC_BASE_URL": origin,
+        "DAME_CURIE_CORS_ORIGIN": origin,
         "ENABLE_RAG": "false",
-        "MAXWELL_EMBED_BASE_URL": "http://ollama:11434",
-        "MAXWELL_EMBED_MODEL": "qwen3-embedding:0.6b",
-        "MAXWELL_EMBED_DIM": "1024",
+        "DAME_CURIE_EMBED_BASE_URL": "http://ollama:11434",
+        "DAME_CURIE_EMBED_MODEL": "qwen3-embedding:0.6b",
+        "DAME_CURIE_EMBED_DIM": "1024",
         "DISCORD_CLIENT_ID": "",
         "DISCORD_CLIENT_SECRET": "",
     }
@@ -105,9 +105,9 @@ def api_runtime(tmp_path):
 @pytest.fixture
 def dashboard_runtime(api_runtime):
     api_origin, state, env = api_runtime
-    caddy = os.getenv("MAXWELL_TEST_CADDY") or shutil.which("caddy")
+    caddy = os.getenv("DAME_CURIE_TEST_CADDY") or shutil.which("caddy")
     if not caddy:
-        pytest.skip("Caddy binary unavailable; set MAXWELL_TEST_CADDY")
+        pytest.skip("Caddy binary unavailable; set DAME_CURIE_TEST_CADDY")
     port = free_port()
     origin = f"http://127.0.0.1:{port}"
     config = (ROOT / "docker/Caddyfile").read_text()
@@ -162,7 +162,7 @@ def verify_authenticated_controls(origin, state):
     status, _, text = request(origin, "GET", "/data/bot_control.json", headers=AUTH)
     assert status == 200
     assert json.loads(text)["base_personality"] == "Synthetic saved personality"
-    assert request(origin, "GET", "/data/maxwell_rag.db", headers=AUTH)[0] == 403
+    assert request(origin, "GET", "/data/dame-curie-rag.db", headers=AUTH)[0] == 403
     assert request(origin, "GET", "/data/admins.json", headers=AUTH)[0] == 403
     assert request(origin, "POST", "/api/pm2/restart", {}, AUTH)[0] == 501
 
@@ -178,7 +178,7 @@ def test_dashboard_counts_only_current_valid_embeddings(api_runtime):
     origin, state, _ = api_runtime
     backend = embedding_backend_id("http://ollama:11434", "qwen3-embedding:0.6b", 1024)
     vector = struct.pack("<1024f", *([0.25] * 1024))
-    with closing(sqlite3.connect(state / "data/maxwell_rag.db")) as connection:
+    with closing(sqlite3.connect(state / "data/dame-curie-rag.db")) as connection:
         connection.execute(
             "CREATE TABLE vectors (id TEXT, channel_id TEXT, kind TEXT, content TEXT, "
             "timestamp TEXT, embedding BLOB, embedding_backend TEXT)"
@@ -228,18 +228,18 @@ def test_caddy_serves_admin_and_preserves_real_api_auth(dashboard_runtime):
 def test_browser_login_and_personality_save_use_real_api(dashboard_runtime):
     origin, state, env = dashboard_runtime
     node = shutil.which("node")
-    playwright = os.getenv("MAXWELL_TEST_PLAYWRIGHT")
-    chromium = os.getenv("MAXWELL_TEST_CHROMIUM")
+    playwright = os.getenv("DAME_CURIE_TEST_PLAYWRIGHT")
+    chromium = os.getenv("DAME_CURIE_TEST_CHROMIUM")
     if not node or not playwright or not chromium:
         pytest.skip(
-            "Set MAXWELL_TEST_PLAYWRIGHT and MAXWELL_TEST_CHROMIUM for browser acceptance"
+            "Set DAME_CURIE_TEST_PLAYWRIGHT and DAME_CURIE_TEST_CHROMIUM for browser acceptance"
         )
     result = subprocess.run(
         [node, str(ROOT / "tests/dashboard_smoke.cjs"), origin],
         env={
             **env,
-            "MAXWELL_TEST_PLAYWRIGHT": playwright,
-            "MAXWELL_TEST_CHROMIUM": chromium,
+            "DAME_CURIE_TEST_PLAYWRIGHT": playwright,
+            "DAME_CURIE_TEST_CHROMIUM": chromium,
         },
         capture_output=True,
         text=True,

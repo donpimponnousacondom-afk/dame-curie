@@ -20,8 +20,8 @@ def test_rem_status_payload_shape(tmp_path, monkeypatch):
 
 
 def test_api_mutation_auth_middleware(monkeypatch):
-    monkeypatch.setenv("MAXWELL_ADMIN_USER", "admin")
-    monkeypatch.setenv("MAXWELL_ADMIN_PASSWORD", "pw")
+    monkeypatch.setenv("DAME_CURIE_ADMIN_USER", "admin")
+    monkeypatch.setenv("DAME_CURIE_ADMIN_PASSWORD", "pw")
     import api.api_server as api_server
 
     api = importlib.reload(api_server)

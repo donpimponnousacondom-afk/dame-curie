@@ -47,14 +47,14 @@ from utils import FileLock, _atomic_json_write_sync
 
 logger = logging.getLogger(__name__)
 
-IMAGE = "maxwell-site-runtime"
+IMAGE = "dame-curie-site-runtime"
 DOCKERFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker", "site-runtime")
-CONTAINER_PREFIX = "maxwell-site-"
+CONTAINER_PREFIX = "dame-curie-site-"
 # Deliberately NOT the same prefix as CONTAINER_PREFIX. When they matched, a
 # per-site image and its container shared one identifier, and `docker inspect`
 # went on finding the image after the container was removed — so the
 # wait-for-removal loop span for its full timeout on every deploy.
-IMAGE_PREFIX = "maxwell-siteimg-"
+IMAGE_PREFIX = "dame-curie-siteimg-"
 CONTAINER_PORT = 8000
 
 # Ports handed to site backends. Loopback only — the public path is the proxy.
@@ -949,7 +949,7 @@ async def _start_unlocked(
     args = [
         "run", "-d",
         "--name", container_name(slug),
-        "--label", f"maxwell.site={slug}",
+        "--label", f"dame-curie.site={slug}",
         "--restart", "unless-stopped",
         "--memory", MEMORY,
         "--cpus", CPUS,

@@ -3,7 +3,7 @@
 Vector search is good at conversational vibe and terrible at multi-hop
 structure ("who owns this site, which routes does it expose, what does the
 frontend call"). This module stores that structure as SQLite nodes+edges in
-the same ``maxwell_rag.db`` — no Neo4j, no extra embed calls.
+the same ``dame-curie-rag.db`` — no Neo4j, no extra embed calls.
 
 Two writers, both cheap:
 
@@ -652,9 +652,9 @@ def refresh_site(bot: Any, slug: str) -> str:
             bot._load_sites(quiet=True)
     entry = ((getattr(bot, "_sites", None) or {}).get(slug) or {})
     cfg = getattr(bot, "config", None)
-    site_root = Path(getattr(cfg, "MAXWELL_SITE_DIR", "public/bot") or "public/bot")
+    site_root = Path(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
     data_dir = getattr(cfg, "DATA_DIR", "data")
-    public_base = str(getattr(cfg, "MAXWELL_PUBLIC_BASE_URL", "") or "").rstrip("/")
+    public_base = str(getattr(cfg, "DAME_CURIE_PUBLIC_BASE_URL", "") or "").rstrip("/")
     url = f"{public_base}/bot/{slug}/" if public_base else f"/bot/{slug}/"
     code_dir = None
     try:

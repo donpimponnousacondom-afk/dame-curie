@@ -32,7 +32,7 @@ A backup, local commit, documentation edit or review pass never authorizes a res
 
 Canonical external name: **dame-curie**. Root's intentional short URL segment **dame** remains. Use `DAME_CURIE_*` for shell/Python environment identifiers where hyphens are not valid ordinary identifiers. Neutral filenames such as `bot.env`, `.env` and `.venv` need no cosmetic rename; their roles and containing roots must be explicit.
 
-Trace coupled image/resource selectors, custom labels, paths, database consumers and routes before changing them. No old-name fallback may silently reconnect V2 to protected V1 resources/state. Do not rename ordinary `max()`/`max_tokens`, rewrite every historical comment, invent real hostnames/mailboxes/Discord identities or change the primary persona/model as a naming shortcut. The source cut-off is still pending; target names in docs are not evidence the code already uses them.
+Trace coupled image/resource selectors, custom labels, paths, database consumers and routes before changing them. No old-name fallback may silently reconnect V2 to protected V1 resources/state. Do not rename ordinary `max()`/`max_tokens`, rewrite every historical comment, invent real hostnames/mailboxes/Discord identities or change the primary persona/model as a naming shortcut. The operational source cut-off is implemented and statically reviewed; it is not evidence of provisioning, runtime isolation or deployment acceptance. Broader feature pruning still requires root's next assignment.
 
 ## Python and review discipline
 

@@ -387,7 +387,7 @@ def read_startup_git_snapshot(path: str) -> dict[str, str | bool]:
 
 def capture_running_build(root: Path) -> RunningBuild:
     started_at = datetime.now(timezone.utc).isoformat()
-    socket_path = os.getenv("MAXWELL_STARTUP_GIT_SOCKET", "").strip()
+    socket_path = os.getenv("DAME_CURIE_STARTUP_GIT_SOCKET", "").strip()
     if socket_path:
         snapshot = read_startup_git_snapshot(socket_path)
         return RunningBuild(**snapshot, started_at=started_at, python=platform.python_version())

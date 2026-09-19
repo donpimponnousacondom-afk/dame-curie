@@ -5,32 +5,33 @@ import re
 from pathlib import Path
 
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
+INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
 STATE_ROOT = Path("/state")
 ROOTS = ("data", "sites", "shell")
 
 
 def container_mode() -> bool:
-    return os.environ.get("MAXWELL_CONTAINER_MODE", "").lower() == "true"
+    return os.environ.get("DAME_CURIE_CONTAINER_MODE", "").lower() == "true"
 
 
 def instance_id() -> str:
-    value = os.environ.get("MAXWELL_INSTANCE_ID", "")
-    if not SLUG.fullmatch(value):
-        raise ValueError("MAXWELL_INSTANCE_ID must be a lower-case safe slug (1-30 characters)")
+    value = os.environ.get("DAME_CURIE_INSTANCE_ID", "")
+    if not INSTANCE.fullmatch(value) or len(value) > 30:
+        raise ValueError("DAME_CURIE_INSTANCE_ID must be dame-curie or dame-curie-<identity>, up to 30 characters")
     return value
 
 
 def resource_name(kind: str, slug: str = "") -> str:
     if not SLUG.fullmatch(kind) or (slug and not SLUG.fullmatch(slug)):
         raise ValueError("unsafe Docker resource name")
-    return f"maxwell-{instance_id()}-{kind}" + (f"-{slug}" if slug else "")
+    return f"{instance_id()}-{kind}" + (f"-{slug}" if slug else "")
 
 
 def ownership_labels(kind: str, slug: str = "") -> dict[str, str]:
     resource_name(kind, slug)
-    labels = {"maxwell.instance": instance_id(), "maxwell.kind": kind}
+    labels = {"dame-curie.instance": instance_id(), "dame-curie.kind": kind}
     if slug:
-        labels["maxwell.site"] = slug
+        labels["dame-curie.site"] = slug
     return labels
 
 
@@ -42,13 +43,13 @@ def label_args(kind: str, slug: str = "") -> list[str]:
 def require_ownership(labels: dict, kind: str, slug: str = "") -> None:
     expected = ownership_labels(kind, slug)
     if not isinstance(labels, dict) or any(labels.get(k) != v for k, v in expected.items()):
-        raise ValueError("Docker resource is not owned by this Maxwell instance")
+        raise ValueError("Docker resource is not owned by this instance")
 
 
 def backend_network() -> str:
     expected = resource_name("backends")
-    if os.environ.get("MAXWELL_BACKEND_NETWORK") != expected:
-        raise ValueError("MAXWELL_BACKEND_NETWORK must match the instance backend network")
+    if os.environ.get("DAME_CURIE_BACKEND_NETWORK") != expected:
+        raise ValueError("DAME_CURIE_BACKEND_NETWORK must match the instance backend network")
     return expected
 
 
@@ -68,7 +69,7 @@ def confined_path(path: str | Path, roots: tuple[str, ...] = ROOTS) -> Path:
 
 def host_path(path: str | Path, roots: tuple[str, ...] = ROOTS) -> Path:
     path = confined_path(path, roots)
-    expected = f"/srv/maxwell/{instance_id()}"
-    if os.environ.get("MAXWELL_HOST_INSTANCE_DIR") != expected:
-        raise ValueError("MAXWELL_HOST_INSTANCE_DIR must be /srv/maxwell/<instance-id>")
+    expected = f"/srv/{instance_id()}"
+    if os.environ.get("DAME_CURIE_HOST_INSTANCE_DIR") != expected:
+        raise ValueError("DAME_CURIE_HOST_INSTANCE_DIR must be /srv/<instance-id>")
     return Path(expected) / path.relative_to(STATE_ROOT)

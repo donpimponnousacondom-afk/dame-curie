@@ -14,10 +14,10 @@ Those switches are tri-state:
     auto   -> DEFAULT. Turn the feature on only if its dependency is
               actually present on this machine.
 
-"auto" is what makes a bare ``git clone`` + ``pip install -r
+"auto" is what makes a bare ``git clone`` + ``.venv/bin/python -m pip install -r
 requirements.txt`` work: features whose system package, Python package or
 API key is missing quietly stay off instead of erroring on first use, and
-``python3 doctor.py`` explains every decision.
+``.venv/bin/python doctor.py`` explains every decision.
 """
 
 import math
@@ -31,7 +31,7 @@ from typing import ClassVar
 from dotenv.main import load_dotenv
 
 APP_ROOT = Path(__file__).resolve().parent
-ENV_FILE = Path(os.getenv("MAXWELL_ENV_FILE", APP_ROOT / ".env"))
+ENV_FILE = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
 # .env is the SOURCE OF TRUTH — always override whatever PM2/the shell
 # injected. PM2 caches the env from first start and `--update-env` does
 # NOT re-read the .env file, so without override=True every restart kept
@@ -294,7 +294,7 @@ class Config:
     # Maxwell Companion / Partner
     GF_DISCORD_TOKEN = os.getenv("GF_DISCORD_TOKEN", "").strip()
     GF_USER_ID = os.getenv("GF_USER_ID", "1496154562715848763").strip()
-    MAXWELL_USER_ID = os.getenv("MAXWELL_USER_ID", "1545541390392369165").strip()
+    DAME_CURIE_USER_ID = os.getenv("DAME_CURIE_USER_ID", "1545541390392369165").strip()
     PARTNER_USER_ID = os.getenv("PARTNER_USER_ID", "").strip()
     # Partner-to-partner replies are intentionally finite.  A human message
     # resets the budget; silence resets it after the configured window.
@@ -314,9 +314,9 @@ class Config:
     # only ever answer "not configured", so auto keeps them unregistered.
     ENABLE_EMAIL_TOOLS = _feature_env(
         "ENABLE_EMAIL_TOOLS",
-        lambda: bool(os.getenv("MAXWELL_EMAIL_PASSWORD", "").strip()),
-        on_text="auto: MAXWELL_EMAIL_PASSWORD is set",
-        off_text="auto: off, no MAXWELL_EMAIL_PASSWORD",
+        lambda: bool(os.getenv("DAME_CURIE_EMAIL_PASSWORD", "").strip()),
+        on_text="auto: DAME_CURIE_EMAIL_PASSWORD is set",
+        off_text="auto: off, no DAME_CURIE_EMAIL_PASSWORD",
     )
 
     # X (Twitter). Reading is free and needs no account at all — X's own
@@ -346,13 +346,13 @@ class Config:
     # to e.g. https://api.openai.com/v1 with EMBED_MODEL/EMBED_DIM to match.
     # -------------------------------------------------------------------------
     EMBED_BASE_URL = _first_env(
-        "MAXWELL_EMBED_BASE_URL", "EMBED_BASE_URL", default="http://localhost:11434"
+        "DAME_CURIE_EMBED_BASE_URL", "EMBED_BASE_URL", default="http://localhost:11434"
     ).rstrip("/")
     EMBED_MODEL = _first_env(
-        "MAXWELL_EMBED_MODEL", "EMBED_MODEL", default="qwen3-embedding:0.6b"
+        "DAME_CURIE_EMBED_MODEL", "EMBED_MODEL", default="qwen3-embedding:0.6b"
     )
-    EMBED_API_KEY = _first_env("MAXWELL_EMBED_API_KEY", "EMBED_API_KEY")
-    EMBED_DIM = _int_env("MAXWELL_EMBED_DIM", 1024, min_value=8, max_value=16384)
+    EMBED_API_KEY = _first_env("DAME_CURIE_EMBED_API_KEY", "EMBED_API_KEY")
+    EMBED_DIM = _int_env("DAME_CURIE_EMBED_DIM", 1024, min_value=8, max_value=16384)
 
     # When false (default), shell refuses to run on a turn
     # that read untrusted fetched content (URLs, web search) without an
@@ -392,10 +392,10 @@ class Config:
     AUX_DISABLE_REASONING = _bool_env("AUX_DISABLE_REASONING", True)
 
     # Live tool progress messages. OFF by default: a per-server `,progress on`
-    # opts a server in, and MAXWELL_PROGRESS_MESSAGES=true enables it for every
+    # opts a server in, and DAME_CURIE_PROGRESS_MESSAGES=true enables it for every
     # server as a baseline. `,progress off` silences a noisy server even under
     # the env baseline; DMs never get them. See tool_progress.py.
-    PROGRESS_MESSAGES = _bool_env("MAXWELL_PROGRESS_MESSAGES", False)
+    PROGRESS_MESSAGES = _bool_env("DAME_CURIE_PROGRESS_MESSAGES", False)
 
     # Custom streaming tool-call protocol. Native OpenAI-style tools= doesn't
     # stream incrementally on some providers (notably Ollama cloud's
@@ -406,8 +406,8 @@ class Config:
     # own line ({"name": "...", "arguments": {...}}) and parses it from the
     # text stream AS IT STREAMS. Tool name lands in the progress UI at
     # ~12% of stream time vs ~88% for native. OFF by default to keep native
-    # behavior; turn on with MAXWELL_CUSTOM_TOOL_CALLS=true in .env.
-    CUSTOM_TOOL_CALLS = _bool_env("MAXWELL_CUSTOM_TOOL_CALLS", False)
+    # behavior; turn on with DAME_CURIE_CUSTOM_TOOL_CALLS=true in .env.
+    CUSTOM_TOOL_CALLS = _bool_env("DAME_CURIE_CUSTOM_TOOL_CALLS", False)
 
     # Discord join-captcha handling. Discord sometimes challenges an invite
     # accept (or other API action) with an hCaptcha — surfaced by the library
@@ -504,19 +504,19 @@ class Config:
         "data_gf" if os.getenv("BOT_PERSONA_TYPE", "").strip().lower()
         in {"gf", "mommy", "mommy_gf", "luna", "mommygf"} else "data",
     )
-    MAXWELL_PROMPTS_DIR = os.getenv("MAXWELL_PROMPTS_DIR", "").strip()
+    DAME_CURIE_PROMPTS_DIR = os.getenv("DAME_CURIE_PROMPTS_DIR", "").strip()
     LOGS_DIR = os.getenv("LOGS_DIR", os.getenv("LOGS", "logs"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 
-    MAXWELL_SITE_DIR = os.getenv("MAXWELL_SITE_DIR", "public/bot")
-    MAXWELL_PUBLIC_BASE_URL = os.getenv(
-        "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"
+    DAME_CURIE_SITE_DIR = os.getenv("DAME_CURIE_SITE_DIR", "public/bot")
+    DAME_CURIE_PUBLIC_BASE_URL = os.getenv(
+        "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
     )
-    MAXWELL_SITE_PUBLIC_BASE_URL = os.getenv("MAXWELL_SITE_PUBLIC_BASE_URL", "").strip()
-    MAXWELL_API_HOST = os.getenv("MAXWELL_API_HOST", "127.0.0.1")
-    MAXWELL_API_PORT = _int_env("MAXWELL_API_PORT", 8765, min_value=1, max_value=65535)
-    MAXWELL_CORS_ORIGIN = os.getenv(
-        "MAXWELL_CORS_ORIGIN", MAXWELL_PUBLIC_BASE_URL.rstrip("/")
+    DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
+    DAME_CURIE_API_HOST = os.getenv("DAME_CURIE_API_HOST", "127.0.0.1")
+    DAME_CURIE_API_PORT = _int_env("DAME_CURIE_API_PORT", 8765, min_value=1, max_value=65535)
+    DAME_CURIE_CORS_ORIGIN = os.getenv(
+        "DAME_CURIE_CORS_ORIGIN", DAME_CURIE_PUBLIC_BASE_URL.rstrip("/")
     )
 
     # Local mail (maxwell@z3ki.dev). Bot talks to local Postfix for
@@ -525,17 +525,17 @@ class Config:
     # in email_integration/README.md. Override the env vars only if you
     # intentionally point the bot at a different mail server (debugging,
     # testing against a sandbox, etc.).
-    MAXWELL_SMTP_HOST = os.getenv("MAXWELL_SMTP_HOST", "127.0.0.1").strip()
-    MAXWELL_SMTP_PORT = _int_env("MAXWELL_SMTP_PORT", 25, min_value=1, max_value=65535)
-    MAXWELL_IMAP_HOST = os.getenv("MAXWELL_IMAP_HOST", "127.0.0.1").strip()
-    MAXWELL_IMAP_PORT = _int_env("MAXWELL_IMAP_PORT", 993, min_value=1, max_value=65535)
-    MAXWELL_EMAIL_USER = os.getenv("MAXWELL_EMAIL_USER", "").strip()
-    MAXWELL_EMAIL_PASSWORD = os.getenv("MAXWELL_EMAIL_PASSWORD", "").strip()
+    DAME_CURIE_SMTP_HOST = os.getenv("DAME_CURIE_SMTP_HOST", "127.0.0.1").strip()
+    DAME_CURIE_SMTP_PORT = _int_env("DAME_CURIE_SMTP_PORT", 25, min_value=1, max_value=65535)
+    DAME_CURIE_IMAP_HOST = os.getenv("DAME_CURIE_IMAP_HOST", "127.0.0.1").strip()
+    DAME_CURIE_IMAP_PORT = _int_env("DAME_CURIE_IMAP_PORT", 993, min_value=1, max_value=65535)
+    DAME_CURIE_EMAIL_USER = os.getenv("DAME_CURIE_EMAIL_USER", "").strip()
+    DAME_CURIE_EMAIL_PASSWORD = os.getenv("DAME_CURIE_EMAIL_PASSWORD", "").strip()
     # Blank From: falls back to the mailbox itself — one less thing to fill in.
-    MAXWELL_EMAIL_FROM = (
-        os.getenv("MAXWELL_EMAIL_FROM", "").strip() or MAXWELL_EMAIL_USER
+    DAME_CURIE_EMAIL_FROM = (
+        os.getenv("DAME_CURIE_EMAIL_FROM", "").strip() or DAME_CURIE_EMAIL_USER
     )
-    MAXWELL_EMAIL_FROM_NAME = os.getenv("MAXWELL_EMAIL_FROM_NAME", "Maxwell").strip()
+    DAME_CURIE_EMAIL_FROM_NAME = os.getenv("DAME_CURIE_EMAIL_FROM_NAME", "dame-curie").strip()
     # Senders whose mail is never filed as an inbox notice. Comma-separated;
     # a full address, or a leading-dot domain (".google.com") for it and its
     # subdomains. Empty by default: which machine mail matters is the
@@ -565,18 +565,18 @@ class Config:
     X_TIMEOUT_SECONDS = _int_env("X_TIMEOUT_SECONDS", 20, min_value=5, max_value=120)
     X_GRAPHQL_FILE = os.getenv("X_GRAPHQL_FILE", "").strip()
 
-    MAXWELL_EMAIL_IGNORE_SENDERS = os.getenv(
-        "MAXWELL_EMAIL_IGNORE_SENDERS", ""
+    DAME_CURIE_EMAIL_IGNORE_SENDERS = os.getenv(
+        "DAME_CURIE_EMAIL_IGNORE_SENDERS", ""
     ).strip()
 
     # Admin / owner allowlists. Re-exported here so Config is the single
     # source of truth; bot_tools.refresh_owner_ids() still does a runtime
     # reload but the initial parse lives here.
-    MAXWELL_ADMIN_USER = os.getenv("MAXWELL_ADMIN_USER", "admin").strip()
-    MAXWELL_ADMIN_PASSWORD = os.getenv("MAXWELL_ADMIN_PASSWORD", "").strip()
-    MAXWELL_OWNER_IDS: ClassVar[set[str]] = {
+    DAME_CURIE_ADMIN_USER = os.getenv("DAME_CURIE_ADMIN_USER", "admin").strip()
+    DAME_CURIE_ADMIN_PASSWORD = os.getenv("DAME_CURIE_ADMIN_PASSWORD", "").strip()
+    DAME_CURIE_OWNER_IDS: ClassVar[set[str]] = {
         item.strip()
-        for item in os.getenv("MAXWELL_OWNER_IDS", "").split(",")
+        for item in os.getenv("DAME_CURIE_OWNER_IDS", "").split(",")
         if item.strip()
     }
 
@@ -646,22 +646,22 @@ class Config:
 
         _log = logging.getLogger("maxwell.config")
 
-        if not cls.MAXWELL_ADMIN_PASSWORD:
+        if not cls.DAME_CURIE_ADMIN_PASSWORD:
             _log.warning(
-                "MAXWELL_ADMIN_PASSWORD is empty — the admin API will return "
+                "DAME_CURIE_ADMIN_PASSWORD is empty — the admin API will return "
                 "503 on every request. Set a real password in .env."
             )
-        if not cls.MAXWELL_OWNER_IDS:
+        if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(
-                "MAXWELL_OWNER_IDS is empty — admin commands (`,prompt`, "
+                "DAME_CURIE_OWNER_IDS is empty — admin commands (`,prompt`, "
                 "`,clearmem`, `,autonomy`, `,rem`, etc.) will be denied to "
                 "everyone. Set your Discord user ID in .env."
             )
-        if cls.ENABLE_EMAIL_TOOLS and not cls.MAXWELL_EMAIL_PASSWORD:
+        if cls.ENABLE_EMAIL_TOOLS and not cls.DAME_CURIE_EMAIL_PASSWORD:
             _log.warning(
-                "ENABLE_EMAIL_TOOLS=true but MAXWELL_EMAIL_PASSWORD is empty — "
+                "ENABLE_EMAIL_TOOLS=true but DAME_CURIE_EMAIL_PASSWORD is empty — "
                 "the email tools will return a 'not configured' error on every "
-                "call. Either set MAXWELL_EMAIL_PASSWORD or set "
+                "call. Either set DAME_CURIE_EMAIL_PASSWORD or set "
                 "ENABLE_EMAIL_TOOLS=false."
             )
         if cls.ENABLE_TELEGRAM and cls.TELEGRAM_TOKEN:

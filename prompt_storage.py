@@ -109,5 +109,5 @@ _cached_store = lru_cache(maxsize=32)(PromptStore)
 
 
 def get_prompt_store(data_dir: Path | str, prompts_dir: str | None = None) -> PromptStore:
-    directory = os.getenv("MAXWELL_PROMPTS_DIR", "").strip() if prompts_dir is None else prompts_dir
+    directory = os.getenv("DAME_CURIE_PROMPTS_DIR", "").strip() if prompts_dir is None else prompts_dir
     return _cached_store(Path(data_dir).resolve(), str(Path(directory).resolve()) if directory else "")

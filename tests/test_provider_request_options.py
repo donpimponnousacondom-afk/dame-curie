@@ -215,8 +215,8 @@ def load_config(tmp_path, monkeypatch):
     def load(overrides):
         environment = {
             "HOME": str(tmp_path), "DATA_DIR": str(tmp_path / "data"),
-            "MAXWELL_SITE_DIR": str(tmp_path / "sites"),
-            "MAXWELL_ENV_FILE": os.devnull, "PYTHON_DOTENV_DISABLED": "1",
+            "DAME_CURIE_SITE_DIR": str(tmp_path / "sites"),
+            "DAME_CURIE_ENV_FILE": os.devnull, "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
         }
         with patch.dict(os.environ, environment, clear=True):

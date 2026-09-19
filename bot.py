@@ -2895,7 +2895,7 @@ class MaxwellBot(commands.Bot):
             or "1496154562715848763"
         )
         self._maxwell_id = str(
-            getattr(self.config, "MAXWELL_USER_ID", "1382894657624866889")
+            getattr(self.config, "DAME_CURIE_USER_ID", "1382894657624866889")
             or "1382894657624866889"
         )
 
@@ -2973,8 +2973,8 @@ class MaxwellBot(commands.Bot):
             "OLLAMA_API_KEY", "OPENAI_COMPAT_API_KEY", "OLLAMA_FALLBACK_API_KEY",
             "OLLAMA_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
             "CAPTCHA_SOLVER_API_KEY", "IMAGE_GEN_API_KEY", "NVIDIA_API_KEY",
-            "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY", "MAXWELL_EMAIL_PASSWORD",
-            "X_AUTH_TOKEN", "X_CT0", "X_API_KEY", "MAXWELL_ADMIN_PASSWORD",
+            "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY", "DAME_CURIE_EMAIL_PASSWORD",
+            "X_AUTH_TOKEN", "X_CT0", "X_API_KEY", "DAME_CURIE_ADMIN_PASSWORD",
         )
         credentials = [getattr(self.config, name, "") or "" for name in credential_names]
         credentials.extend(os.getenv(name, "") for name in (
@@ -2987,9 +2987,9 @@ class MaxwellBot(commands.Bot):
         self._forward_locks: dict[str, asyncio.Lock] = {}
         self._forward_delete_ids: set[int] = set()
         self.config.validate()
-        if self.config.MAXWELL_PROMPTS_DIR:
+        if self.config.DAME_CURIE_PROMPTS_DIR:
             get_prompt_store(
-                self.config.DATA_DIR, self.config.MAXWELL_PROMPTS_DIR
+                self.config.DATA_DIR, self.config.DAME_CURIE_PROMPTS_DIR
             ).read_personality()
         # Display name is source of truth - GF account is Uni per Discord, so initial matches that
         self.bot_name = partner_name if is_gf else bot_name
@@ -3147,7 +3147,7 @@ class MaxwellBot(commands.Bot):
         # _jailbreak_servers. A server id in this set means live
         # 'thinking: …' tool-progress messages are shown in that server's
         # channels. Servers not in the set stay quiet (off by default).
-        # DMs never get progress messages. The MAXWELL_PROGRESS_MESSAGES
+        # DMs never get progress messages. The DAME_CURIE_PROGRESS_MESSAGES
         # env var, when true, enables the feature for ALL servers as a
         # baseline so a fresh install can opt in globally without running
         # `,progress on` in every server; `,progress off` still wins per
@@ -3198,7 +3198,7 @@ class MaxwellBot(commands.Bot):
         # dispatcher so the model can no longer self-confirm.
         self._destructive_confirm: dict[str, float] = {}
         self._control = dict(DEFAULT_CONTROL)
-        if self.config.MAXWELL_PROMPTS_DIR:
+        if self.config.DAME_CURIE_PROMPTS_DIR:
             self._control.pop("base_personality", None)
         # 2026-07-22: progress messages are now per-server (see
         # self._progress_servers + _progress_enabled). The old global
@@ -3255,7 +3255,7 @@ class MaxwellBot(commands.Bot):
         )
         self._token_tracker = TokenBudgetTracker(
             daily_budget=_safe_int(
-                os.environ.get("MAXWELL_DAILY_TOKEN_BUDGET", "500000"), 500000
+                os.environ.get("DAME_CURIE_DAILY_TOKEN_BUDGET", "500000"), 500000
             )
         )
         # Concurrency safety (see concurrency_safety.py): per-(guild, channel)
@@ -3874,14 +3874,14 @@ class MaxwellBot(commands.Bot):
             self.mail_poller = EmailInboxPoller(
                 self.inbox,
                 {
-                    "imap_host": getattr(self.config, "MAXWELL_IMAP_HOST", "127.0.0.1"),
-                    "imap_port": getattr(self.config, "MAXWELL_IMAP_PORT", 993),
-                    "user": getattr(self.config, "MAXWELL_EMAIL_USER", ""),
-                    "password": getattr(self.config, "MAXWELL_EMAIL_PASSWORD", ""),
+                    "imap_host": getattr(self.config, "DAME_CURIE_IMAP_HOST", "127.0.0.1"),
+                    "imap_port": getattr(self.config, "DAME_CURIE_IMAP_PORT", 993),
+                    "user": getattr(self.config, "DAME_CURIE_EMAIL_USER", ""),
+                    "password": getattr(self.config, "DAME_CURIE_EMAIL_PASSWORD", ""),
                     # So the poller can recognise his own mail coming back.
-                    "from_addr": getattr(self.config, "MAXWELL_EMAIL_FROM", ""),
+                    "from_addr": getattr(self.config, "DAME_CURIE_EMAIL_FROM", ""),
                     "ignore_senders": getattr(
-                        self.config, "MAXWELL_EMAIL_IGNORE_SENDERS", ""
+                        self.config, "DAME_CURIE_EMAIL_IGNORE_SENDERS", ""
                     ),
                 },
                 data_dir=self.config.DATA_DIR,
@@ -4036,7 +4036,7 @@ class MaxwellBot(commands.Bot):
         self.tools["vc_where"] = VcWhereTool(self)
         self.tools["leave_vc"] = LeaveVcTool(self)
         # Email tools (local Postfix + Dovecot). Set ENABLE_EMAIL_TOOLS=false
-        # to skip all four registrations. If enabled but MAXWELL_EMAIL_PASSWORD
+        # to skip all four registrations. If enabled but DAME_CURIE_EMAIL_PASSWORD
         # is empty, the tools return a friendly "not configured" error at
         # call time — see bot_tools.EmailSendTool and friends.
         if self.config.ENABLE_EMAIL_TOOLS:
@@ -4130,7 +4130,7 @@ class MaxwellBot(commands.Bot):
     def _get_personality(self) -> str:
         """Get base personality with age injected dynamically."""
         base = get_prompt_store(
-            self.config.DATA_DIR, self.config.MAXWELL_PROMPTS_DIR
+            self.config.DATA_DIR, self.config.DAME_CURIE_PROMPTS_DIR
         ).read_personality(retain_valid=True)
         age_days = (datetime.now(timezone.utc) - self._BIRTHDAY).days
         age_line = f"\nYou are currently {age_days} days old. You were born on May 21, 2026. You KNOW your age — never say you don't have one."
@@ -7717,7 +7717,7 @@ class MaxwellBot(commands.Bot):
                 # 2026-07-22: per-server toggle (mirrors ,jailbreak). Off by
                 # default per server; an admin opts a server in with
                 # `,progress on`. DMs never get progress messages. The
-                # MAXWELL_PROGRESS_MESSAGES env var is a global baseline
+                # DAME_CURIE_PROGRESS_MESSAGES env var is a global baseline
                 # (opt-in-everywhere) that `,progress off` still overrides.
                 if arg in {"on", "enable", "yes", "true"}:
                     if server_id == "DM":
@@ -7756,7 +7756,7 @@ class MaxwellBot(commands.Bot):
                         self._progress_servers_off.add(server_id)
                         self._save_progress_servers()
                         note = (
-                            " (env baseline MAXWELL_PROGRESS_MESSAGES=true had it on; now off here)"
+                            " (env baseline DAME_CURIE_PROGRESS_MESSAGES=true had it on; now off here)"
                             if was_env
                             else ""
                         )
@@ -7772,7 +7772,7 @@ class MaxwellBot(commands.Bot):
                     baseline = "on" if self.config.PROGRESS_MESSAGES else "off"
                     await message.channel.send(
                         f"progress messages are **{state}** for this server "
-                        f"(MAXWELL_PROGRESS_MESSAGES env baseline: {baseline})"
+                        f"(DAME_CURIE_PROGRESS_MESSAGES env baseline: {baseline})"
                     )
                 else:
                     await message.channel.send(
@@ -8465,7 +8465,7 @@ class MaxwellBot(commands.Bot):
                 await message.channel.send("connect me first with `,vc join`")
                 return
             try:
-                with tempfile.TemporaryDirectory(prefix="maxwell-vc-") as tmp:
+                with tempfile.TemporaryDirectory(prefix="dame-curie-vc-") as tmp:
                     wav_path = str(Path(tmp) / "tts.wav")
                     prefer_local_tts = str(
                         self._control.get("vc_tts_engine", "fish")
@@ -9019,7 +9019,7 @@ class MaxwellBot(commands.Bot):
             sink = self._vc_sinks.get(key)
             done = asyncio.Event()
             loop = asyncio.get_running_loop()
-            with tempfile.TemporaryDirectory(prefix="maxwell-vc-reply-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="dame-curie-vc-reply-") as tmp:
                 wav_path = str(Path(tmp) / "reply.wav")
                 t_tts = time.perf_counter()
                 prefer_local_tts = str(
@@ -9427,7 +9427,7 @@ class MaxwellBot(commands.Bot):
         """Live tool-progress messages. OFF by default per server; an admin
         opts a server in with `,progress on` (persisted to
         progress_servers.json). DMs never get progress messages. When the
-        MAXWELL_PROGRESS_MESSAGES env var is true, it enables the feature as a
+        DAME_CURIE_PROGRESS_MESSAGES env var is true, it enables the feature as a
         baseline for every server, so an operator can flip it on globally
         without running the command in each server — a server-level
         `,progress off` still wins (it records the server in
@@ -9553,7 +9553,7 @@ class MaxwellBot(commands.Bot):
         if self._human_captcha_server is None:
             cfg = self.config
             public_base = getattr(
-                cfg, "MAXWELL_PUBLIC_BASE_URL", "http://127.0.0.1"
+                cfg, "DAME_CURIE_PUBLIC_BASE_URL", "http://127.0.0.1"
             ).rstrip("/")
             self._human_captcha_server = HumanCaptchaServer(
                 host=getattr(cfg, "CAPTCHA_HUMAN_HOST", "127.0.0.1"),
@@ -10574,7 +10574,7 @@ class MaxwellBot(commands.Bot):
             if control["ai_concurrency"] != self._ai_concurrency:
                 self._ai_concurrency = control["ai_concurrency"]
                 self._notify_ai_waiters()
-            if self.config.MAXWELL_PROMPTS_DIR:
+            if self.config.DAME_CURIE_PROMPTS_DIR:
                 control.pop("base_personality", None)
             self._control = control
             self._apply_x_control(control)
@@ -11432,7 +11432,7 @@ class MaxwellBot(commands.Bot):
         # Do not stampede local Ollama on boot. Pending-row migration used
         # to POST batches of 50 into /api/embed and stall the whole box.
         # Catch up lazily on search / new writes instead.
-        if os.getenv("MAXWELL_EMBED_PENDING_ON_BOOT", "").strip().lower() in {
+        if os.getenv("DAME_CURIE_EMBED_PENDING_ON_BOOT", "").strip().lower() in {
             "1",
             "true",
             "yes",
@@ -11618,7 +11618,7 @@ class MaxwellBot(commands.Bot):
 
     async def _cleanup_sites(self):
         self._load_sites(quiet=True)
-        base = Path(self.config.MAXWELL_SITE_DIR).resolve()
+        base = Path(self.config.DAME_CURIE_SITE_DIR).resolve()
         now = datetime.now(timezone.utc).timestamp()
         expired = []
         for slug, data in list(self._sites.items()):
@@ -12292,7 +12292,7 @@ class MaxwellBot(commands.Bot):
     ) -> tuple[bytes, str, str] | None:
         suffix = Path(filename).suffix.lower() or ".mp4"
         try:
-            with tempfile.TemporaryDirectory(prefix="maxwell-video-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="dame-curie-video-") as tmp:
                 tmp_path = Path(tmp)
                 input_path = tmp_path / f"input{suffix}"
                 output_path = tmp_path / "normalized.mp4"
@@ -12368,7 +12368,7 @@ class MaxwellBot(commands.Bot):
             include_frames = MaxwellBot._image_input_enabled(self)
         suffix = Path(filename).suffix.lower() or ".mp4"
         try:
-            with tempfile.TemporaryDirectory(prefix="maxwell-vderiv-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="dame-curie-vderiv-") as tmp:
                 tmp_path = Path(tmp)
                 video_path = tmp_path / f"input{suffix}"
                 video_path.write_bytes(blob)
@@ -12499,7 +12499,7 @@ class MaxwellBot(commands.Bot):
         self, blob: bytes, filename: str, max_size: int
     ) -> tuple[bytes, str, str] | None:
         try:
-            with tempfile.TemporaryDirectory(prefix="maxwell-gif-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="dame-curie-gif-") as tmp:
                 tmp_path = Path(tmp)
                 suffix = Path(filename).suffix.lower()
                 if suffix not in {".gif", ".mp4", ".webm", ".webp"}:
@@ -14336,7 +14336,7 @@ class MaxwellBot(commands.Bot):
                 platform, message=message, content=content
             )
             # Native OpenAI tools= always wins when native_tool_calls is on.
-            # MAXWELL_CUSTOM_TOOL_CALLS is a workaround for providers that
+            # DAME_CURIE_CUSTOM_TOOL_CALLS is a workaround for providers that
             # cannot stream native tool_calls (historically Ollama minimax-m3);
             # it must not drop the tools= payload on a native-capable endpoint
             # (OpenCode Zen Go / GLM-5.2).
@@ -18087,7 +18087,7 @@ class MaxwellBot(commands.Bot):
                                         download_resp, 25 * 1024 * 1024
                                     )
                                     with tempfile.TemporaryDirectory(
-                                        prefix="maxwell-tg-audio-"
+                                        prefix="dame-curie-tg-audio-"
                                     ) as tmp:
                                         tmp_path = Path(tmp)
                                         input_path = tmp_path / "tg_audio"
@@ -18468,7 +18468,7 @@ async def main():
     )
 
     async def _gateway_watchdog():
-        threshold = float(os.getenv("MAXWELL_GATEWAY_TIMEOUT", "90"))
+        threshold = float(os.getenv("DAME_CURIE_GATEWAY_TIMEOUT", "90"))
         interval = 15
         while True:
             await asyncio.sleep(interval)

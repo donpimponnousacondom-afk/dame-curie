@@ -28,7 +28,7 @@ def check_embeddings(base_url: str) -> None:
 
 
 if __name__ == "__main__":
-    enabled = dotenv_values(os.getenv("MAXWELL_ENV_FILE", "/config/bot.env")).get(
+    enabled = dotenv_values(os.getenv("DAME_CURIE_ENV_FILE", "/config/bot.env")).get(
         "ENABLE_RAG"
     )
     if enabled is None:

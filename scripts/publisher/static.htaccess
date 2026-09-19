@@ -6,6 +6,6 @@ DirectoryIndex index.html
 <FilesMatch "\.(php[0-9]*|phtml|phar|cgi|fcgi|py|pl|rb|sh|shtml|shtm|asp|aspx)$">
     ForceType text/plain
 </FilesMatch>
-<FilesMatch "^\.curie-publisher-">
+<FilesMatch "^\.dame-curie-publisher-">
     Require all denied
 </FilesMatch>

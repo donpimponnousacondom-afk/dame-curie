@@ -198,7 +198,7 @@ except ImportError:
     _DDGS_AVAILABLE = False
 
 # Owner IDs come from env var only — no hardcoded defaults to leak in open-source.
-# Load dotenv first so bare `python bot.py` sees MAXWELL_OWNER_IDS from .env
+# Load dotenv first so bare `python bot.py` sees DAME_CURIE_OWNER_IDS from .env
 # (config.py also loads dotenv; this avoids import-order freezing empty OWNER_IDS).
 try:
     from dotenv.main import load_dotenv as _load_dotenv_early
@@ -207,7 +207,7 @@ try:
     _load_dotenv_early(
         _PathEarly(
             os.getenv(
-                "MAXWELL_ENV_FILE", _PathEarly(__file__).resolve().parent / ".env"
+                "DAME_CURIE_ENV_FILE", _PathEarly(__file__).resolve().parent / ".env"
             )
         ),
         override=False,
@@ -220,17 +220,17 @@ except Exception:  # noqa: S110 - logging is not configured this early
 
 OWNER_IDS = {
     item.strip()
-    for item in os.environ.get("MAXWELL_OWNER_IDS", "").split(",")
+    for item in os.environ.get("DAME_CURIE_OWNER_IDS", "").split(",")
     if item.strip()
 }
 
 
 def refresh_owner_ids() -> set[str]:
-    """Re-read MAXWELL_OWNER_IDS from the environment (e.g. after dotenv)."""
+    """Re-read DAME_CURIE_OWNER_IDS from the environment (e.g. after dotenv)."""
     global OWNER_IDS
     OWNER_IDS = {
         item.strip()
-        for item in os.environ.get("MAXWELL_OWNER_IDS", "").split(",")
+        for item in os.environ.get("DAME_CURIE_OWNER_IDS", "").split(",")
         if item.strip()
     }
     return OWNER_IDS
@@ -1231,16 +1231,16 @@ def _parse_overwrite_pairs(raw) -> dict:
 def _public_image_target(bot) -> tuple[str, str]:
     """Return (local_dir, public_base_url) for permanently served images.
 
-    Files land in <MAXWELL_SITE_DIR>/_images/ and are served at
-    <MAXWELL_PUBLIC_BASE_URL>/bot/_images/<file> — the same origin that
+    Files land in <DAME_CURIE_SITE_DIR>/_images/ and are served at
+    <DAME_CURIE_PUBLIC_BASE_URL>/bot/_images/<file> — the same origin that
     serves create_site pages, so nothing expires and no external CDN is
     involved.
     """
     cfg = getattr(bot, "config", None)
-    site_dir = str(getattr(cfg, "MAXWELL_SITE_DIR", "public/bot") or "public/bot")
+    site_dir = str(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
     pub = str(
-        getattr(cfg, "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com")
-        or "https://maxwell.example.com"
+        getattr(cfg, "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid")
+        or "https://dame-curie.example.invalid"
     ).rstrip("/")
     return os.path.join(site_dir, "_images"), f"{pub}/bot/_images"
 
@@ -5223,15 +5223,15 @@ class CreateSiteTool(Tool):
 
     def __init__(self, bot):
         super().__init__(bot)
-        self.base_dir = getattr(bot.config, "MAXWELL_SITE_DIR", "public/bot")
+        self.base_dir = getattr(bot.config, "DAME_CURIE_SITE_DIR", "public/bot")
         self.base_url = (
             getattr(
-                bot.config, "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"
+                bot.config, "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
             ).rstrip("/")
             + "/bot"
         )
         self.base_url = (
-            getattr(bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
+            getattr(bot.config, "DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
             or self.base_url
         )
 
@@ -5395,7 +5395,7 @@ class CreateSiteTool(Tool):
                 # Reuse the same broad-but-safe allowlist as SendFileTool so
                 # images produced by image_generator (Discord CDN downloads)
                 # and the shell sandbox (shelldocker) can actually be
-                # embedded. The old check only allowed MAXWELL_SITE_DIR, which
+                # embedded. The old check only allowed DAME_CURIE_SITE_DIR, which
                 # rejected virtually every real image source (the feature was
                 # silently non-functional).
                 send_tool = self.bot.tools.get("send_file") if self.bot else None
@@ -5427,7 +5427,7 @@ class CreateSiteTool(Tool):
                                 f"Site image URL failed: {src_url} ({err or 'unknown'})"
                             )
                         continue
-                    shell_source = str(src_path).startswith(("/home/maxwell/", "home/maxwell/")) or (
+                    shell_source = str(src_path).startswith(("/home/dame-curie/", "home/dame-curie/")) or (
                         bool(src_path) and Path(os.path.abspath(src_path)).is_relative_to(_shell_workspace())
                     )
                     if not src_path or (not shell_source and not any(
@@ -5460,7 +5460,7 @@ class CreateSiteTool(Tool):
                             if shell_tool is None or not self.bot.config.ENABLE_SHELL:
                                 raise ValueError("shell file export requires a registered enabled shell tool")
                             relative = str(src_path)
-                            if not relative.startswith(("/home/maxwell/", "home/maxwell/")):
+                            if not relative.startswith(("/home/dame-curie/", "home/dame-curie/")):
                                 relative = str(Path(os.path.abspath(src_path)).relative_to(_shell_workspace()))
                             async with shell_tool._lifecycle_lock:
                                 await shell_tool._verify_export_container()
@@ -5539,7 +5539,7 @@ class CreateSiteTool(Tool):
                     "(owner/quota changed concurrently). Try again."
                 )
             result = f"Site created: {self.base_url}/{slug}/"
-            if wants_backend and getattr(self.bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip():
+            if wants_backend and getattr(self.bot.config, "DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip():
                 result += "\nPublish this remote URL to the user. HTML, CSS, JavaScript and images are mirrored. You have python run on the local instance, not the remote host (only Dreamhost PHP/Perl and cgi-bin there); the API guide below applies to local testing only."
             if len(written) > 1:
                 result += f"\nFiles: {', '.join(written)}"
@@ -5647,10 +5647,10 @@ class _SiteOwnedTool(Tool):
 
     def __init__(self, bot):
         super().__init__(bot)
-        self.base_dir = getattr(bot.config, "MAXWELL_SITE_DIR", "public/bot")
+        self.base_dir = getattr(bot.config, "DAME_CURIE_SITE_DIR", "public/bot")
         self.base_url = (
             getattr(
-                bot.config, "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"
+                bot.config, "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
             ).rstrip("/")
             + "/bot"
         )
@@ -5751,7 +5751,7 @@ class EditSiteTool(_SiteOwnedTool):
         if act in SITE_MUTATING_ACTIONS:
             site_read_loop_guard(message, key="", label="", action=act)
         public_base = (
-            getattr(self.bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
+            getattr(self.bot.config, "DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
             or self.base_url
         )
         url = f"{public_base}/{slug}/"
@@ -6252,7 +6252,7 @@ class SiteTestTool(_SiteOwnedTool):
             return err
         site_base = (
             "http://web:8080/bot"
-            if os.environ.get("MAXWELL_CONTAINER_MODE", "").lower() == "true"
+            if os.environ.get("DAME_CURIE_CONTAINER_MODE", "").lower() == "true"
             else self.base_url
         )
         try:
@@ -6312,7 +6312,7 @@ class SiteTestTool(_SiteOwnedTool):
                 capture_incident("tool.site_test", "Could not read backend logs", exception=e)
                 backend_bits.append(f"logs: {e}")
         if entry.get("backend"):
-            public = getattr(self.bot.config, "MAXWELL_PUBLIC_BASE_URL", "").rstrip("/")
+            public = getattr(self.bot.config, "DAME_CURIE_PUBLIC_BASE_URL", "").rstrip("/")
             kv_url = f"{public}/api/site/{slug}/kv"
             kv_status, _, kv_err = await site_test.http_get(kv_url)
             if kv_err:
@@ -6475,11 +6475,11 @@ class ListSitesTool(Tool):
         )
         base_url = getattr(
             self.bot.config,
-            "MAXWELL_PUBLIC_BASE_URL",
-            "https://maxwell.z3ki.dev",
+            "DAME_CURIE_PUBLIC_BASE_URL",
+            "https://dame-curie.example.invalid",
         ).rstrip("/") + "/bot"
         base_url = (
-            getattr(self.bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
+            getattr(self.bot.config, "DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
             or base_url
         )
         lines = []
@@ -7298,24 +7298,24 @@ import docker_runtime as shell_runtime
 def _shell_workspace() -> Path:
     if shell_runtime.container_mode():
         return shell_runtime.confined_path(
-            os.environ.get("MAXWELL_SHELL_DIR", "/state/shell"), roots=("shell",)
+            os.environ.get("DAME_CURIE_SHELL_DIR", "/state/shell"), roots=("shell",)
         )
     return Path(__file__).parent / "shelldocker"
 
 
 def _read_shell_export(path: str, limit: int) -> bytes:
     clean = str(path).strip()
-    if clean.startswith("/home/maxwell/"):
-        clean = clean[len("/home/maxwell/"):]
-    elif clean.startswith("home/maxwell/"):
-        clean = clean[len("home/maxwell/"):]
+    if clean.startswith("/home/dame-curie/"):
+        clean = clean[len("/home/dame-curie/"):]
+    elif clean.startswith("home/dame-curie/"):
+        clean = clean[len("home/dame-curie/"):]
     relative = Path(clean)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-        raise ValueError("shell exports must be under /home/maxwell without traversal")
+        raise ValueError("shell exports must be under /home/dame-curie without traversal")
     root = _shell_workspace()
     target = (root / relative).resolve()
     if not target.is_relative_to(root.resolve()):
-        raise ValueError("shell export escapes /home/maxwell")
+        raise ValueError("shell export escapes /home/dame-curie")
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for part in relative.parts[:-1]:
@@ -7427,7 +7427,7 @@ class SendFileTool(Tool):
         )
         site_dir = getattr(getattr(self, "bot", None), "config", None)
         if site_dir:
-            site_path = getattr(site_dir, "MAXWELL_SITE_DIR", "")
+            site_path = getattr(site_dir, "DAME_CURIE_SITE_DIR", "")
             if site_path:
                 bases.append(os.path.abspath(site_path))
         return bases
@@ -7436,8 +7436,8 @@ class SendFileTool(Tool):
         """Map a path the model might pass to the actual host path.
 
         Accepts both forms:
-          * host paths: /root/maxwell/shelldocker/foo.png (or any allowed base)
-          * container paths: /home/maxwell/foo.png  -> shelldocker/foo.png
+          * host paths: <repo>/shelldocker/foo.png (or any allowed base)
+          * container paths: /home/dame-curie/foo.png  -> shelldocker/foo.png
 
         Returns the resolved absolute host path, or the original input if no
         remap is needed (let the existing _is_path_allowed check decide).
@@ -7445,13 +7445,13 @@ class SendFileTool(Tool):
         cleaned = str(raw_path or "").strip()
         if not cleaned:
             return cleaned
-        m = re.fullmatch(r"/?home/maxwell(?:/(.*))?", cleaned)
+        m = re.fullmatch(r"/?home/dame-curie(?:/(.*))?", cleaned)
         if ".." in Path(cleaned).parts:
             raise ValueError("path traversal not allowed")
         if m:
             rel = m.group(1) or ""
             if Path(rel).is_absolute():
-                raise ValueError("shell exports must be under /home/maxwell")
+                raise ValueError("shell exports must be under /home/dame-curie")
             return str(_shell_workspace() / rel)
         return cleaned
 
@@ -7529,11 +7529,11 @@ class SendFileTool(Tool):
 def _shell_exports_dir() -> str:
     """Canonical dir where shell-produced files are staged for re-attach.
 
-    Defaults to <repo>/data/exports, overridable via MAXWELL_SHELL_EXPORT_DIR.
+    Defaults to <repo>/data/exports, overridable via DAME_CURIE_SHELL_EXPORT_DIR.
     send_file already allowlists data/exports, so staged files can be
     re-attached with a plain `send_file path=.../exports/<name>` call.
     """
-    override = os.environ.get("MAXWELL_SHELL_EXPORT_DIR", "").strip()
+    override = os.environ.get("DAME_CURIE_SHELL_EXPORT_DIR", "").strip()
     if override:
         return os.path.abspath(override)
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "data", "exports"))
@@ -7609,7 +7609,7 @@ async def _run_docker_cmd(
 
 
 # Image used by the shell sandbox. Built from docker/Dockerfile on first use.
-SANDBOX_IMAGE_NAME = "maxwell-shell"
+SANDBOX_IMAGE_NAME = "dame-curie-shell"
 SANDBOX_DOCKERFILE_DIR = os.path.join(os.path.dirname(__file__), "docker")
 
 
@@ -7627,7 +7627,7 @@ async def _ensure_sandbox_image(image: str = SANDBOX_IMAGE_NAME) -> None:
             raise ValueError("shell image must use this instance namespace")
         image = expected
         labels = shell_runtime.label_args("shell-image") + [
-            "--label", f"maxwell.shell.source={_sandbox_source_hash()}"
+            "--label", f"dame-curie.shell.source={_sandbox_source_hash()}"
         ]
     try:
         (stdout, stderr), code = await _run_docker_cmd(
@@ -7643,7 +7643,7 @@ async def _ensure_sandbox_image(image: str = SANDBOX_IMAGE_NAME) -> None:
         info = json.loads(stdout)[0]
         image_labels = info["Config"].get("Labels") or {}
         shell_runtime.require_ownership(image_labels, "shell-image")
-        if image_labels.get("maxwell.shell.source") == _sandbox_source_hash():
+        if image_labels.get("dame-curie.shell.source") == _sandbox_source_hash():
             return
     elif b"No such" not in stderr:
         raise RuntimeError(stderr.decode(errors="replace").strip() or "shell image inspect failed")
@@ -7684,7 +7684,7 @@ class ShellTool(Tool):
 
     @property
     def CONTAINER_NAME(self):
-        return shell_runtime.resource_name("shell") if shell_runtime.container_mode() else "maxwell-shell"
+        return shell_runtime.resource_name("shell") if shell_runtime.container_mode() else "dame-curie-shell"
 
     @property
     def IMAGE_NAME(self):
@@ -7697,7 +7697,7 @@ class ShellTool(Tool):
     # Defaults are generous: 100k chars of captured output covers any sane
     # `cat /var/log/*` or `find` invocation, and 64k command length is enough
     # for a multi-line ffmpeg pipeline. If you actually need more, raise
-    # MAXWELL_SHELL_MAX_OUTPUT / MAXWELL_SHELL_MAX_COMMAND_LENGTH in .env.
+    # DAME_CURIE_SHELL_MAX_OUTPUT / DAME_CURIE_SHELL_MAX_COMMAND_LENGTH in .env.
     #
     # Why not just remove the caps entirely? Because we still have to fit
     # the response through Discord (2000 char chunks) AND through the LLM
@@ -7723,7 +7723,7 @@ class ShellTool(Tool):
     @classmethod
     def _max_output(cls) -> int:
         """Captured stdout+stderr cap. 0 = unlimited."""
-        raw = os.environ.get("MAXWELL_SHELL_MAX_OUTPUT", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_MAX_OUTPUT", "").strip()
         if not raw:
             return cls._MAX_OUTPUT_DEFAULT
         try:
@@ -7735,7 +7735,7 @@ class ShellTool(Tool):
     @classmethod
     def _max_command_length(cls) -> int:
         """Max chars in a single shell command. 0 = unlimited."""
-        raw = os.environ.get("MAXWELL_SHELL_MAX_COMMAND_LENGTH", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_MAX_COMMAND_LENGTH", "").strip()
         if not raw:
             return cls._MAX_COMMAND_LENGTH_DEFAULT
         try:
@@ -7747,7 +7747,7 @@ class ShellTool(Tool):
     @classmethod
     def _channel_max_chars(cls) -> int:
         """Max chars posted to the chat for one shell call. 0 = unlimited."""
-        raw = os.environ.get("MAXWELL_SHELL_CHANNEL_MAX_CHARS", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_CHANNEL_MAX_CHARS", "").strip()
         if not raw:
             return cls._CHANNEL_MAX_CHARS_DEFAULT
         try:
@@ -7759,7 +7759,7 @@ class ShellTool(Tool):
     @classmethod
     def _timeout_seconds(cls) -> int:
         """Max wall-clock seconds for a shell command. Always > 0; capped at 1h."""
-        raw = os.environ.get("MAXWELL_SHELL_TIMEOUT", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_TIMEOUT", "").strip()
         if not raw:
             return 600  # 10 min default — was 30s, way too tight for real work
         try:
@@ -7775,11 +7775,11 @@ class ShellTool(Tool):
     @staticmethod
     def _full_host_access() -> bool:
         """Opt-in host RCE mode. Default is isolated (no /host, no host net)."""
-        full = os.environ.get("MAXWELL_SHELL_FULL_HOST", "").strip().lower() in {
+        full = os.environ.get("DAME_CURIE_SHELL_FULL_HOST", "").strip().lower() in {
             "1", "true", "yes", "on",
         }
         if full and shell_runtime.container_mode():
-            raise ValueError("MAXWELL_SHELL_FULL_HOST is forbidden in container mode")
+            raise ValueError("DAME_CURIE_SHELL_FULL_HOST is forbidden in container mode")
         return full
 
     def get_description(self):
@@ -7801,18 +7801,18 @@ class ShellTool(Tool):
             "`cat << 'EOF' > path/file.py` then the body then a line containing "
             "only EOF. `cmd` is an alias for `command`. Do not prefix `$ ` or "
             "wrap the command in a markdown fence. Attach outputs with files= "
-            "(comma-separated paths under /home/maxwell)."
+            "(comma-separated paths under /home/dame-curie)."
         )
         if self._full_host_access():
             return (
-                "Run bash -lc in the maxwell-shell container (FULL ACCESS: host "
+                "Run bash -lc in the dame-curie-shell container (FULL ACCESS: host "
                 "net, /host, root). Params: command (required), files (optional "
                 "paths to attach). "
                 f"{how} Container persists across calls. {limits_note}"
             )
         return (
-            "Run bash -lc in the maxwell-shell sandbox (workdir /home/maxwell). "
-            "Params: command (required), files (optional paths under /home/maxwell "
+            "Run bash -lc in the dame-curie-shell sandbox (workdir /home/dame-curie). "
+            "Params: command (required), files (optional paths under /home/dame-curie "
             "to attach to the channel). "
             f"{how} Container persists across calls. Max 10 MB per file. {limits_note}"
         )
@@ -7838,19 +7838,19 @@ class ShellTool(Tool):
         labels = info["Config"].get("Labels") or {}
         if shell_runtime.container_mode():
             shell_runtime.require_ownership(labels, "shell")
-        elif labels.get("maxwell.shell.mode") not in {"full", "isolated"} or labels.get("maxwell.shell.init") != "1":
-            raise ValueError("existing container is not an owned Maxwell shell")
+        elif labels.get("dame-curie.shell.mode") not in {"full", "isolated"} or labels.get("dame-curie.shell.init") != "1":
+            raise ValueError("existing container is not an owned dame-curie shell")
         return info
 
     async def _verify_container(self, info):
         full = self._full_host_access()
         labels = info["Config"].get("Labels") or {}
-        if labels.get("maxwell.shell.mode") != ("full" if full else "isolated") or labels.get("maxwell.shell.init") != "1":
+        if labels.get("dame-curie.shell.mode") != ("full" if full else "isolated") or labels.get("dame-curie.shell.init") != "1":
             raise ValueError("shell container mode does not match configuration")
         host = info["HostConfig"]
         workspace = _shell_workspace()
         source = shell_runtime.host_path(workspace, roots=("shell",)) if shell_runtime.container_mode() else workspace
-        expected_mounts = {(str(source), "/home/maxwell", True)}
+        expected_mounts = {(str(source), "/home/dame-curie", True)}
         if full:
             expected_mounts.add(("/", "/host", True))
         mounts = {(m["Source"], m["Destination"], m["RW"]) for m in info["Mounts"] if m["Type"] == "bind"}
@@ -7866,7 +7866,7 @@ class ShellTool(Tool):
         if host.get("Tmpfs") != {"/tmp": "rw,exec,nosuid,size=256m"} or any(m["Type"] == "tmpfs" and m["Destination"] != "/tmp" for m in info["Mounts"]):
             raise ValueError("shell container scratch mounts do not match configuration")
         config = info["Config"]
-        if config.get("User") != "root" or config.get("WorkingDir") != "/home/maxwell" or config.get("Cmd") != ["sleep", "infinity"] or config.get("Entrypoint"):
+        if config.get("User") != "root" or config.get("WorkingDir") != "/home/dame-curie" or config.get("Cmd") != ["sleep", "infinity"] or config.get("Entrypoint"):
             raise ValueError("shell container process does not match configuration")
         if set(info["NetworkSettings"]["Networks"]) != {"host" if full else "bridge"}:
             raise ValueError("shell container has unexpected network attachments")
@@ -7881,7 +7881,7 @@ class ShellTool(Tool):
             image = json.loads(stdout)[0]
             image_labels = image["Config"].get("Labels") or {}
             shell_runtime.require_ownership(image_labels, "shell-image")
-            if image_labels.get("maxwell.shell.source") != _sandbox_source_hash() or info["Image"] != image["Id"]:
+            if image_labels.get("dame-curie.shell.source") != _sandbox_source_hash() or info["Image"] != image["Id"]:
                 raise ValueError("shell container image identity/source mismatch")
         return info["Id"]
 
@@ -7899,7 +7899,7 @@ class ShellTool(Tool):
         info = await self._inspect_container()
         if info is not None:
             labels = info["Config"].get("Labels") or {}
-            if labels.get("maxwell.shell.mode") == desired_mode and labels.get("maxwell.shell.init") == "1":
+            if labels.get("dame-curie.shell.mode") == desired_mode and labels.get("dame-curie.shell.init") == "1":
                 container_id = await self._verify_container(info)
                 if not info["State"]["Running"]:
                     (_stdout, stderr), code = await self._run_docker("start", container_id, timeout=15)
@@ -7920,9 +7920,9 @@ class ShellTool(Tool):
             "--name",
             self.CONTAINER_NAME,
             "--label",
-            f"maxwell.shell.mode={desired_mode}",
+            f"dame-curie.shell.mode={desired_mode}",
             "--label",
-            "maxwell.shell.init=1",
+            "dame-curie.shell.init=1",
             "--memory",
             "4g",
             "--cpus",
@@ -7932,7 +7932,7 @@ class ShellTool(Tool):
             "--tmpfs",
             "/tmp:rw,exec,nosuid,size=256m",
             "-v",
-            f"{shell_host}:/home/maxwell:rw",
+            f"{shell_host}:/home/dame-curie:rw",
         ]
         if self._full_host_access():
             # Explicit opt-in: host network + full host FS (documented RCE for admins).
@@ -8026,10 +8026,10 @@ class ShellTool(Tool):
         """Return an error reason if the command looks dangerous, otherwise None."""
         if not command:
             return "empty command"
-        # 0 = unlimited (operator opts in via MAXWELL_SHELL_MAX_COMMAND_LENGTH=0)
+        # 0 = unlimited (operator opts in via DAME_CURIE_SHELL_MAX_COMMAND_LENGTH=0)
         max_len = self._max_command_length()
         if max_len and len(command) > max_len:
-            return f"command too long (max {max_len} chars; set MAXWELL_SHELL_MAX_COMMAND_LENGTH=0 to disable)"
+            return f"command too long (max {max_len} chars; set DAME_CURIE_SHELL_MAX_COMMAND_LENGTH=0 to disable)"
         # Multi-line commands & heredocs are allowed.
         if "\n" in command:
             hint = _unterminated_heredoc_error(command)
@@ -8055,7 +8055,7 @@ class ShellTool(Tool):
         async with self._lifecycle_lock, contextlib.AsyncExitStack() as scope:
             container_id = await self._ensure_container()
             diagnostics = scope.enter_context(ShellDiagnosticCapture(sanitized))
-            exec_token = f"maxwell-exec-{uuid.uuid4().hex}"
+            exec_token = f"dame-curie-exec-{uuid.uuid4().hex}"
             pid_file = f"/tmp/{exec_token}.pid"
             # Run the user's shell in its own session/process group and leave
             # its leader PID in the container. Killing only the local
@@ -8070,7 +8070,7 @@ class ShellTool(Tool):
                 "docker",
                 "exec",
                 "--workdir",
-                "/home/maxwell",
+                "/home/dame-curie",
                 "--user",
                 "root",
                 container_id,
@@ -8179,7 +8179,7 @@ class ShellTool(Tool):
                     raise asyncio.CancelledError
             incident_id = diagnostics.incident_id if proc.returncode != 0 else None
             if output_truncated:
-                stderr_buf.extend(b"\n[output truncated at MAXWELL_SHELL_MAX_OUTPUT]")
+                stderr_buf.extend(b"\n[output truncated at DAME_CURIE_SHELL_MAX_OUTPUT]")
             return ShellResult(bytes(stdout_buf), bytes(stderr_buf), proc.returncode, incident_id)
 
     async def _settle_shell_execution(self, proc, workers, execution, beat, pid_file, container_id, completed):
@@ -9708,7 +9708,7 @@ class YouTubeTool(Tool):
             max_chars = 12000
         lang = re.sub(r"[^A-Za-z0-9_.-]", "", str(lang or "en"))[:20] or "en"
         requested_ts = self._parse_timestamps(timestamps)
-        with tempfile.TemporaryDirectory(prefix="maxwell_yt_") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="dame-curie-yt-") as tmpdir:
             tmp = Path(tmpdir)
             info_task = asyncio.create_task(self._video_info(url))
             transcript = await self._download_transcript(url, lang, tmp)
@@ -10612,14 +10612,14 @@ def _email_cfg(bot) -> dict:
     """
     cfg = getattr(bot, "config", None)
     return {
-        "host": getattr(cfg, "MAXWELL_SMTP_HOST", "127.0.0.1"),
-        "smtp_port": int(getattr(cfg, "MAXWELL_SMTP_PORT", "25")),
-        "imap_host": getattr(cfg, "MAXWELL_IMAP_HOST", "127.0.0.1"),
-        "imap_port": int(getattr(cfg, "MAXWELL_IMAP_PORT", "993")),
-        "user": getattr(cfg, "MAXWELL_EMAIL_USER", "maxwell@z3ki.dev"),
-        "password": getattr(cfg, "MAXWELL_EMAIL_PASSWORD", ""),
-        "from_addr": getattr(cfg, "MAXWELL_EMAIL_FROM", "maxwell@z3ki.dev"),
-        "from_name": getattr(cfg, "MAXWELL_EMAIL_FROM_NAME", "Dame Curie"),
+        "host": getattr(cfg, "DAME_CURIE_SMTP_HOST", "127.0.0.1"),
+        "smtp_port": int(getattr(cfg, "DAME_CURIE_SMTP_PORT", "25")),
+        "imap_host": getattr(cfg, "DAME_CURIE_IMAP_HOST", "127.0.0.1"),
+        "imap_port": int(getattr(cfg, "DAME_CURIE_IMAP_PORT", "993")),
+        "user": getattr(cfg, "DAME_CURIE_EMAIL_USER", ""),
+        "password": getattr(cfg, "DAME_CURIE_EMAIL_PASSWORD", ""),
+        "from_addr": getattr(cfg, "DAME_CURIE_EMAIL_FROM", ""),
+        "from_name": getattr(cfg, "DAME_CURIE_EMAIL_FROM_NAME", "dame-curie"),
     }
 
 
@@ -11232,7 +11232,7 @@ class EmailSendTool(Tool):
         cfg = _email_cfg(self.bot)
         if not cfg["password"]:
             return (
-                "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD "
+                "Error: local mail is not configured. Set DAME_CURIE_EMAIL_PASSWORD "
                 "in .env (the same password Dovecot knows about — /etc/dovecot/users)."
             )
         if not to or not str(to).strip():
@@ -11306,7 +11306,7 @@ class EmailReadInboxTool(Tool):
         cfg = _email_cfg(self.bot)
         if not cfg["password"]:
             return (
-                "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD "
+                "Error: local mail is not configured. Set DAME_CURIE_EMAIL_PASSWORD "
                 "in .env (the same password Dovecot knows about — /etc/dovecot/users)."
             )
         try:
@@ -11364,7 +11364,7 @@ class EmailGetMessageTool(Tool):
 
         cfg = _email_cfg(self.bot)
         if not cfg["password"]:
-            return "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD in .env."
+            return "Error: local mail is not configured. Set DAME_CURIE_EMAIL_PASSWORD in .env."
         try:
             result = await asyncio.to_thread(
                 _imap_get_message_sync,
@@ -11409,7 +11409,7 @@ class EmailSearchTool(Tool):
             limit = 10
         cfg = _email_cfg(self.bot)
         if not cfg["password"]:
-            return "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD in .env."
+            return "Error: local mail is not configured. Set DAME_CURIE_EMAIL_PASSWORD in .env."
         try:
             result = await asyncio.to_thread(
                 _imap_search_sync,
@@ -11443,7 +11443,7 @@ def _x_client(bot):
 def _x_unavailable() -> str:
     return (
         "Error: X is not available on this install (ENABLE_X=false, or "
-        "x_client failed to start). Check `python3 doctor.py`."
+        "x_client failed to start). Check `.venv/bin/python doctor.py`."
     )
 
 

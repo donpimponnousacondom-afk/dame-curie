@@ -159,14 +159,14 @@ PY"""
     def test_rejects_long_command(self, monkeypatch):
         # Default cap is 65,536 (set at the start of this session; was 4000).
         # To trigger rejection in a unit test we set the env var low.
-        # See MAXWELL_SHELL_MAX_COMMAND_LENGTH in .env.example.
-        monkeypatch.setenv("MAXWELL_SHELL_MAX_COMMAND_LENGTH", "2000")
+        # See DAME_CURIE_SHELL_MAX_COMMAND_LENGTH in .env.example.
+        monkeypatch.setenv("DAME_CURIE_SHELL_MAX_COMMAND_LENGTH", "2000")
         tool = ShellTool(None)  # type: ignore[arg-type]
         assert tool._validate_command("x" * 5000) is not None
 
     def test_command_length_unlimited_with_zero(self, monkeypatch):
         # 0 = unlimited (operator opt-in for the env var).
-        monkeypatch.setenv("MAXWELL_SHELL_MAX_COMMAND_LENGTH", "0")
+        monkeypatch.setenv("DAME_CURIE_SHELL_MAX_COMMAND_LENGTH", "0")
         tool = ShellTool(None)  # type: ignore[arg-type]
         assert tool._validate_command("x" * 5000) is None
         assert tool._validate_command("x" * 200_000) is None

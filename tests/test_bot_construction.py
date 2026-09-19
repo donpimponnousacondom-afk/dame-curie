@@ -60,7 +60,7 @@ async def construct():
     assert instance.plugin_manager.state_file == data / 'plugins.json'
     assert json.loads((data / 'plugins.json').read_text())['plugins']
     assert 'checkers' in instance.plugin_manager.loaded_plugins
-    assert instance.memory.db_path == data / 'maxwell_rag.db'
+    assert instance.memory.db_path == data / 'dame-curie-rag.db'
     assert instance.memory.embedding_status()['total'] == 0
     assert instance.bg_jobs.data_path == str(data / 'background_jobs.json')
     assert instance._watermarks.path == str(data / 'watermarks.json')
@@ -109,13 +109,13 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
         "TMPDIR": str(state / "tmp"),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHON_DOTENV_DISABLED": "1",
-        "MAXWELL_ENV_FILE": "/dev/null",
-        "MAXWELL_CONTAINER_MODE": "true",
+        "DAME_CURIE_ENV_FILE": "/dev/null",
+        "DAME_CURIE_CONTAINER_MODE": "true",
         "DATA_DIR": str(state / "data"),
-        "MAXWELL_SITE_DIR": str(state / "sites"),
-        "MAXWELL_PROMPTS_DIR": str(state / "prompts") if external_prompts else "",
+        "DAME_CURIE_SITE_DIR": str(state / "sites"),
+        "DAME_CURIE_PROMPTS_DIR": str(state / "prompts") if external_prompts else "",
         "DISCORD_TOKEN": "synthetic-constructor-token-never-used",
-        "MAXWELL_ADMIN_PASSWORD": "synthetic-constructor-password-never-used",
+        "DAME_CURIE_ADMIN_PASSWORD": "synthetic-constructor-password-never-used",
         "OLLAMA_BASE_URL": "http://127.0.0.1:9/v1",
         "OLLAMA_MODEL": "synthetic-no-network-model",
         "BOT_PERSONA_TYPE": "maxwell",

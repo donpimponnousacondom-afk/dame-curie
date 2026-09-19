@@ -228,7 +228,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.mirror = Mirror(self.config, self.state, self.transport)
         self.mirror.reconcile()
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"after restart")
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
 
     def test_partial_marker_write_recovers_after_restart(self):
         self.put("site/index.html", b"after partial write")
@@ -245,7 +245,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.mirror = Mirror(self.config, self.state, self.transport)
         self.mirror.reconcile()
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"after partial write")
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
 
     def test_removed_source_cleans_partial_claim_not_unmanaged_canonical(self):
         page = self.put("site/index.html")
@@ -269,7 +269,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual((canonical / "keep").read_bytes(), b"unmanaged")
         self.assertFalse((canonical / MARKER).exists())
         self.assertNotIn("site", self.state.sites)
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
         self.assertEqual((self.images / "later.png").read_bytes(), b"archive still reconciles")
 
     def test_overlapping_cleanup_refuses_publication_before_marker_unlink(self):
@@ -304,7 +304,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual(blocked, [errno.EAGAIN])
         self.assertEqual(errors, [])
         self.assertFalse((self.sites / "site").exists())
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
         self.assertEqual(len(guard.run(claim)["site_identity"]), 2)
         self.assertIn(site.token.encode(), (self.sites / "site" / MARKER).read_bytes())
         self.assertEqual((self.sites / "index.html").read_bytes(), b"unrelated root index")
@@ -346,7 +346,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual(published_mutations, [])
         self.assertIn(site.token.encode(), (self.sites / "site" / MARKER).read_bytes())
         self.assertEqual(len(guard.run(claim)["site_identity"]), 2)
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
 
     def test_unsupported_noreplace_has_no_ordinary_rename_fallback(self):
         self.put("site/index.html")

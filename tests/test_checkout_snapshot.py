@@ -271,13 +271,13 @@ def test_relative_repository_is_rejected_without_git(monkeypatch):
 
 def test_rendered_unit_names_match_accept_yes_and_preserve_boundary():
     replacements = {
-        "@INSTANCE@": "curie", "@CHECKOUT_OWNER@": "codexy",
-        "@READER@": "/usr/local/libexec/maxwell-checkout-snapshot.py",
-        "@CHECKOUT_ROOT@": "/home/codexy/Dame_Curie/Maxwell-bot",
+        "@INSTANCE@": "dame-curie", "@CHECKOUT_OWNER@": "codexy",
+        "@READER@": "/usr/local/libexec/dame-curie-checkout-snapshot.py",
+        "@CHECKOUT_ROOT@": "/opt/dame-curie",
     }
     names = {
-        "maxwell-checkout.socket.in": "maxwell-checkout-curie.socket",
-        "maxwell-checkout-worker.service.in": "maxwell-checkout-curie@.service",
+        "dame-curie-checkout.socket.in": "dame-curie-checkout.socket",
+        "dame-curie-checkout-worker.service.in": "dame-curie-checkout@.service",
     }
     rendered = {}
     for template, destination in names.items():
@@ -291,8 +291,8 @@ def test_rendered_unit_names_match_accept_yes_and_preserve_boundary():
     socket_name, service_name = names.values()
     assert service_name == socket_name.removesuffix(".socket") + "@.service"
     socket_unit = rendered[socket_name]["Socket"]
-    assert socket_unit["ListenStream"] == "/srv/maxwell-checkout/curie/snapshot.sock"
-    assert socket_unit["SocketUser"] == socket_unit["SocketGroup"] == "maxwell-curie"
+    assert socket_unit["ListenStream"] == "/srv/dame-curie-checkout/dame-curie/snapshot.sock"
+    assert socket_unit["SocketUser"] == socket_unit["SocketGroup"] == "dame-curie"
     assert socket_unit["SocketMode"] == "0600"
     assert socket_unit["DirectoryMode"] == "0711"
     assert socket_unit["Accept"] == "yes"
@@ -305,8 +305,9 @@ def test_rendered_unit_names_match_accept_yes_and_preserve_boundary():
     assert worker["StandardOutput"] == "inherit"
     assert worker["StandardError"] == "journal"
     assert worker["ExecStart"] == (
-        '/usr/local/bin/python3.14 -I "/usr/local/libexec/maxwell-checkout-snapshot.py" '
-        '"/home/codexy/Dame_Curie/Maxwell-bot"'
+        '/opt/dame-curie/.venv/bin/python -I '
+        '"/usr/local/libexec/dame-curie-checkout-snapshot.py" '
+        '"/opt/dame-curie"'
     )
     for key in ("NoNewPrivileges", "PrivateNetwork", "PrivateTmp"):
         assert worker[key] == "yes"

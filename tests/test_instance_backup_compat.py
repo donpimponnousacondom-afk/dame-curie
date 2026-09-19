@@ -35,10 +35,10 @@ def entries():
             entry(APPROVED, tarfile.SYMTYPE, compat.INTERPRETER)]
 
 
-def write_tar(path, members, identity="curie", metadata_digest=None):
-    headers = {"maxwell.instance": identity}
+def write_tar(path, members, identity="dame-curie", metadata_digest=None):
+    headers = {"dame-curie.instance": identity}
     if metadata_digest is not None:
-        headers["maxwell.compat.link_sha256"] = metadata_digest
+        headers["dame-curie.compat.link_sha256"] = metadata_digest
     with tarfile.open(path, "w", pax_headers=headers) as archive:
         for member in members:
             archive.addfile(member, io.BytesIO(b"x" * member.size) if member.isfile() else None)
@@ -48,12 +48,12 @@ def write_tar(path, members, identity="curie", metadata_digest=None):
 def make_pair(tmp_path, members=None):
     raw = write_tar(tmp_path / "raw.tar", entries() if members is None else members)
     derived, sidecar = tmp_path / "derived.tar", tmp_path / "link.json"
-    record = compat.derive(raw, derived, sidecar, "curie", approved_link=APPROVED)
+    record = compat.derive(raw, derived, sidecar, "dame-curie", approved_link=APPROVED)
     return raw, derived, sidecar, record
 
 
-def run_reconstruction(root, record, *, identity="curie", payload=None, program=None):
-    script, request = compat.reconstruction_request(record, "curie", approved_link=APPROVED)
+def run_reconstruction(root, record, *, identity="dame-curie", payload=None, program=None):
+    script, request = compat.reconstruction_request(record, "dame-curie", approved_link=APPROVED)
     script = script if program is None else program
     script = script.replace('os.open("/instance", flags)', f"os.open({str(root)!r}, flags)")
     return subprocess.run([sys.executable, "-c", script, identity],
@@ -79,14 +79,14 @@ def actual_pair(tmp_path):
         database.execute("CREATE TABLE fixture (value TEXT)")
         database.execute("INSERT INTO fixture VALUES ('synthetic memory')")
     program = ops.ARCHIVE_PROGRAM.replace('Path("/instance")', f"Path({str(source)!r})")
-    archived = subprocess.run([sys.executable, "-c", program, "curie"], capture_output=True)
+    archived = subprocess.run([sys.executable, "-c", program, "dame-curie"], capture_output=True)
     assert archived.returncode == 0, archived.stderr.decode()
     assert archived.stderr == b""
     raw = tmp_path / "raw.tar"
     raw.write_bytes(archived.stdout)
     before = (source / APPROVED).lstat()
     derived, sidecar = tmp_path / "derived.tar", tmp_path / "link.json"
-    record = compat.derive(raw, derived, sidecar, "curie", approved_link=APPROVED)
+    record = compat.derive(raw, derived, sidecar, "dame-curie", approved_link=APPROVED)
     assert raw.read_bytes() == archived.stdout
     after = (source / APPROVED).lstat()
     assert (after.st_ino, after.st_uid, after.st_gid, after.st_mtime_ns, after.st_ctime_ns) == (
@@ -97,13 +97,13 @@ def actual_pair(tmp_path):
 
 def test_real_split_restore_and_last_link_roundtrip(tmp_path, actual_pair):
     source, raw, derived, sidecar, record = actual_pair
-    assert compat.validate_pair(derived, sidecar, "curie", approved_link=APPROVED) == record
+    assert compat.validate_pair(derived, sidecar, "dame-curie", approved_link=APPROVED) == record
     assert derived.stat().st_mode & 0o777 == sidecar.stat().st_mode & 0o777 == 0o600
     with tarfile.open(raw) as archive:
         with pytest.raises(ValueError, match="escapes"):
-            ops.validate_archive(archive, "curie")
+            ops.validate_archive(archive, "dame-curie")
     with tarfile.open(derived) as archive:
-        ops.validate_archive(archive, "curie")
+        ops.validate_archive(archive, "dame-curie")
         assert APPROVED not in archive.getnames()
     restored = tmp_path / "restored"
     restored.mkdir()
@@ -166,7 +166,7 @@ def test_generic_direct_restore_still_rejects_absolute_link(tmp_path, actual_pai
 def test_operator_path_must_be_exact_canonical_shell_python3(tmp_path, approved):
     raw = write_tar(tmp_path / "raw.tar", entries())
     with pytest.raises(ValueError):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=approved)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=approved)
     assert not (tmp_path / "derived.tar").exists()
     assert not (tmp_path / "link.json").exists()
 
@@ -183,7 +183,7 @@ def test_derive_rejects_unsupported_approved_entry(tmp_path, field, value):
     raw = write_tar(tmp_path / "raw.tar", members)
     original = raw.read_bytes()
     with pytest.raises(ValueError):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=APPROVED)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
     assert raw.read_bytes() == original
     assert not (tmp_path / "derived.tar").exists()
     assert not (tmp_path / "link.json").exists()
@@ -205,7 +205,7 @@ def test_original_graph_rejections_precede_any_output(tmp_path, extra):
     outside = tmp_path / "outside"
     outside.write_bytes(b"untouched")
     with pytest.raises(ValueError):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=APPROVED)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
     assert outside.read_bytes() == b"untouched"
     assert not (tmp_path / "derived.tar").exists()
     assert not (tmp_path / "link.json").exists()
@@ -218,16 +218,16 @@ def test_original_graph_requires_real_archived_ancestors(tmp_path, ancestor):
         members.insert(-1, entry("shell/runtime", ancestor, "elsewhere" if ancestor == tarfile.SYMTYPE else ""))
     raw = write_tar(tmp_path / "raw.tar", members)
     with pytest.raises(ValueError):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=APPROVED)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
 
 
 def test_derive_requires_one_link_and_same_identity(tmp_path):
     raw = write_tar(tmp_path / "raw.tar", entries()[:-1])
     with pytest.raises(ValueError, match="exactly one"):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=APPROVED)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
     write_tar(raw, entries(), identity="other")
     with pytest.raises(ValueError, match="identity"):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=APPROVED)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
 
 
 @pytest.mark.parametrize("occupied", ["derived.tar", "link.json", "raw.tar"])
@@ -239,7 +239,7 @@ def test_derive_never_overwrites_existing_artifacts_or_source(tmp_path, occupied
         output.write_bytes(b"keep existing")
     with pytest.raises(FileExistsError):
         compat.derive(raw, raw if output == raw else tmp_path / "derived.tar",
-                      tmp_path / "link.json", "curie", approved_link=APPROVED)
+                      tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
     assert raw.read_bytes() == original
     if output != raw:
         assert output.read_bytes() == b"keep existing"
@@ -260,7 +260,7 @@ def test_artifact_symlinks_are_rejected_without_following(tmp_path, which):
             "sidecar": (raw, derived, alias),
         }[which]
     with pytest.raises(ValueError, match="symlinks"):
-        compat.derive(raw, derived, sidecar, "curie", approved_link=APPROVED)
+        compat.derive(raw, derived, sidecar, "dame-curie", approved_link=APPROVED)
     assert alias.is_symlink()
 
 
@@ -268,7 +268,7 @@ def test_derive_rejects_same_output_path(tmp_path):
     raw = write_tar(tmp_path / "raw.tar", entries())
     path = tmp_path / "artifact"
     with pytest.raises(ValueError, match="distinct"):
-        compat.derive(raw, path, path, "curie", approved_link=APPROVED)
+        compat.derive(raw, path, path, "dame-curie", approved_link=APPROVED)
     assert not path.exists()
 
 
@@ -278,7 +278,7 @@ def test_failed_derivation_removes_only_its_new_outputs(tmp_path, monkeypatch, s
     before = raw.read_bytes()
     monkeypatch.setattr(compat, stage, Mock(side_effect=OSError("synthetic failure")))
     with pytest.raises(OSError, match="synthetic failure"):
-        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "curie", approved_link=APPROVED)
+        compat.derive(raw, tmp_path / "derived.tar", tmp_path / "link.json", "dame-curie", approved_link=APPROVED)
     assert raw.read_bytes() == before
     assert not (tmp_path / "derived.tar").exists()
     assert not (tmp_path / "link.json").exists()
@@ -289,7 +289,7 @@ def test_pair_digest_detects_archive_changes(tmp_path):
     with derived.open("ab") as output:
         output.write(b"changed")
     with pytest.raises(ValueError, match="digest"):
-        compat.validate_pair(derived, sidecar, "curie", approved_link=APPROVED)
+        compat.validate_pair(derived, sidecar, "dame-curie", approved_link=APPROVED)
 
 
 @pytest.mark.parametrize("scope,field,value", [
@@ -308,14 +308,14 @@ def test_pair_rejects_forged_record_fields(tmp_path, scope, field, value):
     target[field] = value
     sidecar.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(ValueError):
-        compat.validate_pair(derived, sidecar, "curie", approved_link=APPROVED)
+        compat.validate_pair(derived, sidecar, "dame-curie", approved_link=APPROVED)
 
 
 def test_pair_rejects_duplicate_json_keys(tmp_path):
     _, derived, sidecar, record = make_pair(tmp_path)
     sidecar.write_text('{"format":"forged",' + json.dumps(record)[1:], encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
-        compat.validate_pair(derived, sidecar, "curie", approved_link=APPROVED)
+        compat.validate_pair(derived, sidecar, "dame-curie", approved_link=APPROVED)
 
 
 @pytest.mark.parametrize("extra", [
@@ -329,7 +329,7 @@ def test_pair_rechecks_combined_graph_even_with_matching_digest(tmp_path, extra)
     record["archive_sha256"] = hashlib.sha256(derived.read_bytes()).hexdigest()
     sidecar.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(ValueError):
-        compat.validate_pair(derived, sidecar, "curie", approved_link=APPROVED)
+        compat.validate_pair(derived, sidecar, "dame-curie", approved_link=APPROVED)
 
 
 def test_pair_rechecks_archive_identity_even_with_matching_digest(tmp_path):
@@ -338,7 +338,7 @@ def test_pair_rechecks_archive_identity_even_with_matching_digest(tmp_path):
     record["archive_sha256"] = hashlib.sha256(derived.read_bytes()).hexdigest()
     sidecar.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(ValueError, match="identity"):
-        compat.validate_pair(derived, sidecar, "curie", approved_link=APPROVED)
+        compat.validate_pair(derived, sidecar, "dame-curie", approved_link=APPROVED)
 
 
 def test_pax_nanoseconds_and_optional_atime_are_preserved(tmp_path):
@@ -421,7 +421,7 @@ def test_reconstruction_checks_rootless_mapping_before_mutation(tmp_path, owner)
     record["link"][owner] = 1
     root = tmp_path / "restored"
     (root / APPROVED).parent.mkdir(parents=True)
-    program, _ = compat.reconstruction_request(record, "curie", approved_link=APPROVED)
+    program, _ = compat.reconstruction_request(record, "dame-curie", approved_link=APPROVED)
     program = program.replace('Path("/proc/self/" + kind + "_map").read_text()', repr("0 0 1\n"))
     result = run_reconstruction(root, record, program=program)
     assert result.returncode != 0
@@ -463,16 +463,16 @@ def test_reconstruction_checks_helper_identity(tmp_path):
 
 def test_helper_keeps_private_link_metadata_off_argv_and_mounts_only_roots(tmp_path):
     _, _, _, record = make_pair(tmp_path)
-    program, payload = compat.reconstruction_request(record, "curie", approved_link=APPROVED)
+    program, payload = compat.reconstruction_request(record, "dame-curie", approved_link=APPROVED)
     assert APPROVED not in program
     assert APPROVED.encode() in payload
     app = ops.Instance.__new__(ops.Instance)
-    app.name, app.path, app.values = "curie", Path("/synthetic/curie"), {"APP_IMAGE": "maxwell-app:fixture"}
+    app.name, app.path, app.values = "dame-curie", Path("/synthetic/dame-curie"), {"APP_IMAGE": "dame-curie-app:fixture"}
     args = app.helper(program, writable=True)
     assert args[args.index("--network") + 1] == "none"
     assert "--read-only" in args
     assert args[args.index("--cap-drop") + 1] == "ALL"
-    assert args[-1] == "curie"
+    assert args[-1] == "dame-curie"
     mounts = [args[index + 1] for index, value in enumerate(args) if value == "--mount"]
-    assert mounts == [f"type=bind,src=/synthetic/curie/{root},dst=/instance/{root}" for root in ops.ROOTS]
+    assert mounts == [f"type=bind,src=/synthetic/dame-curie/{root},dst=/instance/{root}" for root in ops.ROOTS]
     assert all(APPROVED not in argument for argument in args)

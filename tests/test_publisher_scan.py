@@ -47,9 +47,9 @@ class PublisherScanTests(unittest.TestCase):
 
     def test_exclusions_do_not_open_private_or_special_entries(self):
         self.put("site/index.html")
-        for name in (".env", ".curie-publisher-owner", ".publisher-link"):
+        for name in (".env", ".dame-curie-publisher-owner", ".publisher-link"):
             self.put("site/" + name, CREDENTIAL_MARKERS[0])
-        for name in ("_data", "_build", ".git", ".curie-publisher-claim-synthetic"):
+        for name in ("_data", "_build", ".git", ".dame-curie-publisher-claim-synthetic"):
             self.put(f"site/{name}/blocked", CREDENTIAL_MARKERS[0])
         private = self.root / "outside"
         private.write_bytes(CREDENTIAL_MARKERS[0])

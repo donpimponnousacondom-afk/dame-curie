@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs chromium stockfish fonts-dejavu-core acl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY docker/requirements.lock /opt/maxwell/requirements.lock
-RUN python -m pip install --no-cache-dir --no-deps -r /opt/maxwell/requirements.lock
+COPY docker/requirements.lock /opt/dame-curie/requirements.lock
+RUN python -m pip install --no-cache-dir --no-deps -r /opt/dame-curie/requirements.lock
 
 WORKDIR /app
 COPY autonomy.py autonomy_social.py bot.py bot_tools.py captcha_solver.py \
@@ -30,20 +30,20 @@ COPY web/admin/index.html ./web/admin/index.html
 COPY docker/Dockerfile ./docker/Dockerfile
 COPY docker/site-runtime/ ./docker/site-runtime/
 COPY assets/tokenizers/ ./assets/tokenizers/
-COPY docker/check_embeddings.py /opt/maxwell/check_embeddings.py
+COPY docker/check_embeddings.py /opt/dame-curie/check_embeddings.py
 RUN mkdir -p /app/temp /state/data /state/sites /state/shell /config/prompts
 
-ARG MAXWELL_BUILD_COMMIT=unknown
-ARG MAXWELL_BUILD_BRANCH=unknown
-ARG MAXWELL_BUILD_DATE=unknown
-ARG MAXWELL_BUILD_SUBJECT=unknown
-ARG MAXWELL_BUILD_DIRTY=unknown
-ENV MAXWELL_BUILD_COMMIT=${MAXWELL_BUILD_COMMIT} \
-    MAXWELL_BUILD_BRANCH=${MAXWELL_BUILD_BRANCH} \
-    MAXWELL_BUILD_DATE=${MAXWELL_BUILD_DATE} \
-    MAXWELL_BUILD_SUBJECT=${MAXWELL_BUILD_SUBJECT} \
-    MAXWELL_BUILD_DIRTY=${MAXWELL_BUILD_DIRTY}
-LABEL org.opencontainers.image.revision=${MAXWELL_BUILD_COMMIT}
+ARG DAME_CURIE_BUILD_COMMIT=unknown
+ARG DAME_CURIE_BUILD_BRANCH=unknown
+ARG DAME_CURIE_BUILD_DATE=unknown
+ARG DAME_CURIE_BUILD_SUBJECT=unknown
+ARG DAME_CURIE_BUILD_DIRTY=unknown
+ENV DAME_CURIE_BUILD_COMMIT=${DAME_CURIE_BUILD_COMMIT} \
+    DAME_CURIE_BUILD_BRANCH=${DAME_CURIE_BUILD_BRANCH} \
+    DAME_CURIE_BUILD_DATE=${DAME_CURIE_BUILD_DATE} \
+    DAME_CURIE_BUILD_SUBJECT=${DAME_CURIE_BUILD_SUBJECT} \
+    DAME_CURIE_BUILD_DIRTY=${DAME_CURIE_BUILD_DIRTY}
+LABEL org.opencontainers.image.revision=${DAME_CURIE_BUILD_COMMIT}
 
 USER 0:0
 CMD ["python", "bot.py"]

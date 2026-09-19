@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
-MARKER = ".curie-publisher-owner"
+MARKER = ".dame-curie-publisher-owner"
 EXCLUDED = frozenset({"_data", "_build", ".env", ".git", MARKER, ".publisher-link"})
 CREDENTIAL_MARKERS = (
     b"-----BEGIN PRIVATE KEY-----", b"-----BEGIN RSA PRIVATE KEY-----",
@@ -29,7 +29,7 @@ class RemoteFailure(PublisherError):
 
 def eligible(name: str, *, top_level: bool = True) -> bool:
     return not (
-        name in EXCLUDED or name.startswith(".curie-publisher-claim-")
+        name in EXCLUDED or name.startswith(".dame-curie-publisher-claim-")
         or top_level and name.startswith(".")
     )
 

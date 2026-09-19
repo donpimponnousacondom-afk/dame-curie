@@ -4,10 +4,11 @@
 
 Root has now authorized the naming/documentation cut-off and narrowly scoped read-only Docker inventory as `maxwell-curie`. Root fixed the planned V2 service account as exactly **dame-curie**, with a separate private rootless engine; no account/engine creation or startup was performed. These later grants supersede only the earlier notes-only/no-Docker scope below, not the prohibitions on production changes, private state, other-project research or new tests.
 
-Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old operational material is quarantined under `legacy/v1/`. The tyranny templates now target Python 3.14 with scoped application. Source operational renames remain pending; target naming is not a completed cutover.
+Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old operational material is quarantined under `legacy/v1/`. The tyranny templates now target Python 3.14 with scoped application. The source operational cut-off is now implemented and statically reviewed; it is not a runtime cutover. Root also approved quarantining the two V1 DNS provisioners unchanged and committing the unchanged sanity skill as tyranny's review twin. Broader feature pruning is the next separate assignment.
 
 - [Protected running Docker snapshot](DOCKER_INVENTORY.md)
 - [Namespace decisions and source cut-off map](CUTOFF_PLAN.md)
+- [Source checkpoint review and validation limits](SOURCE_REVIEW.md)
 - [Permanent operations procedure](../docs/OPERATIONS.md)
 
 The rest of this file records the **initial grounding baseline**, before those later authorizations. This folder is temporary, project-owned working memory intended for removal when root closes the phase, not the only home of the current operating contract.

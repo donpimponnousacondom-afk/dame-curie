@@ -383,7 +383,7 @@ def test_footer_commands_auth_validation_and_static_replies(
     async def scenario():
         bot = fake_bot(
             _is_admin=lambda uid: uid == 7,
-            config=SimpleNamespace(DATA_DIR=str(tmp_path), MAXWELL_PROMPTS_DIR=""),
+            config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR=""),
             command_prefix="!",
             _ai_concurrency=2,
             _apply_x_control=lambda control: None,

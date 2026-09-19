@@ -192,8 +192,8 @@ def tool(tmp_path, monkeypatch):
     control = {}
     bot = SimpleNamespace(
         config=SimpleNamespace(
-            MAXWELL_SITE_DIR=str(tmp_path / "sites"),
-            MAXWELL_PUBLIC_BASE_URL="https://maxwell.example.com",
+            DAME_CURIE_SITE_DIR=str(tmp_path / "sites"),
+            DAME_CURIE_PUBLIC_BASE_URL="https://dame-curie.example.invalid",
             DATA_DIR=str(tmp_path),
         ),
         _sites={"demo": {"user_id": "42", "title": "Demo"}},
@@ -354,9 +354,9 @@ def test_packages_build_a_per_site_image(data_dir, monkeypatch):
     tag = run(site_server.build_site_image(data_dir, "demo", ["redis==5.0.1"]))
     # The image tag must NOT collide with the container name, or `docker
     # inspect` finds the image after the container is gone.
-    assert tag == "maxwell-siteimg-demo" == seen["tag"]
+    assert tag == "dame-curie-siteimg-demo" == seen["tag"]
     assert tag != site_server.container_name("demo")
-    assert "FROM maxwell-site-runtime" in seen["dockerfile"]
+    assert "FROM dame-curie-site-runtime" in seen["dockerfile"]
     assert "pip install --no-cache-dir redis==5.0.1" in seen["dockerfile"]
     # The build must not run as root at the end.
     assert seen["dockerfile"].rstrip().endswith("USER site")
@@ -440,10 +440,10 @@ def test_wait_healthy_reports_a_real_crash_loop(monkeypatch):
 
 @pytest.fixture
 def container_site(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAXWELL_CONTAINER_MODE", "true")
-    monkeypatch.setenv("MAXWELL_INSTANCE_ID", "curie")
-    monkeypatch.setenv("MAXWELL_HOST_INSTANCE_DIR", "/srv/maxwell/curie")
-    monkeypatch.setenv("MAXWELL_BACKEND_NETWORK", "maxwell-curie-backends")
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "true")
+    monkeypatch.setenv("DAME_CURIE_INSTANCE_ID", "dame-curie")
+    monkeypatch.setenv("DAME_CURIE_HOST_INSTANCE_DIR", "/srv/dame-curie")
+    monkeypatch.setenv("DAME_CURIE_BACKEND_NETWORK", "dame-curie-backends")
     monkeypatch.setattr(site_server.runtime, "STATE_ROOT", tmp_path)
     return tmp_path / "data"
 
@@ -465,39 +465,39 @@ def test_container_start_uses_private_dns_and_translated_binds(container_site, m
     entry = run(site_server.start(container_site, "demo"))
     args = next(args for args in calls if args[0] == "run")
     assert "-p" not in args and "--publish" not in args
-    assert args[args.index("--network") + 1] == "maxwell-curie-backends"
-    assert "/srv/maxwell/curie/data/site_servers/demo:/app:ro" in args
-    assert "/srv/maxwell/curie/data/site_servers/demo/_data:/data:rw" in args
-    assert "maxwell.instance=curie" in args
-    assert entry["image"] == "maxwell-curie-site-runtime"
-    assert site_server.target_for(container_site, "demo") == ("maxwell-curie-site-demo", 8000)
+    assert args[args.index("--network") + 1] == "dame-curie-backends"
+    assert "/srv/dame-curie/data/site_servers/demo:/app:ro" in args
+    assert "/srv/dame-curie/data/site_servers/demo/_data:/data:rw" in args
+    assert "dame-curie.instance=dame-curie" in args
+    assert entry["image"] == "dame-curie-site-runtime"
+    assert site_server.target_for(container_site, "demo") == ("dame-curie-site-demo", 8000)
     raw = json.loads(site_server.registry_path(container_site).read_text())
-    assert raw["version"] == 2 and raw["instance"] == "curie"
+    assert raw["version"] == 2 and raw["instance"] == "dame-curie"
 
 
 @pytest.mark.parametrize("change", [{"container": "169.254.169.254"}, {"network": "bridge"}, {"instance": "other"}, {"port": 80}, {"version": 1}])
 def test_container_target_rejects_registry_tampering(container_site, change):
     container_site.mkdir()
     entry = {
-        "version": 2, "instance": "curie", "network": "maxwell-curie-backends",
-        "container": "maxwell-curie-site-demo", "port": 8000, "running": True,
+        "version": 2, "instance": "dame-curie", "network": "dame-curie-backends",
+        "container": "dame-curie-site-demo", "port": 8000, "running": True,
     }
     entry.update(change)
     site_server._write_entry(container_site, "demo", entry)
     assert site_server.target_for(container_site, "demo") is None
 
 
-@pytest.mark.parametrize("args", [("rm", "-f", "maxwell-curie-site-demo"),
-                                  ("logs", "maxwell-curie-site-demo"),
-                                  ("inspect", "maxwell-curie-site-demo"),
-                                  ("image", "rm", "maxwell-curie-siteimg-demo"),
-                                  ("build", "-t", "maxwell-curie-siteimg-demo", "/tmp/context")])
+@pytest.mark.parametrize("args", [("rm", "-f", "dame-curie-site-demo"),
+                                  ("logs", "dame-curie-site-demo"),
+                                  ("inspect", "dame-curie-site-demo"),
+                                  ("image", "rm", "dame-curie-siteimg-demo"),
+                                  ("build", "-t", "dame-curie-siteimg-demo", "/tmp/context")])
 def test_foreign_resources_are_not_touched(container_site, monkeypatch, args):
     calls = []
 
     async def raw(*command, **kwargs):
         calls.append(command)
-        return 0, json.dumps({"maxwell.instance": "other"}), ""
+        return 0, json.dumps({"dame-curie.instance": "other"}), ""
 
     monkeypatch.setattr(site_server, "_docker_raw", raw)
     with pytest.raises(ValueError, match="owned"):
@@ -525,7 +525,7 @@ def test_container_health_uses_derived_dns(container_site, monkeypatch):
     monkeypatch.setattr(site_server, "_docker", docker)
     monkeypatch.setattr(site_server, "_http_ping", ping)
     assert run(site_server._wait_healthy(8000, "demo")) == "ok"
-    assert calls == [("maxwell-curie-site-demo", 8000)]
+    assert calls == [("dame-curie-site-demo", 8000)]
 
 
 def test_ownership_probe_permission_error_fails_closed(container_site, monkeypatch):
@@ -537,7 +537,7 @@ def test_ownership_probe_permission_error_fails_closed(container_site, monkeypat
 
     monkeypatch.setattr(site_server, "_docker_raw", raw)
     with pytest.raises(site_server.SiteServerError, match="ownership"):
-        run(site_server._docker("rm", "-f", "maxwell-curie-site-demo"))
+        run(site_server._docker("rm", "-f", "dame-curie-site-demo"))
     assert len(calls) == 1
 
 

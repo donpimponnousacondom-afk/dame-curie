@@ -46,7 +46,7 @@ URL_CASES = [
 @pytest.fixture(params=URL_CASES)
 def site_case(request, tmp_path, monkeypatch):
     override, expected = request.param
-    monkeypatch.setenv("MAXWELL_CONTAINER_MODE", "false")
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "false")
     root = tmp_path / "public"
     data = tmp_path / "data"
     root.mkdir()
@@ -54,13 +54,13 @@ def site_case(request, tmp_path, monkeypatch):
     image = root / "source.png"
     image.write_bytes(PNG)
     config = SimpleNamespace(
-        MAXWELL_SITE_DIR=str(root), MAXWELL_PUBLIC_BASE_URL=LOCAL + "///",
+        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_PUBLIC_BASE_URL=LOCAL + "///",
         DATA_DIR=str(data), IMAGE_GEN_PROTOCOL="images", GEMINI_IMAGE_PROTOCOL="images",
         IMAGE_GEN_BASE_URL="https://images.example.invalid/v1",
         GEMINI_IMAGE_BASE_URL="https://images.example.invalid/v1",
     )
     if override is not None:
-        config.MAXWELL_SITE_PUBLIC_BASE_URL = override
+        config.DAME_CURIE_SITE_PUBLIC_BASE_URL = override
     control = {"create_site_quota_per_user": 50, "knowledge_graph_enabled": False}
     bot = SimpleNamespace(
         config=config, _sites={}, _control=control, control=control, tools={},
@@ -109,7 +109,7 @@ def test_create_advertises_site_root_and_bundled_images_without_rewriting_files(
     assert (case.root / "demo/images/plot.png").read_bytes() == PNG
     assert case.bot._sites["demo"]["path"] == str(case.root / "demo")
     assert case.bot._sites["demo"]["backend"] is True
-    assert case.bot.config.MAXWELL_PUBLIC_BASE_URL == LOCAL + "///"
+    assert case.bot.config.DAME_CURIE_PUBLIC_BASE_URL == LOCAL + "///"
 
 
 def test_edit_and_list_advertise_site_root_but_keep_operational_base(site_case):
@@ -207,24 +207,24 @@ def test_website_override_leaves_image_delivery_urls_and_bytes_unchanged(site_ca
     else:
         case.message.channel.send.assert_not_awaited()
         assert "NOT sent" in result
-    assert case.bot.config.MAXWELL_SITE_DIR == str(case.root)
-    assert case.bot.config.MAXWELL_PUBLIC_BASE_URL == LOCAL + "///"
+    assert case.bot.config.DAME_CURIE_SITE_DIR == str(case.root)
+    assert case.bot.config.DAME_CURIE_PUBLIC_BASE_URL == LOCAL + "///"
 
 
 def test_environment_override_does_not_change_global_cors_captcha_or_oauth(site_case, monkeypatch):
     case = site_case
-    monkeypatch.setenv("MAXWELL_ENV_FILE", os.devnull)
+    monkeypatch.setenv("DAME_CURIE_ENV_FILE", os.devnull)
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
-    monkeypatch.setenv("MAXWELL_PUBLIC_BASE_URL", LOCAL + "///")
-    monkeypatch.delenv("MAXWELL_CORS_ORIGIN", raising=False)
+    monkeypatch.setenv("DAME_CURIE_PUBLIC_BASE_URL", LOCAL + "///")
+    monkeypatch.delenv("DAME_CURIE_CORS_ORIGIN", raising=False)
     if case.override is None:
-        monkeypatch.delenv("MAXWELL_SITE_PUBLIC_BASE_URL", raising=False)
+        monkeypatch.delenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", raising=False)
     else:
-        monkeypatch.setenv("MAXWELL_SITE_PUBLIC_BASE_URL", case.override)
+        monkeypatch.setenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", case.override)
     config = runpy.run_path(str(SOURCE_ROOT / "config.py"))["Config"]
-    assert config.MAXWELL_SITE_PUBLIC_BASE_URL == (case.override or "").strip()
-    assert config.MAXWELL_PUBLIC_BASE_URL == LOCAL + "///"
-    assert config.MAXWELL_CORS_ORIGIN == LOCAL
+    assert config.DAME_CURIE_SITE_PUBLIC_BASE_URL == (case.override or "").strip()
+    assert config.DAME_CURIE_PUBLIC_BASE_URL == LOCAL + "///"
+    assert config.DAME_CURIE_CORS_ORIGIN == LOCAL
     origin = source_function("api/api_server.py", "_discord_redirect_base", {"os": os})
     assert origin(SimpleNamespace(scheme="https", host="untrusted.example.invalid")) == LOCAL
     ensure = source_function("bot.py", "_human_captcha_ensure", {"HumanCaptchaServer": HumanCaptchaServer})

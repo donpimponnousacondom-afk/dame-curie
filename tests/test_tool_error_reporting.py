@@ -424,7 +424,7 @@ def test_http_fetch_failure_keeps_full_body_and_original_error(incidents, monkey
 
 def server_tool(tmp_path):
     bot = tool_bot()
-    bot.config = SimpleNamespace(DATA_DIR=tmp_path, MAXWELL_SITE_DIR=tmp_path / "sites")
+    bot.config = SimpleNamespace(DATA_DIR=tmp_path, DAME_CURIE_SITE_DIR=tmp_path / "sites")
     tool = bot_tools.SiteServerTool(bot)
     tool._resolve = Mock(return_value=("synthetic", {"server": True}, tmp_path, None))
     tool._mark_server = AsyncMock()

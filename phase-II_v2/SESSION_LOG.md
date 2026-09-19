@@ -66,4 +66,33 @@ Before staging replacements, Git reported all 21 archive moves as 100% identical
 
 The global staged whitespace check reported three pre-existing two-space Markdown line endings in `legacy/v1/README.md:807-809`. Its blob exactly matches the starting README, so those historical bytes were retained deliberately. The check excluding the byte-preserved `legacy/v1/` cluster passed for active docs, guidance and working notes. All staged paths are documentation/skill/archived-asset paths; root's untracked sanity skill remains excluded. Final ledger edits receive the same scoped check before commit.
 
-No tests, application imports, builds or mutation of the observed V1 resources were used as this documentation gate. The checkpoint hash will be reported after commit; the operational source cut-off is the next implementation milestone, not a completed result.
+No tests, application imports, builds or mutation of the observed V1 resources were used as this documentation gate. This became checkpoint `47cd6f1`; the operational source cut-off was its next implementation milestone.
+
+## 2026-09-19 — source naming checkpoint
+
+The full-slug/account/private-root conventions were selected before parallel implementation: `dame-curie` and `dame-curie-<identity>`, direct account/resource prefix and `/srv/<full-instance>`. Root did not authorize provisioning or startup.
+
+Flash high writers separately owned application/configuration, infrastructure/templates and publisher source. A fourth writer aligned existing fixtures only. Luna max independently challenged the actual source diff; parent reviewed coupled contracts, rejected speculative defects and owned final corrections. Exact identities, findings and provenance limits are in `SOURCE_REVIEW.md`.
+
+### Additional human decisions
+
+- Root approved quarantining both V1-specific DNS provisioning scripts unchanged; broader removals/changes await the next informed pruning assignment. Bot email functionality remains.
+- Root announced concurrent Mermaid scratch work from another session. `scratch-mermaid/` is preserved and excluded from this checkpoint.
+- Root explicitly requested the staged, unchanged `implement-sanity` skill be committed, with a message naming it as the review twin of `implement-tyranny`. This supersedes the earlier exclusion of that user-owned file, not permission to modify it.
+- Root checked the Flash version. The current catalog identifies `deepseek-official/deepseek-flash` as DeepSeek-V41-Flash; the separate vision-experimental route was not used.
+
+### Implementation and review
+
+- Renamed operational env/config keys, labels/resource selectors, images, paths, shared RAG basename, PM2 identifiers and publisher markers/templates together. Existing validators now enforce the full new instance namespace without legacy aliases.
+- Corrected duplicated Compose and socket-account prefixes, aligned archive generation/reconstruction keys and removed remaining real V1 site/OAuth/mailbox fallback values without choosing real V2 identities.
+- Reverted unrequested publisher deduplication and internal persona identifier churn. Retained canonical temporary filesystem prefixes. No new helper, blanket exception handler, logger, type escape or test was introduced.
+- Host wrappers select checkout `.venv`; active doctor/config/tool guidance no longer recommends global Python/pip. Existing installer/doctor gates now require exactly the 3.14 minor version, not any future version by accident. Final staged-diff review caught an added venv helper that rebased a relative install directory after `cd`; parent removed that helper/guard and used direct checkout-relative interpreter calls.
+- Existing fixtures/import roots were aligned in 45 test files, without adding tests/cases/assertions or executing/collecting them. The stale documentation-reading test remains a reported pruning decision, not a fabricated passing result.
+- Both DNS scripts were moved into `legacy/v1/email_integration/`. Archive/build-context/static-tool boundaries were updated without changing dependency pins or running tools. The ignored pre-existing `run.sh` was restored to its original content and is not added to Git.
+- Current active docs now distinguish implemented source conventions from absent runtime/replica/deployment acceptance. Names alone do not prove separate state, ports, mounts or remote publishing destinations.
+
+### Execution-provenance correction
+
+The infrastructure writer disclosed generic `python3` AST parsing of four helper files, `bash -n` and `node --check` against an earlier edit. No app or tests were imported/executed, but these are not explicit isolated Python 3.14 checks or final-source validation. The claim was corrected, no repeat was requested, and no suite/linter/type-checker pass is claimed.
+
+No new runtime queries followed the earlier authorized inventory. No private-state/configuration reads, provider/login calls, environment/dependency creation, Docker builds/pulls/lifecycle work, deployment, migration or publication occurred. A local source checkpoint does not authorize the next runtime step.

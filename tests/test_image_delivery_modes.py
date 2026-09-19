@@ -20,8 +20,8 @@ CDN = "https://cdn.discordapp.com/attachments/10/20/image.png"
 def image_delivery(request, monkeypatch, tmp_path):
     profile = request.param
     config = SimpleNamespace(
-        MAXWELL_SITE_DIR=str(tmp_path / "site"),
-        MAXWELL_PUBLIC_BASE_URL="https://images.example.invalid",
+        DAME_CURIE_SITE_DIR=str(tmp_path / "site"),
+        DAME_CURIE_PUBLIC_BASE_URL="https://images.example.invalid",
         IMAGE_GEN_PROTOCOL="pollinations" if profile == "pollinations" else "images",
         IMAGE_GEN_BASE_URL="https://normal.example.invalid/v1",
         POLLINATIONS_MODEL="flux",
@@ -110,7 +110,7 @@ def test_default_persistence_failure_is_not_delivery_or_regeneration(image_deliv
     case = image_delivery
     blocked = tmp_path / "not-a-directory"
     blocked.write_bytes(b"synthetic blocker")
-    case.tool.bot.config.MAXWELL_SITE_DIR = str(blocked)
+    case.tool.bot.config.DAME_CURIE_SITE_DIR = str(blocked)
     result = asyncio.run(case.tool.execute(case.message, prompt="a red fox"))
     assert result.startswith("Error:")
     assert "saving the local/public copy failed" in result
@@ -171,7 +171,7 @@ def test_generated_path_can_be_presented_once_with_caption(image_delivery):
 
 @pytest.fixture(params=["inline", "path", "media"])
 def caption_delivery(request, monkeypatch, tmp_path):
-    config = SimpleNamespace(MAXWELL_SITE_DIR=str(tmp_path))
+    config = SimpleNamespace(DAME_CURIE_SITE_DIR=str(tmp_path))
     bot = SimpleNamespace(config=config)
     posted = SimpleNamespace(attachments=[SimpleNamespace(url=CDN)])
     message = SimpleNamespace(

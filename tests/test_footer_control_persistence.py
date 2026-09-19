@@ -30,7 +30,7 @@ def control_bot(tmp_path):
             "footer_format": "old",
             "base_personality": "derived external persona, never persist",
         },
-        config=SimpleNamespace(DATA_DIR=str(tmp_path), MAXWELL_PROMPTS_DIR="external"),
+        config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR="external"),
         command_prefix="!",
         bot_name="Maxwell",
         _is_admin=lambda uid: True,

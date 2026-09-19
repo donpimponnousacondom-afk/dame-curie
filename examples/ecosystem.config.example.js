@@ -1,10 +1,10 @@
 module.exports = {
   apps: [
     {
-      name: 'maxwell-bot',
+      name: 'dame-curie-bot',
       script: 'bot.py',
-      interpreter: 'python3',
-      cwd: process.env.MAXWELL_APP_ROOT || __dirname,
+      interpreter: '.venv/bin/python',
+      cwd: process.env.DAME_CURIE_APP_ROOT || __dirname,
       instances: 1,
       autorestart: true,
       watch: false,
@@ -12,10 +12,10 @@ module.exports = {
       env: { NODE_ENV: 'production', PYTHONUNBUFFERED: '1' }
     },
     {
-      name: 'maxwell-api',
+      name: 'dame-curie-api',
       script: 'api/api_server.py',
-      interpreter: 'python3',
-      cwd: process.env.MAXWELL_APP_ROOT || __dirname,
+      interpreter: '.venv/bin/python',
+      cwd: process.env.DAME_CURIE_APP_ROOT || __dirname,
       instances: 1,
       autorestart: true,
       watch: false,

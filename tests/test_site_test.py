@@ -23,8 +23,8 @@ def bot(tmp_path):
     control = {"create_site_quota_per_user": 50}
     return SimpleNamespace(
         config=SimpleNamespace(
-            MAXWELL_SITE_DIR=str(site_dir),
-            MAXWELL_PUBLIC_BASE_URL="https://maxwell.example.com",
+            DAME_CURIE_SITE_DIR=str(site_dir),
+            DAME_CURIE_PUBLIC_BASE_URL="https://dame-curie.example.invalid",
             DATA_DIR=str(data_dir),
         ),
         _sites={},
@@ -53,12 +53,12 @@ PAGE = (
 def test_extract_assets_keeps_same_origin_and_skips_cdn():
     html = (
         '<link href="style.css"><script src="https://cdn.example/x.js"></script>'
-        '<img src="https://maxwell.example.com/bot/demo/logo.png">'
+        '<img src="https://dame-curie.example.invalid/bot/demo/logo.png">'
         '<a href="mailto:x@y.z">'
     )
-    urls = site_test.extract_assets(html, "https://maxwell.example.com/bot/demo/")
-    assert "https://maxwell.example.com/bot/demo/style.css" in urls
-    assert "https://maxwell.example.com/bot/demo/logo.png" in urls
+    urls = site_test.extract_assets(html, "https://dame-curie.example.invalid/bot/demo/")
+    assert "https://dame-curie.example.invalid/bot/demo/style.css" in urls
+    assert "https://dame-curie.example.invalid/bot/demo/logo.png" in urls
     assert not any("cdn.example" in u for u in urls)
 
 
@@ -76,20 +76,20 @@ def test_missing_local_assets_finds_broken_relative_links(tmp_path):
 
 
 def test_page_url_stays_inside_the_site():
-    base = "https://maxwell.example.com/bot"
-    assert site_test.page_url(base, "demo") == "https://maxwell.example.com/bot/demo/"
+    base = "https://dame-curie.example.invalid/bot"
+    assert site_test.page_url(base, "demo") == "https://dame-curie.example.invalid/bot/demo/"
     assert (
         site_test.page_url(base, "demo", "about/")
-        == "https://maxwell.example.com/bot/demo/about/"
+        == "https://dame-curie.example.invalid/bot/demo/about/"
     )
     assert (
-        site_test.page_url(base, "demo", "https://maxwell.example.com/bot/demo/x")
-        == "https://maxwell.example.com/bot/demo/x"
+        site_test.page_url(base, "demo", "https://dame-curie.example.invalid/bot/demo/x")
+        == "https://dame-curie.example.invalid/bot/demo/x"
     )
     with pytest.raises(ValueError):
         site_test.page_url(base, "demo", "https://evil.test/")
     with pytest.raises(ValueError):
-        site_test.page_url(base, "demo", "https://maxwell.example.com/bot/other/")
+        site_test.page_url(base, "demo", "https://dame-curie.example.invalid/bot/other/")
     with pytest.raises(ValueError):
         site_test.page_url(base, "demo", "../secret")
     with pytest.raises(ValueError):
@@ -100,13 +100,13 @@ def test_format_report_lists_console_errors_and_attaches_a_screenshot():
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
     text = site_test.format_report(
         {
-            "url": "https://maxwell.example.com/bot/demo/",
+            "url": "https://dame-curie.example.invalid/bot/demo/",
             "title": "Broken",
             "http_status": 200,
             "browser": "chromium-browser",
             "console_errors": ["Uncaught TypeError: foo"],
             "page_errors": [],
-            "failed_requests": ["404 https://maxwell.example.com/bot/demo/x.js"],
+            "failed_requests": ["404 https://dame-curie.example.invalid/bot/demo/x.js"],
             "asset_errors": ["missing on disk: x.js"],
             "screenshot_png": png,
         }
@@ -123,7 +123,7 @@ def test_format_report_lists_console_errors_and_attaches_a_screenshot():
 def test_format_report_clean_page():
     text = site_test.format_report(
         {
-            "url": "https://maxwell.example.com/bot/demo/",
+            "url": "https://dame-curie.example.invalid/bot/demo/",
             "http_status": 200,
             "browser": "chromium",
             "console_errors": [],
@@ -205,7 +205,7 @@ def test_reports_console_errors_and_missing_files(bot, monkeypatch):
             "console_warnings": [],
             "page_errors": ["Error: exploded"],
             "failed_requests": [
-                "404 https://maxwell.example.com/bot/demo/gone.js"
+                "404 https://dame-curie.example.invalid/bot/demo/gone.js"
             ],
             "screenshot_png": b"\x89PNG\r\n\x1a\n" + b"\x00" * 12,
         }
@@ -213,7 +213,7 @@ def test_reports_console_errors_and_missing_files(bot, monkeypatch):
     monkeypatch.setattr(site_test, "http_get", fake_http)
     monkeypatch.setattr(site_test, "probe_browser", fake_browser)
     out = run(SiteTestTool(bot).execute(_msg(), name="demo", screenshot=True, wait=0.2))
-    assert "SITE TEST https://maxwell.example.com/bot/demo/" in out
+    assert "SITE TEST https://dame-curie.example.invalid/bot/demo/" in out
     assert "boom" in out
     assert "exploded" in out
     assert "gone.js" in out or "missing.css" in out

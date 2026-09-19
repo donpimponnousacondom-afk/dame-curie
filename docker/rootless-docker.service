@@ -1,5 +1,5 @@
 [Unit]
-Description=Private rootless Docker engine for Maxwell
+Description=Private rootless Docker engine for dame-curie
 Documentation=https://docs.docker.com/engine/security/rootless/
 After=network-online.target
 StartLimitBurst=3

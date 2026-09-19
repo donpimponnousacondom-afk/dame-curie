@@ -140,14 +140,14 @@ def find_chrome() -> str | None:
 def find_obscura() -> str | None:
     """The Obscura binary, if one is installed.
 
-    ``MAXWELL_OBSCURA_BIN`` takes priority so a downloaded release can be
+    ``DAME_CURIE_OBSCURA_BIN`` takes priority so a downloaded release can be
     pointed at without putting it on PATH.
     """
-    explicit = str(os.environ.get("MAXWELL_OBSCURA_BIN", "") or "").strip()
+    explicit = str(os.environ.get("DAME_CURIE_OBSCURA_BIN", "") or "").strip()
     if explicit:
         if os.path.isfile(explicit) and os.access(explicit, os.X_OK):
             return explicit
-        logger.warning("MAXWELL_OBSCURA_BIN=%r is not executable; ignoring", explicit)
+        logger.warning("DAME_CURIE_OBSCURA_BIN=%r is not executable; ignoring", explicit)
     return _which_first(OBSCURA_CANDIDATES)
 
 

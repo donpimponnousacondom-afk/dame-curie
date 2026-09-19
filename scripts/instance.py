@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Operate one private rootless Maxwell deployment without loading bot secrets."""
+"""Operate one private rootless dame-curie deployment without loading bot secrets."""
 
 import argparse
 import fcntl
@@ -18,12 +18,13 @@ CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
 SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE", "WEB_IMAGE", "WEB_PORT"}
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
+INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
 IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/:@-]*")
 
 ARCHIVE_PROGRAM = '''import sys, tarfile
 from pathlib import Path
 roots = ("config", "data", "sites", "shell")
-with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", pax_headers={"maxwell.instance": sys.argv[1]}) as archive:
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", pax_headers={"dame-curie.instance": sys.argv[1]}) as archive:
     for root in roots:
         archive.add(Path("/instance") / root, arcname=root)
 '''
@@ -66,9 +67,9 @@ def parse_settings(text: str) -> dict[str, str]:
 
 def service_account(instance: str, *, for_logs: bool = False):
     """Select the fixed service identity, dropping host root before any I/O."""
-    if not SLUG.fullmatch(instance):
-        raise ValueError("instance must be a lowercase slug of 1-30 characters")
-    account = pwd.getpwnam(f"maxwell-{instance}")
+    if not INSTANCE.fullmatch(instance) or len(instance) > 30:
+        raise ValueError("instance must be dame-curie or dame-curie-<identity>, up to 30 characters")
+    account = pwd.getpwnam(instance)
     if account.pw_uid == 0:
         raise ValueError("service account cannot be root")
     if os.geteuid() == 0:
@@ -105,8 +106,8 @@ class Instance:
 
     def __init__(self, name: str, account):
         self.name = name
-        self.path = Path("/srv/maxwell") / name
-        self.project = f"maxwell-{name}"
+        self.path = Path("/srv") / name
+        self.project = name
         require_private(self.path, account.pw_uid)
         deploy = self.path / "deploy.env"
         require_private(deploy, account.pw_uid, directory=False)
@@ -161,7 +162,7 @@ class Instance:
 
     def helper(self, program: str, *, writable: bool = False) -> list[str]:
         args = ["docker", "run", "--rm", "-i", "--network", "none", "--read-only",
-                "--label", f"maxwell.instance={self.name}", "--label", "maxwell.kind=backup",
+                "--label", f"dame-curie.instance={self.name}", "--label", "dame-curie.kind=backup",
                 "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN",
                 "--cap-add", "FOWNER", "--security-opt", "no-new-privileges:true"]
         for root in ROOTS:
@@ -176,18 +177,18 @@ def select_owned(containers: list[dict], name: str, project: str) -> list[dict]:
     for item in containers:
         labels = item.get("Config", {}).get("Labels") or {}
         compose = labels.get("com.docker.compose.project") == project
-        managed = labels.get("maxwell.instance") == name
+        managed = labels.get("dame-curie.instance") == name
         matching_name = item.get("Name", "").lstrip("/").startswith(project + "-")
         if not (compose or managed or matching_name):
             continue
         if compose:
-            if labels.get("maxwell.instance", name) != name:
+            if labels.get("dame-curie.instance", name) != name:
                 raise ValueError("conflicting instance ownership labels")
             if labels.get("com.docker.compose.service") not in {"bot", "api", "web", "ollama", "ollama-pull"}:
                 raise ValueError("unexpected service in instance project")
             if labels.get("com.docker.compose.project.config_files") != str(CHECKOUT / "compose.yaml"):
                 raise ValueError("Compose container belongs to another checkout")
-        elif not managed or labels.get("maxwell.kind") not in {"shell", "site"}:
+        elif not managed or labels.get("dame-curie.kind") not in {"shell", "site"}:
             raise ValueError("container name has missing or foreign ownership labels")
         owned.append(item)
     return owned
@@ -222,7 +223,7 @@ def lifecycle(instance: Instance, action: str, *, log_format: str = "auto") -> N
         if action == "down":
             for item in containers:
                 labels = item["Config"].get("Labels") or {}
-                if labels.get("maxwell.kind") in {"site", "shell"}:
+                if labels.get("dame-curie.kind") in {"site", "shell"}:
                     instance.docker("rm", item["Id"])
             instance.compose("down", "--timeout", "45")
     else:
@@ -271,7 +272,7 @@ def backup(instance: Instance, destination: Path) -> None:
 
 def validate_archive(archive: tarfile.TarFile, expected_instance: str) -> None:
     """Accept only same-identity data files, directories, and in-root links."""
-    if archive.pax_headers.get("maxwell.instance") != expected_instance:
+    if archive.pax_headers.get("dame-curie.instance") != expected_instance:
         raise ValueError("archive identity mismatch; cross-instance cloning is unsupported")
     members = archive.getmembers()
     names = {}

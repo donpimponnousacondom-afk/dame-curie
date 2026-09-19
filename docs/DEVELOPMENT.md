@@ -4,7 +4,7 @@
 
 **Python 3.14 is mandatory.** The host's system interpreter is unrelated to the project's required version and must not be replaced. Do not install project packages into the system Python tree or use a system-package bypass flag.
 
-Application/site images currently declare Python 3.14.4. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
+Application/site images currently declare Python 3.14.4. The inherited shell image installs distro `python3`; its actual interpreter version has not been verified and is a future acceptance check, not proof of compliance. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
 
 | Name | Meaning |
 | --- | --- |

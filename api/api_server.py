@@ -24,11 +24,11 @@ from aiohttp import web
 logger = logging.getLogger("maxwell_api")
 logging.basicConfig(level=logging.INFO)
 
-_API_MAX_CONCURRENT = int(os.getenv("MAXWELL_API_MAX_CONCURRENT", "64"))
+_API_MAX_CONCURRENT = int(os.getenv("DAME_CURIE_API_MAX_CONCURRENT", "64"))
 _API_CONCURRENCY_SEM = asyncio.Semaphore(max(8, _API_MAX_CONCURRENT))
-_API_REQUEST_TIMEOUT = float(os.getenv("MAXWELL_API_REQUEST_TIMEOUT", "30"))
-_API_GLOBAL_RPS = float(os.getenv("MAXWELL_API_GLOBAL_RPS", "120"))
-_API_GLOBAL_BURST = int(os.getenv("MAXWELL_API_GLOBAL_BURST", "240"))
+_API_REQUEST_TIMEOUT = float(os.getenv("DAME_CURIE_API_REQUEST_TIMEOUT", "30"))
+_API_GLOBAL_RPS = float(os.getenv("DAME_CURIE_API_GLOBAL_RPS", "120"))
+_API_GLOBAL_BURST = int(os.getenv("DAME_CURIE_API_GLOBAL_BURST", "240"))
 try:
     import site_backend as _site_backend_for_api
 
@@ -86,9 +86,9 @@ DATA_DIR = Path(os.getenv("DATA_DIR", APP_ROOT / "data"))
 # process). The API server opens it read/write for stats + LTM admin edits. We
 # use a fresh connection per request with check_same_thread=False so we never
 # share a cursor across the aiohttp event-loop's thread pool.
-RAG_DB_PATH = DATA_DIR / "maxwell_rag.db"
+RAG_DB_PATH = DATA_DIR / "dame-curie-rag.db"
 RAG_EMBED_MODEL = os.getenv(
-    "MAXWELL_EMBED_MODEL", os.getenv("EMBED_MODEL", "qwen3-embedding:0.6b")
+    "DAME_CURIE_EMBED_MODEL", os.getenv("EMBED_MODEL", "qwen3-embedding:0.6b")
 )
 
 
@@ -1270,7 +1270,7 @@ async def llm_traces(request):
     if not _has_admin_auth(request):
         return _json_response({"error": "unauthorized"}, 401)
     traces = _safe_list(_load(_llm_traces_path()))
-    limit = _int_env_safe("MAXWELL_TRACE_API_LIMIT", 200)
+    limit = _int_env_safe("DAME_CURIE_TRACE_API_LIMIT", 200)
     try:
         q = int(request.query.get("limit", limit))
         limit = max(1, min(q, 1000))
@@ -1867,7 +1867,7 @@ async def pm2_status(request):
     if not _has_admin_auth(request):
         return _json_response({"error": "unauthorized"}, 401)
     data = await _pm2_json()
-    wanted = {"maxwell-bot", "maxwell-api"}
+    wanted = {"dame-curie-bot", "dame-curie-api"}
     out = []
     for proc in data:
         name = proc.get("name", "")
@@ -1894,13 +1894,13 @@ async def pm2_logs(request):
         return _json_response({"error": "unauthorized"}, 401)
     if docker_runtime.container_mode():
         return _json_response({"error": "Use instance.sh <id> logs on the host"}, 501, expected_refusal=True)
-    process = request.query.get("process", "maxwell-bot")
+    process = request.query.get("process", "dame-curie-bot")
     lines = request.query.get("lines", "30")
     try:
         lines_int = max(1, min(int(lines), 500))
     except (ValueError, TypeError):
         lines_int = 30
-    if process not in {"maxwell-bot", "maxwell-api"}:
+    if process not in {"dame-curie-bot", "dame-curie-api"}:
         return _json_response({"error": "bad process"}, 400)
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -1957,14 +1957,14 @@ async def pm2_restart(request):
         return _json_response({"error": "unauthorized"}, 401)
     if docker_runtime.container_mode():
         return _json_response({"error": "Use instance.sh <id> restart on the host"}, 501, expected_refusal=True)
-    target = request.query.get("target", "maxwell-bot")
-    if target not in {"maxwell-bot", "maxwell-api", "all"}:
+    target = request.query.get("target", "dame-curie-bot")
+    if target not in {"dame-curie-bot", "dame-curie-api", "all"}:
         return _json_response({"error": "bad target"}, 400)
     try:
         cmd = (
             ["pm2", "restart", target]
             if target != "all"
-            else ["pm2", "restart", "maxwell-bot", "maxwell-api"]
+            else ["pm2", "restart", "dame-curie-bot", "dame-curie-api"]
         )
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -2057,8 +2057,8 @@ async def bot_status(request):
         return _json_response({"error": "unauthorized"}, 401)
     control = _load_control()
     pm2 = await _pm2_json()
-    bot_proc = next((p for p in pm2 if p.get("name") == "maxwell-bot"), None)
-    api_proc = next((p for p in pm2 if p.get("name") == "maxwell-api"), None)
+    bot_proc = next((p for p in pm2 if p.get("name") == "dame-curie-bot"), None)
+    api_proc = next((p for p in pm2 if p.get("name") == "dame-curie-api"), None)
     # RAG memory stats — read directly from the SQLite vector DB. Fall back to
     # zeros if the DB is unavailable (e.g. first run before the bot creates it).
     try:
@@ -2185,7 +2185,7 @@ _DISCORD_STATES: dict[str, float] = {}
 def _discord_redirect_base(request) -> str:
     # Prefer fixed public base so Host-header open redirects cannot steal tokens.
     fixed = (
-        os.getenv("MAXWELL_PUBLIC_BASE_URL") or os.getenv("DISCORD_REDIRECT_BASE") or ""
+        os.getenv("DAME_CURIE_PUBLIC_BASE_URL") or os.getenv("DISCORD_REDIRECT_BASE") or ""
     ).rstrip("/")
     if fixed:
         return fixed
@@ -2495,7 +2495,7 @@ async def memory_delete(request):
 async def health_check(request):
     uptime = time.monotonic() - _HEALTH_START
     return _json_response(
-        {"ok": True, "uptime": round(uptime, 1), "service": "maxwell-api"}
+        {"ok": True, "uptime": round(uptime, 1), "service": "dame-curie-api"}
     )
 
 

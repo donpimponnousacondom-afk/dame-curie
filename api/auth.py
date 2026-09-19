@@ -28,8 +28,8 @@ from api.config import (
 from api.storage import _data_dir
 from error_reporting import capture_incident
 
-ADMIN_USER = os.getenv("MAXWELL_ADMIN_USER", "").strip()
-ADMIN_PASSWORD = os.getenv("MAXWELL_ADMIN_PASSWORD", "").strip()
+ADMIN_USER = os.getenv("DAME_CURIE_ADMIN_USER", "").strip()
+ADMIN_PASSWORD = os.getenv("DAME_CURIE_ADMIN_PASSWORD", "").strip()
 
 _DISCORD_TOKENS: dict[str, dict] = {}
 
@@ -44,8 +44,8 @@ def _load_admin_creds():
     open-source deployments and easy to publish accidentally.
     """
     global ADMIN_USER, ADMIN_PASSWORD
-    ADMIN_USER = os.getenv("MAXWELL_ADMIN_USER", "").strip()
-    ADMIN_PASSWORD = os.getenv("MAXWELL_ADMIN_PASSWORD", "").strip()
+    ADMIN_USER = os.getenv("DAME_CURIE_ADMIN_USER", "").strip()
+    ADMIN_PASSWORD = os.getenv("DAME_CURIE_ADMIN_PASSWORD", "").strip()
     return ADMIN_USER, ADMIN_PASSWORD
 
 
@@ -64,7 +64,7 @@ def _load_bot_admins():
     """
     owners = {
         item.strip()
-        for item in os.getenv("MAXWELL_OWNER_IDS", "").split(",")
+        for item in os.getenv("DAME_CURIE_OWNER_IDS", "").split(",")
         if item.strip()
     }
     env_allowed = set(DISCORD_ALLOWED_USER_IDS) | owners
@@ -138,8 +138,8 @@ def _needs_auth(request) -> bool:
 
 
 def _get_client_ip(request) -> str:
-    """Extract client IP. Only trust X-Forwarded-For when MAXWELL_TRUST_PROXY=1."""
-    trust_proxy = os.getenv("MAXWELL_TRUST_PROXY", "").strip().lower() in {
+    """Extract client IP. Only trust X-Forwarded-For when DAME_CURIE_TRUST_PROXY=1."""
+    trust_proxy = os.getenv("DAME_CURIE_TRUST_PROXY", "").strip().lower() in {
         "1",
         "true",
         "yes",

@@ -5,7 +5,7 @@ Replaces the old MemoryManager (memory.py) and ContextCleanupEngine
 qwen3-embedding:0.6b via ollama.
 
 Architecture:
-  - SQLite database at data/maxwell_rag.db
+  - SQLite database at data/dame-curie-rag.db
   - Three logical stores in one table: channel messages, long-term facts,
     shared context entries — distinguished by `kind`
   - Each row stores the text, metadata JSON, and a 1024-dim embedding BLOB
@@ -41,9 +41,9 @@ logger = logging.getLogger(__name__)
 # chars, vs bge-m3's 8k), which suits whole conversations rather than
 # single sentences, and it is free. `ollama pull qwen3-embedding:0.6b`.
 #
-# Nothing here is hardcoded any more: point MAXWELL_EMBED_BASE_URL at any
+# Nothing here is hardcoded any more: point DAME_CURIE_EMBED_BASE_URL at any
 # OpenAI-compatible /v1/embeddings service (OpenAI, OpenRouter, LM Studio,
-# vLLM, Infinity) and set MAXWELL_EMBED_MODEL / MAXWELL_EMBED_DIM to match.
+# vLLM, Infinity) and set DAME_CURIE_EMBED_MODEL / DAME_CURIE_EMBED_DIM to match.
 # Both the Ollama and the OpenAI response shapes are parsed below, so the
 # only thing you change is the URL.
 try:  # config is the single source of truth; fall back for standalone use
@@ -55,10 +55,10 @@ try:  # config is the single source of truth; fall back for standalone use
     EMBED_BASE_URL = _Cfg.EMBED_BASE_URL
     EMBEDDINGS_ENABLED = _Cfg.ENABLE_RAG
 except Exception:  # pragma: no cover - config import failure is not fatal here
-    EMBED_MODEL = os.getenv("MAXWELL_EMBED_MODEL", "qwen3-embedding:0.6b")
-    EMBED_DIM = int(os.getenv("MAXWELL_EMBED_DIM", "1024"))
-    EMBED_API_KEY = os.getenv("MAXWELL_EMBED_API_KEY", "")
-    EMBED_BASE_URL = os.getenv("MAXWELL_EMBED_BASE_URL", "http://localhost:11434")
+    EMBED_MODEL = os.getenv("DAME_CURIE_EMBED_MODEL", "qwen3-embedding:0.6b")
+    EMBED_DIM = int(os.getenv("DAME_CURIE_EMBED_DIM", "1024"))
+    EMBED_API_KEY = os.getenv("DAME_CURIE_EMBED_API_KEY", "")
+    EMBED_BASE_URL = os.getenv("DAME_CURIE_EMBED_BASE_URL", "http://localhost:11434")
     EMBEDDINGS_ENABLED = os.getenv("ENABLE_RAG", "true").strip().lower() not in {
         "0", "false", "no", "off"
     }
@@ -129,26 +129,26 @@ def _float_env(name: str, default: float, minimum: float, maximum: float) -> flo
 # LLM reply can start. A short cooldown also prevents the three searches in a
 # single prompt from retrying the same unavailable/slow endpoint.
 RAG_QUERY_TIMEOUT_SECONDS = _float_env(
-    "MAXWELL_RAG_QUERY_TIMEOUT_SECONDS", 30.0, 0.25, 180.0
+    "DAME_CURIE_RAG_QUERY_TIMEOUT_SECONDS", 30.0, 0.25, 180.0
 )
 RAG_QUERY_FAILURE_COOLDOWN_SECONDS = _float_env(
-    "MAXWELL_RAG_QUERY_FAILURE_COOLDOWN_SECONDS", 15.0, 1.0, 120.0
+    "DAME_CURIE_RAG_QUERY_FAILURE_COOLDOWN_SECONDS", 15.0, 1.0, 120.0
 )
 # How long to stop calling the embedder after a connection-level failure.
 # Short enough that a restarted Ollama is picked up within a message or two,
 # long enough that a dead one doesn't cost a connect attempt per message.
 EMBED_ENDPOINT_COOLDOWN_SECONDS = _float_env(
-    "MAXWELL_EMBED_ENDPOINT_COOLDOWN_SECONDS", 30.0, 5.0, 600.0
+    "DAME_CURIE_EMBED_ENDPOINT_COOLDOWN_SECONDS", 30.0, 5.0, 600.0
 )
 EMBED_HTTP_TIMEOUT_SECONDS = _float_env(
-    "MAXWELL_EMBED_HTTP_TIMEOUT_SECONDS", 30.0, 2.0, 180.0
+    "DAME_CURIE_EMBED_HTTP_TIMEOUT_SECONDS", 30.0, 2.0, 180.0
 )
 MAX_BACKGROUND_EMBED_TASKS = int(
     max(
         1,
         min(
             64,
-            _float_env("MAXWELL_MAX_BACKGROUND_EMBED_TASKS", 8.0, 1.0, 64.0),
+            _float_env("DAME_CURIE_MAX_BACKGROUND_EMBED_TASKS", 8.0, 1.0, 64.0),
         ),
     )
 )
@@ -300,7 +300,7 @@ SIM_THRESHOLD = 0.35
 # ─── web result store (added 2026-08-09) ────────────────────────────────
 # When web_search runs, top results are persisted as kind='web_result' so
 # later turns in the same conversation can recall them without re-searching.
-# Tunables below — env-overridden via MAXWELL_RAG_WEB_* at the call site.
+# Tunables below — env-overridden via DAME_CURIE_RAG_WEB_* at the call site.
 WEB_RESULT_KIND = "web_result"
 WEB_RESULT_DEFAULT_TTL_DAYS = 7       # prune anything older than this
 WEB_RESULT_DEFAULT_MAX_PER_QUERY = 3  # how many top results to embed per search
@@ -753,7 +753,7 @@ class RAGMemoryManager:
     ):
         self.data_dir = Path(data_dir)
         self.max_messages = min(max_messages, 10000)
-        self.db_path = self.data_dir / "maxwell_rag.db" if db_path is None else Path(db_path)
+        self.db_path = self.data_dir / "dame-curie-rag.db" if db_path is None else Path(db_path)
         self._maintenance_only = db_path is not None
         self.embed_url = EMBED_URL
         self.embed_model = EMBED_MODEL

@@ -136,8 +136,8 @@ class BackgroundJobManager:
         max_per_user: int | None = None,
     ) -> None:
         self.data_path = data_path
-        self.max_jobs = max(1, int(max_jobs if max_jobs is not None else os.getenv("MAXWELL_BG_JOBS", BG_MAX_JOBS_DEFAULT) or BG_MAX_JOBS_DEFAULT))
-        self.max_per_user = max(1, int(max_per_user if max_per_user is not None else os.getenv("MAXWELL_BG_PER_USER", BG_MAX_PER_USER_DEFAULT) or BG_MAX_PER_USER_DEFAULT))
+        self.max_jobs = max(1, int(max_jobs if max_jobs is not None else os.getenv("DAME_CURIE_BG_JOBS", BG_MAX_JOBS_DEFAULT) or BG_MAX_JOBS_DEFAULT))
+        self.max_per_user = max(1, int(max_per_user if max_per_user is not None else os.getenv("DAME_CURIE_BG_PER_USER", BG_MAX_PER_USER_DEFAULT) or BG_MAX_PER_USER_DEFAULT))
         self._jobs: dict[str, BackgroundJob] = {}
         self._runtime: dict[str, dict[str, Any]] = {}
         self._tasks: dict[str, asyncio.Task] = {}

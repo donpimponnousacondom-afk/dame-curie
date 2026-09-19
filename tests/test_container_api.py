@@ -10,7 +10,7 @@ from api import api_server
 
 @pytest.fixture
 def container_api(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAXWELL_CONTAINER_MODE", "true")
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "true")
     monkeypatch.setattr(api_server, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api_server, "_has_admin_auth", lambda request: True)
     monkeypatch.setattr(api_server, "_load_control", dict)
@@ -48,10 +48,10 @@ def test_missing_snapshot_is_not_online(container_api):
 
 
 def test_legacy_status_retains_pm2(container_api, monkeypatch):
-    monkeypatch.delenv("MAXWELL_CONTAINER_MODE")
+    monkeypatch.delenv("DAME_CURIE_CONTAINER_MODE")
 
     async def pm2():
-        return [{"name": "maxwell-bot", "pm2_env": {"status": "online"}}]
+        return [{"name": "dame-curie-bot", "pm2_env": {"status": "online"}}]
 
     monkeypatch.setattr(api_server, "_pm2_json", pm2)
     body = json.loads(asyncio.run(api_server.bot_status(SimpleNamespace())).text)

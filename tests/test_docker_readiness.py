@@ -92,7 +92,7 @@ def test_readiness_main_skips_http_for_explicit_disabled_rag(
 ):
     env_file = tmp_path / "bot.env"
     env_file.write_text(f"ENABLE_RAG={setting}\n")
-    monkeypatch.setenv("MAXWELL_ENV_FILE", str(env_file))
+    monkeypatch.setenv("DAME_CURIE_ENV_FILE", str(env_file))
     monkeypatch.setenv("ENABLE_RAG", "true")
     transport = Mock(side_effect=AssertionError("disabled readiness attempted HTTP"))
     monkeypatch.setattr("urllib.request.urlopen", transport)
@@ -113,7 +113,7 @@ def test_compose_entrypoint_gates_application_exec(embeddings_server, tmp_path, 
     ]
     entrypoint = [
         value.replace("$$", "$").replace(
-            "/opt/maxwell/check_embeddings.py", str(checker)
+            "/opt/dame-curie/check_embeddings.py", str(checker)
         )
         for value in entrypoint
     ]
@@ -126,7 +126,7 @@ def test_compose_entrypoint_gates_application_exec(embeddings_server, tmp_path, 
             "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()",
             str(marker),
         ],
-        env={**os.environ, "MAXWELL_ENV_FILE": str(env_file), "ENABLE_RAG": "false"},
+        env={**os.environ, "DAME_CURIE_ENV_FILE": str(env_file), "ENABLE_RAG": "false"},
         capture_output=True,
         text=True,
         timeout=10,

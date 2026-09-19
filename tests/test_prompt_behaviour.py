@@ -16,8 +16,8 @@ from tool_schemas import TOOL_PARAMETERS
 def _create_site_desc():
     bot = SimpleNamespace(
         config=SimpleNamespace(
-            MAXWELL_SITE_DIR="public/bot",
-            MAXWELL_PUBLIC_BASE_URL="https://maxwell.example.com",
+            DAME_CURIE_SITE_DIR="public/bot",
+            DAME_CURIE_PUBLIC_BASE_URL="https://dame-curie.example.invalid",
         )
     )
     return CreateSiteTool(bot).get_description()

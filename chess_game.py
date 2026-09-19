@@ -861,7 +861,7 @@ class ChessGame:
 # --------------------------------------------------------------------------- #
 
 def _data_dir() -> str:
-    env = os.environ.get("MAXWELL_DATA_DIR", "")
+    env = os.environ.get("DAME_CURIE_DATA_DIR", "")
     if env:
         return env
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
