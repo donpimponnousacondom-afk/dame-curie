@@ -11,6 +11,10 @@ This checkout is the clean-cut V2 workstream for **dame-curie**. Root's current 
 
 `legacy/` is quarantined historical material, not active instructions. Exclude it from ordinary orientation/searches. Read a specific archived file only for an explicitly assigned archaeology question; do not follow its external paths, URLs, old commits or operating commands. Never look for another checkout or upstream project to fill gaps. The archive's old agent contract deliberately is not named `AGENTS.md`.
 
+## Current approved redesign
+
+Root approved the Discord-only redesign in `phase-II_v2/REDESIGN_PLAN.md`: logging first; remove dashboard/API/Caddy, bot-local site servers/tools, nested shell infrastructure, X/Telegram and companion/GF; execute shell inside the outer bot container; then tool/prompt boundaries and application-job routing. Active command references become `!command`, including docstrings. The publisher/syncer, local authoring/image paths and remote mirroring are **untouchable**; no replacement API, PHP/Perl installation, local hosting or model-driven remote administration. Preserve Discord administration, autonomy, games, plugins, media and functional memory. This specific human grant supersedes older unselected-feature language, not the runtime/test/privacy holds below. Root is AFK: proceed with bounded best decisions and record concrete uncertainties instead of asking settled-scope questions.
+
 ## Protected V1 and isolated V2
 
 - Protected V1 service account: `maxwell-curie`; its local private Docker engine owns the observed V1 resources.
