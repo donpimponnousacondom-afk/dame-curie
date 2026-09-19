@@ -1,8 +1,8 @@
 # dame-curie status
 
-Updated 2026-09-19. This ledger concerns V2, not the archived V1 rollout history. **Root has now authorized V2 provisioning; it is in progress. Discord and Ollama/model-pull activation remain prohibited.** Current operational evidence and exact holds are in `../phase-II_v2/PROVISIONING.md`; earlier milestones below retain their historical limits.
+Updated 2026-09-19. This ledger concerns V2, not the archived V1 rollout history. **The isolated foundation is provisioned; the newly approved Discord-only redesign is in progress.** Dashboard/API/Caddy, local website runtimes, nested shell infrastructure, X/Telegram and companion/GF are selected for removal. Logging integrates first, followed by the cuts, command-prefix consistency and job/tool-prompt work. Exact authority is in `../phase-II_v2/REDESIGN_PLAN.md`; source integration progress is in `../phase-II_v2/REDESIGN_PROGRESS.md`. Discord and Ollama/model-pull activation remain prohibited; publisher/mirroring is untouched. Earlier milestones below are historical, not current source/deployment acceptance.
 
-## Completed boundaries and observations
+## Historical foundation boundaries and observations
 
 - Root confirms V1 is functional and running under `maxwell-curie`. The authorized metadata-only observation recorded 19 running containers: four core services, fourteen site backends and one shell workspace. Immutable IDs, observed revision/version labels, timestamps and limitations are in `../phase-II_v2/DOCKER_INVENTORY.md`. No old commit was looked up.
 - Root selected exactly `dame-curie` as the V2 service account, with its own private rootless Docker engine. Account/engine existence, provisioning and isolation have not been verified here.
@@ -45,7 +45,7 @@ Updated 2026-09-19. This ledger concerns V2, not the archived V1 rollout history
 
 Through that checkpoint: no application imports/execution or test collection/execution; no new tests, real login/provider probes, application-dependency installation, user/engine provisioning, builds/pulls/retags/pruning, deployment, service/container lifecycle changes, migrations, production configuration/state reads or remote publication. No other-project, upstream or deleted-history research was performed in those earlier assignments.
 
-## Current authorized implementation
+## Earlier staged foundation handoff (`b2f5380` code)
 
 - The authorized V2 foundation is provisioned: separate account/rootless engine, final app/web images from `b2f5380`, isolated shell/site images and six containers. API/web are healthy on server loopback `127.0.0.1:18081`; anonymous control reads return401 and authenticated reads succeed with bot disabled. Fresh SQLite integrity passed, all six memory/graph tables and the local model cache are empty. A capped primary-inference request returned HTTP200 and visible text; no full bot/voice/media/auxiliary-provider acceptance is implied. Exact evidence and remaining holds are in `../phase-II_v2/PROVISIONING.md`.
 - Discord credentials and activity are forbidden; Telegram is disabled for later removal. Ollama and its pull job must remain stopped, with RAG disabled during staging. V1 must not be changed.
