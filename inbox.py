@@ -46,14 +46,11 @@ def needs_decision(item: dict) -> bool:
 KIND_PRIORITY = {
     "friend_request": 0,
     "group_dm": 1,
-    # An @ on X is someone talking to him in public: worth telling, not
-    # waiting on an answer.
-    "x_mention": 3,
 }
 KIND_PRIORITY_DEFAULT = 4
 
 # One noisy source must not push the others out of the tail.
-KIND_RENDER_CAP = {"x_mention": 5}
+KIND_RENDER_CAP = {}
 KIND_RENDER_CAP_DEFAULT = 12
 
 try:
@@ -171,18 +168,10 @@ class InboxStore:
         kind = str(item.get("kind") or "notice")
         acts = ",".join(str(a) for a in (item.get("actions") or [])[:4])
         summary = str(item.get("summary") or "")[:summary_chars]
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         actor = str(item.get("actor_name") or "?")
         aid = str(item.get("actor_id") or "")
-        if kind == "x_mention":
-            # actor_id is the handle; the summary already reads as a sentence.
-            body = summary or f"@{aid}"
-            url = str(payload.get("url") or "")
-            if url:
-                body += f" — {url}"
-        else:
-            who = f"{actor}({aid})" if aid else actor
-            body = f"{who}: {summary}"
+        who = f"{actor}({aid})" if aid else actor
+        body = f"{who}: {summary}"
         return f"- [{iid}] {kind} {body} [{acts}]"
 
     def render_planner(self, items: list[dict]) -> str:

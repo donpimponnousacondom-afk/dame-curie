@@ -199,8 +199,8 @@ def test_public_generic_error_never_acquires_a_fake_footer_in_model_payload():
 
 def test_non_discord_delivery_does_not_leak_into_discord_footer_context():
     bot = make_bot()
-    sent = message("answer\n-# telegram-only" + observability.FOOTER_MARKER, author_id=1)
-    observability.record_delivery(bot, sent.channel, sent, None, platform="telegram")
+    sent = message("answer\n-# synthetic-only" + observability.FOOTER_MARKER, author_id=1)
+    observability.record_delivery(bot, sent.channel, sent, None, platform="synthetic")
     assert observability.latest_delivered_footer(bot, "123") == ""
 
 

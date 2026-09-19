@@ -321,8 +321,9 @@ def test_execute_concurrent_calls_have_independent_directories(
         release_first = asyncio.Event()
         release_second = asyncio.Event()
 
-        async def send_voice_file(path):
-            paths.append(Path(path))
+        async def send_message(channel_id, *, params):
+            path = Path(params.files[0].fp.name)
+            paths.append(path)
             if len(paths) == 2:
                 both_sending.set()
             await (release_first if len(paths) == 1 else release_second).wait()
@@ -332,8 +333,10 @@ def test_execute_concurrent_calls_have_independent_directories(
             asyncio.create_task(
                 tts_runtime.tool.execute(
                     SimpleNamespace(
-                        channel=SimpleNamespace(id=channel),
-                        send_voice_file=send_voice_file,
+                        channel=SimpleNamespace(
+                            id=channel,
+                            _state=SimpleNamespace(http=SimpleNamespace(send_message=send_message)),
+                        ),
                     ),
                     text="synthetic",
                 )

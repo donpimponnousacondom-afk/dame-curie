@@ -544,27 +544,11 @@ def test_rem_runtime_failure_is_generic_but_already_running_remains_validation(o
     assert [item["content"] for item in message.channel.sent] == ["REM not started: REM is already running"]
 
 
-def test_x_and_vc_real_failures_use_generic_public_projection(operator_case, monkeypatch):
+def test_vc_real_failures_use_generic_public_projection(operator_case, monkeypatch):
     bot, message, dm, store = operator_case
-    bot.x_client = SimpleNamespace(read=AsyncMock(side_effect=RuntimeError("private X error")))
-    asyncio.run(MaxwellBot._handle_x_command(bot, message, "read"))
-    assert message.channel.sent[-1]["content"] == PUBLIC_ERROR_TEXT
-    assert "private X error" in store.get(0).traceback
     bot.config = SimpleNamespace(ENABLE_VC=True)
     monkeypatch.setattr(bot_module, "voice_recv", None)
     monkeypatch.setattr(bot_module, "_voice_recv_import_error", ImportError("private VC import error"))
     asyncio.run(MaxwellBot._handle_vc_command(bot, message, "join"))
     assert message.channel.sent[-1]["content"] == PUBLIC_ERROR_TEXT
     assert "private VC import error" in store.get(0).traceback
-
-
-def test_telegram_boundary_uses_generic_projection_and_preserves_context(operator_case, monkeypatch):
-    bot, message, dm, store = operator_case
-    bot._process_telegram_message_inner = AsyncMock(side_effect=RuntimeError("private Telegram error"))
-    reply = AsyncMock()
-    monkeypatch.setattr(bot_module, "TelegramMessageAdapter", lambda *args: SimpleNamespace(reply=reply))
-    asyncio.run(MaxwellBot._process_telegram_message(bot, {"message_id": 9}, 71, "synthetic", "root", 7, None, "synthetic"))
-    reply.assert_awaited_once_with(PUBLIC_ERROR_TEXT)
-    assert "private Telegram error" in store.get(0).traceback
-    assert store.get(0).context["channel"] == "71"
-    assert store.get(0).context["message"] == "9"

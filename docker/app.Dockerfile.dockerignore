@@ -41,7 +41,6 @@
 !utils.py
 !voice_live.py
 !watch_policy.py
-!x_client.py
 !api/
 api/**
 !api/__init__.py

@@ -557,38 +557,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         },
         ["text"],
     ),
-    # X (Twitter). One read tool and one write tool — the action enum keeps
-    # the catalog from growing six near-identical entries.
-    "x_read": _obj(
-        {
-            "action": _str(
-                "home (your feed), user (someone's posts), search, mentions "
-                "(people talking to you), or tweet (one post by id/URL)",
-                enum=["home", "user", "search", "mentions", "tweet"],
-            ),
-            "handle": _str("Account for action=user, with or without the @"),
-            "query": _str(
-                "Search text for action=search. X operators work: from:nasa, "
-                "-filter:replies, min_faves:100, lang:en"
-            ),
-            "tweet_id": _str("Post id or full x.com URL, for action=tweet"),
-            "limit": _int("How many posts (default 15, max 50)"),
-        },
-        ["action"],
-    ),
-    "x_post": _obj(
-        {
-            "action": _str(
-                "post (new), reply, quote, delete, like, or repost",
-                enum=["post", "reply", "quote", "delete", "like", "repost"],
-            ),
-            "text": _str("The post itself, for post/reply/quote"),
-            "reply_to": _str("Post id or URL being replied to"),
-            "quote": _str("Post id or URL being quoted"),
-            "tweet_id": _str("Post id or URL for delete/like/repost"),
-        },
-        ["action"],
-    ),
     # ---- Chess (Dame Curie plays real chess himself against a chosen opponent) --
     "chess_start": _obj(
         {
@@ -693,10 +661,6 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "send_file",
         "send_meme",
         "send_media",
-        "x_read",
-        # x_post gets a turn back so he can say what he posted (and see the
-        # link) instead of describing a post he has not confirmed landed.
-        "x_post",
         "inbox_list",
         "inbox_act",
         "join_vc",
@@ -1629,7 +1593,7 @@ def recover_text_tool_calls(
 
 
 # ── tool-loop transcript bounds ──────────────────────────────────────────
-# Every agent loop in this repo (Discord, Telegram) replays the
+# Every agent loop in this repo replays the
 # whole assistant/tool transcript on every round, so an unbounded tail is how a
 # turn walks off the end of the context window mid-loop. Per-result truncation
 # is not enough on its own: 24 rounds of a 32k-capped result is still ~768k

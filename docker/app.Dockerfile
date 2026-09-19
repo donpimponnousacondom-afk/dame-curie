@@ -22,7 +22,7 @@ COPY autonomy.py autonomy_social.py bot.py bot_tools.py captcha_solver.py \
     message_pipeline.py operator_commands.py plugin_manager.py prompt_storage.py providers.py provider_telemetry.py \
     rag_memory.py rag_maintenance.py rem.py rem_defaults.json response_guard.py response_observability.py site_backend.py \
     site_server.py site_test.py tool_progress.py tool_registry.py tool_schemas.py \
-    tools.py utils.py voice_live.py watch_policy.py x_client.py ./
+    tools.py utils.py voice_live.py watch_policy.py ./
 COPY api/__init__.py api/api_server.py api/auth.py api/config.py api/state.py api/storage.py ./api/
 COPY plugins/checkers/__init__.py plugins/checkers/checkers_game.py plugins/checkers/plugin.json plugins/checkers/tools.py ./plugins/checkers/
 COPY web/index.html ./web/index.html

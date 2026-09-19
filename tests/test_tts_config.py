@@ -113,12 +113,14 @@ def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path
 
     sent = []
 
-    async def send_voice_file(path):
-        sent.append(path)
+    async def send_message(channel_id, *, params):
+        sent.append(params.files[0].fp.name)
 
     message = SimpleNamespace(
         id=123,
-        send_voice_file=send_voice_file,
+        channel=SimpleNamespace(
+            id=0, _state=SimpleNamespace(http=SimpleNamespace(send_message=send_message))
+        ),
     )
 
     async def run():
@@ -311,12 +313,14 @@ def test_tts_tool_prefers_fish_over_riva(monkeypatch, tmp_path):
 
     sent = []
 
-    async def send_voice_file(path):
-        sent.append(path)
+    async def send_message(channel_id, *, params):
+        sent.append(params.files[0].fp.name)
 
     message = SimpleNamespace(
         id=999,
-        send_voice_file=send_voice_file,
+        channel=SimpleNamespace(
+            id=0, _state=SimpleNamespace(http=SimpleNamespace(send_message=send_message))
+        ),
     )
 
     async def run():

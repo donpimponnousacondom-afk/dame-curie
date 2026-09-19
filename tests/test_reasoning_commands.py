@@ -30,7 +30,7 @@ def reasoning_bot(tmp_path, *, admin=True, direct=False):
         _control=dict(DEFAULT_CONTROL), _control_mtime=-1,
         config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR="external"),
         command_prefix="!", _is_admin=lambda uid: admin, _ai_concurrency=2,
-        _apply_x_control=Mock(), _sync_audio_input_flags=Mock(),
+        _sync_audio_input_flags=Mock(),
         _conversation_watch_enabled=lambda: True,
     )
     bot._load_control = MethodType(MaxwellBot._load_control, bot)

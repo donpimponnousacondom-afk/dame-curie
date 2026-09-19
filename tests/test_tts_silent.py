@@ -6,9 +6,6 @@ from bot import (
     MaxwellBot,
     ToolCircuitBreaker,
     _auto_format_discord,
-    _telegram_html,
-    _telegram_latest_message_label,
-    _telegram_tool_followup_instruction,
     _tool_results_need_followup,
 )
 
@@ -294,13 +291,10 @@ def test_dispatch_native_strips_disabled_tool():
 def test_dispatch_native_rejects_platform_incompatible_tool():
     react = FakeTool("Reacted")
     bot = _native_bot({"react": react})
-    # react is Discord-only; pretend this turn is telegram so it's incompatible.
-    bot._message_tool_platform = lambda _message: "telegram"
-    bot._compatible_tool_names = lambda _platform: (
-        set()
-    )  # nothing compatible on tg here
+    bot._message_tool_platform = lambda _message: "synthetic"
+    bot._compatible_tool_names = lambda _platform: set()
     message = SimpleNamespace(
-        guild=None, channel=SimpleNamespace(id=123), tool_platform="telegram"
+        guild=None, channel=SimpleNamespace(id=123), tool_platform="synthetic"
     )
     raw = [_native_call("react", {"emoji": "catjam"})]
 
@@ -364,23 +358,6 @@ def test_dispatch_no_native_calls_just_sanitizes_text():
     assert tool_results == []
     assert "leaked" not in cleaned
     assert "hello" in cleaned and "world" in cleaned
-
-
-def test_tool_prompt_filters_discord_only_tools_for_telegram():
-    bot = SimpleNamespace(
-        _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
-        _control={
-            "tools_enabled": True,
-            "disabled_tools": [],
-            "native_tool_calls": False,
-        },
-        tools={"send_file": FakeTool("sent"), "react": FakeTool("Reacted")},
-    )
-
-    prompt = MaxwellBot._tool_system_prompt(bot, "telegram")
-
-    assert "send_file:" in prompt
-    assert "react:" not in prompt
 
 
 def test_tool_prompt_keeps_discord_tools_for_discord():
@@ -568,40 +545,6 @@ def test_shell_tool_results_trigger_followup():
     assert _tool_results_need_followup(
         ["Tool shell: __SHELL_SENT__\n$ date\nSat May 23"]
     )
-
-
-def test_telegram_html_renders_code_blocks():
-    rendered = _telegram_html("before\n```ansi\n$ whoami\nmaxwell\n```\nafter <ok>")
-
-    assert "before" in rendered
-    assert '<pre><code class="language-ansi">$ whoami\nmaxwell</code></pre>' in rendered
-    assert "after &lt;ok&gt;" in rendered
-
-
-def test_telegram_audio_turn_uses_stable_latest_message_label():
-    assert (
-        _telegram_latest_message_label("", has_media=True) == "[audio message attached]"
-    )
-    assert (
-        _telegram_latest_message_label("make an image", has_media=True)
-        == "make an image"
-    )
-
-
-def test_telegram_tool_followup_keeps_audio_turn_context_available():
-    instruction = _telegram_tool_followup_instruction(has_original_media=True)
-
-    assert "Original media isn't reattached here" in instruction
-    assert "send_message" in instruction
-    # native-only: no XML tag forms in the followup instruction
-    assert "<tool:send_message>" not in instruction
-
-
-def test_telegram_tool_followup_without_media_does_not_claim_audio_context():
-    instruction = _telegram_tool_followup_instruction(has_original_media=False)
-
-    assert "No original media is attached" in instruction
-    assert "Original media isn't reattached here" not in instruction
 
 
 def test_no_response_tool_results_do_not_trigger_followup():

@@ -112,39 +112,6 @@ def check_system_tools() -> None:
             line("warn", f"{binary} not found", f"needed for: {purpose}")
 
 
-def check_x(cfg) -> None:
-    """What X can actually do here — reading, posting, or neither.
-
-    ENABLE_X being on says almost nothing on its own: the read half works
-    with no credentials, so the only real question is whether there is a
-    session to post with. Answer it here rather than at the first failed
-    x_post in a channel.
-    """
-    if cfg is None or not getattr(cfg, "ENABLE_X", False):
-        return
-    head("X (Twitter)")
-    handle = getattr(cfg, "X_HANDLE", "")
-    if getattr(cfg, "X_AUTH_TOKEN", "") and getattr(cfg, "X_CT0", ""):
-        line("ok", "session cookies set", f"posts as @{handle}" if handle else "X_HANDLE unset")
-    elif getattr(cfg, "X_API_BASE_URL", ""):
-        line("ok", "gateway configured", getattr(cfg, "X_API_BASE_URL", ""))
-    else:
-        line(
-            "warn",
-            "read-only",
-            "no X_AUTH_TOKEN/X_CT0 and no X_API_BASE_URL — x_post cannot post",
-        )
-    sources = ["syndication (no account)"] if getattr(cfg, "X_SYNDICATION", True) else []
-    if getattr(cfg, "X_RSS_BASE_URL", ""):
-        sources.append(f"rss ({cfg.X_RSS_BASE_URL})")
-    if sources:
-        line("ok", "public reads", ", ".join(sources))
-    else:
-        line("warn", "no credential-free read source", "set X_RSS_BASE_URL or X_SYNDICATION=true")
-    if not handle:
-        line("warn", "X_HANDLE unset", "mentions cannot be polled without it")
-
-
 def check_features(cfg) -> None:
     if cfg is None:
         return
@@ -247,7 +214,6 @@ def main() -> int:
 
     check_required_settings(cfg)
     check_system_tools()
-    check_x(cfg)
     check_features(cfg)
     if args.probe:
         probe(cfg)

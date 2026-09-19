@@ -151,9 +151,9 @@ def test_split_reserves_footer_once_preserves_body_and_fences(metrics):
 
 @pytest.mark.parametrize(
     "platform,enabled,measured",
-    [("discord", False, True), ("telegram", True, True), ("discord", True, False)],
+    [("discord", False, True), ("discord", True, False)],
 )
-def test_disabled_telegram_and_no_call_have_identical_body(
+def test_disabled_footer_and_no_call_have_identical_body(
     metrics, platform, enabled, measured
 ):
     bot = fake_bot(_control={"footer_enabled": enabled})
@@ -260,7 +260,7 @@ def test_partial_send_failure_returns_clean_success_and_only_sent_ids(metrics):
     asyncio.run(scenario())
 
 
-def test_targeted_send_registers_destination_and_telegram_stays_plain(metrics):
+def test_targeted_send_registers_destination(metrics):
     from bot_tools import SendMessageTool
 
     async def scenario():
@@ -275,12 +275,6 @@ def test_targeted_send_registers_destination_and_telegram_stays_plain(metrics):
         )
         assert bot._delivery_measurements.lookup("100") is None
         assert bot._delivery_measurements.lookup("200") is not None
-        message.tool_platform = "telegram"
-        await SendMessageTool(bot).execute(
-            message, content="telegram", _response_metrics=metrics
-        )
-        assert message.channel.sent[0].content == "telegram"
-        assert bot._delivery_measurements.lookup("100") is None
 
     asyncio.run(scenario())
 
@@ -386,7 +380,6 @@ def test_footer_commands_auth_validation_and_static_replies(
             config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR=""),
             command_prefix="!",
             _ai_concurrency=2,
-            _apply_x_control=lambda control: None,
             _sync_audio_input_flags=lambda: None,
             _conversation_watch_enabled=lambda: True,
         )

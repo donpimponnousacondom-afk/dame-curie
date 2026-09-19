@@ -15,13 +15,6 @@ web_search, and the only feedback was the post-hoc reply. Users thought
 the bot was stuck. The typing indicator isn't enough for tool calls that
 take longer than ~10s or for tools that have meaningful internal phases.
 
-Discord vs Telegram
--------------------
-Discord supports message.edit() natively. The Telegram adapter in this
-codebase does NOT (thin shim around sendMessage). On Telegram we
-degrade to: post a single "working…" message at start, delete at end,
-no live edits.
-
 Rate limits
 -----------
 Discord's per-channel edit limit is 5 edits / 5s. We coalesce edits
@@ -179,7 +172,6 @@ class ToolProgress:
 
     def __init__(self, message: Any):
         self._msg = message
-        self._platform = str(getattr(message, "tool_platform", "discord") or "discord")
         self._posted: Any = None
         self._post_task: asyncio.Task | None = None
         self._last_edit: float = 0.0
@@ -216,21 +208,10 @@ class ToolProgress:
     async def start(self) -> None:
         if self._stopped or self._posted is not None or self._post_task is not None:
             return
-        if self._platform != "discord":
-            try:
-                self._posted = True
-                await self._post_reply("working on it…")
-            except Exception as e:  # noqa: BLE001
-                logger.debug("Telegram progress post failed: %s", e)
-                self._posted = None
-            return
         await self._do_deferred_post()
 
     async def start_defer(self) -> None:
         if self._stopped or self._posted is not None or self._post_task is not None:
-            return
-        if self._platform != "discord":
-            await self.start()
             return
         try:
             self._post_task = asyncio.create_task(self._do_deferred_post())
@@ -274,7 +255,7 @@ class ToolProgress:
         """Post the progress message to the channel (NOT as a reply).
 
         Falls back to reply() if the message object doesn't expose a
-        channel send (Telegram adapter, mocked tests).
+        channel send (mocked tests).
         """
         msg = self._msg
         channel = getattr(msg, "channel", None)
@@ -334,8 +315,6 @@ class ToolProgress:
         """
         if self._stopped or self._tool_streaming:
             return
-        if self._platform != "discord":
-            return
 
         prev_tool = self._current_tool
         self._current_tool = tool_name
@@ -387,8 +366,6 @@ class ToolProgress:
         bypasses the rate limit so the user sees the model commit.
         """
         if self._stopped or self._tool_streaming:
-            return
-        if self._platform != "discord":
             return
 
         if tool_name:
@@ -593,9 +570,6 @@ class ToolProgress:
             self._deferred_task = None
         if not self._posted:
             return
-        if self._platform != "discord":
-            self._posted = None
-            return
         posted = self._posted
         self._posted = None
         try:
@@ -628,7 +602,7 @@ class ToolProgress:
         the edit or fall through to delete — either way the user
         sees one message.
         """
-        if self._stopped or self._platform != "discord" or not self._posted:
+        if self._stopped or not self._posted:
             return False
         if not content:
             return False

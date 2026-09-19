@@ -252,12 +252,6 @@ def test_invalid_request_option_config_is_strict_and_secret_safe(load_config, ca
     assert "synthetic-secret" not in str(error.value) + captured.out + captured.err
 
 
-def test_existing_json_config_remains_lenient(load_config):
-    config = load_config({"X_API_PATHS": "not-json", "X_RSS_PATHS": "[]"})["Config"]
-    assert config.X_API_PATHS == {}
-    assert config.X_RSS_PATHS == {}
-
-
 @pytest.fixture
 def synthetic_bot(monkeypatch):
     import bot as bot_module

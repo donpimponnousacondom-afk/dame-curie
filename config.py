@@ -183,11 +183,6 @@ def _feature_env(
 
 class Config:
     DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-    TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
-    TELEGRAM_WEBHOOK_PORT = _int_env(
-        "TELEGRAM_WEBHOOK_PORT", 8443, min_value=1024, max_value=65535
-    )
 
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", ""))
@@ -250,7 +245,6 @@ class Config:
     ENABLE_FETCH_URL = _feature_env("ENABLE_FETCH_URL")
     ENABLE_CREATE_SITE = _feature_env("ENABLE_CREATE_SITE")
     ENABLE_AVATAR = _feature_env("ENABLE_AVATAR")
-    ENABLE_TELEGRAM = _feature_env("ENABLE_TELEGRAM")
     ENABLE_AUTONOMY = _feature_env("ENABLE_AUTONOMY")
     # image_generator uses Pollinations (free, keyless); hd_image requires a
     # dedicated GEMINI_IMAGE_BASE_URL and returns a clear error when unset.
@@ -309,16 +303,6 @@ class Config:
     CREATOR_ID = os.getenv("CREATOR_ID", "1482143139828596916").strip() or "1482143139828596916"
     BOT_NAME = os.getenv("BOT_NAME", "Dame Curie").strip() or "Dame Curie"
     PARTNER_NAME = os.getenv("PARTNER_NAME", "Uni").strip() or "Uni"
-
-    # X (Twitter). Reading is free and needs no account at all — X's own
-    # embed backend and any Nitter/RSSHub instance serve public profiles,
-    # posts and searches — so `auto` is on. Posting needs the session
-    # cookies below; without them the read half still works and x_post says
-    # what is missing.
-    # No detector: there is no dependency to find. Public reads need no
-    # credentials at all, so `auto` means on and posting simply stays
-    # unavailable until X_AUTH_TOKEN/X_CT0 are set.
-    ENABLE_X = _feature_env("ENABLE_X")
 
     # Host access. Kept on by default for parity with older installs, but
     # this is THE security-relevant switch: `shell` runs commands as the bot
@@ -492,28 +476,6 @@ class Config:
     )
     DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
 
-    # -------------------------------------------------------------------------
-    # X (Twitter). Two cookies out of a logged-in browser tab are the whole
-    # of the write credential; everything else has a working default.
-    # X_BACKEND pins the backend order ("cookies", "api", "rss",
-    # "syndication", or a comma-separated subset); auto tries them in that
-    # order and takes the first that answers.
-    # -------------------------------------------------------------------------
-    X_BACKEND = os.getenv("X_BACKEND", "auto").strip() or "auto"
-    X_AUTH_TOKEN = os.getenv("X_AUTH_TOKEN", "").strip()
-    X_CT0 = os.getenv("X_CT0", "").strip()
-    X_HANDLE = os.getenv("X_HANDLE", "").strip().lstrip("@")
-    X_API_BASE_URL = os.getenv("X_API_BASE_URL", "").strip().rstrip("/")
-    X_API_KEY = os.getenv("X_API_KEY", "").strip()
-    X_API_KEY_HEADER = os.getenv("X_API_KEY_HEADER", "Authorization").strip()
-    X_API_PATHS = _json_env("X_API_PATHS")
-    X_RSS_BASE_URL = os.getenv("X_RSS_BASE_URL", "").strip().rstrip("/")
-    X_RSS_PATHS = _json_env("X_RSS_PATHS")
-    X_SYNDICATION = _bool_env("X_SYNDICATION", True)
-    X_MAX_CHARS = _int_env("X_MAX_CHARS", 280, min_value=1, max_value=25000)
-    X_TIMEOUT_SECONDS = _int_env("X_TIMEOUT_SECONDS", 20, min_value=5, max_value=120)
-    X_GRAPHQL_FILE = os.getenv("X_GRAPHQL_FILE", "").strip()
-
     # Owner allowlist. Re-exported here so Config is the single
     # source of truth; bot_tools.refresh_owner_ids() still does a runtime
     # reload but the initial parse lives here.
@@ -538,10 +500,8 @@ class Config:
         ("ENABLE_YOUTUBE", "YouTube"),
         ("ENABLE_CREATE_SITE", "site generation"),
         ("ENABLE_AVATAR", "avatar changes"),
-        ("ENABLE_X", "X (Twitter)"),
         ("ENABLE_SHELL", "shell (docker sandbox)"),
         ("ENABLE_RAG", "RAG vector memory"),
-        ("ENABLE_TELEGRAM", "Telegram transport"),
         ("ENABLE_AUTONOMY", "autonomy engine"),
         ("REM_ENABLED", "REM dreaming pass"),
     )
@@ -593,11 +553,6 @@ class Config:
                 "DAME_CURIE_OWNER_IDS is empty — admin commands (`,prompt`, "
                 "`,clearmem`, `,autonomy`, `,rem`, etc.) will be denied to "
                 "everyone. Set your Discord user ID in .env."
-            )
-        if cls.ENABLE_TELEGRAM and cls.TELEGRAM_TOKEN:
-            _log.info(
-                "TELEGRAM_TOKEN is set — Telegram polling will auto-start. "
-                "Set ENABLE_TELEGRAM=false to suppress without removing the token."
             )
         if cls.ENABLE_SHELL:
             _log.warning(

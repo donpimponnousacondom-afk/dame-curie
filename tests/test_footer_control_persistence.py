@@ -35,7 +35,6 @@ def control_bot(tmp_path):
         bot_name="Maxwell",
         _is_admin=lambda uid: True,
         _ai_concurrency=2,
-        _apply_x_control=Mock(),
         _sync_audio_input_flags=Mock(),
         _conversation_watch_enabled=lambda: True,
     )
