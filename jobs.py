@@ -559,7 +559,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         await _post_thread(
             thread,
             f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
-            f"{job.requested_route}. Overrides target primary only; configured fallback models may answer.\n"
+            f"{job.requested_route}. An explicit model override applies only to primary; configured fallback models may answer.\n"
             f"Budgets: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. Progress lands here.",
             context=job_context,
         )

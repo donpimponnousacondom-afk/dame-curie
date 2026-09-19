@@ -17,6 +17,7 @@
 !guild_onboarding.py
 !image_media.py
 !inbox.py
+!job_routing.py
 !jobs.py
 !knowledge_graph.py
 !message_pipeline.py
@@ -32,6 +33,7 @@
 !response_guard.py
 !response_observability.py
 !tool_progress.py
+!tool_prompts.py
 !tool_registry.py
 !tool_schemas.py
 !tools.py
