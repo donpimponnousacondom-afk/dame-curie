@@ -380,13 +380,21 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "spawn_background": _obj(
         {
             "goal": _str(
-                "What the background job should build/do (e.g. 'portfolio site with guestbook backend'). Required."
+                "What the background job should build/do. Required."
             ),
             "context": _str(
                 "Extra spec for the job: requirements, style, constraints. Optional."
             ),
+            "provider": _str(
+                "Trusted configured provider profile; aux/autonomy require their own endpoint and model. Defaults to main.",
+                enum=["main", "autonomy", "aux"], default="main",
+            ),
+            "model": _str(
+                "Optional primary-model override. Configured fallback/vision models may answer instead. No endpoint or credentials.",
+            ),
         },
         ["goal"],
+        additional=False,
     ),
     "web_search": _obj(
         {

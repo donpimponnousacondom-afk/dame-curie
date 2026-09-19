@@ -525,7 +525,10 @@ def test_help_is_bounded_and_lists_operator_commands(operator_case):
 def test_job_status_does_not_echo_stored_failure_progress(operator_case):
     bot, message, dm, store = operator_case
     message.content = "!job synthetic-job"
-    job = SimpleNamespace(id="synthetic-job", status="error", goal="safe goal", progress="PRIVATE JOB PROGRESS")
+    job = SimpleNamespace(
+        id="synthetic-job", status="error", goal="safe goal", progress="PRIVATE JOB PROGRESS",
+        requested_route="requested main, model=configured",
+    )
     bot.bg_jobs = SimpleNamespace(get=lambda job_id: job)
     asyncio.run(MaxwellBot._handle_command(bot, message))
     assert "PRIVATE JOB PROGRESS" not in message.channel.sent[0]["content"]

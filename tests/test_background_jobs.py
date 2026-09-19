@@ -6,6 +6,7 @@ fake Discord objects instead of a connection.
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -70,6 +71,8 @@ class StubBot:
         self.bg_jobs = manager
         self._control = {}
         self.config = FakeConfig()
+        self.memory = SimpleNamespace(get_server_prompt=lambda server_id: None)
+        self._get_personality = lambda: "Synthetic personality"
 
 
 # budgets

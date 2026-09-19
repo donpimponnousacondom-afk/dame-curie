@@ -28,12 +28,18 @@ import re
 import secrets
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident
+from job_routing import JobProvider, resolve_job_endpoint
 from tools import Tool
 from response_observability import prepare_delivery, record_delivery
 from utils import _safe_int, _spawn_background
+
+if TYPE_CHECKING:
+    from discord import Message
+
+    from bot import MaxwellBot
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +128,15 @@ class BackgroundJob:
     thread_id: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
+    provider: JobProvider = JobProvider.MAIN
+    model: str | None = None
+
+    @property
+    def requested_route(self) -> str:
+        """Describe selection, not the endpoint/model that eventually answers."""
+        model = _short(self.model, 100) if self.model is not None else "configured"
+        model = model.replace("`", "").replace("@", "@\u200b")
+        return f"requested {self.provider}, model={model}"
 
 
 class BackgroundJobManager:
@@ -189,6 +204,8 @@ class BackgroundJobManager:
                     thread_id=str(data.get("thread_id") or ""),
                     created_at=float(data.get("created_at") or 0.0),
                     finished_at=float(data.get("finished_at") or 0.0),
+                    provider=JobProvider(data.get("provider", "main")),
+                    model=data.get("model"),
                 )
             except (TypeError, ValueError):
                 continue
@@ -225,7 +242,14 @@ class BackgroundJobManager:
         user_id: Any,
         goal: str,
         context: str = "",
+        provider: JobProvider | str = JobProvider.MAIN,
+        model: str | None = None,
     ) -> BackgroundJob:
+        provider = JobProvider(provider)
+        if model is not None:
+            model = model.strip()
+            if not model:
+                raise ValueError("model override must not be blank; omit it to use the configured model")
         goal = str(goal or "").strip()[:2000]
         if not goal:
             raise ValueError("need a goal for the background job")
@@ -243,6 +267,8 @@ class BackgroundJobManager:
             user_id=str(user_id or ""),
             goal=goal,
             context=str(context or "")[:4000],
+            provider=provider,
+            model=model,
         )
         self._jobs[jid] = job
         self._save()
@@ -262,7 +288,7 @@ class BackgroundJobManager:
         lines = []
         for job in ordered:
             age = time.strftime("%H:%M", time.localtime(job.created_at)) if job.created_at else "??:??"
-            lines.append(f"`{job.id}` [{job.status}] <@{job.user_id}> {_short(job.goal, 60)} ({age})")
+            lines.append(f"`{job.id}` [{job.status}] <@{job.user_id}> {_short(job.goal, 60)} ({age}; {job.requested_route})")
         return "\n".join(lines)
 
     def cleanup_runtime(self, job_id: str) -> None:
@@ -324,11 +350,17 @@ class SpawnBackgroundTool(Tool):
             "multi-step work) and END this turn. The job runs detached with "
             "bigger budgets and pings the user when done, so the channel stays "
             "free. Params: goal (what to build/do, required), context (extra "
-            "spec, optional). After calling, reply with send_message: ONE short "
-            "ack line naming the job id — nothing else, no other tools."
+            "spec, optional), provider (main/autonomy/aux, default main), model "
+            "(optional primary-model override; configured fallback/vision models "
+            "may answer instead). Profiles use trusted configuration, never URLs or keys. "
+            "After calling, reply with send_message: ONE short ack line naming the "
+            "job id and requested profile/model — nothing else, no other tools."
         )
 
-    async def execute(self, message: Any, goal: str | None = None, context: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self, message: Any, goal: str | None = None, context: str | None = None,
+        provider: str = "main", model: str | None = None, **kwargs: Any,
+    ) -> str:
         if getattr(message, "_bg_job", False):
             return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
         bot = getattr(self, "bot", None)
@@ -344,12 +376,17 @@ class SpawnBackgroundTool(Tool):
         channel = getattr(message, "channel", None)
         guild = getattr(message, "guild", None)
         try:
+            profile = JobProvider(provider)
+            if profile != JobProvider.MAIN or model is not None:
+                resolve_job_endpoint(profile, bot._control, bot.config)
             job = manager.create(
                 guild_id=getattr(guild, "id", "") or "",
                 channel_id=getattr(channel, "id", "") or "",
                 user_id=getattr(author, "id", "") or "",
                 goal=raw_goal,
                 context=str(context or kwargs.get("details") or "")[:4000],
+                provider=profile,
+                model=model,
             )
         except (ValueError, RuntimeError) as exc:
             text = str(exc)
@@ -360,7 +397,7 @@ class SpawnBackgroundTool(Tool):
                 )
             if text.startswith("ALL_BUSY:"):
                 return f"COULD NOT START background job ({text[len('ALL_BUSY:'):].strip()}). Do the work inline instead."
-            return f"COULD NOT START background job: {text} Do the work inline instead."
+            return f"COULD NOT START background job: {text} Report this selection error; do not silently use another route."
         manager.attach_runtime(job.id, message=message, channel=channel)
         try:
             task = _spawn_background(run_background_job(bot, job.id))
@@ -373,9 +410,10 @@ class SpawnBackgroundTool(Tool):
             manager.mark(job.id, status="error", progress=f"could not launch: {exc}")
             return f"ERROR launching background job `{job.id}`: {exc} Do the work inline."
         return (
-            f"Background job `{job.id}` started for '{_short(raw_goal, 80)}'. "
-            f"Reply NOW with send_message: ONE short ack line (e.g. `on it — job `{job.id}`, "
-            "I'll ping you when it's done`) and NOTHING else. Do not start the work "
+            f"Background job `{job.id}` started for '{_short(raw_goal, 80)}' ({job.requested_route}). "
+            f"Reply NOW with send_message: ONE short ack line naming job `{job.id}` "
+            f"and '{job.requested_route}', then say you'll ping when done. "
+            "NOTHING else. Do not start the work "
             "in this turn — the detached job does it."
         )
 
@@ -402,6 +440,40 @@ async def _post_thread(thread, text: str, *, context: dict[str, str] | None = No
             details="Unsent job message:\n" + text + "\n" + str(getattr(exc, "text", "") or ""), context=context,
         )
         logger.debug("background job thread post failed: %s", type(exc).__name__)
+
+
+def background_messages(
+    bot: MaxwellBot, job: BackgroundJob, message: Message, platform: str,
+) -> list[dict[str, str]]:
+    """Use canonical identity and only the origin's configured server prompt."""
+    server_id = str(message.guild.id) if message.guild else "DM"
+    server_prompt = bot.memory.get_server_prompt(server_id)
+    system_parts = [f"Core personality: {bot._get_personality()}"]
+    if server_prompt:
+        system_parts.append(f"Server-specific instructions: {server_prompt}")
+    system_parts.append(bot._tool_system_prompt(platform, message=message, content=job.goal))
+    system_parts.append(
+        f"You are working on background job `{job.id}`. The user was already "
+        "told the work is running. Complete the goal with the available tools; "
+        "do not spawn another background job. Preserve tool execution and "
+        "confirmation rules. Keep intermediate chatter out of the main channel "
+        "— progress goes to the job thread. End with a concise summary of the "
+        "result and relevant URLs, if any.\n"
+        "Website authoring uses shell writes to local files. An external "
+        "automatic publisher mirrors those files; do not start local hosting "
+        "or administer the remote server."
+    )
+    return [
+        {"role": "system", "content": "\n\n".join(part for part in system_parts if part)},
+        {
+            "role": "user",
+            "content": (
+                f"Background job `{job.id}` from <@{job.user_id}>: {job.goal}"
+                + (f"\nContext: {job.context}" if job.context else "")
+                + "\nDo it now."
+            ),
+        },
+    ]
 
 
 async def run_background_job(bot: Any, job_id: str) -> None:
@@ -487,6 +559,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         await _post_thread(
             thread,
             f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
+            f"{job.requested_route}. Overrides target primary only; configured fallback/vision models may answer.\n"
             f"Budgets: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. Progress lands here.",
             context=job_context,
         )
@@ -511,42 +584,6 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     except Exception:
         pass
 
-    base_personality = ""
-    try:
-        base_personality = str((getattr(bot, "_control", {}) or {}).get("base_personality") or "")
-    except Exception:
-        pass
-    tool_prompt = ""
-    try:
-        tool_prompt = str(bot._tool_system_prompt(platform, message=orig_message, content=job.goal) or "")
-    except Exception as exc:
-        logger.debug("background job %s tool prompt failed: %s", job.id, exc)
-
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": (
-                f"{base_personality}\n\n"
-                f"You are Dame Curie's BACKGROUND build agent (job `{job.id}`). The user was already "
-                "told the work is running; do not narrate, just build.\n"
-                f"Goal: {job.goal}\n"
-                + (f"Extra context: {job.context}\n" if job.context else "")
-                + "Do the whole job with the available tools (build, verify, fix failures). "
-                "Keep intermediate chatter out of the main channel — progress goes to this thread. "
-                "End with a concise summary: what was built + URLs.\n\n"
-                f"{tool_prompt}"
-            ).strip(),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Background job `{job.id}` from <@{job.user_id}>: {job.goal}"
-                + (f"\nContext: {job.context}" if job.context else "")
-                + "\nDo it now."
-            ),
-        },
-    ]
-
     openai_tools: list[dict[str, Any]] = []
     try:
         openai_tools = list(bot._build_openai_tools(platform, message=orig_message, content=job.goal) or [])
@@ -555,9 +592,9 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     # No recursion: the job IS the background worker.
     openai_tools = [t for t in openai_tools if (t.get("function") or {}).get("name") != _NO_RECURSE_TOOL]
     try:
-        _custom, provider_tools = bot._select_tool_protocol(openai_tools)
+        custom_tool_calls, provider_tools = bot._select_tool_protocol(openai_tools)
     except Exception:
-        provider_tools = openai_tools
+        custom_tool_calls, provider_tools = False, openai_tools
 
     known_tool_names = {
         name for tool in openai_tools
@@ -570,6 +607,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     terminal_failure = None
     failure_text = ""
     deadline = time.monotonic() + float(timeout)
+    job_provider = None
+    effective_route = ""
     try:
         for step in range(max(1, max_iters)):
             if time.monotonic() > deadline:
@@ -593,13 +632,29 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 break
 
             try:
-                response = await bot._generate_response(
-                    messages,
-                    timeout=min(timeout, remaining),
-                    max_tokens=max_tokens,
-                    tools=provider_tools,
-                    disable_reasoning=False,
-                )
+                if step == 0:
+                    messages = background_messages(bot, job, orig_message, platform)
+                    if job.provider != JobProvider.MAIN or job.model is not None:
+                        job_provider = bot._create_background_provider(job.provider)
+                if job_provider is None:
+                    response = await bot._generate_response(
+                        messages,
+                        timeout=min(timeout, remaining),
+                        max_tokens=max_tokens,
+                        tools=provider_tools,
+                        custom_tool_calls=custom_tool_calls,
+                        disable_reasoning=False,
+                    )
+                else:
+                    response = await job_provider.generate_response(
+                        messages,
+                        timeout=min(timeout, remaining),
+                        max_tokens=max_tokens,
+                        tools=provider_tools,
+                        custom_tool_calls=custom_tool_calls,
+                        model=job.model,
+                        prefer_fallback=job.provider == JobProvider.MAIN and bot._night_fallback_active(),
+                    )
                 response_metrics = getattr(response, "metrics", None)
                 succeeded = True
             except Exception as exc:
@@ -611,6 +666,12 @@ async def run_background_job(bot: Any, job_id: str) -> None:
             finally:
                 with contextlib.suppress(Exception):
                     await bot._release_ai_slot()
+            if response_metrics is not None:
+                actual_model = _short(response_metrics.model, 100).replace("`", "").replace("@", "@\u200b")
+                actual_route = f"{job.provider}/{response_metrics.endpoint}, model={actual_model}"
+                if actual_route != effective_route:
+                    await _post_thread(thread, f"Effective response route: {actual_route}", context=job_context)
+                    effective_route = actual_route
             try:
                 calls = list(bot._native_calls_from(response) or [])
             except Exception:
@@ -693,7 +754,11 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         await _post_thread(thread, f"Job `{job.id}` cancelled.", context=job_context)
         raise
     finally:
-        manager.cleanup_runtime(job.id)
+        try:
+            if job_provider is not None:
+                await job_provider.close()
+        finally:
+            manager.cleanup_runtime(job.id)
 
     if terminal_failure is not None or not succeeded:
         await _fail(failure_text or final_text or "the model never returned anything.", terminal_failure, partial=final_text)
@@ -717,7 +782,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         thread_ref = getattr(thread, "jump_url", None) or getattr(thread, "mention", "") or ""
     except Exception:
         pass
-    delivery = f"<@{job.user_id}> job `{job.id}` done — {body}"
+    delivery = f"<@{job.user_id}> job `{job.id}` done ({job.requested_route}) — {body}"
     if thread_ref:
         delivery += f"\n{thread_ref}"
     try:

@@ -692,12 +692,12 @@ def test_footer_does_not_ping_but_body_mentions_remain(metrics):
 def test_background_producing_call_survives_string_recovery_without_error_borrow(
     metrics, fail_followup
 ):
-    from jobs import run_background_job
+    from jobs import BackgroundJob, run_background_job
     from providers import ProviderResult
 
     async def scenario():
         message = Message()
-        job = SimpleNamespace(
+        job = BackgroundJob(
             id="job", guild_id="9", channel_id="100", user_id="7", goal="test", context=""
         )
         manager = SimpleNamespace(
@@ -719,6 +719,8 @@ def test_background_producing_call_survives_string_recovery_without_error_borrow
         bot = fake_bot(
             bg_jobs=manager,
             config=SimpleNamespace(),
+            memory=SimpleNamespace(get_server_prompt=lambda server_id: None),
+            _get_personality=lambda: "Synthetic personality",
             _message_tool_platform=lambda message: "discord",
             _tool_system_prompt=lambda *args, **kwargs: "",
             _build_openai_tools=lambda *args, **kwargs: [],

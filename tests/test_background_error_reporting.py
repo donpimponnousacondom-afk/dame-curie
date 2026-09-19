@@ -39,6 +39,8 @@ class JobBot:
         self.bg_jobs = manager
         self._control = {"footer_enabled": True, "footer_format": "MEASURED_FOOTER"}
         self.config = SimpleNamespace(OPENAI_MAX_TOKENS=8192)
+        self.memory = SimpleNamespace(get_server_prompt=lambda server_id: None)
+        self._get_personality = lambda: "Synthetic personality"
         self.responses = list(responses)
         self.dispatches = list(dispatches)
         self.model_messages = []

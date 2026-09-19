@@ -358,6 +358,7 @@ from providers import (  # noqa: E402
     deepseek_reasoning_transport,
 )
 from rag_memory import RAGMemoryManager, RemEventLog, _parse_iso  # noqa: E402
+from job_routing import JobProvider, create_job_provider, parse_background_request, resolve_job_endpoint  # noqa: E402
 from jobs import BackgroundJobManager, SpawnBackgroundTool  # noqa: E402
 from rem import RemStore, load_rem_defaults, run_rem_once  # noqa: E402
 from tool_progress import make_progress as _make_tool_progress  # noqa: E402
@@ -2909,6 +2910,14 @@ class MaxwellBot(commands.Bot):
         for key, value in self._night_fallback_kwargs().items():
             kwargs.setdefault(key, value)
         return await self.ai_provider.generate_response(messages, **kwargs)
+
+    def _create_background_provider(self, profile: JobProvider) -> OpenAICompatibleProvider:
+        """Give an explicitly routed job its own transport, never a cached role."""
+        return create_job_provider(
+            profile, self._control, self.config,
+            enable_audio_input=_owner_audio_input_enabled(self),
+            reasoning_control=self.ai_provider.reasoning_control,
+        )
 
     async def _get_autonomy_provider(self):
         """Return a provider for the autonomy loop.
@@ -6410,18 +6419,21 @@ class MaxwellBot(commands.Bot):
                         last[channel_id] = now
                         await message.channel.send("nothing to stop")
             elif cmd == "bg":
-                # Manual background job: `!bg <goal>`. Everyone may use it;
-                # the live turn ends at once and the job pings back when done.
-                _goal = (args or "").strip()
-                if not _goal:
-                    await message.channel.send("usage: `!bg <what to build/do>`")
+                # Manual background job: !bg GOAL or !bg --provider aux --model MODEL -- GOAL.
+                if not (args or "").strip():
+                    await message.channel.send("usage: `!bg GOAL` or `!bg --provider main|autonomy|aux --model MODEL -- GOAL`")
                 else:
                     try:
+                        _goal, _provider, _model = parse_background_request(args)
+                        if _provider != JobProvider.MAIN or _model is not None:
+                            resolve_job_endpoint(_provider, self._control, self.config)
                         _job = self.bg_jobs.create(
                             guild_id=message.guild.id if message.guild else "DM",
                             channel_id=channel_id,
                             user_id=message.author.id,
                             goal=_goal,
+                            provider=_provider,
+                            model=_model,
                         )
                     except (ValueError, RuntimeError) as _exc:
                         await message.channel.send(str(_exc))
@@ -6440,11 +6452,12 @@ class MaxwellBot(commands.Bot):
                             await send_public_error(self, message.channel)
                         else:
                             await message.channel.send(
-                                f"on it — job `{_job.id}`, I'll ping you when it's done"
+                                f"on it — job `{_job.id}` ({_job.requested_route}), I'll ping you when it's done"
                             )
             elif cmd == "jobs":
                 _gid = str(message.guild.id) if message.guild else ""
-                await message.channel.send(self.bg_jobs.list_text(limit=10, guild_id=_gid))
+                for _page in self._split_response(self.bg_jobs.list_text(limit=10, guild_id=_gid)):
+                    await message.channel.send(_page)
             elif cmd == "job":
                 _job_args = (args or "").strip().split(maxsplit=1)
                 if len(_job_args) == 2 and _job_args[0].lower() == "cancel":
@@ -6460,12 +6473,12 @@ class MaxwellBot(commands.Bot):
                     _uid = str(message.author.id)
                     _is_adm = self._is_admin(message.author.id)
                     if _job is None:
-                        await message.channel.send("usage: `!job cancel <id>`")
+                        await message.channel.send("usage: `!job <id>` or `!job cancel <id>`")
                     elif not _is_adm and ((_gid and _job.guild_id != _gid) or (not _gid and _job.user_id != _uid)):
                         await message.channel.send("job not found.")
                     else:
                         await message.channel.send(
-                            f"`{_job.id}` [{_job.status}] {_job.goal[:200]}"
+                            f"`{_job.id}` [{_job.status}] {_job.goal[:200]} ({_job.requested_route})"
                         )
             elif cmd == "prompt":
                 if args is None:
