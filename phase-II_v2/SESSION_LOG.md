@@ -34,4 +34,36 @@ Only static file/source inspection and local Git/diff checks are in scope. Actio
 ### Checkpoints
 
 - `c460324`: inherited starting commit; not a V2 acceptance result.
-- Grounding checkpoint: child findings received and challenged; Luna performed independent five-file review. Scope/provenance clarifications were applied. The coordinator inspected the complete staged diff and `git diff --cached --check` passed; only the five `phase-II_v2/` Markdown files are staged, with the concurrent sanity skill excluded. Completion-ledger edits are checked again before commit. No tests/runtime validation occurred. The checkpoint hash is reported after commit rather than written recursively into its own content.
+- `aa77fa0`: grounding checkpoint. Child findings received and challenged; Luna performed independent five-file review. Scope/provenance clarifications were applied. The coordinator inspected the complete staged diff and `git diff --cached --check` passed; the five initial `phase-II_v2/` Markdown files were committed, with the concurrent sanity skill excluded. No tests/runtime validation occurred.
+
+## 2026-09-19 — authorized naming/docs cut-off and Docker metadata
+
+### New human decisions
+
+Root requested an operational naming/path/route/storage cut-off, not a global prose replacement; canonical name `dame-curie`, intentional short URL `dame`. Root authorized read-only Docker name/version/commit inventory, identified the existing service account `maxwell-curie` and explicitly requested run-as-user after the default local socket denied access. Root then fixed the planned new service account as exactly `dame-curie`, with a separate private rootless engine. No user/engine creation or startup was requested in this slice.
+
+Root requested active documentation rebuilt from selected local legacy material and a permanent account/engine/discovery/permission/hands-off procedure. Host wording is generic; project Python 3.14 uses isolated venv/uv, never the system package tree.
+
+### Work and evidence
+
+- Dedicated read-only children mapped application namespaces (`e3ad4463-12b9-4158-b938-1e4d66088cee`), infrastructure selectors (`62d64394-1214-4c48-a031-47cd467e77df`), documentation retirement (`4d5cf1d5-a673-4153-8d16-9a7f62a06fb5`) and adversarial boundaries (`366d76b6-3fdf-4959-9ddd-ccea213ed844`). Flash handled the first three; Luna max the last. All children remained without runtime access or file ownership.
+- Parent observed only allowlisted Docker metadata as `maxwell-curie` at its UID-derived local socket. Snapshot: 19 running containers, five distinct running image IDs, `01:03:42–01:05:20 UTC`; full retained evidence in `DOCKER_INVENTORY.md`. The default daemon remains uninspected after its permission denial. No raw inspect/env/credentials/logs/mounts, exec, provider probes, mutations or deployment scripts.
+- Source spot-checks included full `select_owned` control flow. A child's name-only stop/remove bypass claim was false: missing/foreign labels raise before inclusion. That proposed fix was rejected. Other corrected overclaims and the source mapping are in `CUTOFF_PLAN.md`.
+- Verified the already installed Python 3.14.4 interpreter with isolated/no-site/no-bytecode flags and standard-library venv help. Created no environment and installed no packages; no application imports. `uv` was not found on this session PATH, not investigated elsewhere.
+- Archived 21 inherited documentation/guide/asset files under `legacy/v1/` using Git moves. Old AGENTS text is `AGENT_CONTRACT.md`, not an active nested contract. Rebuilt root README/AGENTS/SECURITY and active status/architecture/development/operations pages. Kept LICENSE and tokenizer provenance in place; preserved root's untracked sanity skill.
+- Updated tyranny's documentation templates to Python 3.14, constrained its application to authorized new/rewritten code, and removed unverified old hook-version examples without selecting replacement pins or changing installed tooling.
+- The file-observation backend initially rejected creation of four replacement files because it still remembered the moved originals. Rereading their now-absent paths refreshed that observation, and the write-tool replacements succeeded. No permission escalation or alternate filesystem bypass was used.
+
+### Limits and next milestone
+
+This slice changes documentation/skill guidance only. Application Python, deployment configuration and tests remain unchanged. Source namespace alignment, concrete V2 private-root/project conventions, isolated validation and any provisioning/deployment remain pending. A later account/engine layout must honor root's exact `dame-curie` user, not earlier provisional suffixes. No snapshot/backup completion was inferred.
+
+### Documentation checkpoint review
+
+Flash reviewed active navigation/version/account wording; Luna reviewed the written operations procedure, new active contract and quality guidance. The coordinator clarified future narrow metadata grants and intentional immutable V2 artifacts versus protected V1 namespaces, and kept source-renaming/acceptance pending. Historical initial notes now carry explicit pre-cut-off provenance instead of masquerading as current instructions.
+
+Before staging replacements, Git reported all 21 archive moves as 100% identical. After replacement staging, the archived copies of AGENTS/README/SECURITY/STATUS were additionally matched by Git blob IDs against `aa77fa0`; remaining moves retain R100 status. Archived bytes were not rewritten.
+
+The global staged whitespace check reported three pre-existing two-space Markdown line endings in `legacy/v1/README.md:807-809`. Its blob exactly matches the starting README, so those historical bytes were retained deliberately. The check excluding the byte-preserved `legacy/v1/` cluster passed for active docs, guidance and working notes. All staged paths are documentation/skill/archived-asset paths; root's untracked sanity skill remains excluded. Final ledger edits receive the same scoped check before commit.
+
+No tests, application imports, builds or mutation of the observed V1 resources were used as this documentation gate. The checkpoint hash will be reported after commit; the operational source cut-off is the next implementation milestone, not a completed result.

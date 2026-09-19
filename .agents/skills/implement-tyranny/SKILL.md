@@ -17,18 +17,21 @@ Enforce strict quality standards on Python projects. No mercy, no exceptions.
 - Import restrictions
 - Naming conventions
 
-## How to use
-1. Apply ruff rules from the Banned Patterns section below
-2. Generate or update `pyproject.toml` / `ruff.toml` with the rules
-3. Set up pre-commit hooks to enforce on every commit
-4. Run `ruff check --fix` and `ruff format` on the codebase
-5. Report violations that can't be auto-fixed
+## Scope and use
+
+Python **3.14** is mandatory for dame-curie. Apply strict standards to authorized new or deliberately rewritten Python, not as a whole-repository conversion. Use `implement-sanity` to review the actual diff without turning untouched legacy size/style into another assignment. Host project work uses an isolated 3.14 venv or uv-managed environment, never the system package tree.
+
+1. Establish the authorized file/change scope and the installed tool versions first.
+2. Treat the configuration below as a reference, not permission to overwrite the project's existing settings, formatter width or dependency pins.
+3. Change quality configuration or install hooks only when explicitly assigned. Select verified Python 3.14-capable tools with exact versions; do not invent pins or fetch tooling during a source-only task.
+4. Run checks or scoped auto-fixes only when validation is authorized, and only on the assigned files. Never run a blanket `ruff check --fix` or reformat the legacy tree by loading this skill.
+5. Report remaining violations and validation limits. This skill does not authorize application imports, tests, runtime access or new tests.
 
 ## Template: ruff.toml / pyproject.toml [tool.ruff]
 
 ```toml
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 120
 fix = true
 
@@ -99,31 +102,15 @@ ban-relative-imports = "all"
 
 ## Enforcement hooks
 
-### Pre-commit template (.pre-commit-config.yaml):
+Hook installation is a separately scoped implementation step. Preserve existing exact project pins. The inherited hook-version template is intentionally omitted rather than presented as a verified Python 3.14 toolchain; no replacement versions have been selected or installed.
 
-```yaml
-repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.0
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-        args: ['--maxkb=500']
-```
+When hooks are explicitly requested, verify the selected tools' Python 3.14 support and configure only the agreed checks. A hook must not import the application, read private configuration, call providers or deploy/restart anything as an incidental effect of committing.
 
 ## Type checking enforcement
 
 ```toml
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

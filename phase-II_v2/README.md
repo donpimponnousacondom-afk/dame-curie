@@ -1,8 +1,18 @@
-# Project Dame-Curie — Phase II / V2 handoff
+# dame-curie — Phase II / V2 working notes
 
-Recorded 2026-09-19 UTC from root's direct instructions. This folder is temporary, project-owned working memory for Phase II, intended for removal when root closes the phase. It is not a deployment plan or a new permanent documentation hierarchy.
+## Current scope update — 2026-09-19
 
-## Stop here before acting
+Root has now authorized the naming/documentation cut-off and narrowly scoped read-only Docker inventory as `maxwell-curie`. Root fixed the planned V2 service account as exactly **dame-curie**, with a separate private rootless engine; no account/engine creation or startup was performed. These later grants supersede only the earlier notes-only/no-Docker scope below, not the prohibitions on production changes, private state, other-project research or new tests.
+
+Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old operational material is quarantined under `legacy/v1/`. The tyranny templates now target Python 3.14 with scoped application. Source operational renames remain pending; target naming is not a completed cutover.
+
+- [Protected running Docker snapshot](DOCKER_INVENTORY.md)
+- [Namespace decisions and source cut-off map](CUTOFF_PLAN.md)
+- [Permanent operations procedure](../docs/OPERATIONS.md)
+
+The rest of this file records the **initial grounding baseline**, before those later authorizations. This folder is temporary, project-owned working memory intended for removal when root closes the phase, not the only home of the current operating contract.
+
+## Initial grounding boundary (historical; superseded where noted above)
 
 **V1 is live and sacred. This session has no production authorization.** Full filesystem capability is not permission. Root is having another agent finish the backup/snapshot; completion and rollback readiness have not been confirmed here. Even a completed backup does not authorize production access or cutover.
 

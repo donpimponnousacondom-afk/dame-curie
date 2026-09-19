@@ -1,6 +1,6 @@
 # Grounding adversarial review
 
-2026-09-19; baseline `c460324`. Review type: static source and notes review only. No tests, application imports, runtime probes or production validation.
+**Historical initial-grounding review**, 2026-09-19; baseline `c460324`, before `aa77fa0` and the later docs/Docker-metadata assignment. References to inherited root instructions/status describe that earlier baseline; the originals are now under `legacy/v1/`. Current authority is root `AGENTS.md`, not this retrospective review. Review type here: static source and notes review only; no tests, application imports, runtime probes or production validation were performed in that initial slice.
 
 ## Independent assignments
 

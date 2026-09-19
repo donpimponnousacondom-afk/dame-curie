@@ -1,6 +1,8 @@
 # Grounding reconnaissance — 2026-09-19
 
-Source baseline: `c460324`, Project Dame-Curie. This is a bounded static inventory, not an exhaustive audit, a feature-removal decision or runtime acceptance. References below are checkout-relative source locations. Nothing referenced outside the checkout was opened or followed.
+**Historical initial-grounding report.** Source baseline: `c460324`, before the documentation cut-off. Referenced old project documents now live under `legacy/v1/`; their original path/line citations describe that baseline, not today's active docs. Current scope/status is in root `AGENTS.md`, `docs/STATUS.md` and this folder's `CUTOFF_PLAN.md`.
+
+This is a bounded static inventory, not an exhaustive audit, a feature-removal decision or runtime acceptance. Nothing referenced outside the checkout was opened or followed.
 
 ## Documentation: what exists
 

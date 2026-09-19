@@ -9,7 +9,7 @@ description: Challenge scoped Dame-Curie plans, diffs and evidence without execu
 
 Independently challenge the coordinator's proposed scope, changed files and conclusions. Use this procedure by explicitly reading it or supplying it in a child prompt. It lives temporarily in `phase-II_v2/`, not the auto-discovered `.agents/skills/` tree. Root requested adversarial scrutiny, not another regression-test framework.
 
-Read `../README.md` first. Current direct-human instructions and higher-priority system/developer instructions take precedence. If the assignment lacks a clear boundary or would need forbidden evidence, report the gap and stop that line of investigation; do not silently broaden scope.
+Read the current repository-root `AGENTS.md` and `docs/STATUS.md`, then `../README.md` for this phase's dated context. Current direct-human instructions and higher-priority system/developer instructions take precedence. The initial notes-only phase is historical; today's explicit assignment defines the permitted source-write scope. Reviewers remain read-only unless separately assigned compatible write ownership. If evidence requires widening the assigned boundary, report the gap first.
 
 ## Non-negotiable boundary
 
@@ -17,7 +17,7 @@ Read `../README.md` first. Current direct-human instructions and higher-priority
 - V1 is live. No production/backup paths, mounts, credentials, logs, databases, real environment files or process environments.
 - No Docker/Compose, deployment scripts, sudo, Screen, services/process control, application execution/imports, test execution/collection, provider calls, installation, real login or cutover. Do not invoke the read-only runtime-debug skill.
 - Reviewers do not write files, add tests, stage, commit or delegate further unless root/coordinator explicitly grants a compatible scoped assignment. This procedure itself grants none of those permissions.
-- Old `AGENTS.md` restart/publish permissions and `docs/STATUS.md` acceptance claims are inherited text, not current authority or evidence of V2 acceptance. A backup or passing review does not authorize production work.
+- The archived V1 agent contract (`legacy/v1/AGENT_CONTRACT.md`) and archived status ledger (`legacy/v1/docs/STATUS.md`) are historical text, not current authority or evidence of V2 acceptance. These paths are repository-relative. A backup or passing review does not authorize production work.
 
 ## Inspection discipline
 
