@@ -56,30 +56,7 @@ def default_personality() -> str:
     raise ValueError("canonical default personality not found")
 
 
-def migrated_registry(source: dict, instance: str) -> dict:
-    if "version" in source:
-        raise ValueError("expected a legacy unversioned site registry")
-    sites = {}
-    for slug, old in source.items():
-        if not SLUG.fullmatch(slug) or len(slug) < 2 or not isinstance(old, dict):
-            raise ValueError("invalid legacy site registry entry")
-        if not isinstance(old.get("running", False), bool):
-            raise ValueError("site running state must be boolean")  # noqa: TRY004 - invalid file content
-        env, packages = old.get("env", {}), old.get("packages", [])
-        if not isinstance(env, dict) or not all(isinstance(v, str) for v in env.values()):
-            raise ValueError("site environment must map names to strings")
-        if not isinstance(packages, list) or not all(isinstance(v, str) for v in packages):
-            raise ValueError("site packages must be strings")
-        running = old.get("running", False)
-        sites[slug] = dict(old, version=2, instance=instance, running=running,
-                           port=8000,
-                           container=f"{instance}-site-{slug}",
-                           image=f"{instance}-siteimg-{slug}" if packages else f"{instance}-site-runtime",
-                           network=f"{instance}-backends")
-    return {"version": 2, "instance": instance, "sites": sites}
-
-
-def migration_json(data: Path, instance: str) -> tuple[dict, str, dict, dict]:
+def migration_json(data: Path) -> tuple[dict, str, dict]:
     control = mapping(data / "bot_control.json")
     personality = control.pop("base_personality", None)
     if personality is None:
@@ -89,11 +66,7 @@ def migration_json(data: Path, instance: str) -> tuple[dict, str, dict, dict]:
     servers = mapping(data / "prompts.json")
     if not all(isinstance(v, str) for v in servers.values()):
         raise ValueError("server prompts must map IDs to strings")
-    registry = migrated_registry(mapping(data / "site_servers.json"), instance)
-    for slug, entry in registry["sites"].items():
-        if entry["running"] and not (data / "site_servers" / slug / "app.py").is_file():
-            raise ValueError("running site has no app.py to restore")
-    return control, personality, servers, registry
+    return control, personality, servers
 
 
 def copy_inventory(source: Path, paths: list[Path], target: Path) -> None:
@@ -108,11 +81,10 @@ def copy_inventory(source: Path, paths: list[Path], target: Path) -> None:
 def populate(stages: list[Path], sources: list[Path], inventories: list[list[Path]], converted: tuple) -> None:
     for source, paths, stage in zip(sources, inventories, stages):
         copy_inventory(source, paths, stage)
-    control, personality, servers, registry = converted
+    control, personality, servers = converted
     data, _, _, prompts = stages
     (data / "prompts.json").unlink(missing_ok=True)
     (data / "bot_control.json").write_text(json.dumps(control, indent=2) + "\n")
-    (data / "site_servers.json").write_text(json.dumps(registry, indent=2) + "\n")
     (prompts / "personality.txt").write_text(personality, encoding="utf-8")
     (prompts / "servers.json").write_text(json.dumps(servers, indent=2) + "\n")
 
@@ -135,7 +107,7 @@ def migrate(instance: str, data: Path, sites: Path, shell: Path, *, stopped: boo
     if not config.is_file():
         raise ValueError("operator must prepare target config/bot.env separately")
     inventories = [inventory(source) for source in sources]
-    converted = migration_json(data, instance)
+    converted = migration_json(data)
     with ExitStack() as stack:
         stages = [Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=".migration-", dir=root))) for root in roots]
         populate(stages, sources, inventories, converted)

@@ -46,27 +46,6 @@ def test_migrate_preserves_source_and_externalizes_prompts(layout):
     assert (target / "config/bot.env").read_text() == "OPERATOR=independent\n"
 
 
-def test_registry_retargets_and_preserves_desired_state(layout):
-    target, (data, _, _) = layout
-    app = data / "site_servers/demo/app.py"
-    app.parent.mkdir(parents=True)
-    app.write_text("fixture")
-    original = {"demo": {"running": True, "env": {"FIXTURE": "value"}, "packages": ["redis==5.0.1"], "port": 8800},
-                "idle": {"running": False}}
-    (data / "site_servers.json").write_text(json.dumps(original))
-    execute(layout)
-    registry = json.loads((target / "data/site_servers.json").read_text())
-    assert registry["version"] == 2 and registry["instance"] == "dame-curie"
-    active = registry["sites"]["demo"]
-    assert active["container"] == "dame-curie-site-demo"
-    assert active["image"] == "dame-curie-siteimg-demo"
-    assert active["network"] == "dame-curie-backends"
-    assert active["port"] == 8000 and active["running"] is True
-    assert active["env"] == original["demo"]["env"]
-    assert registry["sites"]["idle"]["running"] is False
-    assert json.loads((data / "site_servers.json").read_text()) == original
-
-
 def test_default_prompt_reads_literal_without_importing_config(layout):
     target, _ = layout
     execute(layout)
@@ -74,8 +53,7 @@ def test_default_prompt_reads_literal_without_importing_config(layout):
 
 
 @pytest.mark.parametrize("filename,content", [("prompts.json", "not json"), ("prompts.json", "[]"),
-                                             ("bot_control.json", '{"base_personality": 12}'),
-                                             ("site_servers.json", '{"demo":{"running":"false"}}')])
+                                             ("bot_control.json", '{"base_personality": 12}')])
 def test_invalid_json_leaves_target_empty(layout, filename, content):
     target, (data, _, _) = layout
     (data / filename).write_text(content)

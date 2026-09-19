@@ -759,33 +759,3 @@ def test_doctor_disabled_rag_does_not_probe():
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config(enabled=False)))
     assert state == "warn"
     assert "no request" in detail
-
-
-@pytest.mark.parametrize(
-    "stdout,stderr,returncode,reachable",
-    [
-        ("\n", "permission denied while trying to connect", 0, False),
-        ("", "", 0, False),
-        ("26.1.5", "permission denied", 0, False),
-        ("26.1.5\n", "", 0, True),
-        ("26.1.5", "", 1, False),
-    ],
-)
-def test_doctor_does_not_trust_formatted_docker_exit_zero(
-    monkeypatch, capsys, stdout, stderr, returncode, reachable
-):
-    import shutil
-    import subprocess
-
-    monkeypatch.setattr(shutil, "which", lambda binary: "/usr/bin/docker")
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            stdout=stdout,
-            stderr=stderr,
-            returncode=returncode,
-        ),
-    )
-    doctor.check_docker(SimpleNamespace(ENABLE_SHELL=True))
-    assert ("daemon reachable" in capsys.readouterr().out) is reachable

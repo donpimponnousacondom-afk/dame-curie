@@ -92,10 +92,6 @@ def check_required_settings(cfg) -> None:
         line("ok", "DAME_CURIE_OWNER_IDS set", f"{len(cfg.DAME_CURIE_OWNER_IDS)} owner(s)")
     else:
         line("warn", "DAME_CURIE_OWNER_IDS empty", "admin commands will be denied to everyone")
-    if cfg.DAME_CURIE_ADMIN_PASSWORD:
-        line("ok", "dashboard password set")
-    else:
-        line("warn", "DAME_CURIE_ADMIN_PASSWORD empty", "the admin API will answer 503")
 
 
 def check_system_tools() -> None:
@@ -114,46 +110,6 @@ def check_system_tools() -> None:
             line("ok", binary, purpose)
         else:
             line("warn", f"{binary} not found", f"needed for: {purpose}")
-
-
-def check_docker(cfg) -> None:
-    """The shell tool runs in a container, so Docker is required.
-
-    Nothing else reported this: `shell` would just fail at call time with a
-    docker error the operator only saw in a Discord reply.
-    """
-    if cfg is None or not getattr(cfg, "ENABLE_SHELL", False):
-        return
-    head("Docker (needed by the shell tool)")
-    import shutil
-    import subprocess
-
-    if not shutil.which("docker"):
-        line(
-            "warn",
-            "docker not found",
-            "shell will fail; install Docker or set ENABLE_SHELL=false",
-        )
-        return
-    try:
-        proc = subprocess.run(
-            ["docker", "info", "--format", "{{.ServerVersion}}"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        line("warn", "docker not usable", f"{type(e).__name__}: {e}")
-        return
-    if proc.returncode == 0 and proc.stdout.strip() and not proc.stderr.strip():
-        line("ok", "docker daemon reachable", f"server {proc.stdout.strip()}")
-    else:
-        detail = (proc.stderr or proc.stdout).strip().splitlines()
-        line(
-            "warn",
-            "docker installed but not reachable",
-            (detail[-1][:120] if detail else "is the daemon running, and are you in the docker group?"),
-        )
 
 
 def check_x(cfg) -> None:
@@ -291,7 +247,6 @@ def main() -> int:
 
     check_required_settings(cfg)
     check_system_tools()
-    check_docker(cfg)
     check_x(cfg)
     check_features(cfg)
     if args.probe:
