@@ -19,6 +19,14 @@ Updated 2026-09-19. This ledger concerns the fresh V2 checkout, not the archived
 - Existing fixtures/import paths were aligned in 45 test files; no new tests, cases or assertions were added. None were collected or run. Root's unchanged `implement-sanity` skill is included as the review twin of `implement-tyranny`.
 - Mapping and review evidence: `../phase-II_v2/CUTOFF_PLAN.md` and `../phase-II_v2/SOURCE_REVIEW.md`.
 
+## Read-only subsystem map
+
+- At source baseline `a9c0fba`, root requested three parallel same-model scouts and a coordinator-led tools/prompt audit before any further pruning. The resulting map is `../phase-II_v2/PRUNING_MAP.md`; application source, tests and runtime remain unchanged by this assignment.
+- DNS archive cleanup, email and X are separate candidate cuts. Shared inbox/media infrastructure must remain. YouTube includes real search/catalogs, captions and visual context, with callers outside its exposed tool.
+- Tools/site prompting is the priority: editable personality/server prompts do not centralize code-owned policy, schemas or tool-result guides. Local Python/KV execution, remote file publication and browser-test targets are distinct contracts. No prompt or runtime fix was made.
+- TTS/image generation remain protected. Built-in background jobs lack independent per-job model/provider selection and use a different personality path; logging/console must be separated from functional memory events. These are scoped source findings, not production incident diagnoses.
+- Root must select one next implementation slice; the map does not authorize a batch of removals or cross-subsystem compensation patches.
+
 ## Review limits and next decisions
 
 - Flash implementation/static review and Luna max adversarial review do not establish runtime correctness. An infrastructure child ran generic-Python AST and shell/JavaScript parser checks on an earlier edit; those are not isolated Python 3.14 validation or final-snapshot acceptance. No linter/type-checker/test pass is claimed.

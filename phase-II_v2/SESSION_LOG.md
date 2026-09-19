@@ -96,3 +96,16 @@ Flash high writers separately owned application/configuration, infrastructure/te
 The infrastructure writer disclosed generic `python3` AST parsing of four helper files, `bash -n` and `node --check` against an earlier edit. No app or tests were imported/executed, but these are not explicit isolated Python 3.14 checks or final-source validation. The claim was corrected, no repeat was requested, and no suite/linter/type-checker pass is claimed.
 
 No new runtime queries followed the earlier authorized inventory. No private-state/configuration reads, provider/login calls, environment/dependency creation, Docker builds/pulls/lifecycle work, deployment, migration or publication occurred. A local source checkpoint does not authorize the next runtime step.
+
+## Read-only subsystem map — source baseline `a9c0fba`
+
+Root requested a fast parallel map before surgical pruning, explicitly selecting three same-model scouts. Root's desired removal candidates are DNS, email and X; YouTube needs scope clarification, while working TTS/image generation remain protected. Application subagent/provider selection and logging/console need separate boundaries. The highest-priority issue is duplicated, inconsistently editable website/tool prompting and its mismatch with remote hosting. Root explicitly forbids opportunistic cross-subsystem repairs and broad all-at-once runs.
+
+- Scout `4f51a2c5-9309-45bf-b2cc-758f73fe47f1` (`gpt-6-astra`) mapped DNS/email/X/YouTube, including only the two explicitly relevant archived DNS scripts.
+- Scout `95423f35-9df4-4945-9aa9-d2fcfedb6f6a` (`gpt-6-astra`) mapped TTS/image provider selection, manual PPQ routing and protected artifact/delivery dependencies.
+- Scout `0dfdc711-6145-4d35-9421-e6a562bd728e` (`gpt-6-astra`) mapped application background jobs/provider routing and logging/console versus functional memory events.
+- Coordinator mapped tool registration, descriptions/schemas/result feedback, live versus source-owned prompt layers, local site/KV runtimes, remote file publishing and browser-test targets. Scout ownership was read-only; all documentation writes stayed with the coordinator. Existing scouts also checked the synthesized claims without editing code.
+
+Findings and resume instructions are in `PRUNING_MAP.md`, linked from active status. The `mermaid-diagrams-v1` authoring contract was loaded, and root confirmed the renderer is available; chat diagrams summarize source relationships, not observed runtime traffic. No scratch Mermaid work was read or changed.
+
+No application/test/configuration changes, new tests, code imports/execution, syntax-parser runs, test collection, provider probes, Docker/service access, private-state reads, dependency installation, remote access, deployment, migration or feature removal were performed. The source snapshot stays unchanged; any next implementation requires root's single-slice instruction.
