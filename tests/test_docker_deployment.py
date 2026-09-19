@@ -10,9 +10,9 @@ def deployment():
     return yaml.safe_load((ROOT / "compose.yaml").read_text())
 
 
-def test_one_bot_and_api_share_whole_private_state():
+def test_bot_uses_whole_private_state():
     services = deployment()["services"]
-    for name in ("bot", "api"):
+    for name in ("bot",):
         service = services[name]
         mounts = {item["target"]: item for item in service["volumes"]}
         assert mounts["/state/data"]["source"] == "${INSTANCE_DIR}/data"
@@ -28,7 +28,7 @@ def test_one_bot_and_api_share_whole_private_state():
 
 def test_core_services_use_the_host_timezone_file_without_a_fixed_offset():
     services = deployment()["services"]
-    assert set(services) == {"bot", "api", "ollama", "ollama-pull", "web"}
+    assert set(services) == {"bot", "ollama", "ollama-pull"}
     for service in services.values():
         mounts = {item["target"]: item for item in service["volumes"]}
         assert mounts["/etc/dame-curie-localtime"] == {
@@ -41,9 +41,9 @@ def test_core_services_use_the_host_timezone_file_without_a_fixed_offset():
         assert all(not path.startswith("/usr/share/zoneinfo/") for path in mounts)
 
 
-def test_private_socket_and_no_host_privilege():
-    for service in deployment()["services"].values():
-        assert service["read_only"] is True
+def test_outer_container_privilege_boundary():
+    for name, service in deployment()["services"].items():
+        assert service["read_only"] is (name != "bot")
         assert service["cap_drop"] == ["ALL"]
         assert service["security_opt"] == ["no-new-privileges:true"]
         assert not service.get("privileged")
@@ -51,8 +51,6 @@ def test_private_socket_and_no_host_privilege():
         for mount in service.get("volumes", []):
             assert mount["source"] != "/"
             assert mount["source"] != "/var/run/docker.sock"
-    socket_mount = deployment()["services"]["bot"]["volumes"][-1]
-    assert socket_mount["source"].startswith("${ENGINE_SOCKET:?")
 
 
 def test_only_bot_receives_private_live_git_socket_directory():
@@ -69,50 +67,11 @@ def test_only_bot_receives_private_live_git_socket_directory():
         if name != "bot":
             assert "DAME_CURIE_STARTUP_GIT_SOCKET" not in service.get("environment", {})
             assert all(item["target"] != "/run/dame-curie-checkout" for item in service.get("volumes", []))
-    assert set(services["api"]["environment"]).issubset(services["bot"]["environment"])
-
-
-def test_web_only_mounts_public_sites_and_host_timezone_and_binds_loopback():
-    web = deployment()["services"]["web"]
-    mounts = {item["target"]: item for item in web["volumes"]}
-    assert set(mounts) == {"/srv/sites", "/etc/dame-curie-localtime"}
-    assert mounts["/srv/sites"]["source"] == "${INSTANCE_DIR}/sites"
-    assert mounts["/srv/sites"]["read_only"] is True
-    assert web["ports"][0].startswith("127.0.0.1:")
-    caddy = (ROOT / "docker/Caddyfile").read_text()
-    assert "reverse_proxy api:8765" in caddy
-    assert "/bot/*/api /bot/*/api/*" in caddy
-    assert "/state/data" not in caddy
-
-
-def test_web_starts_without_file_capabilities_and_reports_health():
-    web = deployment()["services"]["web"]
-    dockerfile = (ROOT / "docker/app.Dockerfile").read_text()
-    web_stage = dockerfile.split("FROM caddy:2.10.2-alpine AS web", 1)[1]
-    assert "RUN setcap -r /usr/bin/caddy" in web_stage
-    assert web["cap_drop"] == ["ALL"]
-    assert "cap_add" not in web
-    assert web["security_opt"] == ["no-new-privileges:true"]
-    assert web["healthcheck"]["test"] == [
-        "CMD",
-        "wget",
-        "--spider",
-        "-q",
-        "http://127.0.0.1:8080/admin/",
-    ]
-    assert web["healthcheck"]["interval"] == "10s"
-    assert web["healthcheck"]["timeout"] == "5s"
-    assert web["healthcheck"]["retries"] == 3
 
 
 def test_image_uses_allowlisted_source_and_locked_dependencies():
     dockerfile = (ROOT / "docker/app.Dockerfile").read_text()
     assert "python:3.14.4-slim-trixie" in dockerfile
-    assert (
-        "docker:26.1.4-cli@sha256:f13cbf1ea352bdbdc825a9233fc56716bdf818e4f608f63280a1aa0b3dc1f2f7"
-        in dockerfile
-    )
-    assert "docker:26.1.5-cli" not in dockerfile
     assert "COPY . " not in dockerfile
     assert "COPY *.py" not in dockerfile
     assert "--no-deps -r /opt/dame-curie/requirements.lock" in dockerfile
@@ -155,11 +114,8 @@ def test_bot_template_keeps_operational_paths_consistent():
     assert settings["DATA_DIR"] == "/state/data"
     assert settings["DAME_CURIE_SITE_DIR"] == "/state/sites"
     assert settings["DAME_CURIE_PROMPTS_DIR"] == "/config/prompts"
-    assert settings["DAME_CURIE_SHELL_FULL_HOST"] == "false"
-    assert settings["DAME_CURIE_API_PORT"] == "8765"
     assert settings["DISCORD_TOKEN"] == ""
     assert settings["OPENAI_API_KEY"] == ""
-    assert settings["DAME_CURIE_ADMIN_PASSWORD"] == ""
     assert settings["ENABLE_RAG"] == "false"
     assert settings["DAME_CURIE_EMBED_BASE_URL"] == "http://ollama:11434"
     assert settings["DAME_CURIE_EMBED_MODEL"] == "qwen3-embedding:0.6b"
@@ -174,7 +130,6 @@ def test_ollama_is_private_and_has_persistent_per_project_models():
     assert services["ollama"]["networks"] == ["embeddings"]
     assert services["ollama-pull"]["networks"] == ["model-download"]
     assert "model-download" not in services["ollama"]["networks"]
-    assert "embeddings" not in services["web"]["networks"]
     assert config["volumes"]["ollama-models"] is None
     for name in ("ollama", "ollama-pull"):
         service = services[name]
@@ -208,7 +163,7 @@ def test_pull_is_one_shot_and_runtime_waits_for_download_and_embedding():
         "show",
         "qwen3-embedding:0.6b",
     ]
-    for name in ("bot", "api"):
+    for name in ("bot",):
         service = services[name]
         assert service["depends_on"] == {"ollama": {"condition": "service_healthy"}}
         assert service["entrypoint"] == [
@@ -235,20 +190,3 @@ def test_image_contains_readiness_gate_and_explicit_build_provenance():
         assert f"{key}=${{{key}}}" in dockerfile
     assert "org.opencontainers.image.revision=${DAME_CURIE_BUILD_COMMIT}" in dockerfile
     assert ".git" not in (ROOT / "docker/app.Dockerfile.dockerignore").read_text()
-
-
-def test_site_runtime_uses_python314_compatible_pillow_and_contract():
-    dockerfile = (ROOT / "docker/site-runtime/Dockerfile").read_text()
-    assert "FROM python:3.14.4-slim-trixie" in dockerfile
-    assert "pillow==12.3.0" in dockerfile
-    assert "pillow==11.1.0" not in dockerfile
-    assert "python 3.14 + flask" in (ROOT / "site_server.py").read_text()
-
-
-def test_caddy_admin_route_is_explicit_and_keeps_authenticated_api_boundary():
-    caddy = (ROOT / "docker/Caddyfile").read_text()
-    assert "redir /admin /admin/ 308" in caddy
-    assert "@backend path /api/* /data/* /bot/*/api /bot/*/api/*" in caddy
-    assert "root * /srv/web" in caddy
-    assert "root * /srv/sites" in caddy
-    assert "/config" not in caddy

@@ -55,8 +55,7 @@ Useful environment variables:
   DAME_CURIE_INSTALL_DIR, DAME_CURIE_REPO_URL (required to clone), DAME_CURIE_BRANCH,
   DAME_CURIE_NONINTERACTIVE=1, DAME_CURIE_SKIP_SYSTEM_DEPS=1,
   DISCORD_TOKEN, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_API_KEY,
-  DAME_CURIE_OWNER_IDS, DAME_CURIE_ADMIN_PASSWORD,
-  DAME_CURIE_INSTALL_EXTRAS=yes|no, DAME_CURIE_INSTALL_DOCKER=yes|no
+  DAME_CURIE_OWNER_IDS, DAME_CURIE_INSTALL_EXTRAS=yes|no
 EOF
 }
 
@@ -158,7 +157,7 @@ Unsupported OS/package manager.
 Install these manually, then re-run with DAME_CURIE_SKIP_SYSTEM_DEPS=1:
   Required: git curl Python 3.14 with venv and pip
   Optional extras: ffmpeg, libopus/opus, libsodium, espeak-ng, nodejs
-  Optional shell tool: Docker Engine with a daemon reachable by your user
+  Deployment: separately provisioned private rootless Docker engine for the service account
 EOF
   exit 1
 }
@@ -269,54 +268,6 @@ install_python_deps() {
   fi
 }
 
-docker_reachable() {
-  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
-}
-
-install_docker_if_requested() {
-  if docker_reachable; then
-    ok "Docker daemon reachable"
-    return 0
-  fi
-  warn "The shell tool runs commands inside Docker, but Docker is absent or unreachable."
-  docker_choice=$(yes_no "Install/enable Docker for the shell tool?" "no" "${DAME_CURIE_INSTALL_DOCKER:-}")
-  if [ "$docker_choice" != "yes" ]; then
-    set_env_value ENABLE_SHELL false
-    warn "Set ENABLE_SHELL=false in .env. Re-enable it after Docker works."
-    return 0
-  fi
-  [ "$SKIP_SYSTEM_DEPS" = "1" ] && { warn "Cannot install Docker while DAME_CURIE_SKIP_SYSTEM_DEPS=1; disabling shell."; set_env_value ENABLE_SHELL false; return 0; }
-  [ -n "$OS_FAMILY" ] || detect_os
-  step "Installing Docker"
-  case "$OS_FAMILY" in
-    apt|dnf)
-      curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-      run_as_root sh /tmp/get-docker.sh
-      rm -f /tmp/get-docker.sh
-      ;;
-    pacman)
-      run_as_root pacman -Sy --needed --noconfirm docker
-      run_as_root systemctl enable --now docker || true
-      ;;
-    brew)
-      warn "Installing Docker Desktop with Homebrew. Start Docker Desktop after installation."
-      brew install --cask docker
-      ;;
-  esac
-  target_user="${USER:-$(id -un 2>/dev/null || printf '')}"
-  if command -v docker >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ] && [ -n "$target_user" ] && getent group docker >/dev/null 2>&1; then
-    run_as_root usermod -aG docker "$target_user" || true
-    warn "Added $target_user to the docker group. Log out and back in before using Docker without sudo."
-  fi
-  if docker_reachable || run_as_root docker info >/dev/null 2>&1; then
-    set_env_value ENABLE_SHELL true
-    ok "Docker daemon is running; shell tool enabled"
-  else
-    set_env_value ENABLE_SHELL false
-    warn "Docker is still not reachable; set ENABLE_SHELL=false. Re-run --reconfigure after fixing Docker."
-  fi
-}
-
 configure_env() {
   step "Configuring dame-curie"
   if [ -f .env ] && [ "$RECONFIGURE" != "1" ]; then
@@ -329,12 +280,12 @@ configure_env() {
   fi
   copy_env_if_needed
 
-  printf '\n%sStep 1/5: Discord user token%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 1/4: Discord user token%s\n' "$BOLD" "$RESET"
   printf '  This is a self-bot user token. In a browser, open Discord, DevTools, Network, select a discord.com/api request, and copy the authorization header. You can also inspect Application/Local Storage. This may violate Discord ToS.\n'
   token=$(prompt_secret "Discord token (blank to skip)" "${DISCORD_TOKEN:-}")
   if [ -n "$token" ]; then set_env_value DISCORD_TOKEN "$token"; ok "Discord token saved"; else warn "DISCORD_TOKEN left blank; the bot cannot start until you edit .env."; fi
 
-  printf '\n%sStep 2/5: LLM provider%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 2/4: LLM provider%s\n' "$BOLD" "$RESET"
   base_default="${OPENAI_BASE_URL:-}"
   model_default="${OPENAI_MODEL:-}"
   api_key_default="${OPENAI_API_KEY:-}"
@@ -346,23 +297,7 @@ configure_env() {
   if [ -n "$model" ]; then set_env_value OPENAI_MODEL "$model"; else warn "OPENAI_MODEL left blank; set it before starting dame-curie."; fi
   set_env_value OPENAI_API_KEY "$key"
 
-  if [ "$NONINTERACTIVE" != "1" ]; then
-    ollama_choice=$(yes_no "Install local Ollama for RAG embeddings and pull qwen3-embedding:0.6b?" "no" "")
-    if [ "$ollama_choice" = "yes" ]; then
-      if [ "$(uname -s 2>/dev/null || printf unknown)" = "Linux" ]; then
-        curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
-        sh /tmp/ollama-install.sh
-        rm -f /tmp/ollama-install.sh
-        if command -v ollama >/dev/null 2>&1; then
-          ollama pull qwen3-embedding:0.6b || true
-        fi
-      else
-        warn "Install Ollama from https://ollama.com/download, then run: ollama pull qwen3-embedding:0.6b"
-      fi
-    fi
-  fi
-
-  printf '\n%sStep 3/5: Owner Discord user ID(s)%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 3/4: Owner Discord user ID(s)%s\n' "$BOLD" "$RESET"
   printf '  Enable Discord Developer Mode, right-click yourself, and choose Copy User ID. Use commas for multiple owners.\n'
   owner=$(prompt "Owner ID(s), optional" "${DAME_CURIE_OWNER_IDS:-}")
   if [ -n "$owner" ]; then
@@ -371,26 +306,7 @@ configure_env() {
     warn "DAME_CURIE_OWNER_IDS left blank; admin commands will be denied."
   fi
 
-  printf '\n%sStep 4/5: Dashboard credentials%s\n' "$BOLD" "$RESET"
-  printf '  Empty DAME_CURIE_ADMIN_PASSWORD makes the dashboard/admin API answer 503. Press Enter interactively to generate one.\n'
-  admin_user_default="${DAME_CURIE_ADMIN_USER:-admin}"
-  admin_user=$(prompt "Dashboard admin username" "$admin_user_default")
-  [ -n "$admin_user" ] || admin_user="admin"
-  set_env_value DAME_CURIE_ADMIN_USER "$admin_user"
-
-  admin_pw_default="${DAME_CURIE_ADMIN_PASSWORD:-}"
-  admin_pw=$(prompt_secret "Dashboard admin password" "$admin_pw_default")
-  if [ -z "$admin_pw" ] && [ "$NONINTERACTIVE" != "1" ]; then
-    if command -v openssl >/dev/null 2>&1; then admin_pw=$(openssl rand -hex 16); else admin_pw=$(./.venv/bin/python -c 'import secrets; print(secrets.token_hex(16))'); fi
-    printf '  Generated dashboard password: %s\n' "$admin_pw"
-  fi
-  if [ -n "$admin_pw" ]; then
-    set_env_value DAME_CURIE_ADMIN_PASSWORD "$admin_pw"
-  else
-    warn "DAME_CURIE_ADMIN_PASSWORD left blank; dashboard/admin API will answer 503."
-  fi
-
-  printf '\n%sStep 5/5: Optional background loops%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 4/4: Optional background loops%s\n' "$BOLD" "$RESET"
   printf '  Autonomy and REM spend LLM tokens on timers, so the safe default is off.\n'
   autonomy=$(yes_no "Enable autonomy background actions?" "no" "${ENABLE_AUTONOMY:-}")
   rem=$(yes_no "Enable REM memory consolidation?" "no" "${ENABLE_REM:-}")
@@ -403,64 +319,6 @@ configure_env() {
     set_env_value ENABLE_REM true
   else
     set_env_value ENABLE_REM false
-  fi
-
-  install_docker_if_requested
-}
-
-write_run_script() {
-  cat > run.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-exec ./.venv/bin/python bot.py "$@"
-EOF
-  chmod +x run.sh
-  ok "wrote run.sh"
-}
-
-offer_systemd() {
-  [ "$NONINTERACTIVE" = "1" ] && return 0
-  [ "$(uname -s 2>/dev/null || printf unknown)" = "Linux" ] || return 0
-  choice=$(yes_no "Create a systemd user service for dame-curie?" "no" "")
-  [ "$choice" = "yes" ] || return 0
-  mkdir -p "$HOME/.config/systemd/user"
-  service="$HOME/.config/systemd/user/dame-curie.service"
-  cat > "$service" <<EOF
-[Unit]
-Description=dame-curie Discord self-bot
-After=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=$(pwd -P)
-ExecStart=$(pwd -P)/.venv/bin/python bot.py
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-  systemctl --user daemon-reload || true
-  ok "wrote $service"
-  printf '  Enable it with: systemctl --user enable --now dame-curie\n'
-}
-
-run_doctor() {
-  step "Verifying installation"
-  if ./.venv/bin/python doctor.py; then
-    ok "doctor.py reports the install is ready to start"
-  else
-    warn "doctor.py found startup blockers. Fix the items above, then run ./.venv/bin/python doctor.py again."
-  fi
-  if grep -q '^DISCORD_TOKEN=.' .env && grep -q '^OPENAI_BASE_URL=.' .env && grep -q '^OPENAI_MODEL=.' .env; then
-    if ./.venv/bin/python doctor.py --probe; then
-      ok "live endpoint probe succeeded"
-    else
-      warn "doctor.py --probe failed. Check docs/INSTALL.md troubleshooting for URL/key/model fixes."
-    fi
-  else
-    warn "Skipping live probe because DISCORD_TOKEN, OPENAI_BASE_URL, or OPENAI_MODEL is blank."
   fi
 }
 
@@ -480,9 +338,9 @@ final_summary() {
   step "Done"
   cat <<EOF
   Install path: $(pwd -P)
-  Start the bot: cd $(pwd -P) && ./run.sh
-  Start dashboard/API: cd $(pwd -P) && ./.venv/bin/python api/api_server.py
-  PM2 alternative: pm2 start ecosystem.config.js && pm2 logs dame-curie-bot dame-curie-api
+  Checkout dependencies/configuration only; no runtime was provisioned or activated.
+  Deploy the bot only inside its service account's private rootless container.
+  Deployment contract and activation holds: phase-II_v2/DISCORD_ONLY_DEPLOYMENT.md
   Edit configuration later: $(pwd -P)/.env
   Re-run the wizard: ./install.sh --local --reconfigure
   Update later: ./install.sh --local, or git pull --ff-only && ./install.sh --local
@@ -496,9 +354,6 @@ main() {
   clone_or_update
   install_python_deps
   configure_env
-  write_run_script
-  offer_systemd
-  run_doctor
   final_summary
 }
 

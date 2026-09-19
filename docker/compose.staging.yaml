@@ -10,5 +10,3 @@ services:
   ollama-pull:
     profiles:
       - rag-activation
-  api:
-    depends_on: !reset {}

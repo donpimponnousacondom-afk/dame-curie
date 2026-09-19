@@ -46,7 +46,7 @@ def instance(tmp_path):
     for root in ops.ROOTS:
         (app.path / root).mkdir()
     app.values = {"APP_IMAGE": "dame-curie-app:test"}
-    app.env = {"DOCKER_HOST": "unix:///private/docker.sock"}
+    app.env = {"DOCKER_HOST": "unix:///private/docker.sock", "DAME_CURIE_STAGING": "false"}
     return app
 
 
@@ -144,7 +144,7 @@ def test_down_stops_all_writers_before_removing_managed_containers(tmp_path):
     ops.lifecycle(app, "down")
     assert [event[-1] for event in events[:5]] == ["bot", "api", "shell", "site", "web"]
     assert events[5:7] == [("rm", "shell"), ("rm", "site")]
-    assert events[-1] == ("compose", "--profile", "*", "down", "--timeout", "45")
+    assert events[-1] == ("compose", "--profile", "*", "down", "--remove-orphans", "--timeout", "45")
 
 
 @pytest.mark.parametrize("action", ["up", "start"])
@@ -154,7 +154,7 @@ def test_up_waits_for_live_service_health(tmp_path, action):
     app.compose = Mock()
     ops.lifecycle(app, action)
     app.inventory.assert_called_once_with()
-    app.compose.assert_called_once_with("up", "-d", "--wait", "--wait-timeout", "300")
+    app.compose.assert_called_once_with("up", "-d", "--wait", "--wait-timeout", "300", "bot")
 
 
 @pytest.mark.parametrize("action", ["up", "start"])
@@ -171,7 +171,8 @@ def test_start_alias_rejects_failed_inventory(tmp_path, action):
 @pytest.mark.parametrize("lock_busy", [False, True])
 def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, action, lock_busy):
     events = Mock()
-    app = SimpleNamespace(path=Path("/synthetic/dame-curie"), inventory=events.inventory, compose=events.compose)
+    app = SimpleNamespace(path=Path("/synthetic/dame-curie"), inventory=events.inventory, compose=events.compose,
+                          env={"DAME_CURIE_STAGING": "false"})
     account = object()
     service_account = Mock(return_value=account)
     constructor = Mock(return_value=app)
@@ -200,7 +201,7 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
     file_open.assert_called_once_with(123, "w")
     expected = [call.flock(123, ops.fcntl.LOCK_EX | ops.fcntl.LOCK_NB)]
     if not lock_busy:
-        expected += [call.inventory(), call.compose("up", "-d", "--wait", "--wait-timeout", "300")]
+        expected += [call.inventory(), call.compose("up", "-d", "--wait", "--wait-timeout", "300", "bot")]
     assert events.mock_calls == expected
 
 
@@ -216,14 +217,14 @@ def test_start_alias_cli_rejects_archive_before_identity_lookup(monkeypatch, cap
     service_account.assert_not_called()
 
 
-def test_restart_remains_bot_api_only(tmp_path):
+def test_restart_remains_bot_only(tmp_path):
     app = instance(tmp_path)
     app.env["DAME_CURIE_STAGING"] = "false"
     app.inventory = Mock(return_value=[])
     app.compose = Mock()
     ops.lifecycle(app, "restart")
     app.inventory.assert_called_once_with()
-    app.compose.assert_called_once_with("restart", "--timeout", "45", "bot", "api")
+    app.compose.assert_called_once_with("restart", "--timeout", "45", "bot")
 
 
 def test_helper_mounts_only_state_and_no_network(tmp_path):

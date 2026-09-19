@@ -16,7 +16,8 @@ from pathlib import Path
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
-SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE", "WEB_IMAGE", "WEB_PORT"}
+SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE"}
+RETIRED_SETTINGS = {"WEB_IMAGE", "WEB_PORT"}
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
 INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
 IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/:@-]*")
@@ -55,13 +56,23 @@ def parse_settings(text: str) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key not in SETTINGS | {"DAME_CURIE_STAGING"} or key in values:
+        if not separator or key not in SETTINGS | RETIRED_SETTINGS | {"DAME_CURIE_STAGING"} or key in values:
             raise ValueError("unknown or duplicate deploy.env setting")
         if not value or any(char.isspace() for char in value) or any(char in value for char in "'\"`$\\;"):
             raise ValueError("deploy.env values must be unquoted literals")
         values[key] = value
-    if values.keys() - {"DAME_CURIE_STAGING"} != SETTINGS:
+    if values.keys() - RETIRED_SETTINGS - {"DAME_CURIE_STAGING"} != SETTINGS:
         raise ValueError("deploy.env must contain exactly the documented settings")
+    retired = values.keys() & RETIRED_SETTINGS
+    if retired and retired != RETIRED_SETTINGS:
+        raise ValueError("remove WEB_IMAGE and WEB_PORT together")
+    if retired:
+        if not IMAGE.fullmatch(values["WEB_IMAGE"]):
+            raise ValueError("invalid retired web image reference")
+        if not values["WEB_PORT"].isdigit() or not 1024 <= int(values["WEB_PORT"]) <= 65535:
+            raise ValueError("retired WEB_PORT must be between 1024 and 65535")
+        for key in RETIRED_SETTINGS:
+            del values[key]
     if values.get("DAME_CURIE_STAGING", "true") not in {"true", "false"}:
         raise ValueError("DAME_CURIE_STAGING must be true or false")
     return values
@@ -120,10 +131,8 @@ class Instance:
             raise ValueError("deployment identity, directory, or engine socket mismatch")
         if socket.is_symlink() or not stat.S_ISSOCK(socket.stat().st_mode) or socket.stat().st_uid != account.pw_uid:
             raise ValueError("engine socket is not owned by the service user")
-        if not all(IMAGE.fullmatch(self.values[key]) for key in ("APP_IMAGE", "WEB_IMAGE")):
+        if not IMAGE.fullmatch(self.values["APP_IMAGE"]):
             raise ValueError("invalid image reference")
-        if not self.values["WEB_PORT"].isdigit() or not 1024 <= int(self.values["WEB_PORT"]) <= 65535:
-            raise ValueError("WEB_PORT must be between 1024 and 65535")
         self.env = {"HOME": account.pw_dir, "PATH": "/usr/local/bin:/usr/bin:/bin",
                     "XDG_RUNTIME_DIR": str(socket.parent), "DOCKER_HOST": f"unix://{socket}",
                     "COMPOSE_DISABLE_ENV_FILE": "1", **self.values}
@@ -232,14 +241,15 @@ def lifecycle(instance: Instance, action: str, *, log_format: str = "auto", no_k
                 labels = item["Config"].get("Labels") or {}
                 if labels.get("dame-curie.kind") in {"site", "shell"}:
                     instance.docker("rm", item["Id"])
-            instance.compose("--profile", "*", "down", "--timeout", "45")
+            instance.compose("--profile", "*", "down", "--remove-orphans", "--timeout", "45")
     else:
         instance.inventory()
+        if action in {"up", "start", "restart"} and instance.env.get("DAME_CURIE_STAGING", "true") == "true":
+            return
         if action == "restart":
-            services = ("api", "web") if instance.env.get("DAME_CURIE_STAGING", "true") == "true" else ("bot", "api")
-            instance.compose("restart", "--timeout", "45", *services)
+            instance.compose("restart", "--timeout", "45", "bot")
         elif action in {"up", "start"}:
-            instance.compose("up", "-d", "--wait", "--wait-timeout", "300")
+            instance.compose("up", "-d", "--wait", "--wait-timeout", "300", "bot")
         else:
             instance.compose("logs", "--follow", "--tail", "100", log_format=log_format, no_keys=no_keys)
 

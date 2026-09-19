@@ -1,13 +1,26 @@
 #!/bin/bash
+set -euo pipefail
 
 rev=$(git rev-parse HEAD)
 image="dame-curie-app:${rev:0:7}"
 uid=$(id -u dame-curie)
+socket="/run/user/$uid/docker.sock"
+home=$(getent passwd dame-curie | cut -d: -f6)
+private=(sudo -n runuser -u dame-curie -- env -i PATH=/usr/local/bin:/usr/bin:/bin
+  HOME="$home" XDG_RUNTIME_DIR="/run/user/$uid")
+if [ "$uid" -eq 0 ] || ! "${private[@]}" test -S "$socket" || "${private[@]}" test -L "$socket" || [ "$("${private[@]}" stat -c %u "$socket")" != "$uid" ]; then
+  printf 'Refusing an absent, redirected or foreign private engine socket.\n' >&2
+  exit 1
+fi
+engine=("${private[@]}" docker --host "unix://$socket")
+security=$("${engine[@]}" info --format '{{json .SecurityOptions}}')
+case "$security" in
+  *'"name=rootless"'*|*'"name=rootless,'*) ;;
+  *) printf 'Refusing a non-rootless engine.\n' >&2; exit 1 ;;
+esac
 
 git archive "$rev" |
-sudo -n runuser -u dame-curie -- \
-  env DOCKER_HOST=unix:///run/user/"$uid"/docker.sock \
-  docker build --target app -f docker/app.Dockerfile \
+  "${engine[@]}" build --target app -f docker/app.Dockerfile \
     --build-arg DAME_CURIE_BUILD_COMMIT="$rev" \
     --build-arg DAME_CURIE_BUILD_BRANCH="$(git branch --show-current)" \
     --build-arg DAME_CURIE_BUILD_DATE="$(git show -s --format=%cI "$rev")" \
@@ -15,15 +28,4 @@ sudo -n runuser -u dame-curie -- \
     --build-arg DAME_CURIE_BUILD_DIRTY=false \
     -t "$image" -
 
-git archive "$rev" | sudo -n tar -x -C /opt/dame-curie
-
-sudo -n runuser -u dame-curie -- \
-  sed -i "s|^APP_IMAGE=.*|APP_IMAGE=$image|" /srv/dame-curie/deploy.env
-
-sudo -n runuser -u dame-curie -- \
-  /opt/dame-curie/.venv/bin/python /opt/dame-curie/scripts/instance.py dame-curie up
-
-sudo -n runuser -u dame-curie -- \
-  env DOCKER_HOST=unix:///run/user/"$uid"/docker.sock \
-  docker inspect dame-curie-bot-1 \
-    --format 'Image: {{.Config.Image}} | Image ID: {{.Image}} | Started: {{.State.StartedAt}}'
+printf 'Built %s only; checkout, private settings and container lifecycle are unchanged.\n' "$image"
