@@ -13,7 +13,7 @@ Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old opera
 - [First soft dead-code pass](DEAD_CODE_PASS.md): pinned Vulture, exact source manifest, raw findings and candidate-versus-framework triage; no removals.
 - [V2 provisioning and activation holds](PROVISIONING.md): current account/engine/configuration evidence and remaining acceptance.
 - [Screen-safe logging proposal](LOGGING_PLAN.md): reference-source research and independent review; no implementation or terminal acceptance yet.
-- Email removal is running in isolated branch `work/prune-email-20260919`; its reviewed integration remains pending. Twitter/X is the next queued pruning cut after email; see the current queue atop `PRUNING_MAP.md`.
+- Email source removal is independently reviewed and integrated (`9b01074`/`70b8ceb`); see `EMAIL_REMOVAL.md`. Runtime image acceptance remains separate. Remote inference naming is now being independently reviewed in `work/openai-inference-names-20260919`: protocol-neutral `OPENAI_*`, distinct from local Ollama embeddings. Twitter/X remains the next queued pruning cut; see the current queue atop `PRUNING_MAP.md`.
 - [Repeatable static-audit workflow](../docs/DEAD_CODE.md)
 - [Permanent operations procedure](../docs/OPERATIONS.md)
 

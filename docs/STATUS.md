@@ -15,7 +15,7 @@ Updated 2026-09-19. This ledger concerns V2, not the archived V1 rollout history
 - Coupled operational env/config keys, custom ownership labels, image/resource names, shell/socket paths, PM2 selectors and publisher markers/templates use the new namespace. Bot and API agree on `dame-curie-rag.db`. Neutral `/api`, `/bot`, configuration filenames and the intentional short URL `dame` remain.
 - Baked V1 URL/mailbox selections were removed from runtime defaults. Examples use reserved synthetic destinations or explicit empty configuration, not invented real identities. Persona/internal identifiers, real Discord IDs, model choices and harmless historical prose were not globally rewritten.
 - Host wrappers select checkout `.venv/bin/python`; installer/doctor version checks require Python 3.14. The shell image's distro-provided interpreter remains unverified; application/site image declarations remain 3.14.4.
-- Root approved moving both V1-specific DNS provisioning scripts unchanged into `legacy/v1/email_integration/`. Bot email functionality remains. Build-context and static-tool exclusions keep the quarantine out of those ordinary source paths.
+- Root approved moving both V1-specific DNS provisioning scripts unchanged into `legacy/v1/email_integration/`. Bot email functionality remained at that historical checkpoint; it was subsequently removed in the separately reviewed slice below. Build-context and static-tool exclusions keep the quarantine out of ordinary source paths.
 - Existing fixtures/import paths were aligned in 45 test files; no new tests, cases or assertions were added. None were collected or run. Root's unchanged `implement-sanity` skill is included as the review twin of `implement-tyranny`.
 - Mapping and review evidence: `../phase-II_v2/CUTOFF_PLAN.md` and `../phase-II_v2/SOURCE_REVIEW.md`.
 
@@ -33,7 +33,7 @@ Updated 2026-09-19. This ledger concerns V2, not the archived V1 rollout history
 - **87 tracked source files / 70,746 physical lines / 163 findings**: 150 at 60%, 2 at 90%, 11 at 100%; no unreachable blocks reported. The high-confidence set is mostly required callback parameters. Retired helper/catalog candidates are recorded separately from framework consumers; the report is not removable-LOC or production-usage evidence.
 - Workflow: `DEAD_CODE.md`. Exact inputs, raw report and bounded triage: `../phase-II_v2/DEAD_CODE_PASS.md`. No application source, test, private configuration or running service was changed; the scan parsed source without importing it. Application validation remains unperformed.
 
-## Review limits and next decisions
+## Historical review limits through `3a71cbb`
 
 - Flash implementation/static review and Luna max adversarial review do not establish runtime correctness. An infrastructure child ran generic-Python AST and shell/JavaScript parser checks on an earlier edit; those are not isolated Python 3.14 validation or final-snapshot acceptance. No linter/type-checker/test pass is claimed.
 - Broader feature pruning remains root's next assignment. An inherited provider-resilience test still references retired/missing documentation; its purpose was not rewritten to preserve obsolete documentation checks.
@@ -50,7 +50,8 @@ Through that checkpoint: no application imports/execution or test collection/exe
 - Root subsequently authorized account/engine/image/container provisioning, fresh V2 state, read-only V1 provider configuration transfer, and bounded non-Discord provider checks. The account and engine now exist; detailed progress and remaining acceptance are in `../phase-II_v2/PROVISIONING.md`.
 - Discord credentials and activity are forbidden; Telegram is disabled for later removal. Ollama and its pull job must remain stopped, with RAG disabled during staging. V1 must not be changed.
 - Root fixed Dame Curie's identity as `1545541390392369165` and root/.normal.man as `1482143139828596916`; incorrect inherited companion/identity defaults are being removed without pruning the companion feature.
-- Root additionally authorized a separate-worktree email removal, now in progress, and queued Twitter/X as the next independent pruning cut after it. Shared web fetching/inbox/notifications/media remain protected. No other feature cut is implied.
-- Logging is the next priority: narrowly authorized read-only Hortator source research and Flash/Luna review are preparing a Screen-safe plan; existing logging is retained and no logging implementation is underway.
+- Email source removal was independently reviewed by Luna and integrated as `9b01074`/`70b8ceb`, with the restored admin polling control removed in main. Shared web fetching/inbox/notifications/media remain. Refreshed-image acceptance is tracked separately; see `../phase-II_v2/EMAIL_REMOVAL.md`. Twitter/X is the next queued pruning cut, not started.
+- Root additionally selected remote inference naming: `OPENAI_*` means the OpenAI-compatible protocol, not OpenAI's service/account. Its separate worktree removes the misleading localhost inference default while preserving configured endpoints and local Ollama embedding settings; independent actual-diff reviews are underway.
+- Logging is the next priority: `f94c291` records the Hortator-based Screen plan with Flash/Luna reviews. Existing logging is retained; neither the logging implementation nor terminal acceptance has occurred.
 
 Work remains local on `dev/phaseII_v2` and explicitly owned worktrees. A source/documentation commit alone never synchronizes V1 or authorizes Discord/RAG activation.

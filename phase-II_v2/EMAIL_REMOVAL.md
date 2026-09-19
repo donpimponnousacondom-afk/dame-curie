@@ -53,3 +53,7 @@
 3. Shared STATUS/SESSION_LOG/README/AGENTS ledgers, `PRUNING_MAP.md` and dated Vulture snapshots are unchanged; coordinator owns their integration updates. Twitter/X remains a separate next cut, not part of this removal.
 4. Old persisted notices/configuration or external plugins may still refer to removed mail tools. No compatibility shim or private-data cleanup was added. Old notice rows can still pass through generic inbox behavior; V2 fresh-state isolation remains coordinator-owned.
 5. Builds and runtime acceptance remain unverified and require separate authority; this commit changes no deployed service or DNS/mail infrastructure.
+
+## Coordinator integration checkpoint
+
+Luna independently reviewed the removal against `3a71cbb` and found no implementation blocker or collateral regression in the retained consumers. Coordinator cherry-picked the two commits cleanly as `9b01074` and `70b8ceb`, preserved identity/image-media changes, removed the main-only admin poll control, and updated current ledgers without rewriting dated audit evidence. No mail-state migration, V1 edit or new test was added. Refreshed V2 images and runtime acceptance are recorded separately in `PROVISIONING.md`; source integration alone is not deployment evidence.

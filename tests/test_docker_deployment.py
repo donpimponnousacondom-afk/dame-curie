@@ -160,7 +160,7 @@ def test_bot_template_keeps_operational_paths_consistent():
     assert settings["DISCORD_TOKEN"] == ""
     assert settings["OLLAMA_API_KEY"] == ""
     assert settings["DAME_CURIE_ADMIN_PASSWORD"] == ""
-    assert settings["ENABLE_RAG"] == "true"
+    assert settings["ENABLE_RAG"] == "false"
     assert settings["DAME_CURIE_EMBED_BASE_URL"] == "http://ollama:11434"
     assert settings["DAME_CURIE_EMBED_MODEL"] == "qwen3-embedding:0.6b"
     assert settings["DAME_CURIE_EMBED_DIM"] == "1024"

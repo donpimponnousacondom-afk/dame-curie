@@ -3,7 +3,8 @@
 ## Current implementation queue — later root decisions
 
 - V2 foundation is being provisioned under the separate grant in `PROVISIONING.md`; Discord and Ollama/model-pull remain held.
-- **Email: in progress**, isolated branch `work/prune-email-20260919`; preserve shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure.
+- **Email: source removal reviewed and integrated** as `9b01074`/`70b8ceb`, from isolated branch `work/prune-email-20260919`; shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure remain. Main-only UI follow-up and refreshed image acceptance are being completed; see `EMAIL_REMOVAL.md`.
+- **Remote inference naming: in progress**, isolated branch `work/openai-inference-names-20260919`. `OPENAI_*` means the compatible remote protocol, not OpenAI's service; configured endpoints stay unchanged and local Ollama embeddings remain separate.
 - **Logging: next implementation priority after the foundation**, using the reviewed Hortator/Screen proposal in `LOGGING_PLAN.md`; legacy logging and functional memory stay.
 - **Twitter/X: next queued pruning cut after email**, explicitly selected by root. Use a separate worktree and review its tools/admin commands/client/mentions/control edges before integration. Preserve generic web fetching, Twitter Card metadata, shared media/inbox/notification code, provider routing and V1 state. No X implementation has started.
 - Telegram is disabled and selected for later removal. Other removals/refactors remain separately scoped.

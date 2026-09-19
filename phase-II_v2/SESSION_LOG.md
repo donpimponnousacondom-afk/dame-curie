@@ -136,3 +136,12 @@ Root included provisioning in this round and selected fresh V2 state, secret-saf
 - Logging is the next priority: an Astra child traced the actual Hortator implementation under root's narrow other-project source grant, with independent Flash/Luna adversarial review. `LOGGING_PLAN.md` is a reviewed proposal, not implementation or terminal acceptance. Existing logging and functional memory remain; no agent touched live Screen.
 
 Runtime authority remains coordinator-only. Source commits are not Discord/RAG activation permission.
+
+### Subsequent checkpoints in the same provisioning round
+
+- `f94c291`: reviewed Screen logging proposal; `8876dc4`: naming/static-web/identity/staging closeout.
+- Email worker source `1cc0e9c` and report `fd060a2` passed independent Luna review and were cherry-picked cleanly as `9b01074`/`70b8ceb`. Main-only admin polling control removed. Shared inbox/media and X date parsing remain; no history migration/new tests. Source integration and final image acceptance are distinct.
+- Root queued Twitter/X as the next pruning cut; implementation has not started. Root then selected the remote inference `OLLAMA_*` to vendor-neutral protocol `OPENAI_*` naming cut in another worktree. Its source commit `85eafb1` is being independently checked by Flash/Luna. Local Ollama embedding/runtime settings remain separate and unchanged. Private V2 key migration is coordinator-owned and pending.
+- All required initial images built successfully; shell/site interpreter checks reported Python3.14.4 without networking. Core containers created with both profiles for create only; bot/Ollama/pull each reported never-started timestamps and restart `no`. Source installed under `/opt/dame-curie`; private home permissions stayed unchanged.
+- Fresh source-default prompts and empty RAG/graph schema seeded with networking disabled. SQLite integrity passed and six key tables were empty. API/web support startup and final post-integration images/provider checks remain separate acceptance steps.
+- The staged example's `ENABLE_RAG=false` change left one existing deployment fixture expecting true; coordinator aligned that assertion after the naming worker flagged it. This was coordinator integration fallout, not a defect attributed to the worker. No fixture was executed.
