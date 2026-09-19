@@ -10,6 +10,8 @@ Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old opera
 - [Namespace decisions and source cut-off map](CUTOFF_PLAN.md)
 - [Source checkpoint review and validation limits](SOURCE_REVIEW.md)
 - [Read-only subsystem map and surgical next-step handoff](PRUNING_MAP.md): current source baseline `a9c0fba`; tools/prompt work is the priority, with no feature removal or runtime change performed by the mapping assignment.
+- [First soft dead-code pass](DEAD_CODE_PASS.md): pinned Vulture, exact source manifest, raw findings and candidate-versus-framework triage; no removals.
+- [Repeatable static-audit workflow](../docs/DEAD_CODE.md)
 - [Permanent operations procedure](../docs/OPERATIONS.md)
 
 The rest of this file records the **initial grounding baseline**, before those later authorizations. This folder is temporary, project-owned working memory intended for removal when root closes the phase, not the only home of the current operating contract.

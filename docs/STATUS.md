@@ -27,6 +27,12 @@ Updated 2026-09-19. This ledger concerns the fresh V2 checkout, not the archived
 - TTS/image generation remain protected. Built-in background jobs lack independent per-job model/provider selection and use a different personality path; logging/console must be separated from functional memory events. These are scoped source findings, not production incident diagnoses.
 - Root must select one next implementation slice; the map does not authorize a batch of removals or cross-subsystem compensation patches.
 
+## First soft dead-code audit
+
+- Root subsequently authorized static-audit tooling and an initial report-only pass, not removals. Vulture `2.16` is pinned and installed in a fresh isolated Python `3.14.4` `.venv`; Ruff settings and existing pins remain unchanged. Both review skills now carry the audit/triage discipline. No hooks or automatic clean-tree gate were added.
+- **87 tracked source files / 70,746 physical lines / 163 findings**: 150 at 60%, 2 at 90%, 11 at 100%; no unreachable blocks reported. The high-confidence set is mostly required callback parameters. Retired helper/catalog candidates are recorded separately from framework consumers; the report is not removable-LOC or production-usage evidence.
+- Workflow: `DEAD_CODE.md`. Exact inputs, raw report and bounded triage: `../phase-II_v2/DEAD_CODE_PASS.md`. No application source, test, private configuration or running service was changed; the scan parsed source without importing it. Application validation remains unperformed.
+
 ## Review limits and next decisions
 
 - Flash implementation/static review and Luna max adversarial review do not establish runtime correctness. An infrastructure child ran generic-Python AST and shell/JavaScript parser checks on an earlier edit; those are not isolated Python 3.14 validation or final-snapshot acceptance. No linter/type-checker/test pass is claimed.

@@ -27,6 +27,14 @@ Python **3.14** is mandatory for dame-curie. Apply strict standards to authorize
 4. Run checks or scoped auto-fixes only when validation is authorized, and only on the assigned files. Never run a blanket `ruff check --fix` or reformat the legacy tree by loading this skill.
 5. Report remaining violations and validation limits. This skill does not authorize application imports, tests, runtime access or new tests.
 
+## Dead-code audit — report before pruning
+
+Vulture **2.16** is the project's pinned Python 3.14-compatible static dead-code tool. Follow the repository-root `docs/DEAD_CODE.md` workflow when an audit is authorized: explicit tracked-source selection, isolated interpreter, no application imports or test execution. The first-pass evidence is in `phase-II_v2/DEAD_CODE_PASS.md`.
+
+Start with the project configuration's 60% report and inspect the 100% view separately. Confidence is not safe-deletion proof: unused callback parameters may be required, framework/serializer consumers can be implicit, and name collisions can hide unused code. Classify findings before removing anything. Do not turn a soft report into a mandatory clean-tree gate, install hooks, generate blanket whitelists, change signatures, or add dummy references/suppressions to make counts disappear. Exit 3 means findings; syntax/input/tool failures must remain visible.
+
+A later authorized pruning slice should record its baseline, actual caller/registration evidence and remaining unknowns. Retain shared infrastructure and root's manual compatibility patches unless that exact behavior is assigned. No new tests or runtime access are granted by this audit rule.
+
 ## Template: ruff.toml / pyproject.toml [tool.ruff]
 
 ```toml

@@ -23,6 +23,15 @@ Review the last round of agent work before it becomes a PR. Catch the tricks age
 3. For each violation, show the exact file and line
 4. Provide a summary: ready for PR / needs fixes / needs discussion
 
+## Dead-code evidence
+
+For an authorized dead-code audit or pruning diff, use the pinned Vulture **2.16** workflow in repository-root `docs/DEAD_CODE.md`, under isolated Python **3.14**. Review its report alongside caller/registration evidence; do not import the application, collect/run tests or read private configuration to validate a static finding. Initial evidence is in `phase-II_v2/DEAD_CODE_PASS.md`.
+
+- Distinguish ordinary orphan candidates from callback signatures, decorators, dynamic dispatch, serializers and external interfaces. A 100% unused argument can still be required by its caller.
+- Treat 60/90/100 confidence values as analyzer categories, not removal authority or production-usage probabilities. Inspect the reported code and its replacement/callers; name matching also has false negatives.
+- A soft-pass report may legitimately exit 3 with findings. Missing/syntax-invalid input and broken tool execution are not clean results. Do not demand a zero-finding legacy tree or conceal it with blanket whitelists, dummy uses or cosmetic parameter renames.
+- Confirm the diff removes only the assigned slice and preserves shared dependencies/manual compatibility patches. Record what was retained and why. No new tests, hooks or runtime checks are authorized by this checklist.
+
 ## Review Checklist
 
 ### Blockers (must fix before PR)
