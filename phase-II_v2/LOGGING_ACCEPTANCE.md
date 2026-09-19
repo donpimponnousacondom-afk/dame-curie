@@ -1,15 +1,15 @@
 # Disposable logging acceptance ledger
 
-Status: **partial acceptance; structured-redaction correction integrated and synthetic rerun passed**. Pressure, foreground-transition and GNU Screen acceptance remain pending below.
+Status: **bounded synthetic acceptance completed, including pressure, foreground loss and fresh GNU Screen; not exhaustive terminal/application acceptance**. The structured-redaction correction and recorded reruns passed. Remaining coverage limits are explicit below; no default-mode switch.
 
 ## Scope and isolation
 
-Coordinator observations use main source `2e34000`, including logging through `f023176`. These are one-off synthetic viewer exercises, not new repository tests or test-suite execution.
+Initial coordinator observations used main source `2e34000`, including logging through `f023176`; the corrected reruns include `c2f148b`. Final exercises use the same logging code present in selected release `734c050` and documentation-only checkout `5ef235a`. These are one-off synthetic viewer exercises, not new repository tests or test-suite execution.
 
-- Explicit existing Python3.14.4 venv, `-I -S -B`, a cleared/minimal environment, `HOME=/nonexistent`, and generated finite producer programs.
+- Explicit existing Python3.14.4 venv, `-I -S -B`, a cleared/minimal environment, `HOME=/nonexistent` or a fresh owned temporary HOME, and generated finite producer programs.
 - Entry: `scripts.log_filter.follow_logs(..., output_format="screen")`; never `scripts/instance.py`, app bootstrap or a deployment wrapper.
 - Audited import closure: logging modules, standard library and `error_reporting.redact_sensitive_text`. Observed `_store` remains unbound; `bot`, `config`, `providers` and `rag_memory` are absent from `sys.modules`.
-- Only disposable PTYs and unnamed temporary output files. No existing Screen session, private log/config/state, credentials, network, Docker, V2 service, Discord or model operation.
+- Only disposable PTYs/output files and fresh mode0700 Screen/HOME namespaces with synthetic window logs. No existing Screen session, private application log/config/state, credentials, network, Docker, V2 service, Discord or model operation in these logging exercises.
 - All producer text and secret-like values are synthetic. Viewer output is not proof of producer-before-persistence secrecy.
 
 ## Observed: keyless pipe and regular-file paths
@@ -53,11 +53,41 @@ A fresh disposable controller became a Linux child subreaper for its own process
 - Leader and child ignored TERM; controller sent INT, TERM, HUP, QUIT, TSTP, INT during shutdown: viewer completed requested exit with status zero in **5.376 s**. The child was reaped with SIGKILL status and the group probe returned ESRCH. This exercises the five-second TERM grace and ignored repeated signals during cleanup.
 - Both runs restored exact termios, input/output fd flags, handlers and mask. These are observed timings under this synthetic setup, not hard real-time limits or proof about arbitrary detached descendants/real Docker CLI topology. No after-reap mutating signal is inferred from timing; source review separately establishes that order.
 
-## Still pending
+## Observed: paused eviction, bounded resume and blocked-output quit
 
-- Foreground loss, first-signal variants, Ctrl-D and deliberate-exception paths beyond the observed incomplete-drain error.
-- Pressure, sustained receive/eviction, rejected-page retry, bounded resume, split/expired control sequences, tiny-terminal and resize behavior.
-- Disposable GNU Screen copy mode, remapped prefix and detach/reattach behavior; an ordinary PTY is not Screen acceptance.
-- Legacy behavior remains source-preserved, not exhaustively re-exercised. No default switch to Screen mode.
+Collected `bash-531` completed exit0. Child-local wrappers around the public `AppendState.receive` and `AppendWriter.submit` methods called the originals once, preserved their return values and recorded only synthetic counters. These instrumentation/retention observations are not RSS or whole-process memory bounds.
+
+- **Paused ingestion:** one completed seed plus 1,500 distinct records produced receive#1501, exactly 500 retained records/230,500 serialized bytes, 1,001 total evictions and zero omitted records/live drops. Completed LIVE watermark stayed at1. Resume disclosed 1,000 unavailable records in the paused range and 480 catch-up-limit omissions, then emitted exactly20 replay rows ending at the newest record. Final observed queue peaks were2 blocks/2,678 bytes. Requested quit, exact restoration and follower-group disappearance passed; settlement observed0.063s.
+- **Blocked output:** after the seed, the controller stopped draining the PTY until after viewer exit. Another 1,500 records with 4KiB payloads were fully ingested. Final history held243 records/2,094,903 bytes with1,258 evictions, zero input omissions,1,292 LIVE display drops and completed LIVE watermark81. Observed history peaks were244 records/2,095,334 bytes; queue peaks128 blocks/27,262 bytes. This exercised the history byte cap and queue block cap, not saturation of the queue byte cap. Quit still returned normally with exact restoration and group disappearance in0.091s without clearing output pressure first. Exit0 is not a lossless-delivery claim.
+
+## Observed: resize, split controls, exit signals and injected exception
+
+Collected `bash-536` completed exit0 over seven fresh PTYs. At3x3, help reported the minimum4x4 warning. Resizing to80x24 and paging the old pin retained its tiny geometry; requesting fresh help rebuilt a usable page. A child-local `AppendKeys.feed` observer confirmed separate input chunks for a split arrow and split bracketed paste containing `q0ir `; none dispatched commands. A later ordinary `i` worked. An unfinished CSI expired into the explicit sticky-disabled notice; later `q0i` dispatched nothing, while ISIG Ctrl-C still exited.
+
+Fresh Ctrl-D, first SIGTERM/HUP/QUIT/TSTP runs exited0. A deliberate `RuntimeError("synthetic-viewer-exception")` after the third received record exited1 as expected. Every case restored exact termios, both fd flags, handlers and mask; the store remained unbound, app modules absent and the owned source group gone. Observed settlement intervals ranged0.065–0.224s; these are sampled timings, not hard deadlines. The initial tiny-terminal controller incorrectly waited for text that the viewer intentionally abbreviated; geometry-independent readiness corrected the exercise, not product code.
+
+## Observed: real foreground transfer
+
+Collected `bash-537` completed exit0. A disposable helper had its own process group inside the viewer's PTY session. After the third synthetic record, the probe transferred the actual terminal foreground group to that helper. The loop recorded `terminal foreground ownership lost` and returned normally. Exact terminal/fd/handler/mask restoration was measured **while the helper still owned the foreground**; the viewer did not steal it back. The helper survived follower cleanup. Only afterwards did the controller reclaim its own disposable TTY and terminate/reap its own helper. Both helper and source group were gone; sampled transfer-through-cleanup interval0.051s. The racing SIGTTIN/SIGTTOU exception variant is not established by this quiet transfer.
+
+## Observed: fresh GNU Screen
+
+Installed GNU Screen4.09.01 help and its local manual were checked, including `-D -m` nonforking ownership, `-e`, `-L`/`-Logfile`, system/user rc selection and disabled login accounting. Collected corrected run `bash-530` completed exit0:
+
+- Fresh0700 SCREENDIR/HOME, null system rc, a tiny owned rc, login accounting disabled, exact private session selectors and only the synthetic viewer/source. No existing sessions were listed, attached or controlled.
+- Verified the reserved Screen server remained nonforking; viewer/source parent and process-group relationships matched the owned tree, and the window viewer owned its foreground TTY with keys on.
+- Ctrl-B was the remapped Screen prefix. Paused viewer output stayed unchanged while `h`/`b` moved within Screen copy mode. Screen's copy-exit `q` was consumed there; subsequent viewer `i` worked. Exact detach/reattach preserved the same running viewer, then local-state/help keys still worked.
+- Normal viewer quit returned successfully; server and attachment exited0. Exact termios/fd/handler/mask restoration, unbound store and absent app imports passed. The3,743-byte **window log**, not Screen-rendered attach bytes, contained only viewer-owned SGR and ordinary CRLF. Screen's own redraw/alternate-buffer controls in the attachment stream are expected and were not misattributed to the viewer.
+- Viewer/source group disappeared; an independent synthetic sleeper survived and was separately cleaned up. Quit-to-settlement observed0.064s. The owned socket namespace and temporary files were removed.
+
+Earlier Screen controller attempts were rejected rather than counted as passes: `i` is itself a Screen copy-mode exit, so an additional Escape contaminated the next key check; attach readiness and a placeholder-built producer environment also needed correction. Another controller wrongly treated successful `follow_logs() -> None` as a nonzero exit. The final run records normal return separately from child/server status. No product change was needed for these controller corrections; all ended synthetic namespaces were ownership-checked and cleaned.
+
+## Remaining coverage limits
+
+- Rejected-page retry under a saturated priority-only queue, queue byte-cap saturation, very long sustained/RSS behavior and every pinned-evidence/eviction combination were not exercised.
+- Split arrows/paste and expired CSI passed; broader UTF-8/SS3/Alt fragmentation, long OSC/DCS bodies (including >64 bytes), C1 ST and all malformed/delayed suffix combinations were not exercised.
+- Quiet foreground loss passed; racing job-control signals, forced Screen-server death and every terminal/backend/platform combination are not exhaustively accepted.
+- Legacy behavior remains source-preserved, not exhaustively re-exercised. Producer-before-persistence secrecy, native operational event transport and arbitrary detached descendants remain outside this viewer's demonstrated contract.
+- No default switch to Screen mode. These are bounded synthetic observations, not application, Discord, voice/media, provider, RAG or replica acceptance.
 
 None of these observations authorizes bot/Ollama/model-pull activation, private history access, remote publication or V1 mutation.
