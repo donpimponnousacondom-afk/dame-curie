@@ -309,7 +309,6 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     _is_safe_url,
     _read_response_limited,
     close_shared_session,
-    SITE_READ_LOOP_MARKER,
 )
 from captcha_solver import build_solver  # noqa: E402
 from config import Config  # noqa: E402
@@ -13034,12 +13033,6 @@ class MaxwellBot(commands.Bot):
                     break
                 if not _tool_results_need_followup(tool_results):
                     break
-                if any(SITE_READ_LOOP_MARKER in (r or "") for r in tool_results):
-                    site_loop_strikes += 1
-                    if site_loop_strikes >= 2:
-                        logger.info(
-                            "site read-loop breaker; finalizing without tools"
-                        )
                 # An ack-only turn ("on it…") loops back exactly once, so the
                 # promised work runs. Without this guard a model that keeps
                 # acknowledging would ping-pong until max_iters.
