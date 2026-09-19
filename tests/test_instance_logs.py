@@ -180,6 +180,7 @@ def test_actual_logs_action_delegates_without_lifecycle_mutations(monkeypatch):
     assert command == ["docker", "compose", "--project-name", app.project,
                        "--project-directory", str(instance.CHECKOUT), "--env-file", "/dev/null",
                        "-f", str(instance.CHECKOUT / "compose.yaml"),
+                       "-f", str(instance.CHECKOUT / "docker" / "compose.staging.yaml"),
                        "logs", "--follow", "--tail", "100"]
     assert env is app.env
 

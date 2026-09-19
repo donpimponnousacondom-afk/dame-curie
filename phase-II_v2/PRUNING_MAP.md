@@ -1,5 +1,15 @@
 # dame-curie: dependency map for surgical cuts
 
+## Current implementation queue — later root decisions
+
+- V2 foundation is being provisioned under the separate grant in `PROVISIONING.md`; Discord and Ollama/model-pull remain held.
+- **Email: in progress**, isolated branch `work/prune-email-20260919`; preserve shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure.
+- **Logging: next implementation priority after the foundation**, using the reviewed Hortator/Screen proposal in `LOGGING_PLAN.md`; legacy logging and functional memory stay.
+- **Twitter/X: next queued pruning cut after email**, explicitly selected by root. Use a separate worktree and review its tools/admin commands/client/mentions/control edges before integration. Preserve generic web fetching, Twitter Card metadata, shared media/inbox/notification code, provider routing and V1 state. No X implementation has started.
+- Telegram is disabled and selected for later removal. Other removals/refactors remain separately scoped.
+
+The map below remains the original bounded source audit; its line references and no-execution claims are historical, not a report of the later provisioning/removal assignments.
+
 ## Resume here
 
 - **Source baseline:** `a9c0fba` on `dev/phaseII_v2`. All source line references below refer to that unchanged application snapshot. This is a bounded static map, not runtime acceptance or proof that deployed V1 has identical source.

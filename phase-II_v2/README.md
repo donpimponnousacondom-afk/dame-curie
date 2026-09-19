@@ -2,15 +2,18 @@
 
 ## Current scope update — 2026-09-19
 
-Root has now authorized the naming/documentation cut-off and narrowly scoped read-only Docker inventory as `maxwell-curie`. Root fixed the planned V2 service account as exactly **dame-curie**, with a separate private rootless engine; no account/engine creation or startup was performed. These later grants supersede only the earlier notes-only/no-Docker scope below, not the prohibitions on production changes, private state, other-project research or new tests.
+Root has now authorized V2 provisioning as exactly **dame-curie**, with a separate private rootless engine, fresh state and secret-safe provider-configuration transfer. The account/engine exist; image/container acceptance is in progress. Discord credentials/activity and Ollama/model-pull startup remain forbidden, RAG is disabled, and V1 cannot be modified. Root also authorized a separate-worktree email removal and read-only research of the working Hortator logger for the next Screen-safe logging slice. These narrow grants supersede the earlier historical scope below; they do not permit unrelated private-state access, feature cuts, new tests or runtime work by children.
 
-Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old operational material is quarantined under `legacy/v1/`. The tyranny templates now target Python 3.14 with scoped application. The source operational cut-off is now implemented and statically reviewed; it is not a runtime cutover. Root also approved quarantining the two V1 DNS provisioners unchanged and committing the unchanged sanity skill as tyranny's review twin. Broader feature pruning is the next separate assignment.
+Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old operational material is quarantined under `legacy/v1/`. The tyranny templates now target Python 3.14 with scoped application. The source operational cut-off is now implemented and statically reviewed; it is not a runtime cutover. Root also approved quarantining the two V1 DNS provisioners unchanged and committing the unchanged sanity skill as tyranny's review twin. Email is now the separately authorized feature cut; other cuts remain unselected.
 
 - [Protected running Docker snapshot](DOCKER_INVENTORY.md)
 - [Namespace decisions and source cut-off map](CUTOFF_PLAN.md)
 - [Source checkpoint review and validation limits](SOURCE_REVIEW.md)
 - [Read-only subsystem map and surgical next-step handoff](PRUNING_MAP.md): current source baseline `a9c0fba`; tools/prompt work is the priority, with no feature removal or runtime change performed by the mapping assignment.
 - [First soft dead-code pass](DEAD_CODE_PASS.md): pinned Vulture, exact source manifest, raw findings and candidate-versus-framework triage; no removals.
+- [V2 provisioning and activation holds](PROVISIONING.md): current account/engine/configuration evidence and remaining acceptance.
+- [Screen-safe logging proposal](LOGGING_PLAN.md): reference-source research and independent review; no implementation or terminal acceptance yet.
+- Email removal is running in isolated branch `work/prune-email-20260919`; its reviewed integration remains pending. Twitter/X is the next queued pruning cut after email; see the current queue atop `PRUNING_MAP.md`.
 - [Repeatable static-audit workflow](../docs/DEAD_CODE.md)
 - [Permanent operations procedure](../docs/OPERATIONS.md)
 

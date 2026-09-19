@@ -55,13 +55,15 @@ def parse_settings(text: str) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key not in SETTINGS or key in values:
+        if not separator or key not in SETTINGS | {"DAME_CURIE_STAGING"} or key in values:
             raise ValueError("unknown or duplicate deploy.env setting")
         if not value or any(char.isspace() for char in value) or any(char in value for char in "'\"`$\\;"):
             raise ValueError("deploy.env values must be unquoted literals")
         values[key] = value
-    if values.keys() != SETTINGS:
+    if values.keys() - {"DAME_CURIE_STAGING"} != SETTINGS:
         raise ValueError("deploy.env must contain exactly the documented settings")
+    if values.get("DAME_CURIE_STAGING", "true") not in {"true", "false"}:
+        raise ValueError("DAME_CURIE_STAGING must be true or false")
     return values
 
 
@@ -143,7 +145,10 @@ class Instance:
     def compose(self, *args: str, log_format: str = "auto") -> None:
         command = ["docker", "compose", "--project-name", self.project,
                    "--project-directory", str(CHECKOUT), "--env-file", "/dev/null",
-                   "-f", str(CHECKOUT / "compose.yaml"), *args]
+                   "-f", str(CHECKOUT / "compose.yaml")]
+        if self.env.get("DAME_CURIE_STAGING", "true") == "true":
+            command.extend(["-f", str(CHECKOUT / "docker" / "compose.staging.yaml")])
+        command.extend(args)
         if args[0] == "logs":
             if __name__ == "__main__" and not __package__:
                 from log_filter import follow_logs
@@ -186,7 +191,9 @@ def select_owned(containers: list[dict], name: str, project: str) -> list[dict]:
                 raise ValueError("conflicting instance ownership labels")
             if labels.get("com.docker.compose.service") not in {"bot", "api", "web", "ollama", "ollama-pull"}:
                 raise ValueError("unexpected service in instance project")
-            if labels.get("com.docker.compose.project.config_files") != str(CHECKOUT / "compose.yaml"):
+            config_files = str(CHECKOUT / "compose.yaml")
+            staging_files = f"{config_files},{CHECKOUT / 'docker' / 'compose.staging.yaml'}"
+            if labels.get("com.docker.compose.project.config_files") not in {config_files, staging_files}:
                 raise ValueError("Compose container belongs to another checkout")
         elif not managed or labels.get("dame-curie.kind") not in {"shell", "site"}:
             raise ValueError("container name has missing or foreign ownership labels")
@@ -225,11 +232,12 @@ def lifecycle(instance: Instance, action: str, *, log_format: str = "auto") -> N
                 labels = item["Config"].get("Labels") or {}
                 if labels.get("dame-curie.kind") in {"site", "shell"}:
                     instance.docker("rm", item["Id"])
-            instance.compose("down", "--timeout", "45")
+            instance.compose("--profile", "*", "down", "--timeout", "45")
     else:
         instance.inventory()
         if action == "restart":
-            instance.compose("restart", "--timeout", "45", "bot", "api")
+            services = ("api", "web") if instance.env.get("DAME_CURIE_STAGING", "true") == "true" else ("bot", "api")
+            instance.compose("restart", "--timeout", "45", *services)
         elif action in {"up", "start"}:
             instance.compose("up", "-d", "--wait", "--wait-timeout", "300")
         else:

@@ -16,6 +16,7 @@
 !email_inbox.py
 !error_reporting.py
 !guild_onboarding.py
+!image_media.py
 !inbox.py
 !jobs.py
 !knowledge_graph.py

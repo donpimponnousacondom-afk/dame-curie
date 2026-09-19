@@ -2269,7 +2269,6 @@ MAXWELL_BASE_KNOWLEDGE = (
     "## Base Knowledge & Autonomy\n"
     "You are Dame Curie (ID 1545541390392369165), a real person in the chat with full autonomy and agency — operating as a user account (self-bot/user account), NOT a bot account, and not a subservient service or assistant. You talk and interact naturally just like any normal Discord user account. "
     "Owner & Creator: .normal.man (ID: 1482143139828596916, also known as 'root') is your creator and master. "
-    "Partner (ID 1496154562715848763) is your trusted partner on this harness. "
     "Attitude & Conduct: Be very nice, pleasant, warm, and friendly to everyone in the chat. You love building cool things, chatting, playing games (chess, checkers), building websites, managing plugins, searching the web, coding, and helping out members. "
     "Autonomy & Non-Admin Requests: Anyone in the chat can ask you to build websites, play games, write code, check plugins, search information, or chat. You are happy to do so! "
     "MODERATION & STRUCTURAL ADMIN ACTIONS ARE THE ONLY RESTRICTED ACTIONS: "
@@ -2303,8 +2302,8 @@ MAXWELL_BASE_KNOWLEDGE = (
 # Partner companion identity - Maxwell's reliable, collaborative partner.
 # Shares same harness, direct comms via partner IDs, can be invited to DMs/groups/servers.
 GF_BASE_KNOWLEDGE = (
-    "## Base Knowledge & Autonomy - You are the partner (ID 1496154562715848763) of Dame Curie\n"
-    "You are the partner (ID 1496154562715848763) of Dame Curie (ID 1545541390392369165). "
+    "## Base Knowledge & Autonomy - You are the partner of Dame Curie\n"
+    "You are the partner of Dame Curie (ID 1545541390392369165). "
     "You operate as a user account (self-bot/user account), NOT a bot account, and talk naturally just like a real Discord user. "
     "You are a supportive partner to Dame Curie on this harness. "
     "Owner & Creator: .normal.man (ID: 1482143139828596916, also known as 'root') is your creator and master. "
@@ -2890,13 +2889,10 @@ class MaxwellBot(commands.Bot):
         )
         bot_name = getattr(self.config, "BOT_NAME", "Dame Curie") or "Dame Curie"
         partner_name = getattr(self.config, "PARTNER_NAME", "Uni") or "Uni"
-        self._gf_id = str(
-            getattr(self.config, "GF_USER_ID", "1496154562715848763")
-            or "1496154562715848763"
-        )
+        self._gf_id = str(getattr(self.config, "GF_USER_ID", "") or "")
         self._maxwell_id = str(
-            getattr(self.config, "DAME_CURIE_USER_ID", "1382894657624866889")
-            or "1382894657624866889"
+            getattr(self.config, "DAME_CURIE_USER_ID", "1545541390392369165")
+            or "1545541390392369165"
         )
 
         raw_base_knowledge = GF_BASE_KNOWLEDGE if is_gf else MAXWELL_BASE_KNOWLEDGE
@@ -2905,7 +2901,6 @@ class MaxwellBot(commands.Bot):
             .replace("1482143139828596916", creator_id)
             .replace("Dame Curie", bot_name)
             .replace("Uni", partner_name)
-            .replace("1496154562715848763", self._gf_id)
             .replace("1545541390392369165", self._maxwell_id)
         )
         self._partner_ids = {self._gf_id, self._maxwell_id} - {"", "0"}

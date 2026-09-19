@@ -7,10 +7,10 @@ This page defines a safe investigation procedure. It does not grant deployment a
 | Workload | Service account | Engine | State of this knowledge |
 | --- | --- | --- | --- |
 | Protected running V1 | `maxwell-curie` | That account's private local rootless Docker engine | Root identified the account; bounded running-resource metadata was observed on 2026-09-19 |
-| Planned V2 | **`dame-curie`** | A separate private rootless engine owned by that account | Root's target decision; account/engine creation and existence not verified here |
+| V2 foundation | **`dame-curie`** | Its separate private rootless Docker engine | Account UID/GID 1005 and engine verified during authorized provisioning; see `../phase-II_v2/PROVISIONING.md` for readiness and activation holds |
 | Future replicas | Explicitly assigned distinct accounts | One private engine per identity | Design intent, not tested V2 replication |
 
-The account, Compose project, application instance key, image reference and database root are different fields. Do not guess one from a pretty container name. The observed V1 Compose project is `maxwell-curie`; V2 source now uses the full instance/project slug `dame-curie`, with replicas `dame-curie-<identity>` and private roots `/srv/<full-instance>`. This source convention does not prove a V2 engine exists. Do not silently make its user `dame-curie-v2` or `dame-curie-dame-curie`.
+The account, Compose project, application instance key, image reference and database root are different fields. Do not guess one from a pretty container name. The observed V1 Compose project is `maxwell-curie`; V2 uses the full instance/project slug `dame-curie`, with replicas `dame-curie-<identity>` and private roots `/srv/<full-instance>`. Engine provisioning evidence is separate from this source convention and does not establish application readiness. Do not silently make its user `dame-curie-v2` or `dame-curie-dame-curie`.
 
 The intended local rootless endpoint is `unix:///run/user/<service-uid>/docker.sock`, with UID resolved from the **approved service account**, not copied from a historical document. Socket/engine availability and ownership must be established for the actual target. No default-rootful fallback is acceptable. Separate engines do not protect against shared host mounts, credentials, database roots, exposed ports or remote publisher destinations; those need their own boundaries.
 
@@ -21,6 +21,14 @@ The intended local rootless endpoint is `unix:///run/user/<service-uid>/docker.s
 3. **Runtime mutation or deeper diagnosis:** provisioning, builds, pulls, lifecycle operations, container exec, logs, private configuration/state and real logins require a separate explicit scope. Neither this page, the historical debug skill nor a previous inventory grants it.
 
 Once a metadata/run-as assignment is granted, use that known account directly. Do not repeat the discovery mistake of starting with bare `docker` against the caller's default daemon. Do not execute a lifecycle wrapper, deployment helper or installer to discover the identity—even `--help` can cross boundaries through initialization.
+
+## V2 staging gate
+
+The canonical instance wrapper reads optional `DAME_CURIE_STAGING=true|false` from private `deploy.env`; missing means **true**. Staging adds `docker/compose.staging.yaml`, selects only API/web for normal startup, and restarts only those services. Both base-only and exact base+staging Compose labels are recognized in the same checkout. Down includes all profiles for cleanup, not activation.
+
+Keep Discord credentials blank and `ENABLE_RAG=false` while bot/Ollama/model-pull are held. The public Docker examples reflect this state. Do not substitute bare Compose against only the base file: it selects the full application. `discord-activation` alone is not a supported activation recipe because bot retains its Ollama dependency. Leaving staging requires root's explicit activation grant, embedding readiness and separately configured Discord credentials; changing a flag alone is not permission.
+
+Moving an already-running full instance back into staging requires an explicitly authorized all-profile down first. Merely changing the flag and calling up does not stop services in now-inactive profiles. No such transition occurred in the fresh V2 provisioning.
 
 ## Read-only discovery
 

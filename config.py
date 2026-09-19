@@ -293,7 +293,7 @@ class Config:
     )
     # Maxwell Companion / Partner
     GF_DISCORD_TOKEN = os.getenv("GF_DISCORD_TOKEN", "").strip()
-    GF_USER_ID = os.getenv("GF_USER_ID", "1496154562715848763").strip()
+    GF_USER_ID = os.getenv("GF_USER_ID", "").strip()
     DAME_CURIE_USER_ID = os.getenv("DAME_CURIE_USER_ID", "1545541390392369165").strip()
     PARTNER_USER_ID = os.getenv("PARTNER_USER_ID", "").strip()
     # Partner-to-partner replies are intentionally finite.  A human message

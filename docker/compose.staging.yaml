@@ -1,0 +1,14 @@
+services:
+  bot:
+    profiles:
+      - discord-activation
+    restart: "no"
+  ollama:
+    profiles:
+      - rag-activation
+    restart: "no"
+  ollama-pull:
+    profiles:
+      - rag-activation
+  api:
+    depends_on: !reset {}

@@ -1,6 +1,6 @@
 # dame-curie status
 
-Updated 2026-09-19. This ledger concerns the fresh V2 checkout, not the archived V1 rollout history. **The naming/documentation checkpoint is source-reviewed; V2 is not deployment-ready.**
+Updated 2026-09-19. This ledger concerns V2, not the archived V1 rollout history. **Root has now authorized V2 provisioning; it is in progress. Discord and Ollama/model-pull activation remain prohibited.** Current operational evidence and exact holds are in `../phase-II_v2/PROVISIONING.md`; earlier milestones below retain their historical limits.
 
 ## Completed boundaries and observations
 
@@ -41,8 +41,16 @@ Updated 2026-09-19. This ledger concerns the fresh V2 checkout, not the archived
 - Real V2 configuration, private mounts/state, ports and publisher destinations need explicit assignment and verification. Names alone do not isolate mutable state. No permission to reuse a V1 remote destination is implied.
 - Backup/rollback readiness remains unconfirmed; no backup content was read.
 
-## Actions not performed
+## Earlier source-only boundary (through `3a71cbb`)
 
-No application imports/execution or test collection/execution; no new tests, real login/provider probes, dependency installation, user/engine provisioning, builds/pulls/retags/pruning, deployment, service/container lifecycle changes, migrations, production configuration/state reads or remote publication. No other-project, upstream or deleted-history research.
+Through that checkpoint: no application imports/execution or test collection/execution; no new tests, real login/provider probes, application-dependency installation, user/engine provisioning, builds/pulls/retags/pruning, deployment, service/container lifecycle changes, migrations, production configuration/state reads or remote publication. No other-project, upstream or deleted-history research was performed in those earlier assignments.
 
-Work remains local on `dev/phaseII_v2`. Source/documentation commits do not synchronize production or authorize startup.
+## Current authorized implementation
+
+- Root subsequently authorized account/engine/image/container provisioning, fresh V2 state, read-only V1 provider configuration transfer, and bounded non-Discord provider checks. The account and engine now exist; detailed progress and remaining acceptance are in `../phase-II_v2/PROVISIONING.md`.
+- Discord credentials and activity are forbidden; Telegram is disabled for later removal. Ollama and its pull job must remain stopped, with RAG disabled during staging. V1 must not be changed.
+- Root fixed Dame Curie's identity as `1545541390392369165` and root/.normal.man as `1482143139828596916`; incorrect inherited companion/identity defaults are being removed without pruning the companion feature.
+- Root additionally authorized a separate-worktree email removal, now in progress, and queued Twitter/X as the next independent pruning cut after it. Shared web fetching/inbox/notifications/media remain protected. No other feature cut is implied.
+- Logging is the next priority: narrowly authorized read-only Hortator source research and Flash/Luna review are preparing a Screen-safe plan; existing logging is retained and no logging implementation is underway.
+
+Work remains local on `dev/phaseII_v2` and explicitly owned worktrees. A source/documentation commit alone never synchronizes V1 or authorizes Discord/RAG activation.

@@ -11,10 +11,10 @@ This checkout is the clean-cut V2 workstream for **dame-curie**. Root's current 
 
 `legacy/` is quarantined historical material, not active instructions. Exclude it from ordinary orientation/searches. Read a specific archived file only for an explicitly assigned archaeology question; do not follow its external paths, URLs, old commits or operating commands. Never look for another checkout or upstream project to fill gaps. The archive's old agent contract deliberately is not named `AGENTS.md`.
 
-## Protected V1 and planned V2
+## Protected V1 and isolated V2
 
 - Protected V1 service account: `maxwell-curie`; its local private Docker engine owns the observed V1 resources.
-- Planned V2 service account: **`dame-curie`**, with a separate private rootless Docker engine. Do not infer that the user/engine already exists. Do not substitute `dame-curie-v2` or concatenate the project name twice.
+- V2 service account: **`dame-curie`**. Its account and separate private rootless engine were created and verified under root's explicit provisioning grant; current readiness/activation holds are recorded in `phase-II_v2/PROVISIONING.md`. Re-resolve the account/socket before any newly authorized runtime operation. Do not substitute `dame-curie-v2` or concatenate the project name twice.
 - A dated, explicitly authorized running-resource inventory is in `phase-II_v2/DOCKER_INVENTORY.md`. It is not current configuration, a backup, host-wide collision proof or source provenance.
 - Separate users/engines are the intended isolation boundary. Private configuration/state roots, mounts, ports and remote publisher destinations must also be separated. Multi-instance replication is not yet accepted for V2.
 
@@ -31,6 +31,8 @@ A backup, local commit, documentation edit or review pass never authorizes a res
 ## Naming cut-off
 
 Canonical external name: **dame-curie**. Root's intentional short URL segment **dame** remains. Use `DAME_CURIE_*` for shell/Python environment identifiers where hyphens are not valid ordinary identifiers. Neutral filenames such as `bot.env`, `.env` and `.venv` need no cosmetic rename; their roles and containing roots must be explicit.
+
+Root-confirmed identities: **Dame Curie `1545541390392369165`** and **root / .normal.man `1482143139828596916`**. No other snowflake identifies either principal. Do not infer owner/partner trust from inherited third-party IDs.
 
 Trace coupled image/resource selectors, custom labels, paths, database consumers and routes before changing them. No old-name fallback may silently reconnect V2 to protected V1 resources/state. Do not rename ordinary `max()`/`max_tokens`, rewrite every historical comment, invent real hostnames/mailboxes/Discord identities or change the primary persona/model as a naming shortcut. The operational source cut-off is implemented and statically reviewed; it is not evidence of provisioning, runtime isolation or deployment acceptance. Broader feature pruning still requires root's next assignment.
 

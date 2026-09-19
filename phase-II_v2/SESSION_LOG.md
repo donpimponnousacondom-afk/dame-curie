@@ -123,4 +123,16 @@ This follow-up separately authorized tool setup and static parsing, not applicat
 - Independent read-only review confirmed the report counts and soft-pass boundaries. It found that the initial documented process-substitution recipe would hide a failed Git selection. The permanent workflow now clears the array, accepts a cached path list only after Git succeeds, and separates path review from invocation. This corrected the future recipe; the recorded successful baseline remained valid.
 - Root reported a harness rendering problem and requested the draggable diagram form. Coordinator used flat Mermaid flowcharts without subgraphs; no harness/plugin/server change or restart was attempted, and current rendering success was not claimed.
 
-Application/test code, real configuration and protected V1 remain untouched. No app/test import or execution, private-state read, Docker/service access, provider call, deployment or pruning occurred. Future cleanup remains one explicitly chosen slice.
+Application/test code, real configuration and protected V1 remained untouched in that audit assignment. No app/test import or execution, private-state read, Docker/service access, provider call, deployment or pruning occurred there.
+
+## 2026-09-19 — authorized V2 foundation and parallel next slices
+
+Root included provisioning in this round and selected fresh V2 state, secret-safe V1 provider settings transfer and bounded non-Discord provider checks. Root explicitly prohibited Discord credentials/activity and required Ollama/model-pull to remain stopped with RAG disabled. Canonical principal IDs were confirmed. Detailed current evidence lives in `PROVISIONING.md`.
+
+- Coordinator created the `dame-curie` account/private rootless engine and restrictive roots, transferred only allowed provider settings, and began image preparation. V1 lifecycle and personal history remain untouched.
+- Flash restored-source web closeout was limited to branding, namespaced browser storage and PM2 selectors; immutable artifact provenance is recorded. Coordinator fixed wrong identity/implicit partner defaults and the missing image-media Docker input.
+- Luna caught a canonical-wrapper bypass of the staging overlay. Coordinator added the default-on staging gate, exact ownership-label layouts and appropriate restart/down selection; Luna re-reviewed without a remaining source blocker. Existing fixtures were aligned, no new tests or test execution. Source syntax and Compose service selection were checked.
+- Root then authorized removing the email subsystem in worktree `/home/codexy/deepseek/dame-curie-worktrees/prune-email`, branch `work/prune-email-20260919`, based on `3a71cbb`. Its agent owns only that branch; shared inbox/notifications/media are protected and central ledgers stay coordinator-owned. Review/integration is pending.
+- Logging is the next priority: an Astra child traced the actual Hortator implementation under root's narrow other-project source grant, with independent Flash/Luna adversarial review. `LOGGING_PLAN.md` is a reviewed proposal, not implementation or terminal acceptance. Existing logging and functional memory remain; no agent touched live Screen.
+
+Runtime authority remains coordinator-only. Source commits are not Discord/RAG activation permission.

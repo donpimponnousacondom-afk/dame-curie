@@ -144,7 +144,7 @@ def test_down_stops_all_writers_before_removing_managed_containers(tmp_path):
     ops.lifecycle(app, "down")
     assert [event[-1] for event in events[:5]] == ["bot", "api", "shell", "site", "web"]
     assert events[5:7] == [("rm", "shell"), ("rm", "site")]
-    assert events[-1] == ("compose", "down", "--timeout", "45")
+    assert events[-1] == ("compose", "--profile", "*", "down", "--timeout", "45")
 
 
 @pytest.mark.parametrize("action", ["up", "start"])
@@ -218,6 +218,7 @@ def test_start_alias_cli_rejects_archive_before_identity_lookup(monkeypatch, cap
 
 def test_restart_remains_bot_api_only(tmp_path):
     app = instance(tmp_path)
+    app.env["DAME_CURIE_STAGING"] = "false"
     app.inventory = Mock(return_value=[])
     app.compose = Mock()
     ops.lifecycle(app, "restart")

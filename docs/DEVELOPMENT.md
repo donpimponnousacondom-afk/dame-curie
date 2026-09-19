@@ -16,7 +16,7 @@ Application/site images currently declare Python 3.14.4. The inherited shell ima
 
 ## Chosen minimal local workflow
 
-Use an explicitly selected Python 3.14 venv. The source cut-off verified Python 3.14.4 and standard-library `venv --help` without creating an environment. Root's later, separately authorized static-audit assignment created a fresh `.venv` and installed Vulture 2.16 only (besides bootstrap pip). This is a tool environment, not application readiness. `uv` was not found on PATH or exercised; do not search unrelated environments to recover it.
+Use an explicitly selected Python 3.14 venv. The source cut-off verified Python 3.14.4 and standard-library `venv --help` without creating an environment. Root's later static-audit assignment created a fresh `.venv` with Vulture 2.16 (besides bootstrap pip). The subsequently authorized provisioning assignment added `python-dotenv==1.2.3`, matching the image lock, for secret-safe configuration transfer. This is a tool environment, not application readiness. `uv` was not found on PATH or exercised; do not search unrelated environments to recover it.
 
 When environment creation is explicitly in scope, from this checkout and only if `.venv` is a new intended environment:
 
