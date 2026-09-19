@@ -413,19 +413,6 @@ class Config:
         "CAPTCHA_SOLVER_TIMEOUT", 180, min_value=10, max_value=600
     )
 
-    # Human-in-the-loop captcha solving. When CAPTCHA_SOLVER_SERVICE is unset
-    # (or fails), the bot hosts a one-shot hCaptcha solve page and DMs the
-    # link to the owner (any CAPTCHA hit: joins, DM gates, phone checks).
-    # The token is bound to Discord's sitekey+rqdata, not the solver, so
-    # anyone who opens the link can complete it. CAPTCHA_FALLBACK_USER_ID is
-    # DM'd when no admin is resolvable.
-    CAPTCHA_HUMAN_SOLVE = _bool_env("CAPTCHA_HUMAN_SOLVE", True)
-    CAPTCHA_HUMAN_HOST = os.getenv("CAPTCHA_HUMAN_HOST", "127.0.0.1").strip()
-    CAPTCHA_HUMAN_PORT = _int_env(
-        "CAPTCHA_HUMAN_PORT", 8790, min_value=1, max_value=65535
-    )
-    CAPTCHA_FALLBACK_USER_ID = os.getenv("CAPTCHA_FALLBACK_USER_ID", "").strip()
-
     POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "MarcosFRG/sdxl-lightning")
     IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "pollinations").strip().lower()
     IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "").strip()

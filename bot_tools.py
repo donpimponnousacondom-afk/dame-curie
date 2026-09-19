@@ -38,7 +38,6 @@ from tools import Tool
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident, redact_sensitive_text, register_secrets
 from image_media import ImageMediaError, image_mime, normalize_image
 from response_observability import FOOTER_MARKER, clean_message_content, discord_message_excerpt, prepare_delivery, record_delivery, strip_footer
-from captcha_solver import CaptchaSolveError
 from control_defaults import parse_bool
 import site_backend
 import site_server
@@ -2621,92 +2620,11 @@ class JoinServerTool(Tool):
                 "tool.join_server", f"CAPTCHA required to join {gname}",
                 exception=e, details=_format_captcha(e),
             )
-            human = bool(
-                getattr(getattr(self.bot, "config", None), "CAPTCHA_HUMAN_SOLVE", False)
-            )
-            if human:
-                async def _notify_admin(url: str) -> None:
-                    from operator_commands import send_private_error_report
-
-                    if not self.bot._is_admin(author_id):
-                        return
-                    try:
-                        await send_private_error_report(
-                            self.bot, message.author,
-                            "⚠️ CAPTCHA required to join " + gname + ". Solve here (expires ~2 min): " + url,
-                            report=False,
-                        )
-                    except Exception as ex:
-                        capture_incident("tool.join_server", "Could not privately notify CAPTCHA requester", exception=ex)
-                        logger.warning("captcha admin DM notify failed: %s", ex)
-
-                try:
-                    token = await self.bot._solve_captcha_with_notify(
-                        e, notify=_notify_admin
-                    )
-                except CaptchaSolveError as se:
-                    return tool_failure(
-                        "tool.join_server",
-                        "\n".join(lines)
-                        + f"\nCAPTCHA REQUIRED to join {gname}: {_format_captcha(e)}"
-                        + _solver_status(self.bot)
-                        + f"\nHuman solve failed: {se}",
-                        exception=se,
-                    )
-                try:
-                    data = await self.bot._retry_invite_with_captcha(code, e, token)
-                except discord.HTTPException as he:
-                    return tool_failure(
-                        "tool.join_server",
-                        "\n".join(lines)
-                        + f"\nCAPTCHA solved but join retry failed: HTTP {he.status}: "
-                        + (he.text[:200] if he.text else ""),
-                        exception=he,
-                    )
-                except Exception as ex:
-                    return tool_failure(
-                        "tool.join_server",
-                        "\n".join(lines)
-                        + f"\nCAPTCHA solved but join retry failed: {type(ex).__name__}: {ex}",
-                        exception=ex,
-                    )
-                gid2 = None
-                if isinstance(data, dict):
-                    gid2 = (data.get("guild") or {}).get("id")
-                joined_guild = None
-                for _ in range(12):
-                    joined_guild = (
-                        self.bot.get_guild(gid2 or gid) if (gid2 or gid) else None
-                    )
-                    if joined_guild is not None:
-                        break
-                    await asyncio.sleep(1)
-                if joined_guild is not None:
-                    onboard_note = ""
-                    try:
-                        onboard = await self.bot._auto_onboard(
-                            joined_guild, detail=True
-                        )
-                        if onboard.get("ok"):
-                            onboard_note = "\n" + str(onboard.get("summary") or "")
-                    except Exception as ex:
-                        logger.debug("auto-onboard (captcha join) failed: %s", ex)
-                    return (
-                        "\n".join(lines)
-                        + f"\nJOINED {joined_guild.name} (ID: {joined_guild.id}) — "
-                        + "captcha was solved via the posted link."
-                        + onboard_note
-                    )
-                return (
-                    "\n".join(lines)
-                    + "\nCAPTCHA solved and join re-submitted — waiting on the "
-                    + "guild to appear in cache. Check list_servers shortly."
-                )
             return ToolFailure(
                 "\n".join(lines)
                 + f"\nCAPTCHA REQUIRED to join {gname}: {_format_captcha(e)}"
                 + _solver_status(self.bot)
-                + "\nJoin blocked until the captcha is solved.",
+                + "\nJoin blocked. Manual action in Discord is required before retrying.",
                 incident_id,
             )
         except discord.NotFound as e:

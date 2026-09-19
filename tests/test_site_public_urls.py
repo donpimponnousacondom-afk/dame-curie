@@ -1,8 +1,4 @@
-import ast
 import asyncio
-import os
-import runpy
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
@@ -20,10 +16,8 @@ from bot_tools import (
     SiteServerTool,
     SiteTestTool,
 )
-from captcha_solver import HumanCaptchaServer
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[1]
 LOCAL = "http://127.0.0.1:8081"
 LOCAL_SITE = LOCAL + "/bot"
 PUBLIC = "https://redroom.zombiedawn.net/dame"
@@ -84,17 +78,6 @@ def site_case(request, tmp_path, monkeypatch):
         bot=bot, message=message, root=root, create=create, created=result,
         expected=expected, override=override,
     )
-
-
-def source_function(relative_path, name, namespace):
-    path = SOURCE_ROOT / relative_path
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    function = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
-    )
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
-    return namespace[name]
 
 
 def test_create_advertises_site_root_and_bundled_images_without_rewriting_files(site_case):
@@ -209,35 +192,3 @@ def test_website_override_leaves_image_delivery_urls_and_bytes_unchanged(site_ca
         assert "NOT sent" in result
     assert case.bot.config.DAME_CURIE_SITE_DIR == str(case.root)
     assert case.bot.config.DAME_CURIE_PUBLIC_BASE_URL == LOCAL + "///"
-
-
-def test_environment_override_does_not_change_global_cors_captcha_or_oauth(site_case, monkeypatch):
-    case = site_case
-    monkeypatch.setenv("DAME_CURIE_ENV_FILE", os.devnull)
-    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
-    monkeypatch.setenv("DAME_CURIE_PUBLIC_BASE_URL", LOCAL + "///")
-    monkeypatch.delenv("DAME_CURIE_CORS_ORIGIN", raising=False)
-    if case.override is None:
-        monkeypatch.delenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", raising=False)
-    else:
-        monkeypatch.setenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", case.override)
-    config = runpy.run_path(str(SOURCE_ROOT / "config.py"))["Config"]
-    assert config.DAME_CURIE_SITE_PUBLIC_BASE_URL == (case.override or "").strip()
-    assert config.DAME_CURIE_PUBLIC_BASE_URL == LOCAL + "///"
-    assert config.DAME_CURIE_CORS_ORIGIN == LOCAL
-    origin = source_function("api/api_server.py", "_discord_redirect_base", {"os": os})
-    assert origin(SimpleNamespace(scheme="https", host="untrusted.example.invalid")) == LOCAL
-    ensure = source_function("bot.py", "_human_captcha_ensure", {"HumanCaptchaServer": HumanCaptchaServer})
-    start = AsyncMock()
-    monkeypatch.setattr(HumanCaptchaServer, "start", start)
-    owner = SimpleNamespace(config=config, _human_captcha_server=None)
-
-    async def challenge():
-        server = await ensure(owner)
-        return await server.create_challenge(SimpleNamespace())
-
-    url = asyncio.run(challenge())
-    assert owner._human_captcha_server.public_base == LOCAL
-    assert url.startswith(LOCAL + "/captcha/")
-    assert PUBLIC not in url
-    assert start.await_count == 2

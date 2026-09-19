@@ -10,7 +10,6 @@ import bot_tools
 import error_reporting
 from bot_tools import ToolFailure
 from error_reporting import PUBLIC_ERROR_TEXT, IncidentLoggingHandler, configure_incident_store, register_secrets
-from operator_commands import PRIVATE_ERROR_REPORT_MARKER
 
 
 @pytest.fixture
@@ -346,62 +345,17 @@ def test_guide_ordinary_dm_no_thread_is_not_an_incident(incidents):
     assert incidents.get(0) is None
 
 
-class SyntheticCaptcha(RuntimeError):
-    service = "synthetic"
-    sitekey = "synthetic-site-key"
-    session_id = "synthetic-session"
-    rqdata = "private challenge data " * 100 + "CHALLENGE-END"
-    rqtoken = "synthetic-rqtoken"
-    should_serve_invisible = False
-    errors = ["synthetic challenge"]
-
-
-def captcha_call(monkeypatch, *, denied_dm=False):
-    monkeypatch.setattr(bot_tools.discord, "CaptchaRequired", SyntheticCaptcha, raising=False)
+def invite_call():
     message = message_in()
     dm = Channel(55)
-    message.author.create_dm = AsyncMock(side_effect=RuntimeError("DM delivery blocked")) if denied_dm else AsyncMock(return_value=dm)
+    message.author.create_dm = AsyncMock(return_value=dm)
     guild = SimpleNamespace(id=77, name="Synthetic Guild", features=[], verification_level=None, member_count=2)
-    invite = SimpleNamespace(guild=guild, approximate_member_count=2, accept=AsyncMock(side_effect=SyntheticCaptcha("challenge")))
+    invite = SimpleNamespace(guild=guild, approximate_member_count=2)
     bot = tool_bot()
-    bot.config = SimpleNamespace(CAPTCHA_HUMAN_SOLVE=True)
     bot._is_admin = Mock(return_value=True)
     bot.fetch_invite = AsyncMock(return_value=invite)
     bot.get_guild = Mock(side_effect=[None, guild])
-    bot._retry_invite_with_captcha = AsyncMock(return_value={"guild": {"id": 77}})
-    bot._auto_onboard = AsyncMock(return_value={"ok": False})
-
-    async def solve(exception, notify):
-        await notify("https://solve.invalid/synthetic-private-challenge")
-        return "synthetic-solved-token"
-
-    bot._solve_captcha_with_notify = solve
     return bot_tools.JoinServerTool(bot), message, dm
-
-
-@pytest.mark.parametrize("denied_dm", [False, True])
-def test_captcha_notification_is_private_and_solver_still_runs(incidents, monkeypatch, denied_dm):
-    tool, message, dm = captcha_call(monkeypatch, denied_dm=denied_dm)
-    result = asyncio.run(tool.execute(message, invite="synthetic-code"))
-    assert "JOINED Synthetic Guild" in result
-    assert message.channel.sent == []
-    message.author.create_dm.assert_awaited_once()
-    tool.bot._retry_invite_with_captcha.assert_awaited_once()
-    if denied_dm:
-        assert dm.sent == []
-    else:
-        assert "https://solve.invalid/synthetic-private-challenge" in dm.sent[0].content
-        assert PRIVATE_ERROR_REPORT_MARKER in dm.sent[0].content
-        assert dm.options[0]["allowed_mentions"].everyone is False
-    assert "CHALLENGE-END" in incidents.get(0).format_report()
-
-
-def test_captcha_rechecks_admin_before_private_notification(incidents, monkeypatch):
-    tool, message, dm = captcha_call(monkeypatch)
-    tool.bot._is_admin = Mock(side_effect=[True, False])
-    asyncio.run(tool.execute(message, invite="synthetic-code"))
-    message.author.create_dm.assert_not_called()
-    assert dm.sent == message.channel.sent == []
 
 
 def test_private_url_refusal_is_not_an_incident(incidents, monkeypatch):
@@ -897,8 +851,8 @@ def test_resolver_cancellation_is_not_a_tool_failure(root_incidents, kind):
 
 
 @pytest.mark.parametrize("status", [429, 503])
-def test_ordinary_invite_accept_http_failure_keeps_full_body(root_incidents, monkeypatch, status):
-    tool, message, dm = captcha_call(monkeypatch)
+def test_ordinary_invite_accept_http_failure_keeps_full_body(root_incidents, status):
+    tool, message, dm = invite_call()
     body = "ordinary invite upstream detail\n" * 1000 + "INVITE-TAIL"
     failure = bot_tools.discord.HTTPException(SimpleNamespace(status=status, reason="synthetic"), body)
 

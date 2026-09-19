@@ -272,55 +272,6 @@ def test_marked_own_reports_skip_create_edit_raw_edit_and_memory(operator_case):
     bot.rem_log.record.assert_not_awaited()
 
 
-@pytest.mark.parametrize("admins,expected_recipients", [({"7", "8"}, ["7", "8"]), (set(), ["99"])])
-def test_global_captcha_notice_stays_private_without_changing_solver_link(operator_case, admins, expected_recipients):
-    bot, message, dm, store = operator_case
-    bot._admins = admins
-    bot.config = SimpleNamespace(CAPTCHA_FALLBACK_USER_ID="99")
-    bot._is_admin = lambda uid: False
-    bot._captcha_recipient_ids = lambda: MaxwellBot._captcha_recipient_ids(bot)
-    bot._captcha_summary = lambda exception: MaxwellBot._captcha_summary(bot, exception)
-    users = {uid: SimpleNamespace(send=AsyncMock()) for uid in expected_recipients}
-    bot._captcha_resolve_user = AsyncMock(side_effect=lambda uid: users[uid])
-    bot._dispatch_plugin_event = Mock()
-    bot._on_message_impl = AsyncMock()
-    bot._generate_response = AsyncMock()
-    bot._inbound_dedup = Mock()
-    bot.memory = SimpleNamespace(add_to_channel_memory=AsyncMock())
-    bot.rem_log = SimpleNamespace(record=AsyncMock())
-    url = "http://127.0.0.1:8790/solve/synthetic-challenge?token=synthetic-solve-token"
-    challenge = SimpleNamespace(
-        errors=["synthetic captcha-required"], service="hcaptcha", sitekey="synthetic-sitekey",
-        rqdata="synthetic-challenge-data @everyone", should_serve_invisible=True,
-    )
-
-    async def run():
-        await MaxwellBot._notify_captcha_link(bot, url, challenge)
-        for index, user in enumerate(users.values()):
-            user.send.assert_awaited_once()
-            call = user.send.await_args
-            payload = call.args[0]
-            assert url in payload and "synthetic-challenge-data" in payload
-            assert payload.endswith("\n" + PRIVATE_ERROR_REPORT_MARKER)
-            assert FOOTER_MARKER not in payload
-            assert not call.kwargs["allowed_mentions"].everyone
-            assert not call.kwargs["allowed_mentions"].users
-            gateway_message = own_message(bot, dm, 90 + index, content=payload)
-            await MaxwellBot.on_message(bot, gateway_message)
-            await MaxwellBot._on_message_impl(bot, gateway_message)
-
-    asyncio.run(run())
-    assert [call.args[0] for call in bot._captcha_resolve_user.await_args_list] == expected_recipients
-    assert not message.channel.sent
-    bot._dispatch_plugin_event.assert_not_called()
-    bot._on_message_impl.assert_not_awaited()
-    bot._generate_response.assert_not_awaited()
-    bot._inbound_dedup.check_and_add.assert_not_called()
-    bot.memory.add_to_channel_memory.assert_not_awaited()
-    bot.rem_log.record.assert_not_awaited()
-    assert store.get(0) is None
-
-
 @pytest.mark.parametrize("content", ["!error 0", "!forward 2"])
 def test_operator_command_ingress_bypasses_plugins_and_memory_but_dispatches(operator_case, content):
     bot, message, dm, store = operator_case
