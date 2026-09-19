@@ -9,7 +9,7 @@ the other half of that contract:
 - `extract_reasoning()` pops `reasoning` back out before the params reach
   Tool.execute(), so no tool ever sees the kwarg.
 - `record_reasoning()` is the ONE function that persists a trace to the
-  dashboard JSON. Both dispatch paths (native + XML) funnel through it. Stop
+  trace JSON. Tool dispatch funnels through it. Stop
   adding new places to write `llm_traces.json` — there is one.
 
 Schemas, the result contract, and the tool catalog live in tool_schemas.py.
@@ -22,7 +22,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Max chars we keep from a reasoning string. The trace is shown on a dashboard;
+# Max chars we keep from a reasoning string. The trace is for human inspection;
 # a novel here helps nobody and bloats the context budget.
 REASONING_MAX_CHARS = 280
 
@@ -87,7 +87,7 @@ async def record_reasoning(
     """ONE reasoning recorder. Both dispatch paths call this.
 
     Writes a trace payload keyed by the tool that actually ran (not a phantom
-    `reasoning_log` tool), so the dashboard shows reasoning attached to the
+    `reasoning_log` tool), so the trace keeps reasoning attached to the
     real action. If `reasoning` is empty we still record a stub so every tool
     call is auditable — that's the whole reason this exists.
 
@@ -111,7 +111,7 @@ def _summarize_params(params: dict[str, Any]) -> dict[str, Any]:
     """Throw away the giant blobs (HTML bodies, file contents) for the trace.
 
     The trace is for humans eyeballing reasoning, not a byte-exact replay.
-    Keeping a 2MB create_site body in llm_traces.json would be insane.
+    Keeping 2MB of file contents in llm_traces.json would be insane.
     """
     out: dict[str, Any] = {}
     for k, v in (params or {}).items():

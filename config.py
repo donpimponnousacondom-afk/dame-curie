@@ -228,7 +228,7 @@ class Config:
     # Toggle for "omni" (audio+vision capable) model input. On by default:
     # Gemini behind the current proxy transcribes wav/mp3; endpoints that
     # 400 on input_audio fall back to text-only via the media-incapable path.
-    # Dashboard process_audio can still turn it off at runtime.
+    # The process_audio control can still turn it off at runtime.
     ENABLE_AUDIO_INPUT = _feature_env("ENABLE_AUDIO_INPUT", default=True)
 
     # -------------------------------------------------------------------------
@@ -243,7 +243,6 @@ class Config:
     # No external dependency — pure code paths, on by default.
     ENABLE_IMAGE_INPUT = _feature_env("ENABLE_IMAGE_INPUT")
     ENABLE_FETCH_URL = _feature_env("ENABLE_FETCH_URL")
-    ENABLE_CREATE_SITE = _feature_env("ENABLE_CREATE_SITE")
     ENABLE_AVATAR = _feature_env("ENABLE_AVATAR")
     ENABLE_AUTONOMY = _feature_env("ENABLE_AUTONOMY")
     # image_generator uses Pollinations (free, keyless); hd_image requires a
@@ -352,9 +351,9 @@ class Config:
     AUX_MODEL = os.getenv("AUX_MODEL", "").strip()
     AUX_DISABLE_REASONING = _bool_env("AUX_DISABLE_REASONING", True)
 
-    # Live tool progress messages. OFF by default: a per-server `,progress on`
+    # Live tool progress messages. OFF by default: a per-server `!progress on`
     # opts a server in, and DAME_CURIE_PROGRESS_MESSAGES=true enables it for every
-    # server as a baseline. `,progress off` silences a noisy server even under
+    # server as a baseline. `!progress off` silences a noisy server even under
     # the env baseline; DMs never get them. See tool_progress.py.
     PROGRESS_MESSAGES = _bool_env("DAME_CURIE_PROGRESS_MESSAGES", False)
 
@@ -480,7 +479,6 @@ class Config:
         ("ENABLE_WEB_SEARCH", "web search"),
         ("ENABLE_FETCH_URL", "fetch_url"),
         ("ENABLE_YOUTUBE", "YouTube"),
-        ("ENABLE_CREATE_SITE", "site generation"),
         ("ENABLE_AVATAR", "avatar changes"),
         ("ENABLE_SHELL", "shell (docker sandbox)"),
         ("ENABLE_RAG", "RAG vector memory"),
@@ -532,8 +530,8 @@ class Config:
 
         if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(
-                "DAME_CURIE_OWNER_IDS is empty — admin commands (`,prompt`, "
-                "`,clearmem`, `,autonomy`, `,rem`, etc.) will be denied to "
+                "DAME_CURIE_OWNER_IDS is empty — admin commands (`!prompt`, "
+                "`!clearmem`, `!autonomy`, `!rem`, etc.) will be denied to "
                 "everyone. Set your Discord user ID in .env."
             )
         if cls.ENABLE_SHELL:

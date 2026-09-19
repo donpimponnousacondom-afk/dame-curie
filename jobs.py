@@ -4,7 +4,7 @@ The problem: a site build holds the channel's ``ReplyQueue`` turn (and one
 of only two global LLM slots) for minutes, so everyone else in the room
 queues behind it and the bot looks channel-locked.
 
-The fix: the model calls ``spawn_background`` (or a user runs ``,bg``).
+The fix: the model calls ``spawn_background`` (or a user runs ``!bg``).
 The live turn ends immediately with a one-line ack naming the job id, and
 the real work runs detached in :func:`run_background_job` with EXTENDED
 budgets (more thinking, more output, longer timeout than a live turn).
@@ -531,7 +531,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 "told the work is running; do not narrate, just build.\n"
                 f"Goal: {job.goal}\n"
                 + (f"Extra context: {job.context}\n" if job.context else "")
-                + "Do the whole job with tools (build, test with site_test, fix failures). "
+                + "Do the whole job with the available tools (build, verify, fix failures). "
                 "Keep intermediate chatter out of the main channel — progress goes to this thread. "
                 "End with a concise summary: what was built + URLs.\n\n"
                 f"{tool_prompt}"

@@ -75,4 +75,4 @@ def test_link_and_command_help_keeps_inline_markdown(command_report):
     bot, message = command_report
     asyncio.run(MaxwellBot._handle_vc_command(bot, message, "help"))
     content = message.channel.send.await_args.args[0]
-    assert "`,vc join`" in content and "```" not in content
+    assert "`!vc join`" in content and "```" not in content

@@ -24,7 +24,7 @@ MAINTAINER NOTES:
 - Don't reintroduce a silence-first planner prompt. It buys nothing: the floor
   gate already makes badly-timed speech impossible, and the prompt-level version
   only costs initiative.
-- Autonomy exposes every dashboard-enabled tool. If a tool needs a real
+- Autonomy applies the runtime tool controls. If a tool needs a real
   Discord message, SyntheticMessage has to point at target_message_id. Yes,
   this is more annoying. The user explicitly asked for all tools.
 - The context budget is PER-SECTION now, not global truncation. The old
@@ -596,7 +596,7 @@ _DM_HISTORY_TIMEOUT = 20
 # Research tools are never available to the unattended tick. Curiosity-as-a-
 # drive turned every quiet interval into web_search + update_memory on random
 # engine trivia. Extra denials: AUTONOMY_DISABLED_TOOLS=shell,delete_channel
-# Dashboard tools_enabled / disabled_tools still apply on top of this.
+# Runtime tools_enabled / disabled_tools controls still apply on top of this.
 AUTONOMY_RESEARCH_TOOLS = frozenset({"web_search", "fetch_url", "youtube"})
 # Unattended ticks must not kick/ban/timeout/purge or reshape a server.
 AUTONOMY_DESTRUCTIVE_TOOLS = frozenset(
@@ -1263,7 +1263,7 @@ class AutonomyEngine:
                     control.get("autonomy_blocked_servers", []) or []
                 ):
                     return False
-                # `,solo` locks a server to one channel. Setting it also
+                # `!solo` locks a server to one channel. Setting it also
                 # blacklists the guild above, but enforce the lock here too:
                 # the promise is "nowhere but that channel", and it should not
                 # depend on two settings staying in sync.
@@ -1289,7 +1289,7 @@ class AutonomyEngine:
         return True
 
     def _autonomy_tool_allowed(self, name: str) -> bool:
-        """Check if autonomy can use a tool, respecting dashboard controls.
+        """Check if autonomy can use a tool, respecting runtime controls.
 
         CRITICAL: without this, autonomy bypasses tools_enabled/disabled_tools.
         The LLM was calling shell/kilo/create_channel through autonomy even when
@@ -3586,7 +3586,7 @@ class AutonomyEngine:
         """Gate then run. Kept as one call for the many callers that want both.
 
         The tick uses the stages separately so it can report what the gate
-        decided; everything else (tests, `,autonomy run`, the tool loop's
+        decided; everything else (tests, `!autonomy run`, the tool loop's
         mechanical-skip path) wants plan-in, results-out.
         """
         verdicts = await self.policy_gate(actions, planned_post_channels)

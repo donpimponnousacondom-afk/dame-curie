@@ -1,4 +1,4 @@
-"""Shared live prompt storage for the bot and admin API."""
+"""Live personality and server-prompt storage for the bot."""
 
 import json
 import logging

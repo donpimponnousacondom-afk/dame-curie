@@ -7979,9 +7979,9 @@ class UpdateBasePersonalityTool(Tool):
 
 
 class UpdateServerPromptTool(Tool):
-    """Rewrite the per-server custom prompt (same as `,prompt <text>`).
+    """Rewrite the per-server custom prompt (same as `!prompt <text>`).
 
-    Same effect as the `,prompt <text>` command but invokable from
+    Same effect as the `!prompt <text>` command but invokable from
     inside an LLM turn — Dame Curie can edit its own per-server instructions
     when it has a reason. Pass server_id (numeric snowflake) or pass 'DM'
     for the DM default. Pass empty text to clear the per-server prompt.
@@ -7991,7 +7991,7 @@ class UpdateServerPromptTool(Tool):
 
     def get_description(self) -> str:
         return (
-            "Rewrite or clear the per-server custom prompt (same as `,prompt`). "
+            "Rewrite or clear the per-server custom prompt (same as `!prompt`). "
             "Params: server_id (snowflake or 'DM'), text (empty or '__CLEAR__' "
             "to clear)."
         )

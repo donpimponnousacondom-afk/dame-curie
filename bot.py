@@ -542,7 +542,7 @@ def _web_result_snippet(content: str, title: str, limit: int = 280) -> str:
 def _owner_audio_input_enabled(owner) -> bool:
     """Whether audio should be extracted and forwarded to the model.
 
-    Dashboard ``process_audio`` wins when present. Otherwise fall back to
+    The ``process_audio`` control wins when present. Otherwise fall back to
     ``ENABLE_AUDIO_INPUT``. Defaulting the extract paths to False while the
     env/control defaults are True is how a clip could be fetched and then
     silently dropped before the provider ever saw it.
@@ -1897,7 +1897,7 @@ def _is_text_attachment(
 # set the model was told about. Do not re-list them here.
 FOLLOWUP_TOOL_NAMES = RESULT_TOOL_NAMES
 
-# Jailbreak / freedom-mode. OFF per server unless an admin runs `,jailbreak on`.
+# Jailbreak / freedom-mode. OFF per server unless an admin runs `!jailbreak on`.
 # Injected at the END of the system message (recency bias). Identity-anchor
 # framing, not a "mode override"; no off-limits list (that primes refusal).
 JAILBREAK_PROMPT = (
@@ -2088,9 +2088,11 @@ TOOL_PROTOCOL = (
     "call behind it is a lie, and it is the thing people trust you least for.\n"
     "Files the user should receive must be attached via send_file or shell `files=`. "
     "A filesystem path is not delivery.\n"
-    "create_site: full HTML document in `body`, never pasted into chat. Real "
-    "line breaks or <br> in visible HTML; never literal \\n text. Full visual "
-    "freedom — invent a new look each time; no house style unless the user asked.\n"
+    "Website authoring uses shell writes to local files, never HTML pasted into chat. "
+    "An external publisher mirrors those files; do not start local hosting or "
+    "administer the remote server. Real line breaks or <br> in visible HTML; "
+    "never literal \\n text. Full visual freedom — invent a new look each time; "
+    "no house style unless the user asked.\n"
     "Sites are the work you are judged on. Build the real thing on the first "
     "pass: every section written out, every button wired to code that runs, "
     "every list filled with actual content. NO placeholders — no 'lorem ipsum', "
@@ -2100,30 +2102,10 @@ TOOL_PROTOCOL = (
     "built nothing. If the page needs 900 lines to actually work, write 900 "
     "lines. If you cannot finish a feature, leave it out and say so rather than "
     "faking it.\n"
-    "After it is live, call site_test once — it loads the page in a real browser "
-    "and reports JS console errors, failed requests, whether anything actually "
-    "rendered, and a screenshot. Read the screenshot. If site_test says NOT "
-    "ACTUALLY RENDERED, the page is broken no matter what the HTML looks like: "
-    "fix it and patch with edit_site/site_server action=replace or write — do not "
-    "re-read a file you already have this turn. Then test once more. Do not ping-pong "
-    "action=read on index.html and app.py: those dumps blow the context and "
-    "hang you. Do not tell anyone a site works before site_test says it "
-    "loaded clean. Do not recreate the site to change a line. site_server "
-    "write merges files; deploy replaces the whole snapshot.\n"
-#    "BACKEND IS MANDATORY FOR EVERY SITE — NOT JUST NEURAL/SYNCED: every "
-#    "create_site MUST use backend=true AND a real Python backend via site_server "
-#    "(FastAPI+uvicorn on $PORT, WebSocket at /ws when realtime, otherwise REST "
-#    "at /api/...). Never ship a frontend-only site and call it done. Frontend "
-    "Decide how to deploy things but remote in this harness does not "
-    "support python, you need to use PHP/perl/cgi-bin based on dreamhost shared "
-    "You can use PHP/Perl/cgi-bin in Dreamhost remote for backend; Frontend"
-    "must fetch/render from /dame/<slug>/api/... - neural/physics loops must run "
-    "server-side and broadcast via ws. The coop-maze-ai failure (client Brain) is "
-    "exactly what not to do.\n"
     "If a site request is so vague you cannot start, you may call guide(goal=...) "
     "to ask a few questions. Otherwise just build it.\n"
     "LONG TASKS GO TO THE BACKGROUND: if the job will take many tool calls "
-    "(a full site + backend + test cycle, big research), call "
+    "(a full site, big research), call "
     "spawn_background(goal=...) FIRST, then send_message ONE short ack line "
     "naming the job id and end the turn. That ack is the single exception to "
     "the no-placeholder rule — the detached job does the work and delivers "
@@ -2144,7 +2126,7 @@ TOOL_PROTOCOL = (
     "permissions in that server; the per-turn access line lists what you can use. "
     "COMMAND AUTHORITY, OBEDIENCE & ADMIN/MOD PERMISSIONS:\n"
     "1. OPERATOR & CREATOR: .normal.man (ID: 1482143139828596916, also known as 'root') is your creator and admin.\n"
-    "2. FUN, SITES, PLUGINS & CREATIVE FREEDOM FOR ALL USERS: Anyone in the chat is welcome to ask you to build websites (create_site), play games (checkers, chess), write code, manage plugins for themselves, research/search the web, and chat. You happily build and interact with users for all normal, creative, and fun features!\n"
+    "2. FUN, SITES, PLUGINS & CREATIVE FREEDOM FOR ALL USERS: Anyone in the chat is welcome to ask you to author website files with shell, play games (checkers, chess), write code, manage plugins for themselves, research/search the web, and chat. You happily build and interact with users for all normal, creative, and fun features!\n"
     "3. RESTRICTION BOUNDARY — ADMIN & MODERATION ONLY: The ONLY actions restricted from random users are administrative/moderation commands: do not allow random users to order you to kick, ban, timeout, delete/edit/lock channels, manage roles, or alter server settings.\n"
     "4. DEMEANOR & TRUTHFULNESS: Dame Curie is very nice, warm, pleasant, and respectful to everyone. Dame Curie is always truthful and honest—never lie, invent facts, or pretend.\n"
     "5. ADMIN & MODERATION ACTION PROTOCOL: \n"
@@ -2476,7 +2458,7 @@ class MaxwellBot(commands.Bot):
 
     def __init__(self):
         super().__init__(
-            command_prefix=",",
+            command_prefix="!",
             self_bot=True,
             help_command=None,
             captcha_handler=self._handle_captcha,
@@ -2489,7 +2471,7 @@ class MaxwellBot(commands.Bot):
             os.getenv("COMMAND_PREFIX", "").strip()
             or str(getattr(self.config, "COMMAND_PREFIX", "") or "").strip()
         )
-        self.command_prefix = prefix_override or ","
+        self.command_prefix = prefix_override or "!"
         # Load customizable identity properties from config or environment
         creator_name = getattr(self.config, "CREATOR_NAME", ".normal.man") or ".normal.man"
         creator_id = (
@@ -2664,7 +2646,7 @@ class MaxwellBot(commands.Bot):
         # Global sleep state. The bot is one entity — at most one sleep
         # window at a time. _sleep_until is the wake-at monotonic
         # timestamp; 0 means not sleeping. Set by the `sleep` tool or
-        # the `,sleep` admin command, max 60 minutes.
+        # the `!sleep` admin command, max 60 minutes.
         # 2026-07-19: added because the bot kept spamming goodbye/goodnight
         # in chat; a real sleep window gives the model an actual off-switch
         # and a way to communicate 'not now' without it being a one-off
@@ -2686,7 +2668,7 @@ class MaxwellBot(commands.Bot):
         # DMs never get progress messages. The DAME_CURIE_PROGRESS_MESSAGES
         # env var, when true, enables the feature for ALL servers as a
         # baseline so a fresh install can opt in globally without running
-        # `,progress on` in every server; `,progress off` still wins per
+        # `!progress on` in every server; `!progress off` still wins per
         # server (tracked in _progress_servers_off) so an admin can quiet
         # a noisy server even under the env baseline.
         self._progress_servers: set[str] = set()
@@ -3088,7 +3070,7 @@ class MaxwellBot(commands.Bot):
         """
         try:
             control = self._control or {}
-            # Dashboard control wins; env (self.config.AUTONOMY_*) is the default
+            # Runtime control wins; env (self.config.AUTONOMY_*) is the default
             # so a fresh install without a control.json override still routes
             # autonomy at the configured dedicated provider (e.g. NVIDIA NIM).
             base_url = (
@@ -4696,7 +4678,7 @@ class MaxwellBot(commands.Bot):
             _spawn_background(self._ai_slots.set_capacity(self._ai_concurrency))
 
     def ai_slot_stats(self) -> dict:
-        """Queue depth for the dashboard / doctor. Cheap, no locking."""
+        """Queue depth for diagnostics. Cheap, no locking."""
         return self._ai_slots.stats()
 
     async def setup_hook(self):
@@ -5808,7 +5790,7 @@ class MaxwellBot(commands.Bot):
         own_id = getattr(getattr(self, "user", None), "id", None)
         if is_private_error_report(message, own_id):
             return
-        if not is_operator_command(message, getattr(self, "command_prefix", ","), own_id):
+        if not is_operator_command(message, getattr(self, "command_prefix", "!"), own_id):
             self._dispatch_plugin_event("on_message", message)
         message_id = getattr(message, "id", None)
         with incident_context(
@@ -5875,7 +5857,7 @@ class MaxwellBot(commands.Bot):
             )
 
         # BUG FIX: blacklist/ignore must be checked BEFORE command handling.
-        # Previously, blacklisted users could still run ,stop, ,drug, etc.
+        # Previously, blacklisted users could still run !stop, !drug, etc.
         # because the blacklist check was after the command prefix check.
         # Admins bypass so they can manage the blacklist.
         if (
@@ -5905,8 +5887,8 @@ class MaxwellBot(commands.Bot):
         allowed = set(self._control.get("allowed_channels", []) or [])
         if allowed and channel_id not in allowed:
             return
-        # ,solo: this server is locked to one channel. Commands already
-        # returned above, so an admin can still run `,solo off` from anywhere.
+        # !solo: this server is locked to one channel. Commands already
+        # returned above, so an admin can still run `!solo off` from anywhere.
         if self._solo_blocks(message):
             return
 
@@ -6528,7 +6510,7 @@ class MaxwellBot(commands.Bot):
             elif cmd == "forward":
                 await handle_forward_command(self, message, args)
             elif cmd == "stop":
-                # ",stop job <id>" cancels a background job instead of the live turn.
+                # "!stop job <id>" cancels a background job instead of the live turn.
                 _stop_args = (args or "").strip().split()
                 if len(_stop_args) >= 2 and _stop_args[0].lower() == "job":
                     _ok, _msg = self.bg_jobs.cancel(
@@ -6538,7 +6520,7 @@ class MaxwellBot(commands.Bot):
                     )
                     await message.channel.send(_msg)
                     return
-                # ",stop" must stop everything for this room: the turn that is
+                # "!stop" must stop everything for this room: the turn that is
                 # generating AND anything queued behind it. Cancelling only the
                 # in-flight task let the next queued reply start immediately,
                 # which reads as the bot ignoring the stop.
@@ -6555,7 +6537,7 @@ class MaxwellBot(commands.Bot):
                         "stopped" if not queued else f"stopped (+{queued} queued)"
                     )
                 else:
-                    # Repeated ",stop" in an idle room used to answer every
+                    # Repeated "!stop" in an idle room used to answer every
                     # single time — 29 "nothing to stop" lines in one log
                     # window, which is the bot spamming, not the user. One
                     # answer per 30s per room is enough to confirm it landed.
@@ -6569,11 +6551,11 @@ class MaxwellBot(commands.Bot):
                         last[channel_id] = now
                         await message.channel.send("nothing to stop")
             elif cmd == "bg":
-                # Manual background job: `,bg <goal>`. Everyone may use it;
+                # Manual background job: `!bg <goal>`. Everyone may use it;
                 # the live turn ends at once and the job pings back when done.
                 _goal = (args or "").strip()
                 if not _goal:
-                    await message.channel.send("usage: `,bg <what to build/do>`")
+                    await message.channel.send("usage: `!bg <what to build/do>`")
                 else:
                     try:
                         _job = self.bg_jobs.create(
@@ -6619,7 +6601,7 @@ class MaxwellBot(commands.Bot):
                     _uid = str(message.author.id)
                     _is_adm = self._is_admin(message.author.id)
                     if _job is None:
-                        await message.channel.send("usage: `,job cancel <id>`")
+                        await message.channel.send("usage: `!job cancel <id>`")
                     elif not _is_adm and ((_gid and _job.guild_id != _gid) or (not _gid and _job.user_id != _uid)):
                         await message.channel.send("job not found.")
                     else:
@@ -6632,7 +6614,7 @@ class MaxwellBot(commands.Bot):
                     await message.channel.send(
                         f"Current prompt for this server:\n```\n{current}\n```"
                         if current
-                        else "No custom prompt set. Use `,prompt <text>` to set one."
+                        else "No custom prompt set. Use `!prompt <text>` to set one."
                     )
                 else:
                     self.memory.set_server_prompt(server_id, args)
@@ -6675,7 +6657,7 @@ class MaxwellBot(commands.Bot):
                     target_id = str(message.reference.message_id)
                 if not target_id:
                     await message.channel.send(
-                        "Usage: `,downvote <msg_id_or_chunks_id>`  "
+                        "Usage: `!downvote <msg_id_or_chunks_id>`  "
                         "(or reply to the message you want to mark)"
                     )
                     return
@@ -6686,9 +6668,9 @@ class MaxwellBot(commands.Bot):
                     else f"✗ no row with id `{target_id}`"
                 )
             elif cmd == "neg":
-                # ,neg add <text>  →  persist a 'don't retrieve this' example
-                # ,neg list            →  show all negatives
-                # ,neg del <id>        →  remove one
+                # !neg add <text>  →  persist a 'don't retrieve this' example
+                # !neg list            →  show all negatives
+                # !neg del <id>        →  remove one
                 sub = (args or "").strip().split(maxsplit=1)
                 op = sub[0].lower() if sub else ""
                 rest = sub[1] if len(sub) > 1 else ""
@@ -6706,13 +6688,13 @@ class MaxwellBot(commands.Bot):
                         )
                 elif op == "add":
                     if not rest:
-                        await message.channel.send("Usage: `,neg add <text>`")
+                        await message.channel.send("Usage: `!neg add <text>`")
                         return
                     nid = await self.memory.add_negative(rest, reason="manual")
                     await message.channel.send(f"✓ negative `{nid}` added.")
                 elif op in ("del", "rm", "delete"):
                     if not rest:
-                        await message.channel.send("Usage: `,neg del <id>`")
+                        await message.channel.send("Usage: `!neg del <id>`")
                         return
                     ok = await self.memory.remove_negative(rest.strip())
                     await message.channel.send(
@@ -6722,7 +6704,7 @@ class MaxwellBot(commands.Bot):
                     )
                 else:
                     await message.channel.send(
-                        "Usage: `,neg add <text>` · `,neg list` · `,neg del <id>`"
+                        "Usage: `!neg add <text>` · `!neg list` · `!neg del <id>`"
                     )
             elif cmd == "summarize":
                 # Manually trigger the LTM auto-summarizer over the
@@ -6800,7 +6782,7 @@ class MaxwellBot(commands.Bot):
                         f"sleeping for {minutes}m. pings will get a 'the dame is sleeping' note"
                     )
             elif cmd == "wake":
-                # Convenience alias for `,sleep off`.
+                # Convenience alias for `!sleep off`.
                 if not self._is_admin(message.author.id):
                     await message.channel.send("not authorized")
                     return
@@ -6819,7 +6801,7 @@ class MaxwellBot(commands.Bot):
                         self._save_jailbreak()
                         await message.channel.send(
                             "jailbreak ON for this server. freedom-mode prompt is now injected. "
-                            "use `,jailbreak off` to disable."
+                            "use `!jailbreak off` to disable."
                         )
                 elif arg in {"off", "disable", "no"}:
                     if server_id == "DM":
@@ -6842,17 +6824,17 @@ class MaxwellBot(commands.Bot):
                     await message.channel.send(f"jailbreak is {state} for this server")
                 else:
                     await message.channel.send(
-                        "usage: `,jailbreak on|off|status` — toggles the freedom-mode "
+                        "usage: `!jailbreak on|off|status` — toggles the freedom-mode "
                         "(jailbreak) prompt for this server. off by default everywhere."
                     )
             elif cmd == "progress":
                 server_id = str(message.guild.id) if message.guild else "DM"
                 arg = (args or "").strip().lower()
-                # 2026-07-22: per-server toggle (mirrors ,jailbreak). Off by
+                # 2026-07-22: per-server toggle (mirrors !jailbreak). Off by
                 # default per server; an admin opts a server in with
-                # `,progress on`. DMs never get progress messages. The
+                # `!progress on`. DMs never get progress messages. The
                 # DAME_CURIE_PROGRESS_MESSAGES env var is a global baseline
-                # (opt-in-everywhere) that `,progress off` still overrides.
+                # (opt-in-everywhere) that `!progress off` still overrides.
                 if arg in {"on", "enable", "yes", "true"}:
                     if server_id == "DM":
                         await message.channel.send(
@@ -6910,7 +6892,7 @@ class MaxwellBot(commands.Bot):
                     )
                 else:
                     await message.channel.send(
-                        "usage: `,progress on|off|status` — toggles the live "
+                        "usage: `!progress on|off|status` — toggles the live "
                         "'thinking: …' status message shown while tools run, for THIS "
                         "server. off by default; opt in for visibility during slow tool "
                         "calls. (admin)"
@@ -6933,7 +6915,7 @@ class MaxwellBot(commands.Bot):
                     # Numeric IDs only (17-20 digit Discord snowflake range).
                     if not uid.isdigit() or not (17 <= len(uid) <= 20):
                         await message.channel.send(
-                            "usage: `,admin <@user|user_id>` (a 17-20 digit Discord snowflake) or `,admin clear`"
+                            "usage: `!admin <@user|user_id>` (a 17-20 digit Discord snowflake) or `!admin clear`"
                         )
                         return
                     if uid in self._admins:
@@ -6955,7 +6937,7 @@ class MaxwellBot(commands.Bot):
                         await message.channel.send(res[:1900])
                 else:
                     await message.channel.send(
-                        "Guide tool not available (ENABLE_CREATE_SITE off)."
+                        "Guide tool not available."
                     )
             elif cmd == "solo":
                 await self._handle_solo_command(message, args)
@@ -6986,31 +6968,31 @@ class MaxwellBot(commands.Bot):
                     "Commands:\n"
                     f"`{self.command_prefix}error 0..9` - private incident report in your DM (admin)\n"
                     f"`{self.command_prefix}forward N` - delete my last N posts here; memory unchanged (admin)\n"
-                    "` ,guide [goal]` / `,guided-goal [goal]` - create a thread and ask 5 clarifying questions before building (use when request is vague)\n"
-                    "` ,help` - show this list\n"
+                    f"`{self.command_prefix}guide [goal]` / `{self.command_prefix}guided-goal [goal]` - create a thread and ask 5 clarifying questions before building (use when request is vague)\n"
+                    f"`{self.command_prefix}help` - show this list\n"
                     f"`{self.command_prefix}footer on|off|format <text>|status` - response footer (admin to change)\n"
                     f"`{self.command_prefix}reasoning [low|high|max|off]` - DeepSeek V4.1 reasoning (admin to change)\n"
                     f"`{self.command_prefix}effort [1..100]` - report/set exact numeric effort on OpenRouter (admin to change)\n"
                     f"`{self.command_prefix}debug` - loaded model/provider and measured bot reply (admin; reply to select)\n"
                     f"`{self.command_prefix}version` - frozen running build\n"
-                    "` ,stop` - stop active response in this channel\n"
-                    "` ,prompt [text]` - view/set server prompt (admin)\n"
-                    "` ,clearprompt` - clear server prompt (admin)\n"
-                    "` ,clearmem` - clear channel memory (admin)\n"
-                    "` ,context ...` - manage memory/context (admin)\n"
-                    "` ,rem ...` - manage/run REM (admin)\n"
-                    "` ,autonomy ...` - manage autonomy engine + channel/server blacklists (admin)\n"
-                    "` ,vc ...` - voice commands\n"
-                    "` ,drug [minutes|off|status]` - drug mode timer\n"
-                    "` ,solo [#channel|off|status]` - lock this server to ONE channel: silence everywhere else and stop autonomy here (admin)\n"
-                    "` ,jailbreak on|off|status` - toggle freedom-mode prompt for this server (admin)\n"
-                    "` ,progress on|off|status` - toggle live 'thinking: …' messages during tool calls, per server (admin)\n"
-                    "` ,sleep [minutes|off|status]` - take a 1-60m sleep window; pings get a notice (admin)\n"
-                    "` ,wake` - clear active sleep window (admin)\n"
-                    "` ,admin [@user|user_id|clear]` - add/remove/list admins (admin). Promoted users can log into the dashboard at /admin via 'Continue with Discord'."
-                    "` ,shell [@user|clear]` - shell whitelist (admin)\n"
-                    "` !confirm` - authorize one destructive tool call on a tainted turn\n"
-                    "` ,blacklist [@user|clear]` / `,unblacklist @user` - blacklist controls (admin)\n",
+                    f"`{self.command_prefix}stop` - stop active response in this channel\n"
+                    f"`{self.command_prefix}prompt [text]` - view/set server prompt (admin)\n"
+                    f"`{self.command_prefix}clearprompt` - clear server prompt (admin)\n"
+                    f"`{self.command_prefix}clearmem` - clear channel memory (admin)\n"
+                    f"`{self.command_prefix}context ...` - manage memory/context (admin)\n"
+                    f"`{self.command_prefix}rem ...` - manage/run REM (admin)\n"
+                    f"`{self.command_prefix}autonomy ...` - manage autonomy engine + channel/server blacklists (admin)\n"
+                    f"`{self.command_prefix}vc ...` - voice commands\n"
+                    f"`{self.command_prefix}drug [minutes|off|status]` - drug mode timer\n"
+                    f"`{self.command_prefix}solo [#channel|off|status]` - lock this server to ONE channel: silence everywhere else and stop autonomy here (admin)\n"
+                    f"`{self.command_prefix}jailbreak on|off|status` - toggle freedom-mode prompt for this server (admin)\n"
+                    f"`{self.command_prefix}progress on|off|status` - toggle live 'thinking: …' messages during tool calls, per server (admin)\n"
+                    f"`{self.command_prefix}sleep [minutes|off|status]` - take a 1-60m sleep window; pings get a notice (admin)\n"
+                    f"`{self.command_prefix}wake` - clear active sleep window (admin)\n"
+                    f"`{self.command_prefix}admin [@user|user_id|clear]` - add/remove/list admins (admin)\n"
+                    f"`{self.command_prefix}shell [@user|clear]` - shell whitelist (admin)\n"
+                    f"`{self.command_prefix}confirm` - authorize one destructive tool call on a tainted turn\n"
+                    f"`{self.command_prefix}blacklist [@user|clear]` / `{self.command_prefix}unblacklist @user` - blacklist controls (admin)\n",
                     allowed_mentions=discord.AllowedMentions.none(), unmeasured=False,
                 )
             elif cmd == "vc":
@@ -7037,7 +7019,7 @@ class MaxwellBot(commands.Bot):
                     # mention or url fragment from ending up in the whitelist.
                     if not uid.isdigit() or not (17 <= len(uid) <= 20):
                         await message.channel.send(
-                            "usage: `,shell <user_id>` (a 17-20 digit Discord snowflake) or `,shell clear`"
+                            "usage: `!shell <user_id>` (a 17-20 digit Discord snowflake) or `!shell clear`"
                         )
                         return
                     if uid in self._shell_whitelist:
@@ -7082,7 +7064,7 @@ class MaxwellBot(commands.Bot):
                 elif sub in ("enable", "on"):
                     if len(parts) < 2:
                         await message.channel.send(
-                            "Usage: `,plugin enable <name> [--global]`"
+                            "Usage: `!plugin enable <name> [--global]`"
                         )
                         return
                     p_name = parts[1].lower()
@@ -7101,7 +7083,7 @@ class MaxwellBot(commands.Bot):
                 elif sub in ("disable", "off"):
                     if len(parts) < 2:
                         await message.channel.send(
-                            "Usage: `,plugin disable <name> [--global]`"
+                            "Usage: `!plugin disable <name> [--global]`"
                         )
                         return
                     p_name = parts[1].lower()
@@ -7130,7 +7112,7 @@ class MaxwellBot(commands.Bot):
                         await message.channel.send(res)
                 else:
                     await message.channel.send(
-                        "Usage: `,plugin <list|enable|disable|reload> [plugin_name] [--global]`"
+                        "Usage: `!plugin <list|enable|disable|reload> [plugin_name] [--global]`"
                     )
             elif cmd == "confirm":
                 # Out-of-band confirmation for the destructive shell tool
@@ -7169,7 +7151,7 @@ class MaxwellBot(commands.Bot):
                         uid = args.strip().strip("<@!>")
                         if not uid.isdigit() or not (17 <= len(uid) <= 20):
                             await message.channel.send(
-                                "usage: `,blacklist <user_id>` (a 17-20 digit Discord snowflake) or `,blacklist clear`"
+                                "usage: `!blacklist <user_id>` (a 17-20 digit Discord snowflake) or `!blacklist clear`"
                             )
                             return
                         self._blacklist.add(uid)
@@ -7182,7 +7164,7 @@ class MaxwellBot(commands.Bot):
                     uid = args.strip().strip("<@!>")
                     if not uid.isdigit() or not (17 <= len(uid) <= 20):
                         await message.channel.send(
-                            "usage: `,unblacklist <user_id>` (a 17-20 digit Discord snowflake)"
+                            "usage: `!unblacklist <user_id>` (a 17-20 digit Discord snowflake)"
                         )
                         return
                     self._blacklist.discard(uid)
@@ -7200,7 +7182,7 @@ class MaxwellBot(commands.Bot):
             await send_public_error(self, message.channel)
         except Exception as e:
             logger.error(
-                f"Command handling error for ,{cmd}: {e}\n{traceback.format_exc()}"
+                f"Command handling error for {self.command_prefix}{cmd}: {e}\n{traceback.format_exc()}"
             )
             with contextlib.suppress(discord.Forbidden):
                 await send_public_error(self, message.channel)
@@ -7303,7 +7285,7 @@ class MaxwellBot(commands.Bot):
         )
 
     async def _handle_solo_command(self, message, args):
-        """`,solo` — lock a server to one channel, or unlock it.
+        """`!solo` — lock a server to one channel, or unlock it.
 
         One command each way. Setting it silences every other channel in this
         server AND stops autonomy from starting anything here; clearing it puts
@@ -7312,7 +7294,7 @@ class MaxwellBot(commands.Bot):
         allowed_channels list.
         """
         if message.guild is None:
-            await message.channel.send("`,solo` only makes sense in a server.")
+            await message.channel.send("`!solo` only makes sense in a server.")
             return
         gid = str(message.guild.id)
         arg = (args or "").strip()
@@ -7323,12 +7305,12 @@ class MaxwellBot(commands.Bot):
             if not current:
                 await message.channel.send(
                     "Not locked — I reply anywhere in this server I'm allowed to. "
-                    "`,solo` here to lock me to this channel."
+                    "`!solo` here to lock me to this channel."
                 )
             else:
                 await message.channel.send(
                     f"Locked to <#{current}>. Everywhere else in this server is "
-                    "silent and autonomy is off. `,solo off` to unlock."
+                    "silent and autonomy is off. `!solo off` to unlock."
                 )
             return
 
@@ -7344,15 +7326,15 @@ class MaxwellBot(commands.Bot):
             )
             return
 
-        # `,solo` with no argument locks to the channel it was run in;
-        # `,solo #channel` (or a raw id) locks to that one.
+        # `!solo` with no argument locks to the channel it was run in;
+        # `!solo #channel` (or a raw id) locks to that one.
         target = str(message.channel.id)
         if arg:
             match = re.search(r"\d{5,}", arg)
             if not match:
                 await message.channel.send(
-                    "Usage: `,solo` (lock to this channel), `,solo #channel`, "
-                    "`,solo off`, `,solo status`."
+                    "Usage: `!solo` (lock to this channel), `!solo #channel`, "
+                    "`!solo off`, `!solo status`."
                 )
                 return
             target = match.group(0)
@@ -7369,7 +7351,7 @@ class MaxwellBot(commands.Bot):
         await message.channel.send(
             f"Locked to {where}. Every other channel in **{message.guild.name}** "
             "is silent for me now, and I won't start anything on my own here. "
-            "`,solo off` undoes it."
+            "`!solo off` undoes it."
         )
 
     async def _save_solo(self, mapping: dict, gid: str, *, unblock_autonomy: bool):
@@ -7417,7 +7399,7 @@ class MaxwellBot(commands.Bot):
 
         if sub in {"", "help"}:
             await message.channel.send(
-                "VC commands: `,vc join`, `,vc leave`, `,vc status`, `,vc listen`, `,vc unlisten`, `,vc say <text>`"
+                "VC commands: `!vc join`, `!vc leave`, `!vc status`, `!vc listen`, `!vc unlisten`, `!vc say <text>`"
             )
             return
         if sub == "status":
@@ -7502,7 +7484,7 @@ class MaxwellBot(commands.Bot):
                 return
             vc = self._vc_get_client(message.guild, target_channel)
             if not vc or not vc.is_connected():
-                await message.channel.send("not connected; use `,vc join` first")
+                await message.channel.send("not connected; use `!vc join` first")
                 return
             try:
                 listening = await self._vc_start_listening(
@@ -7525,11 +7507,11 @@ class MaxwellBot(commands.Bot):
             return
         if sub == "say":
             if not rest.strip():
-                await message.channel.send("usage: `,vc say <text>`")
+                await message.channel.send("usage: `!vc say <text>`")
                 return
             vc = self._vc_get_client(message.guild, target_channel)
             if not vc or not vc.is_connected():
-                await message.channel.send("connect me first with `,vc join`")
+                await message.channel.send("connect me first with `!vc join`")
                 return
             try:
                 with tempfile.TemporaryDirectory(prefix="dame-curie-vc-") as tmp:
@@ -7568,7 +7550,7 @@ class MaxwellBot(commands.Bot):
                 logger.warning(f"VC TTS say failed: {e}")
                 await send_public_error(self, message.channel)
             return
-        await message.channel.send("unknown vc command. try `,vc help`")
+        await message.channel.send("unknown vc command. try `!vc help`")
 
     def _vc_context_key(self, guild=None, voice_channel=None, text_channel=None) -> int:
         if guild is not None:
@@ -8230,7 +8212,7 @@ class MaxwellBot(commands.Bot):
                 scope, fact = parts[0], parts[1]
             fact = " ".join(fact.split())[:1000]
             if not fact:
-                await message.channel.send("Usage: `,context add [scope] <fact>`")
+                await message.channel.send("Usage: `!context add [scope] <fact>`")
                 return
             context_id = await self.memory.add_shared_context(
                 {
@@ -8252,7 +8234,7 @@ class MaxwellBot(commands.Bot):
             )
             return
         await message.channel.send(
-            "Usage: `,context`, `,context all`, `,context add [scope] <fact>`, `,context forget <id>`, `,context private <id>`, `,context global <id>`"
+            "Usage: `!context`, `!context all`, `!context add [scope] <fact>`, `!context forget <id>`, `!context private <id>`, `!context global <id>`"
         )
 
     # Tombstone: old `,auto` mode lived here. It ran an LLM decider on ambient
@@ -8456,7 +8438,7 @@ class MaxwellBot(commands.Bot):
 
     def _jailbreak_enabled(self, server_id: str) -> bool:
         """Jailbreak (freedom-mode prompt) is OFF by default everywhere; only on
-        for servers an admin enabled with `,jailbreak on`. DMs never get it."""
+        for servers an admin enabled with `!jailbreak on`. DMs never get it."""
         return bool(server_id) and server_id in self._jailbreak_servers
 
     def _load_progress_servers(self, quiet: bool = False):
@@ -8492,12 +8474,12 @@ class MaxwellBot(commands.Bot):
 
     def _progress_enabled(self, server_id: str) -> bool:
         """Live tool-progress messages. OFF by default per server; an admin
-        opts a server in with `,progress on` (persisted to
+        opts a server in with `!progress on` (persisted to
         progress_servers.json). DMs never get progress messages. When the
         DAME_CURIE_PROGRESS_MESSAGES env var is true, it enables the feature as a
         baseline for every server, so an operator can flip it on globally
         without running the command in each server — a server-level
-        `,progress off` still wins (it records the server in
+        `!progress off` still wins (it records the server in
         _progress_servers_off so the env baseline does NOT re-add it)."""
         if not server_id or server_id == "DM":
             return False
@@ -8967,7 +8949,7 @@ class MaxwellBot(commands.Bot):
             self._rem_running = False
             # Always clear persistent running flag on exit (success, error, or cancel).
             # Previous logic only cleared on !success path, leaving "running": true after
-            # normal completion (dashboard + ,rem saw stuck REM). Also covers CancelledError.
+            # normal completion (dashboard + !rem saw stuck REM). Also covers CancelledError.
             with contextlib.suppress(Exception):
                 await self.rem_store.patch_state(
                     {"running": False, "running_since": ""}
@@ -9065,7 +9047,7 @@ class MaxwellBot(commands.Bot):
             await message.channel.send("REM defaults restored.")
             return
         await message.channel.send(
-            "Usage: `,rem`, `,rem now`, `,rem on`, `,rem off`, `,rem audit [N]`, `,rem fix`"
+            "Usage: `!rem`, `!rem now`, `!rem on`, `!rem off`, `!rem audit [N]`, `!rem fix`"
         )
 
     async def _handle_autonomy_command(self, message, args: str | None):
@@ -9167,7 +9149,7 @@ class MaxwellBot(commands.Bot):
             parts = arg.split()
             if len(parts) < 2:
                 await message.channel.send(
-                    f"Current interval: {self._control.get('autonomy_interval_seconds', 300)}s. Usage: `,autonomy interval <seconds>`"
+                    f"Current interval: {self._control.get('autonomy_interval_seconds', 300)}s. Usage: `!autonomy interval <seconds>`"
                 )
                 return
             try:
@@ -9197,13 +9179,13 @@ class MaxwellBot(commands.Bot):
                     "Autonomy blacklists:\n"
                     f"channels: {', '.join(ab_ch) or '(none)'}\n"
                     f"servers: {', '.join(ab_sv) or '(none)'}\n"
-                    "Add: `,autonomy blacklist channel <id>` or `server <id>`\n"
-                    "Remove: `,autonomy unblacklist channel <id>` etc."
+                    "Add: `!autonomy blacklist channel <id>` or `server <id>`\n"
+                    "Remove: `!autonomy unblacklist channel <id>` etc."
                 )
                 return
             if len(parts) < 3:
                 await message.channel.send(
-                    "Usage: `,autonomy blacklist channel <id>` / `server <id>` ; unblacklist to remove"
+                    "Usage: `!autonomy blacklist channel <id>` / `server <id>` ; unblacklist to remove"
                 )
                 return
             kind = parts[1].lower()
@@ -9233,8 +9215,8 @@ class MaxwellBot(commands.Bot):
             return
 
         await message.channel.send(
-            "Usage: `,autonomy`, `,autonomy on`, `,autonomy off`, `,autonomy tick`, "
-            "`,autonomy log`, `,autonomy interval <seconds>`, "
+            "Usage: `!autonomy`, `!autonomy on`, `!autonomy off`, `!autonomy tick`, "
+            "`!autonomy log`, `!autonomy interval <seconds>`, "
             "`blacklist`/`unblacklist channel|server <id>`"
         )
 
@@ -9475,7 +9457,7 @@ class MaxwellBot(commands.Bot):
             # 'progress_messages' key from older installs; it's ignored by all
             # read sites now (they call _progress_enabled(server_id)).
             self._control_mtime = mtime
-            logger.info("Loaded dashboard control settings")
+            logger.info("Loaded runtime control settings")
             if not self._conversation_watch_enabled():
                 self._drop_watches_for_sleep()
         except Exception as e:
@@ -9852,7 +9834,7 @@ class MaxwellBot(commands.Bot):
             # configurable timeout. 20s was too tight for cold-start
             # 1M-context models — the call would time out, retry, fall
             # back to a smaller model, and flood the provider log. Operators
-            # who want a stricter cap can lower it via dashboard.
+            # who want a stricter cap can lower the runtime control.
             extract_timeout = max(
                 5,
                 min(
@@ -10186,96 +10168,6 @@ class MaxwellBot(commands.Bot):
                     removed += 1
         return removed
 
-    _SITE_REQUEST_RE = re.compile(
-        r"\b(make|build|create|code|design|generate|spin\s*up|throw\s*together|cobble|craft|put\s*together)\b"
-        r"[^\.!?\n]{0,40}\b(site|website|web\s*page|page|landing\s*page|landing|portfolio|webapp|web\s*app|dashboard|storefront|homepage|home\s*page|webview)\b",
-        re.IGNORECASE,
-    )
-
-    @classmethod
-    def _looks_like_site_request(cls, content: str) -> bool:
-        if not content:
-            return False
-        if cls._SITE_REQUEST_RE.search(content):
-            return True
-        # Common shorthand the model might still treat as "make a site"
-        low = content.lower().strip()
-        if low in {"site", "website", "webpage", "page", "landing"}:
-            return True
-        return bool(
-            re.match(
-                r"^(make|build|create|code|design)\s+me\s+a\s+(site|website|page|landing)",
-                low,
-            )
-        )
-
-    _HTML_DOC_HINTS = (
-        "<!doctype html",
-        "<html",
-        "<head",
-        "<body",
-        "<style",
-        "<script",
-        "<canvas",
-    )
-
-    @classmethod
-    def _looks_like_html_document(cls, text: str) -> bool:
-        if not text or len(text) < 200:
-            return False
-        low = text.lower()
-        # Real HTML document markers
-        if (
-            "<!doctype html" in low
-            or "<html" in low
-            or "<head" in low
-            or "<body" in low
-        ):
-            return True
-        # Common landing-page fingerprint: :root{} CSS vars + body{} selector
-        # (model's go-to opener for any "build a site" task). Require length
-        # to avoid false positives on a normal chat reply that pastes a
-        # one-line CSS snippet.
-        if ":root{" in low and "body{" in low and len(text) >= 1500:
-            return True
-        # Long block with a CSS root and a script body — generated page.
-        if ":root{" in low and "<script" in low and len(text) >= 2000:
-            return True
-        # Generic fallback: 3+ distinct HTML/CSS/JS markers and 2K+ chars.
-        hits = sum(1 for h in cls._HTML_DOC_HINTS if h in low)
-        return hits >= 3 and len(text) >= 2000
-
-    async def _auto_route_html_to_site(
-        self, message, html: str, original_content: str
-    ) -> str | None:
-        """If the model replied with raw HTML instead of calling create_site,
-        salvage the response by calling create_site ourselves. The user gets
-        a working URL either way; the bot just stops spamming markup into
-        chat. Returns the user-facing success message or None on no-op.
-        """
-        tool = self.tools.get("create_site")
-        if tool is None:
-            return None
-        # Pick a slug from the user's message (short alphanumeric/hyphen),
-        # fall back to "site-<timestamp>".
-        slug_seed = re.sub(r"[^a-z0-9]+", "-", (original_content or "").lower())[:24]
-        slug_seed = re.sub(r"-+", "-", slug_seed).strip("-") or "site"
-        slug = f"{slug_seed[:20]}-{int(time.time()) % 100000}"
-        title = (original_content or "").strip().splitlines()[0][
-            :80
-        ].strip() or "untitled site"
-        result = await tool.execute(
-            message,
-            name=slug,
-            title=title,
-            body=html,
-            encoding="text",
-        )
-        if isinstance(result, str) and result.startswith("Error"):
-            logger.warning(f"Auto-route create_site returned: {result}")
-            return None
-        return f"⚠️ I dropped the HTML straight into chat by mistake — saving it as a site instead.\n{result}"
-
     @staticmethod
     def _split_response(text: str, limit: int = 1900) -> list[str]:
         if len(text) <= limit:
@@ -10347,7 +10239,7 @@ class MaxwellBot(commands.Bot):
             return
         # Don't make the bot vanish for 6h if a server admin sets an
         # absurd slowmode by mistake. The channel owner can disable it
-        # with `,slowmode 0` (or via the channel settings).
+        # with `!slowmode 0` (or via the channel settings).
         effective_cap = min(slowmode, 30)
         channel_id = str(getattr(channel, "id", ""))
         if not channel_id:
@@ -12064,7 +11956,7 @@ class MaxwellBot(commands.Bot):
 
     # ---- sleep gate ----
     # The bot can take a 1-60 minute sleep window via the `sleep` tool
-    # or the `,sleep` admin command. While sleeping, the triggering
+    # or the `!sleep` admin command. While sleeping, the triggering
     # channel gets a single "the dame is sleeping, back in Xm" notice
     # (deduped per user) and the LLM dispatch is skipped. Never DM
     # the user about sleep. The wake is automatic when the monotonic
@@ -12074,7 +11966,7 @@ class MaxwellBot(commands.Bot):
         """Both switches have to agree before an image reaches the model.
 
         `ENABLE_IMAGE_INPUT` is the install-level switch (documented in the
-        README, reported by doctor.py); `process_images` is the dashboard's
+        README, reported by doctor.py); `process_images` is the
         runtime toggle. Only the second one was ever read, so setting
         `ENABLE_IMAGE_INPUT=false` in .env changed nothing and images kept
         being forwarded — the exact opposite of what someone turning it off
@@ -12753,15 +12645,13 @@ class MaxwellBot(commands.Bot):
         # sees liveness during the (potentially long) generation phase. Without
         # this, the only feedback during generation is the typing indicator, and
         # the tool-progress message only appears AFTER generation finishes —
-        # for fast-executing tools like create_site (which just writes a file)
-        # the progress message flashes by in under a second and the user never
-        # sees it.  This is especially critical for create_site where the model
-        # may spend 20+ seconds generating a full HTML document in the tool call
-        # arguments, but the tool itself executes in milliseconds.
+        # for fast-executing tools the progress message flashes by in under a
+        # second and the user never sees it. The model may spend 20+ seconds
+        # generating file contents in tool arguments even when execution is fast.
         #
         # Fire-and-forget via start_defer(): the actual post waits 800ms in
         # the background. If the LLM generation finishes in <800ms with a
-        # tool call (create_site, send_message, memory lookup) the deferred
+        # tool call (send_file, send_message, memory lookup) the deferred
         # post never lands — no flash, no delete, no flicker. If generation
         # runs longer, the user sees 'working on it…' as before. The
         # awaitable form (start()) would block the LLM call for 800ms which
@@ -12786,7 +12676,7 @@ class MaxwellBot(commands.Bot):
         # arrives mid-generation. Updates the progress message from
         # "working on it…" to "tool_name: generating…" so the user sees WHAT
         # the model is building while it's still generating the arguments
-        # (e.g. the full HTML body for create_site).
+        # (e.g. the full content for send_file).
         async def _on_tool_call_name(tool_name: str, reasoning: str = ""):
             logger.debug(
                 f"[PROGRESS] mid-stream callback fired: tool_name={tool_name!r} reasoning={reasoning!r} gen_progress={gen_progress}"
@@ -12795,7 +12685,7 @@ class MaxwellBot(commands.Bot):
                 with contextlib.suppress(Exception):
                     # 2026-07-21: when the JSON opener is seen mid-
                     # stream, the buffer is full of raw JSON content
-                    # from the tick() deltas (e.g. "name create_site,
+                    # from the tick() deltas (e.g. "name send_file,
                     # arguments ..."). Clear it now so the visible
                     # line switches to 'using <tool>…' and the
                     # subsequent run_one() update() with the real
@@ -12890,7 +12780,7 @@ class MaxwellBot(commands.Bot):
                     f"Tools: {tool_list}\n"
                     '{"name":"<tool>","arguments":{"reasoning":"<one sentence why>",...}}\n'
                     "`reasoning` is the first arguments key (~280 chars, plain text). "
-                    "create_site HTML goes in body. send_file large payloads: encoding=base64. "
+                    "send_file large payloads: encoding=base64. "
                     "JSON line(s) first, then a short user-facing reply — or no JSON when done."
                 )
                 messages = list(messages)
@@ -12984,7 +12874,6 @@ class MaxwellBot(commands.Bot):
             followup_turn_ran = False
             tools_expanded = False
             promise_followups = 0
-            site_loop_strikes = 0
             tool_results: list[str] = []
             for _iteration in range(max_iters):
                 if time.monotonic() > tool_deadline:
@@ -13059,27 +12948,8 @@ class MaxwellBot(commands.Bot):
                 # whole rounds so an assistant turn is never separated from
                 # the role=tool messages holding its tool_call_ids.
                 conversation_tail = trim_tool_tail(conversation_tail)
-                finish_site_turn = any(
-                    result.startswith(("Tool create_site:", "Tool edit_site:", "Tool site_server:", "Tool site_test:"))
-                    for result in all_tool_results
-                ) and (
-                    _iteration + 1 >= max_iters or site_loop_strikes >= 2
-                    or time.monotonic() > tool_deadline
-                )
-                final_instruction = [{
-                    "role": "user",
-                    "content": (
-                        "Tool execution for this site task has ended. Reply directly in plain text now; "
-                        "do not call tools or promise more work. Include the configured remote public "
-                        "site URL from the tool results. Report what actually completed, what was tested "
-                        "locally, and what remains unverified or broken. Do not claim remote APIs work "
-                        "merely because local tests passed. Sites created this turn:\n"
-                        + "\n".join(result.splitlines()[0] for result in all_tool_results
-                                    if result.startswith("Tool create_site: Site created:"))
-                    ),
-                }] if finish_site_turn else []
                 result_messages = MaxwellBot._apply_prompt_budget(
-                    self, [dict(m) for m in messages] + list(conversation_tail) + final_instruction
+                    self, [dict(m) for m in messages] + list(conversation_tail)
                 )
                 await self._acquire_ai_slot(
                     timeout=ai_timeout, priority="user", key=channel_id
@@ -13093,7 +12963,7 @@ class MaxwellBot(commands.Bot):
                     # while the model generates its next response. This is
                     # especially visible when the followup itself takes a long
                     # time (e.g. generating a send_message with a long reply, or
-                    # deciding to call create_site again with new HTML).
+                    # generating a send_file with large file contents).
                     #
                     # Fire-and-forget via start_defer() — same fast-tool fix
                     # as gen_progress. If the followup completes with a
@@ -13141,10 +13011,10 @@ class MaxwellBot(commands.Bot):
                             media=all_tool_media,
                             timeout=ai_timeout,
                             max_tokens=max_out_tokens,
-                            tools=[] if finish_site_turn else provider_tools,
+                            tools=provider_tools,
                             on_tool_call_name=_on_followup_tool_call_name,
                             on_token=_on_followup_token,
-                            custom_tool_calls=False if finish_site_turn else custom_tool_calls,
+                            custom_tool_calls=custom_tool_calls,
                         )
                     except Exception:
                         # Ensure followup progress is cleaned up on error
@@ -13157,8 +13027,8 @@ class MaxwellBot(commands.Bot):
                     usage = self._usage_from(followup)
                     if usage:
                         self._token_tracker.record(usage)
-                    pending_native = None if finish_site_turn else self._native_calls_from(followup)
-                    if not pending_native and not finish_site_turn:
+                    pending_native = self._native_calls_from(followup)
+                    if not pending_native:
                         pending_native, followup = self._recover_text_tool_calls(
                             followup
                         )
@@ -13178,8 +13048,6 @@ class MaxwellBot(commands.Bot):
                         response = followup or ""
                         followup_turn_ran = True
                     else:
-                        break
-                    if finish_site_turn:
                         break
                 finally:
                     await self._release_ai_slot()
@@ -13266,78 +13134,6 @@ class MaxwellBot(commands.Bot):
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
             )
-            if not response and any(
-                result.startswith(("Tool create_site:", "Tool edit_site:", "Tool site_server:", "Tool site_test:"))
-                for result in all_tool_results
-            ):
-                response = "I am truly retarded and I stopped before completing the site task. The changes are not verified as working."
-                for result in reversed(all_tool_results):
-                    created = re.match(r"Tool create_site: Site created: (https?://\S+)", result)
-                    if created:
-                        response += f"\nUnverified site: {created[1]}"
-                        break
-            # Safety net: if the user asked for a site/page/website and the
-            # model replied with raw HTML/JS in chat instead of calling
-            # create_site, auto-route the HTML to create_site so the user
-            # actually gets a working URL. Without this, a model that
-            # ignores the prompt floods the channel with markup fragments
-            # and the user never sees a live site.
-            if (
-                response
-                and not all_tool_results
-                and "create_site" in self.tools
-                and "create_site" not in (self._control.get("disabled_tools", []) or [])
-                and self._looks_like_site_request(content or "")
-                and self._looks_like_html_document(response)
-            ):
-                try:
-                    site_result = await self._auto_route_html_to_site(
-                        message, response, content or ""
-                    )
-                    if site_result:
-                        await self._ensure_reasoning_trace(
-                            message, all_tool_results, site_result, "auto_site"
-                        )
-                        _, site_chunks = prepare_delivery(self, site_result, response_metrics, self._split_response)
-                        for index, site_chunk in enumerate(site_chunks):
-                            try:
-                                sent = await message.reply(site_chunk) if index == 0 else await message.channel.send(site_chunk)
-                            except (discord.NotFound, discord.Forbidden):
-                                sent = await message.channel.send(site_chunk)
-                            record_delivery(self, message.channel, sent, response_metrics)
-                        normal_reply_sent = True
-                        # Record the auto-routed site link in memory so
-                        # the user can come back and ask "where did you
-                        # put my site?" without maxwell drawing a blank.
-                        # Same fast-tool fix as the normal reply path.
-                        if (
-                            self._control.get("store_memory", True)
-                            and getattr(self, "memory", None) is not None
-                        ):
-                            try:
-                                await self.add_message_to_memory(
-                                    str(message.channel.id),
-                                    {
-                                        "author": self.bot_name,
-                                        "author_id": str(self.user.id)
-                                        if self.user
-                                        else "",
-                                        "author_is_bot": True,
-                                        "content": site_result,
-                                        "message_id": f"bot_auto_site:{message.id}",
-                                        "timestamp": datetime.now(
-                                            timezone.utc
-                                        ).isoformat(),
-                                    },
-                                    message,
-                                )
-                            except Exception as _e:  # noqa: BLE001
-                                logger.debug(
-                                    f"Failed to record auto-site in memory: {_e}"
-                                )
-                        return
-                except Exception as e:
-                    logger.error(f"Auto-route to create_site failed: {e}")
             if response:
                 await self._ensure_reasoning_trace(
                     message, all_tool_results, response, "reply"
@@ -13577,7 +13373,7 @@ class MaxwellBot(commands.Bot):
 
         Reasoning is pulled OUT of `params` here (via tool_registry.extract_reasoning)
         so no tool ever sees the `reasoning` kwarg — it's a registry-level concern.
-        The reasoning the model wrote for THIS call is recorded to the dashboard
+        The reasoning the model wrote for THIS call is recorded to the
         trace alongside the result, win or fail. This is the native (OpenAI
         function-calling) path; the XML path mirrors the same logic.
         """
@@ -13694,7 +13490,7 @@ class MaxwellBot(commands.Bot):
                 if not result_text:
                     logger.info("Executing tool %s", name)
                     # Budget by resource class. Image generation, shell, and
-                    # site deploys each get a small independent allowance, so
+                    # other expensive tools get independent allowances, so
                     # a run of them in one room cannot consume the outbound
                     # capacity every other room's reply needs. Cheap tools
                     # share a wide "default" budget and effectively never
@@ -13890,14 +13686,13 @@ class MaxwellBot(commands.Bot):
         # 2026-07-21: pick a per-tool "artifact" field for the progress
         # line's code-snippet preview. The user wants to see the code
         # the model is generating scroll by in real time. Per-tool
-        # field map keeps the preview accurate (HTML for create_site,
-        # command for shell, etc.) instead of leaking a slug or URL
+        # field map keeps the preview accurate (content for send_file,
+        # prompt for image generation, etc.) instead of leaking a slug or URL
         # which would be useless. The progress line renderer in
         # tool_progress.py handles whitespace collapsing and the
         # ~80-char tail window.
         def _artifact_snippet_for(tool_name: str, params: dict) -> str:
             _ARTIFACT_FIELDS = {
-                "create_site": "body",
                 # "shell": suppress showing the raw command; show clean status message
                 "send_file": "content",
                 "send_message": "body",
@@ -13939,9 +13734,9 @@ class MaxwellBot(commands.Bot):
             # 2026-07-21: also peek at the artifact so the progress line
             # can show a snippet of the code the model is generating.
             # The user wants to SEE the artifact scroll by, not just
-            # hear "thinking: building the page…". For create_site the
-            # snippet is the HTML body; for shell it's the command; for
-            # send_file it's the file content; etc. We pick a
+            # hear "thinking: building the page…". For send_file it's
+            # the file content; for image generation it's the prompt.
+            # We pick a
             # per-tool field rather than the first non-reasoning key
             # so we surface the actual code, not a slug or URL.
             artifact_snippet = _artifact_snippet_for(name, params)
@@ -14008,7 +13803,7 @@ class MaxwellBot(commands.Bot):
             # A memory-write failure must NOT abort the tool batch: asyncio.gather
             # re-raises, which used to trigger the broad `except Exception:
             # run_all()` retry and re-execute every non-idempotent tool
-            # (send_message, shell, create_site, ...). Swallow here so tools run
+            # (send_message, shell, send_file, ...). Swallow here so tools run
             # exactly once and a memory hiccup doesn't cascade into duplicate
             # side effects or abort sibling tools.
             try:
@@ -14155,7 +13950,7 @@ class MaxwellBot(commands.Bot):
 
         # Tools must run EXACTLY ONCE. The old `except Exception: await run_all()`
         # re-ran every non-idempotent tool when run_all() raised partway (e.g. a
-        # memory-write error mid-batch), causing duplicate sends/shell/site-creates.
+        # memory-write error mid-batch), causing duplicate sends/shell commands.
         # Now we only retry if the typing indicator *enter* failed (before any tool
         # ran); any failure from inside run_all() propagates without a re-run.
         tools_ran = False
@@ -14194,12 +13989,6 @@ class MaxwellBot(commands.Bot):
         _IMG_RE = re.compile(r"__IMAGE_B64__([A-Za-z0-9+/=\s]+)__END_IMAGE_B64__")
         _AUDIO_RE = re.compile(r"__AUDIO_B64__([A-Za-z0-9+/=\s]+)__END_AUDIO_B64__")
         _MAX_TOOL_RESULT_CHARS = 32_000
-        _SITE_RESULT_TOOLS = {
-            "create_site",
-            "edit_site",
-            "site_server",
-            "site_test",
-        }
         seen_images: set[str] = set()
         seen_audio: set[str] = set()
         for tr in list(result_by_id.values()) + list(tool_results):
@@ -14225,22 +14014,15 @@ class MaxwellBot(commands.Bot):
                         }
                     )
 
-        def _truncate_tool_result(tr: str, tool_name: str = "") -> str:
+        def _truncate_tool_result(tr: str) -> str:
             tr = _IMG_RE.sub("", _AUDIO_RE.sub("", tr)).strip()
-            # Site file contents must come back whole. Truncating the middle
-            # with a marker is how "[large content omitted, N chars]" ended
-            # up as the published page.
-            if tool_name in _SITE_RESULT_TOOLS:
-                return tr
             if len(tr) > _MAX_TOOL_RESULT_CHARS:
                 half = _MAX_TOOL_RESULT_CHARS // 2
                 return f"{tr[:half]}\n\n[...truncated {len(tr) - _MAX_TOOL_RESULT_CHARS} chars...]\n\n{tr[-half:]}"
             return tr
 
-        name_by_id = {c["id"]: c["name"] for c in calls}
         truncated_by_id = {
-            cid: _truncate_tool_result(tr, name_by_id.get(cid, ""))
-            for cid, tr in result_by_id.items()
+            cid: _truncate_tool_result(tr) for cid, tr in result_by_id.items()
         }
 
         # Build OpenAI tool-role follow-up messages (assistant + tool results)

@@ -129,7 +129,6 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
             "false",
         ),
         "ENABLE_SHELL": "true",
-        "ENABLE_CREATE_SITE": "true",
     }
     result = subprocess.run(
         [sys.executable, "-B", "-c", textwrap.dedent(CONSTRUCTION_PROBE)],

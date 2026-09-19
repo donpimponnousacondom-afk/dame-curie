@@ -39,7 +39,7 @@ def rem_system_prompt(turns_remaining: int, prompt_body: str | None = None) -> s
         "preferences, unresolved tasks, or identity facts.\n\n"
         f"## Task\n{body}\n\n"
         "## Output\nSingle pass. Brief reason, then exactly one JSON object "
-        "(one line). `audit` is what the dashboard shows — keep it short."
+        "(one line). `audit` is the operator-facing summary — keep it short."
     )
 
 

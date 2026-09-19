@@ -38,7 +38,7 @@ from utils import _spawn_background as _fire_and_forget  # noqa: E402
 
 # Matches the `reasoning` string value inside a (possibly partial) tool-call
 # arguments JSON. Models emit reasoning as the FIRST field, well before any
-# huge field like create_site's `body`, so once this regex matches the value's
+# huge field like send_file's `content`, so once this regex matches the value's
 # closing quote is in hand and we can surface the reasoning to the live
 # progress message without waiting for the rest of the stream.
 _PARTIAL_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -96,7 +96,7 @@ _CUSTOM_TOOL_OPEN_RE = re.compile(r'\{\s*"name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"
 # Opener-match failure recovery threshold. If the brace counter can't find
 # a balanced close inside this many characters after a `{"name":` match,
 # we give up on this opener and look for the next one. Prevents a single
-# pathological opener (think: create_site's HTML body with embedded
+# pathological opener (think: HTML file contents with embedded
 # unbalanced `'{"name": "...' substrings from a prior tool's args, or
 # a stray `"` inside CSS that strands the string-state counter) from
 # silently disabling extraction for the rest of the stream.
@@ -241,7 +241,7 @@ class _CustomToolCallBuffer:
             end = _find_balanced_json_end(self._buf, m.start())
             if end is None:
                 # Opener mid-JSON. Hold unless the held region is huge (unescaped
-                # quotes in create_site HTML, CSS `{`, etc.) — then skip the
+                # quotes in embedded HTML, CSS `{`, etc.) — then skip the
                 # false opener so a later valid tool call can still parse.
                 if len(self._buf) - m.start() > _GIVE_UP_BYTES:
                     self._released_len = m.start() + 1
@@ -314,8 +314,8 @@ def _find_balanced_json_end(text: str, start: int) -> int | None:
     (i.e. the stream hasn't delivered the closing brace yet).
 
     Counts ``{``/``}`` while correctly ignoring braces that appear inside
-    JSON string literals (which can happen for things like ``"body": "{...}"``
-    in a create_site body that contains CSS with braces).
+    JSON string literals (which can happen for things like ``"content": "{...}"``
+    in file contents containing CSS with braces).
     """
     depth = 0
     in_str = False
@@ -520,7 +520,7 @@ def _escape_body_slice(
 def _safe_parse_tool_call_candidate(candidate: str):
     """Parse a candidate tool-call JSON, with one repair pass for the
     common failure mode of unescaped ``"`` characters in embedded HTML
-    (``create_site`` body fields with ``target="_blank"``, ``href="..."``,
+    (``body`` fields with ``target="_blank"``, ``href="..."``,
     etc).
 
     Returns the parsed dict on success, ``None`` if it cannot be parsed
@@ -746,8 +746,8 @@ async def _read_sse_response(
     If ``on_tool_call_name`` is provided, it's awaited the first time a
     tool_call delta arrives with a function name. This lets the caller
     update a live progress message mid-stream — e.g. show
-    "create_site: …" while the model is still generating the tool arguments
-    (the HTML body), instead of waiting for the entire response to finish.
+    "send_file: …" while the model is still generating the tool arguments
+    (the file content), instead of waiting for the entire response to finish.
 
     If ``on_token`` is provided, it's called (fire-and-forget, NEVER awaited
     inline) on every content and reasoning delta so the caller can show a
@@ -963,7 +963,7 @@ async def _read_sse_response(
                     # 2026-07-21: when the custom buffer is mid-JSON
                     # (model is emitting a bare-JSON tool call), DON'T
                     # surface the raw content as a progress preview.
-                    # The raw text is JSON like 'name create_site ,
+                    # The raw text is JSON like 'name send_file ,
                     # arguments reason ing ...' which fills the
                     # progress buffer with unreadable fragments. The
                     # bot's _on_tool_call_name callback (bridged from
@@ -1056,7 +1056,7 @@ async def _read_sse_response(
                             # Surface the model's reasoning mid-stream so the
                             # progress message shows intent (not a static
                             # "generating…") during long argument generation
-                            # (e.g. create_site's HTML body). Reasoning is
+                            # (e.g. send_file's content). Reasoning is
                             # usually the first field emitted, so it completes
                             # well before the big fields. Fires once per call.
                             if on_tool_call_name is not None and not slot.get(
@@ -2116,8 +2116,8 @@ class OpenAICompatibleProvider:
         If ``on_tool_call_name`` is provided, it's forwarded to the streaming
         layer so the caller gets a callback the moment a tool call name arrives
         mid-stream — useful for updating a live progress message during long
-        generations (e.g. create_site where the model spends 20+ seconds
-        generating HTML in the tool arguments).
+        generations (e.g. send_file where the model spends 20+ seconds
+        generating file contents in the tool arguments).
         """
         message = await self.generate_chat_completion(
             messages,

@@ -1,7 +1,7 @@
 """Shared control defaults for Maxwell Bot.
 
 Single source of truth for DEFAULT_CONTROL, KNOWN_TOOLS, and parse_bool.
-Both bot.py and api_server.py import from here so config ranges never drift.
+Bot and prompt storage import from here so defaults never drift.
 """
 
 
@@ -39,7 +39,7 @@ def parse_bool(value, default: bool = False) -> bool:
     return default
 
 
-# Canonical DEFAULT_CONTROL — both bot and API import this.
+# Canonical DEFAULT_CONTROL — bot and prompt storage import this.
 # If you change a value here, it changes everywhere. That's the point.
 DEFAULT_CONTROL = {
     "bot_enabled": True,
@@ -147,13 +147,13 @@ DEFAULT_CONTROL = {
     # transcribe audio fine (verified on 3.7-flash and 3-pro), so this is on.
     "process_audio": True,
     "max_image_size_mb": 10,
-    # When True, the `sleep` tool and `,sleep` command can put the bot
+    # When True, the `sleep` tool and `!sleep` command can put the bot
     # into a 1-60 minute sleep window where the triggering channel gets
     # a one-shot "the dame is sleeping, back in Xm" notice (never a DM).
     # Default ON so the 2026-07-19 'goodnight spam' complaint has a
     # real off-switch.
-    # Operators who want the bot to always be available can flip this
-    # to False in dashboard.
+    # Operators who want the bot to always be available can set
+    # the enable_sleep control to False.
     "enable_sleep": True,
     # ─── nightly fallback model ─────────────────────────────────────────
     # During local 22:00–09:00 hours, start requests on the configured
@@ -201,12 +201,12 @@ DEFAULT_CONTROL = {
     "disabled_commands": [],
     # {guild_id: channel_id}. When a server has an entry, Maxwell only speaks
     # in that one channel there — every other channel in that server is dead to
-    # him, including autonomy. Set with `,solo`, cleared with `,solo off`.
+    # him, including autonomy. Set with `!solo`, cleared with `!solo off`.
     # Scoped per server on purpose: allowed_channels is global, so using it to
     # quiet one server silences him everywhere.
     "guild_solo_channel": {},
-    # Guild ids whose autonomy blacklist entry was added BY `,solo`. Only these
-    # are handed back on `,solo off` — a server an admin silenced by hand stays
+    # Guild ids whose autonomy blacklist entry was added BY `!solo`. Only these
+    # are handed back on `!solo off` — a server an admin silenced by hand stays
     # silenced.
     "guild_solo_autonomy_added": [],
     "base_personality": (

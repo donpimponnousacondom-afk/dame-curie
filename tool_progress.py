@@ -81,7 +81,7 @@ _HARD_FALLBACK_CHARS = 4000
 _VISIBLE_STRIP_CHARS = set("{}[\\]\"`:")
 
 # Code-snippet preview budget. The model often spends its time
-# generating a large artifact (full HTML document for create_site, a
+# generating a large artifact (full file contents for send_file, a
 # multi-line shell command, etc.) that the user can't see at all while
 # the tool runs. We surface a SHORT head of the artifact on the
 # progress line so the user can watch the code scroll by in real time.
