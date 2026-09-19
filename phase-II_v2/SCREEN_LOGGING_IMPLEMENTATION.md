@@ -1,6 +1,6 @@
 # Append-only Screen viewer implementation
 
-Status: **implemented and source-reviewed; NOT runtime-accepted**. This worker performed no imports/tests/terminal execution. The coordinator reported limited synthetic PTY observations exposing a structured-redaction blocker below; the correction awaits independent review and a coordinator rerun.
+Status: **implemented and source-reviewed; partial coordinator synthetic acceptance, not full terminal acceptance**. This worker performed no imports/tests/terminal execution. The structured-redaction correction was independently reviewed, integrated as `c2f148b` and passed the coordinator's bounded pipe/PTY rerun. Current observations and remaining pressure/foreground/Screen gates are in `LOGGING_ACCEPTANCE.md`; historical worker-only statements below do not supersede that ledger.
 Branch: `work/screen-logging-20260919`; baseline: `43ce047d9d5985a78a9cf3899e0302acc36383d6`.
 Worktree: `/home/codexy/deepseek/dame-curie-worktrees/screen-logging`.
 
@@ -105,7 +105,7 @@ This worker's follow-up checks are source tracing/self-review, explicit Python3.
 
 ## Separate terminal acceptance still required
 
-These are **coordinator-only acceptance steps, not worker-executed checks or new test code**. The coordinator's limited pre-fix PTY observation is attributed above; full acceptance and the post-correction structured-redaction rerun remain pending. Use disposable synthetic viewer-only processes/PTYs, an explicit import allowlist including the audited redactor helper, no private mounts/tokens/network, and an independently owned synthetic producer. Do not invoke `scripts/instance.py` for synthetic input: it performs identity/configuration/runtime discovery.
+These are **coordinator-only acceptance steps, not worker-executed checks or new test code**. The coordinator's pre-fix observation is attributed above; the post-correction rerun subsequently passed as recorded in `LOGGING_ACCEPTANCE.md`. Unperformed portions of the matrix remain full-acceptance gates. Use disposable synthetic viewer-only processes/PTYs, an explicit import allowlist including the audited redactor helper, no private mounts/tokens/network, and an independently owned synthetic producer. Do not invoke `scripts/instance.py` for synthetic input: it performs identity/configuration/runtime discovery.
 
 1. Verify ordinary PTY and disposable Screen append history: no alternate buffer/repaint; default/remapped Screen prefix, Space then Screen copy mode, detach/reattach. Record byte output and visual behavior rather than infer it from source.
 2. Exercise no-keys, piped input/output, regular-file output, `TERM=dumb`, an unknown terminal name and `NO_COLOR`; verify no key reader or control sequences in non-TTY output. Confirm old formats remain selectable with unchanged behavior.

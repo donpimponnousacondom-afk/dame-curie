@@ -1,10 +1,12 @@
-# V2 Discord-only reconciliation — in progress
+# V2 Discord-only reconciliation — staged, activation held
 
 ## Authority and current limit
 
 Coordinator-only work under `REDESIGN_PLAN.md`, after independent source review. This record is not activation permission. No bot entrypoint, Discord/provider/model request, Ollama/model-pull start, model warm/download, V1 operation, publisher invocation or existing Screen access is permitted or performed.
 
-**Current state: the corrected image/workspace alias passed its bounded isolated rerun. A final comments/label/warning-only configuration cleanup is being frozen; canonical source/lifecycle/private-file cutover remains pending.** Old API/web are still running. Source and image evidence are not whole-bot, voice, media, RAG, provider, multi-instance or terminal acceptance.
+**Current state: reviewed release `734c050` is installed; old V2 API/web/shell containers are removed. Exactly bot, Ollama and model-pull are created, never started, restart=no, with no published ports. Staged wrapper `up` was a verified no-op.** Discord remains blank, RAG false and all activation/publication holds remain. Source, image and metadata evidence are not whole-bot, voice, media, RAG, provider, multi-instance or terminal acceptance.
+
+The early sections are chronological pre-cutover observations, not the present running state. The selected artifact and completed cutover are recorded at the end.
 
 ## Fresh identity and ownership observations
 
@@ -78,7 +80,7 @@ A second sanitized read-only preflight re-resolved account/socket/engine and con
 
 While checking the identity consumers, the coordinator found stale config comments, a `shell (docker sandbox)` display label and an active warning claiming host execution. The narrow source correction changes only comments/docstring/display/warning text, preserves dotenv override and all flag/provider/path/identity logic, and has independent Luna functional source signoff. It also removes retired PM2 examples from those comments/docstrings. Freeze this last wording slice into the selected artifact rather than mislabeling a previous image as later source.
 
-## Reviewed next sequence
+## Reviewed reconciliation contract
 
 1. Freeze the final reviewed release SHA; bind archive, source checkout and exact built image to it. Optional validation stays stdlib/Bash-only, network-none, neutral `--rm` container name, no private mounts and no bot entrypoint.
 2. Stage a clean root-owned/service-readable archive beside `/opt/dame-curie`, preserve the existing operator venv at its canonical final path, and atomically replace the release. Never overlay-extract or execute install.sh.
@@ -89,3 +91,25 @@ While checking the identity consumers, the coordinator found stale config commen
 7. Inspect allowlisted state/restart/image/port/mount/ownership gates, then verify staged wrapper `up` starts nothing. Never dump inspect/env/label/mount collections.
 
 Leave old images, model/state volumes and undeclared old networks alone; `down` is not a purge and no broad pruning is authorized. Publisher/syncer and protected V1 remain untouched. Final evidence must distinguish these deployment gates from unperformed application, voice, RAG, provider, publication and terminal acceptance.
+
+## Selected artifact and completed cutover
+
+Selected public source/archive: **`734c05019aaeed67bdd8d2c8498f912668d19b72`**. Tag **`dame-curie-app:734c050`**; content ID **`sha256:2e7887c30d10d2b1d491b16a4754f06386a13a440e874fb85f12d33f962d9dc0`**. Build `bash-520` completed and was collected, exit0, from that exact archive. Resolved base remains `python:3.14.4-slim-trixie@sha256:2ca02f32b4d9d893863367ce07ec1972819f476dd38d8612f2a9cb6a41cbb727`. Selected image ID/revision inspection and its isolated stdlib/Bash rerun passed: actual persistent HOME alias, synthetic tmpfs write, six reviewed file hashes, Python3.14.4/namespace UID0 and no app imports. No failed candidate tag was selected.
+
+- The canonical release was exchanged atomically with clean, root-owned public staging using verified `mv --exchange --no-copy -T`, under the existing private operations lock. Twelve selected deployment/application/logger source files matched the reviewed checkout. Existing operator `.venv` was moved into the new tree without installing or changing packages and remains at `/opt/dame-curie/.venv`; its Python3.14.4 and UID1005 execution were rechecked.
+- Previous public `b2f5380` checkout remains at `/opt/dame-curie-release-734c050.nkYLOwgK`, **without the venv**; this is not a private-state backup or demonstrated rollback procedure. The separately prepared, unused `0112692` public staging tree was explicitly removed. No overlay extraction or install.sh execution occurred.
+- Canonical reviewed `instance.py dame-curie down` (`bash-521`, collected exit0) used the still-valid old deployment file after fresh ownership checks. It removed the managed old shell and all five old Compose containers, including API/web. The private engine then had zero containers before configuration writes. No `--volumes`, image removal or pruning was used; undeclared old networks were not broadly swept.
+- Private reconciliation ran as UID/GID1005 under the operations lock. `deploy.env` now has the same canonical identity/root/socket, `APP_IMAGE=dame-curie-app:734c050` and explicit staging=true; the complete WEB pair is removed. Thirteen retired bot-env keys were removed: six old admin/API/CORS/FULL_HOST fields, ENABLE_X/ENABLE_TELEGRAM, four blank Discord OAuth fields and blank GF_DISCORD_TOKEN. Startup socket was already absent. Retained assignment bytes, parsed unset/blank/value semantics and provider/publisher assignments were checked unchanged; retained interpolation cannot refer to a removed key. Both files were fsynced and atomically replaced, then confirmed UID/GID1005 and mode0600. No prompt, control JSON, database/history, provider or publisher policy was rewritten.
+- Actual installed Compose help confirmed `create --no-build --pull never`. The coordinator used the reviewed canonical Compose context, explicit discord/rag profiles and only `bot ollama ollama-pull`. Both exact images were already present. Creation completed without build, pull, health check or start.
+
+| Current service | Container ID | State | Exact image content ID |
+| --- | --- | --- | --- |
+| bot | `2638ef3a2b5560062d83098db6a2fb098e69dd258d30b471fbf9473752078c1e` | created / zero StartedAt / restart=no | `sha256:2e7887c30d10d2b1d491b16a4754f06386a13a440e874fb85f12d33f962d9dc0` |
+| ollama | `94d73cab8bf01b754f0cb46c938c31b75c3cd017d1afa4bffea6dfe77649cd65` | created / zero StartedAt / restart=no | `sha256:2a5d0462221131b2313d838e99c30cf4190a5207236f065b246acd11ae718e85` |
+| ollama-pull | `570eacadb05e7be05aec4de35a6d9bf6637ff3f9a2514f10dd2b0b83037fea73` | created / zero StartedAt / restart=no | same pinned Ollama ID |
+
+Allowlisted inspection confirmed exactly those three containers, canonical project/config-file labels, selected bot OCI revision, zero published ports, no host namespaces/privileged mode/added capabilities/devices, cap-drop ALL/no-new-privileges, USER0:0 and PID256. Bot has the expected writable outer filesystem and six exact V2/timezone binds; model containers have read-only root filesystems, only the timezone bind and the shared owned `dame-curie_ollama-models` volume. Temporary mounts and outbound/internal-embedding/model-download networks match source. No host-root/socket/V1 bind is present.
+
+The actual canonical CLI `instance.py dame-curie up` returned zero under staging. Before/after container IDs, created status, zero StartedAt and non-running flags were identical: **nothing started**. Model-volume ownership metadata was checked and the existing volume reused; contents were not read, downloaded or warmed, so no fresh cache-content or database-integrity claim is made.
+
+Later checkout commits may update evidence/docs; they do not change this explicitly frozen installed/image source revision. No bot entrypoint, Discord credential use/request, Ollama/pull activation, new bot-provider probe, V1 operation or publisher invocation/publication occurred. Original image candidates and prior unrelated resources were not pruned. Full application/voice/media/RAG/provider/replica and remaining logger terminal acceptance are separate, unperformed gates.
