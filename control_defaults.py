@@ -180,7 +180,7 @@ DEFAULT_CONTROL = {
     "enable_sleep": True,
     # ─── nightly fallback model ─────────────────────────────────────────
     # During local 22:00–09:00 hours, start requests on the configured
-    # OLLAMA_FALLBACK_* endpoint/model instead of putting Maxwell to sleep.
+    # OPENAI_FALLBACK_* endpoint/model instead of putting Maxwell to sleep.
     # If no fallback is configured, the primary provider is used normally.
     "enable_night_fallback": True,
     "night_fallback_start_hour": 22,

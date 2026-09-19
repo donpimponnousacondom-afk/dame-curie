@@ -14,7 +14,7 @@ from bot import MaxwellBot
 
 
 class _FakeProvider:
-    """Stand-in for OllamaProvider; records close() and init()."""
+    """Stand-in for OpenAICompatibleProvider; records close() and init()."""
 
     def __init__(self, name="main"):
         self.name = name
@@ -45,16 +45,16 @@ def _make_bot(monkeypatch, *, control=None, aux_env=None, auto_env=None):
         "AUTONOMY_API_KEY": (auto_env or {}).get("api_key", ""),
         "AUTONOMY_MODEL": (auto_env or {}).get("model", ""),
         "AUTONOMY_DISABLE_REASONING": (auto_env or {}).get("disable_reasoning", False),
-        "OLLAMA_MODEL": "main-model",
-        "OLLAMA_MAX_TOKENS": 8192,
-        "OLLAMA_TEMPERATURE": 0.6,
-        "OLLAMA_TOP_P": 0.95,
-        "OLLAMA_TOP_K": 20,
-        "OLLAMA_FALLBACK_BASE_URL": "",
-        "OLLAMA_FALLBACK_MODEL": "",
-        "OLLAMA_FALLBACK_API_KEY": "",
-        "OLLAMA_FALLBACK_DISABLE_REASONING": True,
-        "OLLAMA_RETRY_ATTEMPTS": 1,
+        "OPENAI_MODEL": "main-model",
+        "OPENAI_MAX_TOKENS": 8192,
+        "OPENAI_TEMPERATURE": 0.6,
+        "OPENAI_TOP_P": 0.95,
+        "OPENAI_TOP_K": 20,
+        "OPENAI_FALLBACK_BASE_URL": "",
+        "OPENAI_FALLBACK_MODEL": "",
+        "OPENAI_FALLBACK_API_KEY": "",
+        "OPENAI_FALLBACK_DISABLE_REASONING": True,
+        "OPENAI_RETRY_ATTEMPTS": 1,
         "ENABLE_AUDIO_INPUT": False,
     }
 
@@ -80,11 +80,11 @@ def _make_bot(monkeypatch, *, control=None, aux_env=None, auto_env=None):
 
     inst._track_task = _track
 
-    # Stub OllamaProvider so we don't touch the network: return a labeled fake
+    # Stub OpenAICompatibleProvider so we don't touch the network: return a labeled fake
     # and remember what it was built with.
     built = []
 
-    class _FakeOllama:
+    class _FakeOpenAICompatible:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.available = True
@@ -96,7 +96,7 @@ def _make_bot(monkeypatch, *, control=None, aux_env=None, auto_env=None):
         async def close(self):
             pass
 
-    monkeypatch.setattr(bot_mod, "OllamaProvider", _FakeOllama)
+    monkeypatch.setattr(bot_mod, "OpenAICompatibleProvider", _FakeOpenAICompatible)
     inst._built = built
     return inst
 
@@ -219,7 +219,7 @@ def test_get_aux_provider_falls_back_to_main_when_unavailable(monkeypatch):
     )
 
     # Make the built provider fail availability.
-    class _DeadOllama:
+    class _DeadOpenAICompatible:
         def __init__(self, **kwargs):
             self.available = False
             self.kwargs = kwargs
@@ -230,6 +230,6 @@ def test_get_aux_provider_falls_back_to_main_when_unavailable(monkeypatch):
         async def close(self):
             pass
 
-    monkeypatch.setattr(bot_mod, "OllamaProvider", _DeadOllama)
+    monkeypatch.setattr(bot_mod, "OpenAICompatibleProvider", _DeadOpenAICompatible)
     prov = asyncio.run(bot._get_aux_provider())
     assert prov is bot.ai_provider

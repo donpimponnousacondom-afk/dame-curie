@@ -17,7 +17,7 @@ from provider_telemetry import (
     request_text,
     token_count,
 )
-from providers import OllamaProvider, ProviderRequestError, ProviderResult
+from providers import OpenAICompatibleProvider, ProviderRequestError, ProviderResult
 from test_provider_resilience import DONE, StreamResponse
 from test_providers import (
     FakeEmptyResponse,
@@ -45,7 +45,7 @@ def sse_frame(delta=None, **fields):
 
 
 def provider_for(responses, **kwargs):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "https://user:synthetic@example.test/v1?secret=synthetic",
         "model",
         8192,
@@ -690,7 +690,7 @@ def test_tokenizer_failure_precedes_provider_network_initialization(monkeypatch)
 
     initialize = AsyncMock()
     monkeypatch.setattr("providers.local_encoding", missing_asset)
-    monkeypatch.setattr(OllamaProvider, "initialize", initialize)
+    monkeypatch.setattr(OpenAICompatibleProvider, "initialize", initialize)
     with pytest.raises(FileNotFoundError, match="local tokenizer"):
         provider_for([])
     initialize.assert_not_awaited()

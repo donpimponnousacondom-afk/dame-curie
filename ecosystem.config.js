@@ -5,7 +5,7 @@
 // is the single source of truth — edit .env, `pm2 restart`, done. No env
 // merging in this file (PM2 caches env from first start and --update-env
 // does NOT re-read .env, which used to pin stale values like the old
-// OLLAMA_FALLBACK_MODEL forever).
+// OPENAI_FALLBACK_MODEL forever).
 //
 // Only runtime flags that must exist before the interpreter boots live here:
 // PYTHONUNBUFFERED (live logs). Everything else belongs in .env.
@@ -94,9 +94,9 @@ const apps = [
 		log_type: "json",
 	},
 	{
-		// Ollama serves the embedding model (qwen3-embedding) and the
-		// autonomy/background-agent model (AUTONOMY_BASE_URL points at
-		// localhost:11434). It runs here rather than under systemd because
+		// Local Ollama serves only the RAG embedding model (qwen3-embedding).
+		// Remote OpenAI-compatible inference is configured separately.
+		// It runs here rather than under systemd because
 		// the packaged unit runs as user `ollama` with HOME=/usr/share/ollama,
 		// whose model store is empty — the 2.3G of pulled models live in
 		// /root/.ollama and /root is 0700. pm2 runs as root, so it sees them.

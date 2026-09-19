@@ -38,7 +38,7 @@ class JobBot:
     def __init__(self, manager, responses, dispatches=()):
         self.bg_jobs = manager
         self._control = {"footer_enabled": True, "footer_format": "MEASURED_FOOTER"}
-        self.config = SimpleNamespace(OLLAMA_MAX_TOKENS=8192)
+        self.config = SimpleNamespace(OPENAI_MAX_TOKENS=8192)
         self.responses = list(responses)
         self.dispatches = list(dispatches)
         self.model_messages = []

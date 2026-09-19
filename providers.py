@@ -1,4 +1,4 @@
-"""Ollama AI Provider for Maxwell Bot"""
+"""OpenAI-compatible remote inference provider for Dame Curie."""
 
 import asyncio
 import contextlib
@@ -1167,7 +1167,7 @@ async def _read_sse_response(
 # steer traffic away from it for this long instead of retrying it in the same
 # request. This avoids hammering a shared upstream pool (e.g. OpenRouter's
 # pooled free keys) that is already rate-limiting us, which only makes the
-# limit worse. Override via OLLAMA_ENDPOINT_COOLDOWN_SECONDS.
+# limit worse. Override via OPENAI_ENDPOINT_COOLDOWN_SECONDS.
 DEFAULT_ENDPOINT_COOLDOWN_SECONDS = 60.0
 # Reserve up to this many remaining attempts for non-streaming recovery
 # when HTTP 200 responses contain no assistant content or tool call.
@@ -1590,11 +1590,10 @@ def normalize_base_url(base_url: str) -> str:
     """Normalize an OpenAI-compatible base URL to the API root.
 
     Requests are built as ``{base_url}/chat/completions``, so the base has
-    to include the API path segment. Everyone pastes the bare host
-    ("http://localhost:11434", "https://api.openai.com"), which then 404s in
-    a way that looks like a broken bot rather than a missing "/v1". If the
-    URL carries no path at all we add the conventional one; a URL that
-    already has a path (/v1, /v2, /api/v1, ...) is left exactly as given.
+    to include the API path segment. A bare configured host can otherwise
+    return 404 for a missing "/v1". If the URL carries no path at all we add
+    the conventional one; a URL that already has a path (/v1, /v2, /api/v1,
+    ...) is left exactly as given.
     """
     base = (base_url or "").strip().rstrip("/")
     if not base:
@@ -1636,7 +1635,7 @@ def _deepseek_reasoning_transport(base_url: str, model: str) -> str:
     return ""
 
 
-class OllamaProvider:
+class OpenAICompatibleProvider:
     """OpenAI-compatible LLM Provider with multimodal support using /v1/chat/completions"""
 
     def __init__(
@@ -1681,7 +1680,7 @@ class OllamaProvider:
             try:
                 empty_response_retries = int(
                     os.getenv(
-                        "OLLAMA_EMPTY_RESPONSE_RETRIES",
+                        "OPENAI_EMPTY_RESPONSE_RETRIES",
                         str(DEFAULT_EMPTY_RESPONSE_RETRIES),
                     )
                     or DEFAULT_EMPTY_RESPONSE_RETRIES
@@ -1747,7 +1746,7 @@ class OllamaProvider:
         try:
             self._cooldown_seconds = float(
                 os.getenv(
-                    "OLLAMA_ENDPOINT_COOLDOWN_SECONDS",
+                    "OPENAI_ENDPOINT_COOLDOWN_SECONDS",
                     str(DEFAULT_ENDPOINT_COOLDOWN_SECONDS),
                 )
                 or DEFAULT_ENDPOINT_COOLDOWN_SECONDS
@@ -2033,10 +2032,9 @@ class OllamaProvider:
 
     async def _get_session(self):
         if self._session is None or self._session.closed:
-            # BUG FIX: do NOT use SSRF-safe resolver for the provider session.
-            # The default provider URL is localhost:11434 (local Ollama), and
-            # the safe resolver blocks all private/loopback addresses.
-            # The provider is operator-configured via env vars, not user input.
+            # Do NOT use the untrusted-fetch SSRF resolver for this session.
+            # Operator-configured OpenAI-compatible endpoints may be private
+            # proxies; they are trusted configuration, not user input.
             # SSRF protection belongs on the shared session used by tools like
             # fetch_url, which DO accept untrusted URLs.
             connector = aiohttp.TCPConnector(

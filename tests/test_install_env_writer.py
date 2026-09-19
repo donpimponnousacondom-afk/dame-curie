@@ -9,17 +9,17 @@ def test_set_env_replaces_values_with_special_characters(tmp_path: Path) -> None
     env_file = tmp_path / ".env"
     env_file.write_text(
         "DISCORD_TOKEN=old\n"
-        "OLLAMA_BASE_URL=http://localhost:11434\n"
+        "OPENAI_BASE_URL=http://localhost:11434\n"
         "KEEP=this stays\n",
         encoding="utf-8",
     )
 
-    set_env(env_file, "OLLAMA_BASE_URL", "https://example.com/a/b?x=1&y=two")
+    set_env(env_file, "OPENAI_BASE_URL", "https://example.com/a/b?x=1&y=two")
     set_env(env_file, "DASHBOARD_PASSWORD", "abc=123 with spaces & symbols")
 
     assert env_file.read_text(encoding="utf-8") == (
         "DISCORD_TOKEN=old\n"
-        "OLLAMA_BASE_URL=https://example.com/a/b?x=1&y=two\n"
+        "OPENAI_BASE_URL=https://example.com/a/b?x=1&y=two\n"
         "KEEP=this stays\n"
         "DASHBOARD_PASSWORD=abc=123 with spaces & symbols\n"
     )

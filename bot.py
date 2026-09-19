@@ -369,7 +369,7 @@ from inbox import (  # noqa: E402
 from response_guard import break_echo_loop, scrub_repetitions  # noqa: E402
 from providers import (  # noqa: E402
     MIME_MAP,
-    OllamaProvider,
+    OpenAICompatibleProvider,
     ProviderEmptyResponseError,
     ProviderUsageExhaustedError,
     deepseek_reasoning_transport,
@@ -2950,8 +2950,8 @@ class MaxwellBot(commands.Bot):
                 logger.warning("Could not pre-create %s: %s", gf_data, e)
         credential_names = (
             "DISCORD_TOKEN", "GF_DISCORD_TOKEN", "TELEGRAM_TOKEN",
-            "OLLAMA_API_KEY", "OPENAI_COMPAT_API_KEY", "OLLAMA_FALLBACK_API_KEY",
-            "OLLAMA_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
+            "OPENAI_API_KEY", "OPENAI_COMPAT_API_KEY", "OPENAI_FALLBACK_API_KEY",
+            "OPENAI_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
             "CAPTCHA_SOLVER_API_KEY", "IMAGE_GEN_API_KEY", "NVIDIA_API_KEY",
             "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY",
             "X_AUTH_TOKEN", "X_CT0", "X_API_KEY", "DAME_CURIE_ADMIN_PASSWORD",
@@ -3444,31 +3444,31 @@ class MaxwellBot(commands.Bot):
         self._tasks = [t for t in self._tasks if not t.done()]
 
     def _setup_ai(self):
-        self.ai_provider = OllamaProvider(
-            base_url=self.config.OLLAMA_BASE_URL,
-            model=self.config.OLLAMA_MODEL,
-            max_tokens=self.config.OLLAMA_MAX_TOKENS,
-            temperature=self.config.OLLAMA_TEMPERATURE,
-            top_p=self.config.OLLAMA_TOP_P,
-            top_k=self.config.OLLAMA_TOP_K,
-            api_key=self.config.OLLAMA_API_KEY,
-            extra_headers=self.config.OLLAMA_EXTRA_HEADERS,
-            extra_body=self.config.OLLAMA_EXTRA_BODY,
+        self.ai_provider = OpenAICompatibleProvider(
+            base_url=self.config.OPENAI_BASE_URL,
+            model=self.config.OPENAI_MODEL,
+            max_tokens=self.config.OPENAI_MAX_TOKENS,
+            temperature=self.config.OPENAI_TEMPERATURE,
+            top_p=self.config.OPENAI_TOP_P,
+            top_k=self.config.OPENAI_TOP_K,
+            api_key=self.config.OPENAI_API_KEY,
+            extra_headers=self.config.OPENAI_EXTRA_HEADERS,
+            extra_body=self.config.OPENAI_EXTRA_BODY,
             reasoning_control=lambda: self._control.get("deepseek_reasoning", ""),
-            disable_reasoning=self.config.OLLAMA_DISABLE_REASONING,
-            fallback_base_url=self.config.OLLAMA_FALLBACK_BASE_URL,
-            fallback_model=self.config.OLLAMA_FALLBACK_MODEL,
-            fallback_api_key=self.config.OLLAMA_FALLBACK_API_KEY,
-            fallback_disable_reasoning=self.config.OLLAMA_FALLBACK_DISABLE_REASONING,
-            retry_attempts=self.config.OLLAMA_RETRY_ATTEMPTS,
+            disable_reasoning=self.config.OPENAI_DISABLE_REASONING,
+            fallback_base_url=self.config.OPENAI_FALLBACK_BASE_URL,
+            fallback_model=self.config.OPENAI_FALLBACK_MODEL,
+            fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
+            fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
+            retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
             empty_response_retries=getattr(
-                self.config, "OLLAMA_EMPTY_RESPONSE_RETRIES", None
+                self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
             ),
             enable_audio_input=_owner_audio_input_enabled(self),
-            vision_base_url=self.config.OLLAMA_VISION_BASE_URL,
-            vision_model=self.config.OLLAMA_VISION_MODEL,
-            vision_api_key=self.config.OLLAMA_VISION_API_KEY,
-            vision_disable_reasoning=self.config.OLLAMA_VISION_DISABLE_REASONING,
+            vision_base_url=self.config.OPENAI_VISION_BASE_URL,
+            vision_model=self.config.OPENAI_VISION_MODEL,
+            vision_api_key=self.config.OPENAI_VISION_API_KEY,
+            vision_disable_reasoning=self.config.OPENAI_VISION_DISABLE_REASONING,
         )
 
     def _is_in_night_fallback_window(self) -> bool:
@@ -3496,8 +3496,8 @@ class MaxwellBot(commands.Bot):
             return False
         config = getattr(self, "config", None)
         return bool(
-            str(getattr(config, "OLLAMA_FALLBACK_BASE_URL", "") or "").strip()
-            and str(getattr(config, "OLLAMA_FALLBACK_MODEL", "") or "").strip()
+            str(getattr(config, "OPENAI_FALLBACK_BASE_URL", "") or "").strip()
+            and str(getattr(config, "OPENAI_FALLBACK_MODEL", "") or "").strip()
         )
 
     def _night_fallback_kwargs(self, provider=None) -> dict[str, bool]:
@@ -3517,7 +3517,7 @@ class MaxwellBot(commands.Bot):
         """Return a provider for the autonomy loop.
 
         If autonomy_base_url / autonomy_model are configured, build (and cache) a
-        separate OllamaProvider. Otherwise — or on any construction/init failure —
+        separate OpenAICompatibleProvider. Otherwise — or on any construction/init failure —
         fall back to the main ai_provider. NEVER raise: the autonomy tick must not
         crash because of provider construction.
 
@@ -3584,7 +3584,7 @@ class MaxwellBot(commands.Bot):
             # bot's large max_tokens, which can exceed the autonomy model's
             # output cap (e.g. minimax-m3 caps at 131072). Cap conservatively.
             autonomy_max_tokens = min(
-                _safe_int(self.config.OLLAMA_MAX_TOKENS or 200000, 200000), 8192
+                _safe_int(self.config.OPENAI_MAX_TOKENS or 200000, 200000), 8192
             )
             # Signature changed: close the previously cached provider (it owns an
             # aiohttp ClientSession) before replacing it, so config churn doesn't
@@ -3600,25 +3600,25 @@ class MaxwellBot(commands.Bot):
                         logger.warning(
                             f"Failed to schedule old autonomy provider close: {e}"
                         )
-                provider = OllamaProvider(
+                provider = OpenAICompatibleProvider(
                     base_url=base_url,
-                    model=model or self.config.OLLAMA_MODEL,
+                    model=model or self.config.OPENAI_MODEL,
                     max_tokens=autonomy_max_tokens,
-                    temperature=self.config.OLLAMA_TEMPERATURE,
-                    top_p=self.config.OLLAMA_TOP_P,
-                    top_k=self.config.OLLAMA_TOP_K,
+                    temperature=self.config.OPENAI_TEMPERATURE,
+                    top_p=self.config.OPENAI_TOP_P,
+                    top_k=self.config.OPENAI_TOP_K,
                     api_key=api_key,
                     disable_reasoning=disable_reasoning,
                     # Inherit the main provider's fallback endpoint so a dedicated
                     # autonomy endpoint doesn't lose fallback resilience. No-op
-                    # when OLLAMA_FALLBACK_* is unset (empty -> no fallback).
-                    fallback_base_url=self.config.OLLAMA_FALLBACK_BASE_URL,
-                    fallback_model=self.config.OLLAMA_FALLBACK_MODEL,
-                    fallback_api_key=self.config.OLLAMA_FALLBACK_API_KEY,
-                    fallback_disable_reasoning=self.config.OLLAMA_FALLBACK_DISABLE_REASONING,
-                    retry_attempts=self.config.OLLAMA_RETRY_ATTEMPTS,
+                    # when OPENAI_FALLBACK_* is unset (empty -> no fallback).
+                    fallback_base_url=self.config.OPENAI_FALLBACK_BASE_URL,
+                    fallback_model=self.config.OPENAI_FALLBACK_MODEL,
+                    fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
+                    fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
+                    retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
                     empty_response_retries=getattr(
-                        self.config, "OLLAMA_EMPTY_RESPONSE_RETRIES", None
+                        self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
                     ),
                     enable_audio_input=_owner_audio_input_enabled(self),
                 )
@@ -3659,7 +3659,7 @@ class MaxwellBot(commands.Bot):
         background agents shared the autonomy endpoint).
 
         Like ``_get_autonomy_provider``: build+cache a dedicated
-        OllamaProvider keyed on the resolved (base_url, api_key, model,
+        OpenAICompatibleProvider keyed on the resolved (base_url, api_key, model,
         disable_reasoning) signature so config churn doesn't leak
         ClientSessions; re-probe initialize() when the cached provider is
         unavailable so a transient failure self-heals; never raise (a
@@ -3710,7 +3710,7 @@ class MaxwellBot(commands.Bot):
             # Aux agents produce short JSON plans/audits — cap conservatively
             # so we don't exceed the model's output limit.
             aux_max_tokens = min(
-                _safe_int(self.config.OLLAMA_MAX_TOKENS or 200000, 200000), 8192
+                _safe_int(self.config.OPENAI_MAX_TOKENS or 200000, 200000), 8192
             )
             if cached is None:
                 old = self.aux_provider
@@ -3722,22 +3722,22 @@ class MaxwellBot(commands.Bot):
                         logger.warning(
                             f"Failed to schedule old aux provider close: {e}"
                         )
-                provider = OllamaProvider(
+                provider = OpenAICompatibleProvider(
                     base_url=base_url,
-                    model=model or self.config.OLLAMA_MODEL,
+                    model=model or self.config.OPENAI_MODEL,
                     max_tokens=aux_max_tokens,
                     temperature=0.2,
-                    top_p=self.config.OLLAMA_TOP_P,
-                    top_k=self.config.OLLAMA_TOP_K,
+                    top_p=self.config.OPENAI_TOP_P,
+                    top_k=self.config.OPENAI_TOP_K,
                     api_key=api_key,
                     disable_reasoning=disable_reasoning,
-                    fallback_base_url=self.config.OLLAMA_FALLBACK_BASE_URL,
-                    fallback_model=self.config.OLLAMA_FALLBACK_MODEL,
-                    fallback_api_key=self.config.OLLAMA_FALLBACK_API_KEY,
-                    fallback_disable_reasoning=self.config.OLLAMA_FALLBACK_DISABLE_REASONING,
-                    retry_attempts=self.config.OLLAMA_RETRY_ATTEMPTS,
+                    fallback_base_url=self.config.OPENAI_FALLBACK_BASE_URL,
+                    fallback_model=self.config.OPENAI_FALLBACK_MODEL,
+                    fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
+                    fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
+                    retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
                     empty_response_retries=getattr(
-                        self.config, "OLLAMA_EMPTY_RESPONSE_RETRIES", None
+                        self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
                     ),
                     enable_audio_input=_owner_audio_input_enabled(self),
                 )
@@ -3783,7 +3783,7 @@ class MaxwellBot(commands.Bot):
         )
 
         # Wire the LTM auto-summarizer's LLM hook to the live ai_provider
-        # (ollama-backed). The summarizer passes a transcript to the LLM
+        # (OpenAI-compatible). The summarizer passes a transcript to the LLM
         # and expects a list of durable facts back.
         async def _ltm_summarizer_fn(transcript: str, max_facts: int = 20) -> list:
             try:
@@ -9911,7 +9911,7 @@ class MaxwellBot(commands.Bot):
                 :500
             ],
             "events_buffered": await self.rem_log.size(),
-            "model": self.config.OLLAMA_REM_MODEL,
+            "model": self.config.OPENAI_REM_MODEL,
             "running": self._rem_running or bool(state.get("running")),
         }
 
@@ -9954,7 +9954,7 @@ class MaxwellBot(commands.Bot):
                     getattr(rem_provider, "generate_chat_completion", None)
                 ):
                     rem_provider = self.ai_provider
-                rem_model = self._get_aux_model() or self.config.OLLAMA_REM_MODEL
+                rem_model = self._get_aux_model() or self.config.OPENAI_REM_MODEL
                 run = await run_rem_once(
                     memory_manager=self.memory,
                     rem_log=self.rem_log,
@@ -9972,7 +9972,7 @@ class MaxwellBot(commands.Bot):
                     ),
                     # REM produces a short audit, not free-form prose; cap
                     # max_tokens like autonomy so we don't blow past the model's
-                    # output limit (default OLLAMA_MAX_TOKENS=200000 risks a 400).
+                    # output limit (default OPENAI_MAX_TOKENS=200000 risks a 400).
                     max_tokens=8192,
                 )
             finally:
@@ -13775,7 +13775,7 @@ class MaxwellBot(commands.Bot):
                 7200,
             ),
         )
-        max_out_tokens = getattr(self.config, "OLLAMA_MAX_TOKENS", 16384) or 16384
+        max_out_tokens = getattr(self.config, "OPENAI_MAX_TOKENS", 16384) or 16384
         if self._is_short_live_turn(message, content):
             # Banter does not need a 16k output budget.
             max_out_tokens = min(int(max_out_tokens), 4096)
@@ -14417,7 +14417,7 @@ class MaxwellBot(commands.Bot):
                         openai_tools
                     )
                     max_out_tokens = (
-                        getattr(self.config, "OLLAMA_MAX_TOKENS", 16384) or 16384
+                        getattr(self.config, "OPENAI_MAX_TOKENS", 16384) or 16384
                     )
                     logger.info(
                         "more_tools: reattached %d tools for follow-up",

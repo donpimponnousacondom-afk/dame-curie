@@ -10,7 +10,7 @@ import pytest
 import error_reporting
 import providers
 from providers import (
-    OllamaProvider,
+    OpenAICompatibleProvider,
     ProviderEmptyResponseError,
     ProviderRequestError,
     ProviderResponseError,
@@ -77,7 +77,7 @@ class Session:
 
 
 def provider_for(responses, **kwargs):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "https://primary.example.test/v1", "synthetic-model", 8192, 0.6, **kwargs
     )
     provider.available = True
@@ -141,7 +141,7 @@ MESSAGES = [{"role": "user", "content": "synthetic private prompt not needed in 
 def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics(production_handler, caplog, number):
     body = "reasoning.effort rejected as numeric; " + "FULL-UPSTREAM-DETAIL " * 1000 + "FINAL-SUPPORT-TAIL"
     response = Response(body.encode(), 400, headers={"X-Request-ID": "synthetic-effort-request"})
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "deepseek/deepseek-v4.1-flash", 8192, 0.6,
         api_key="synthetic-effort-key", retry_attempts=4, reasoning_control=lambda: number,
         extra_body={"provider": {"only": ["deepseek"]}},

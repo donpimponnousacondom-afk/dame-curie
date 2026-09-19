@@ -10,7 +10,7 @@ import bot as bot_module
 import control_defaults
 from bot import MaxwellBot
 from control_defaults import DEFAULT_CONTROL, update_deepseek_reasoning
-from providers import OllamaProvider
+from providers import OpenAICompatibleProvider
 from utils import FileLock, FileLockTimeout, _atomic_json_write_sync
 
 
@@ -35,7 +35,7 @@ def reasoning_bot(tmp_path, *, admin=True, direct=False):
     )
     bot._load_control = MethodType(MaxwellBot._load_control, bot)
     bot._handle_reasoning_command = MethodType(MaxwellBot._handle_reasoning_command, bot)
-    bot.ai_provider = OllamaProvider(
+    bot.ai_provider = OpenAICompatibleProvider(
         "https://api.deepseek.com/v1" if direct else "https://openrouter.ai/api/v1",
         "deepseek-flash" if direct else "deepseek/deepseek-v4.1-flash", 8192, 0.6,
         extra_body={"provider": {"only": ["deepseek"]}},
@@ -228,16 +228,16 @@ def test_dashboard_update_reload_changes_future_requests(tmp_path):
 
 def test_main_constructor_wires_live_control_callback(tmp_path, monkeypatch):
     captured = {}
-    monkeypatch.setattr(bot_module, "OllamaProvider", lambda **kwargs: captured.update(kwargs) or SimpleNamespace())
+    monkeypatch.setattr(bot_module, "OpenAICompatibleProvider", lambda **kwargs: captured.update(kwargs) or SimpleNamespace())
     config = dict.fromkeys((
-        "OLLAMA_BASE_URL", "OLLAMA_MODEL", "OLLAMA_API_KEY", "OLLAMA_FALLBACK_BASE_URL",
-        "OLLAMA_FALLBACK_MODEL", "OLLAMA_FALLBACK_API_KEY", "OLLAMA_VISION_BASE_URL",
-        "OLLAMA_VISION_MODEL", "OLLAMA_VISION_API_KEY",
+        "OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "OPENAI_FALLBACK_BASE_URL",
+        "OPENAI_FALLBACK_MODEL", "OPENAI_FALLBACK_API_KEY", "OPENAI_VISION_BASE_URL",
+        "OPENAI_VISION_MODEL", "OPENAI_VISION_API_KEY",
     ), "")
-    config.update(OLLAMA_MAX_TOKENS=8192, OLLAMA_TEMPERATURE=0.6, OLLAMA_TOP_P=0.95,
-                  OLLAMA_TOP_K=20, OLLAMA_DISABLE_REASONING=False, OLLAMA_FALLBACK_DISABLE_REASONING=True,
-                  OLLAMA_VISION_DISABLE_REASONING=True, OLLAMA_RETRY_ATTEMPTS=1,
-                  OLLAMA_EXTRA_HEADERS={}, OLLAMA_EXTRA_BODY={}, ENABLE_AUDIO_INPUT=False)
+    config.update(OPENAI_MAX_TOKENS=8192, OPENAI_TEMPERATURE=0.6, OPENAI_TOP_P=0.95,
+                  OPENAI_TOP_K=20, OPENAI_DISABLE_REASONING=False, OPENAI_FALLBACK_DISABLE_REASONING=True,
+                  OPENAI_VISION_DISABLE_REASONING=True, OPENAI_RETRY_ATTEMPTS=1,
+                  OPENAI_EXTRA_HEADERS={}, OPENAI_EXTRA_BODY={}, ENABLE_AUDIO_INPUT=False)
     bot = SimpleNamespace(config=SimpleNamespace(**config), _control={"deepseek_reasoning": "low"})
     MaxwellBot._setup_ai(bot)
     assert captured["reasoning_control"]() == "low"

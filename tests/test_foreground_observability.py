@@ -75,7 +75,7 @@ def measured_call():
 def foreground_bot():
     bot = SimpleNamespace(
         _control={"max_tool_iterations": 3, "footer_format": "{{MODEL}} {{TTFT}}"},
-        config=SimpleNamespace(ENABLE_IMAGE_INPUT=False, OLLAMA_MAX_TOKENS=1000),
+        config=SimpleNamespace(ENABLE_IMAGE_INPUT=False, OPENAI_MAX_TOKENS=1000),
         bot_name="Maxwell",
         user=SimpleNamespace(id=42),
         tools={},

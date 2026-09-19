@@ -20,7 +20,7 @@ def shared_bot():
         AUTONOMY_API_KEY="",
         AUTONOMY_MODEL="",
         AUTONOMY_DISABLE_REASONING=False,
-        OLLAMA_TEMPERATURE=0.6,
+        OPENAI_TEMPERATURE=0.6,
     )
     bot.bot_name = "dame_curie"
     bot._control = {}
@@ -116,7 +116,7 @@ def test_ltm_summary_overrides_shared_main_policy(monkeypatch, shared_bot, night
 def test_rem_guard_forwards_aux_policy_on_shared_main(monkeypatch, aux_policy):
     bot, expected_disabled = aux_policy
     bot.config.DATA_DIR = "unused"
-    bot.config.OLLAMA_REM_MODEL = "rem-model"
+    bot.config.OPENAI_REM_MODEL = "rem-model"
     bot.config.REM_RUN_HISTORY = 5
     bot._rem_running = False
     bot.rem_max_turns = 3

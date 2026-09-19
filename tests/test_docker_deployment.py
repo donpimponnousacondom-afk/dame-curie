@@ -158,7 +158,7 @@ def test_bot_template_keeps_operational_paths_consistent():
     assert settings["DAME_CURIE_SHELL_FULL_HOST"] == "false"
     assert settings["DAME_CURIE_API_PORT"] == "8765"
     assert settings["DISCORD_TOKEN"] == ""
-    assert settings["OLLAMA_API_KEY"] == ""
+    assert settings["OPENAI_API_KEY"] == ""
     assert settings["DAME_CURIE_ADMIN_PASSWORD"] == ""
     assert settings["ENABLE_RAG"] == "false"
     assert settings["DAME_CURIE_EMBED_BASE_URL"] == "http://ollama:11434"

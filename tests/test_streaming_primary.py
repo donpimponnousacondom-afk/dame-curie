@@ -1,6 +1,5 @@
-"""Test SSE streaming against the bot's PRIMARY provider (local Ollama +
-minimax-m3:cloud). This is the model the bot is actually using, so it's the
-one the streaming code MUST work against.
+"""Test SSE streaming against the explicitly configured PRIMARY remote
+OpenAI-compatible endpoint and model.
 
 Catches: reasoning deltas, content=empty but reasoning=present (the ollama
 cloud variant does this), usage, tool calls, error frames.
@@ -17,14 +16,14 @@ import providers  # noqa: E402
 
 
 async def main() -> int:
-    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    base_url = os.environ["OPENAI_BASE_URL"]
     if not base_url.endswith("/v1"):
         base_url = base_url.rstrip("/") + "/v1"
-    model = os.environ.get("OLLAMA_MODEL", "minimax-m3:cloud")
-    api_key = os.environ.get("OLLAMA_API_KEY", "")
+    model = os.environ["OPENAI_MODEL"]
+    api_key = os.environ.get("OPENAI_API_KEY", "")
 
     print(f"Testing stream=True against PRIMARY {base_url} model={model}")
-    p = providers.OllamaProvider(
+    p = providers.OpenAICompatibleProvider(
         base_url=base_url,
         model=model,
         max_tokens=200,

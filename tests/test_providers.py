@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from providers import (
-    OllamaProvider,
+    OpenAICompatibleProvider,
     ProviderUsageExhaustedError,
     USAGE_EXHAUSTED_MESSAGE,
     _is_content_policy_block,
@@ -158,7 +158,7 @@ class FakeSequenceSession(FakeSession):
     ],
 )
 def test_openrouter_native_reasoning_and_sampling_defaults(model):
-    provider = OllamaProvider("https://openrouter.ai/api/v1", model, 8192, 0.6)
+    provider = OpenAICompatibleProvider("https://openrouter.ai/api/v1", model, 8192, 0.6)
     messages = [{"role": "user", "content": "hi"}]
 
     payload = provider._request_payload(provider._endpoints[0], messages)
@@ -176,7 +176,7 @@ def test_openrouter_native_reasoning_and_sampling_defaults(model):
 
 
 def test_openrouter_aux_override_does_not_mutate_main(caplog):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "inclusionai/ling-3.0-flash-fin:free",
         8192, 0.6, top_p=0.9, top_k=30,
     )
@@ -209,7 +209,7 @@ def test_openrouter_aux_override_does_not_mutate_main(caplog):
 
 
 def test_openrouter_reasoning_override_restores_native_default():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "inclusionai/ling-3.0-flash-fin:free",
         8192, 0.6, disable_reasoning=True,
     )
@@ -229,7 +229,7 @@ def test_openrouter_reasoning_override_restores_native_default():
     ["http://localhost:11434/v1", "https://openrouter.ai.example.test/v1"],
 )
 def test_non_openrouter_reasoning_disable_protocol_is_preserved(base_url):
-    provider = OllamaProvider(base_url, "model", 8192, 0.6, disable_reasoning=True)
+    provider = OpenAICompatibleProvider(base_url, "model", 8192, 0.6, disable_reasoning=True)
     payload = provider._request_payload(provider._endpoints[0], [])
 
     assert payload["reasoning_effort"] == "none"
@@ -238,7 +238,7 @@ def test_non_openrouter_reasoning_disable_protocol_is_preserved(base_url):
 
 
 def test_reasoning_protocol_uses_selected_endpoint():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://localhost:11434/v1", "local-model", 8192, 0.6,
         disable_reasoning=True,
         fallback_base_url="https://openrouter.ai/api/v1",
@@ -257,7 +257,7 @@ def test_reasoning_protocol_uses_selected_endpoint():
 
 
 def test_generate_chat_completion_model_override():
-    provider = OllamaProvider("http://example.test", "base-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "base-model", 10, 0.5)
     provider.available = True
     session = FakeSession()
     provider._session = session
@@ -287,7 +287,7 @@ def test_generate_chat_completion_model_override():
 
 
 def test_generate_chat_completion_usage_exhausted_error():
-    provider = OllamaProvider("http://example.test", "base-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "base-model", 10, 0.5)
     provider.available = True
     session = FakeSession(
         FakeErrorResponse(
@@ -307,7 +307,7 @@ def test_generate_chat_completion_usage_exhausted_error():
 
 
 def test_generate_chat_completion_falls_back_to_secondary_provider():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -349,7 +349,7 @@ def test_generate_chat_completion_falls_back_to_secondary_provider():
 
 
 def test_generate_chat_completion_retries_primary_before_fallback():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -384,7 +384,7 @@ def test_generate_chat_completion_retries_primary_before_fallback():
 
 def test_empty_200_gets_non_streaming_recovery_within_total_budget():
     """Empty-content recovery uses remaining attempts, never extra requests."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -423,7 +423,7 @@ def test_empty_200_gets_non_streaming_recovery_within_total_budget():
 
 
 def test_prefer_fallback_routes_first_request_to_fallback():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -448,7 +448,7 @@ def test_prefer_fallback_routes_first_request_to_fallback():
 
 
 def test_prefer_fallback_fails_over_to_primary():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -483,7 +483,7 @@ def test_prefer_fallback_fails_over_to_primary():
 
 
 def test_429_rate_limit_skips_to_fallback_without_doomed_retry():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -608,7 +608,7 @@ def test_read_sse_native_tool_call_with_object_arguments():
 
 def test_generate_response_returns_native_tool_calls():
     """generate_response now supports native tool_calls instead of rejecting them."""
-    provider = OllamaProvider("http://example.test", "base-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "base-model", 10, 0.5)
     provider.available = True
     provider._session = FakeSession(FakeToolCallResponse())
 
@@ -623,7 +623,7 @@ def test_generate_response_returns_native_tool_calls():
 
 
 def test_context_overflow_clamp_survives_retry():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://example.test", "base-model", 12000, 0.5, retry_attempts=2
     )
     provider.available = True
@@ -657,7 +657,7 @@ def test_context_overflow_clamp_survives_retry():
 def test_none_json_body_retries_and_falls_back():
     """A 200 response with a None/missing JSON body should not crash with
     AttributeError — it should retry/fallback like any other failed response."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -693,7 +693,7 @@ def test_none_json_body_retries_and_falls_back():
 def test_degraded_endpoint_skips_to_fallback_without_retry():
     """A 400 'DEGRADED function cannot be invoked' should cool the endpoint and
     fall back immediately — no wasted retries on the same degraded endpoint."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -745,7 +745,7 @@ def test_degraded_endpoint_skips_to_fallback_without_retry():
 
 
 def test_vision_model_used_for_images():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "deepseek-v4-flash",
         10,
@@ -779,7 +779,7 @@ def test_vision_model_used_for_images():
 def test_kimi_k27_vision_enables_thinking():
     """kimi-k2.7-code rejects reasoning_effort=none and otherwise streams
     reasoning-only with empty content. Vision must pin thinking=enabled."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "glm-5.2",
         10,
@@ -806,7 +806,7 @@ def test_kimi_k27_vision_enables_thinking():
 
 
 def test_vision_model_not_used_for_text():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "deepseek-v4-flash",
         10,
@@ -831,7 +831,7 @@ def test_vision_model_not_used_for_text():
 
 
 def test_image_unsupported_skips_text_only_primary():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "deepseek-v4-flash",
         10,
@@ -869,7 +869,7 @@ def test_image_unsupported_skips_text_only_primary():
 
 
 def test_reasoning_only_response_is_not_treated_as_empty():
-    provider = OllamaProvider("http://example.test", "deepseek-v4-flash", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "deepseek-v4-flash", 10, 0.5)
     provider.available = True
     session = FakeSession(FakeReasoningOnlyResponse())
     provider._session = session
@@ -891,7 +891,7 @@ def test_reasoning_only_not_promoted_for_non_deepseek_models():
     # Discord as the user-visible reply. Non-deepseek models must NOT have
     # reasoning promoted — it falls through to the empty-response path instead
     # (leaking the scratchpad beats no answer at all, never sending it).
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://example.test",
         "grok-4.6",
         10,
@@ -914,7 +914,7 @@ def test_reasoning_only_not_promoted_for_non_deepseek_models():
 
 
 def test_403_region_error_skips_to_fallback_without_retry():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "deepseek-v4-flash",
         10,
@@ -951,7 +951,7 @@ def test_403_region_error_skips_to_fallback_without_retry():
 
 
 def test_video_parts_are_not_attached():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "deepseek-v4-flash",
         10,
@@ -985,7 +985,7 @@ def test_video_parts_are_not_attached():
 
 def test_openrouter_image_unsupported_routes_to_another_endpoint():
     """404 'No endpoints found that support image input' must not kill the turn."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "text-only-model",
         10,
@@ -1022,7 +1022,7 @@ def test_openrouter_image_unsupported_routes_to_another_endpoint():
 
 def test_media_unsupported_everywhere_falls_back_to_text_only():
     """When no endpoint accepts the image, answer the text instead of failing."""
-    provider = OllamaProvider("http://primary.test/v1", "text-only-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "text-only-model", 10, 0.5)
     provider.available = True
     session = FakeSequenceSession(
         [
@@ -1052,7 +1052,7 @@ def test_media_unsupported_everywhere_falls_back_to_text_only():
 
 def test_unhandled_4xx_fails_over_instead_of_raising():
     """404 model-unavailable on primary used to kill the turn outright."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "dead-slug",
         10,
@@ -1085,7 +1085,7 @@ def test_unhandled_4xx_fails_over_instead_of_raising():
 
 def test_unhandled_4xx_single_endpoint_still_raises():
     """With nowhere to fail over to, the error must surface."""
-    provider = OllamaProvider("http://primary.test/v1", "dead-slug", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "dead-slug", 10, 0.5)
     provider.available = True
     session = FakeSession(FakeErrorResponse(404, '{"error":{"message":"gone"}}'))
     provider._session = session
@@ -1100,7 +1100,7 @@ def test_unhandled_4xx_single_endpoint_still_raises():
 
 def test_temperature_constraint_is_learned_and_resent():
     """'only 0.6 is allowed' must resend at 0.6, not burn retries."""
-    provider = OllamaProvider("http://primary.test/v1", "picky-model", 10, 0.9)
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "picky-model", 10, 0.9)
     provider.available = True
     session = FakeSequenceSession(
         [
@@ -1129,7 +1129,7 @@ def test_temperature_constraint_is_learned_and_resent():
 
 def test_media_incapable_endpoint_is_remembered_across_calls():
     """A text-only fallback shouldn't be re-offered images on every turn."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -1166,7 +1166,7 @@ def test_media_incapable_endpoint_is_remembered_across_calls():
 
 
 def test_media_incapable_is_learned_from_a_404():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -1198,7 +1198,7 @@ def test_media_incapable_is_learned_from_a_404():
 
 @pytest.mark.parametrize("attempts", [1, 2])
 def test_failover_respects_total_attempt_budget(attempts):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -1236,7 +1236,7 @@ def test_failover_respects_total_attempt_budget(attempts):
 
 @pytest.mark.parametrize("attempts", [1, 2])
 def test_media_strip_retry_respects_total_attempt_budget(attempts):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -1275,7 +1275,7 @@ def test_media_strip_retry_respects_total_attempt_budget(attempts):
 
 def test_retry_loop_cannot_spin_forever_on_endless_deterministic_400s():
     """The while loop must still terminate when every reply is a fresh 400."""
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://primary.test/v1",
         "primary-model",
         10,
@@ -1337,7 +1337,7 @@ def test_policy_block_fails_over_once_and_never_returns_the_notice():
     Regression: the notice was posted to Discord verbatim, and the blocked
     endpoint was retried instead of being handed straight to the fallback.
     """
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         base_url="http://primary.test",
         model="gemini-3.7-flash-low",
         max_tokens=256,
@@ -1400,7 +1400,7 @@ def test_policy_block_fails_over_once_and_never_returns_the_notice():
 
 
 def test_audio_attaches_as_input_audio_when_enabled():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://example.test", "omni-model", 10, 0.5, enable_audio_input=True
     )
     provider.available = True
@@ -1422,7 +1422,7 @@ def test_audio_attaches_as_input_audio_when_enabled():
 
 
 def test_audio_is_not_attached_when_disabled():
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "http://example.test", "text-model", 10, 0.5, enable_audio_input=False
     )
     provider.available = True
@@ -1459,7 +1459,7 @@ def test_svg_is_rasterized_at_provider_boundary_without_mutating_input(monkeypat
     else:
         messages[0]["content"] = [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded, "detail": "low"}}]
     original = copy.deepcopy((messages, options))
-    provider = OllamaProvider("http://example.test", "vision-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "vision-model", 10, 0.5)
     provider.available = True
     provider._session = session = FakeSession()
     asyncio.run(provider.generate_chat_completion(messages, **options))
@@ -1473,7 +1473,7 @@ def test_svg_is_rasterized_at_provider_boundary_without_mutating_input(monkeypat
 def test_legacy_images_keep_actual_raster_mime(blob, mime):
     import base64
 
-    provider = OllamaProvider("http://example.test", "vision-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "vision-model", 10, 0.5)
     provider.available = True
     provider._session = session = FakeSession()
     encoded = base64.b64encode(blob).decode()
@@ -1485,7 +1485,7 @@ def test_legacy_images_keep_actual_raster_mime(blob, mime):
 def test_invalid_svg_is_explicit_text_and_existing_image_parts_survive():
     import base64
 
-    provider = OllamaProvider("http://example.test", "vision-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "vision-model", 10, 0.5)
     provider.available = True
     provider._session = session = FakeSession()
     existing = {"type": "image_url", "image_url": {"url": "https://example.test/original.png"}}
@@ -1502,7 +1502,7 @@ def test_media_routing_uses_normalized_history_parts(monkeypatch, blob, expected
     import base64
     from unittest.mock import Mock
 
-    provider = OllamaProvider("http://example.test", "vision-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "vision-model", 10, 0.5)
     provider.available = True
     provider._session = FakeSession()
     route = Mock(wraps=provider._attempt_endpoint)

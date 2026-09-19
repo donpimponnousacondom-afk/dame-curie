@@ -19,19 +19,19 @@ import providers  # noqa: E402  -- production module under test
 
 async def main() -> int:
     base_url = os.environ.get(
-        "OLLAMA_FALLBACK_BASE_URL", "https://openrouter.ai/api/v1"
+        "OPENAI_FALLBACK_BASE_URL", "https://openrouter.ai/api/v1"
     )
-    api_key = os.environ.get("OLLAMA_FALLBACK_API_KEY", "")
+    api_key = os.environ.get("OPENAI_FALLBACK_API_KEY", "")
     model = os.environ.get(
-        "OLLAMA_FALLBACK_MODEL",
+        "OPENAI_FALLBACK_MODEL",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     )
     if not api_key:
-        print("FAIL: OLLAMA_FALLBACK_API_KEY is empty; cannot test", file=sys.stderr)
+        print("FAIL: OPENAI_FALLBACK_API_KEY is empty; cannot test", file=sys.stderr)
         return 2
 
     print(f"Testing stream=True against {base_url} model={model}")
-    p = providers.OllamaProvider(
+    p = providers.OpenAICompatibleProvider(
         base_url=base_url,
         model=model,
         max_tokens=120,

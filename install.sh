@@ -54,7 +54,7 @@ Options:
 Useful environment variables:
   DAME_CURIE_INSTALL_DIR, DAME_CURIE_REPO_URL (required to clone), DAME_CURIE_BRANCH,
   DAME_CURIE_NONINTERACTIVE=1, DAME_CURIE_SKIP_SYSTEM_DEPS=1,
-  DISCORD_TOKEN, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_API_KEY,
+  DISCORD_TOKEN, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_API_KEY,
   DAME_CURIE_OWNER_IDS, DAME_CURIE_ADMIN_PASSWORD,
   DAME_CURIE_INSTALL_EXTRAS=yes|no, DAME_CURIE_INSTALL_DOCKER=yes|no
 EOF
@@ -78,7 +78,7 @@ if [ -r /dev/tty ] && [ -w /dev/tty ]; then
 elif [ "$NONINTERACTIVE" != "1" ]; then
   NONINTERACTIVE=1
   warn "No controlling TTY is available; switching to non-interactive mode."
-  warn "Set DISCORD_TOKEN, OLLAMA_MODEL, and other DAME_CURIE_* variables, then re-run with --reconfigure if needed."
+  warn "Set DISCORD_TOKEN, OPENAI_BASE_URL, OPENAI_MODEL, and other DAME_CURIE_* variables, then re-run with --reconfigure if needed."
 fi
 
 prompt() {
@@ -335,44 +335,32 @@ configure_env() {
   if [ -n "$token" ]; then set_env_value DISCORD_TOKEN "$token"; ok "Discord token saved"; else warn "DISCORD_TOKEN left blank; the bot cannot start until you edit .env."; fi
 
   printf '\n%sStep 2/5: LLM provider%s\n' "$BOLD" "$RESET"
-  base_default="${OLLAMA_BASE_URL:-http://localhost:11434}"
-  model_default="${OLLAMA_MODEL:-qwen3:8b}"
-  api_key_default="${OLLAMA_API_KEY:-}"
-  if [ "$NONINTERACTIVE" != "1" ] && [ -z "${OLLAMA_BASE_URL:-}" ] && [ -z "${OLLAMA_MODEL:-}" ]; then
-    printf '  Choose an OpenAI-compatible provider:\n' > "$TTY"
-    printf '    1) Local Ollama (http://localhost:11434)\n    2) OpenRouter (https://openrouter.ai/api/v1, key from openrouter.ai/keys, free model moonshotai/kimi-k2.6:free)\n    3) OpenAI (https://api.openai.com/v1)\n    4) LM Studio (http://localhost:1234/v1)\n    5) Custom OpenAI-compatible URL\n' > "$TTY"
-    provider=$(prompt "Provider" "1")
-    case "$provider" in
-      1) base_default=http://localhost:11434; model_default=qwen3:8b; api_key_default="" ;;
-      2) base_default=https://openrouter.ai/api/v1; model_default=moonshotai/kimi-k2.6:free ;;
-      3) base_default=https://api.openai.com/v1; model_default=gpt-4.1-mini ;;
-      4) base_default=http://localhost:1234/v1; model_default="local-model"; api_key_default="" ;;
-      5) base_default=$(prompt "Custom base URL" "$base_default"); model_default="" ;;
-      *) warn "Unknown choice; using Local Ollama defaults." ;;
-    esac
-    if [ "$provider" = "1" ]; then
-      ollama_choice=$(yes_no "Install Ollama and pull the selected model?" "no" "")
-      if [ "$ollama_choice" = "yes" ]; then
-        if [ "$(uname -s 2>/dev/null || printf unknown)" = "Linux" ]; then
-          curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
-          sh /tmp/ollama-install.sh
-          rm -f /tmp/ollama-install.sh
-          if command -v ollama >/dev/null 2>&1; then
-            ollama pull "$model_default" || true
-            ollama pull qwen3-embedding:0.6b || true
-          fi
-        else
-          warn "Install Ollama from https://ollama.com/download, then run: ollama pull $model_default"
+  base_default="${OPENAI_BASE_URL:-}"
+  model_default="${OPENAI_MODEL:-}"
+  api_key_default="${OPENAI_API_KEY:-}"
+  printf '  OPENAI_* selects your remote OpenAI-compatible endpoint, not an official OpenAI account or service. No endpoint or model is assumed.\n'
+  base=$(prompt "Remote OpenAI-compatible base URL" "$base_default")
+  model=$(prompt "Model name" "$model_default")
+  key=$(prompt_secret "Endpoint API key (blank if no bearer is required)" "$api_key_default")
+  set_env_value OPENAI_BASE_URL "$base"
+  if [ -n "$model" ]; then set_env_value OPENAI_MODEL "$model"; else warn "OPENAI_MODEL left blank; set it before starting dame-curie."; fi
+  set_env_value OPENAI_API_KEY "$key"
+
+  if [ "$NONINTERACTIVE" != "1" ]; then
+    ollama_choice=$(yes_no "Install local Ollama for RAG embeddings and pull qwen3-embedding:0.6b?" "no" "")
+    if [ "$ollama_choice" = "yes" ]; then
+      if [ "$(uname -s 2>/dev/null || printf unknown)" = "Linux" ]; then
+        curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+        sh /tmp/ollama-install.sh
+        rm -f /tmp/ollama-install.sh
+        if command -v ollama >/dev/null 2>&1; then
+          ollama pull qwen3-embedding:0.6b || true
         fi
+      else
+        warn "Install Ollama from https://ollama.com/download, then run: ollama pull qwen3-embedding:0.6b"
       fi
     fi
   fi
-  base=$(prompt "Provider base URL" "$base_default")
-  model=$(prompt "Model name" "$model_default")
-  key=$(prompt_secret "API key (blank for local providers)" "$api_key_default")
-  set_env_value OLLAMA_BASE_URL "$base"
-  if [ -n "$model" ]; then set_env_value OLLAMA_MODEL "$model"; else warn "OLLAMA_MODEL left blank; set it before starting dame-curie."; fi
-  set_env_value OLLAMA_API_KEY "$key"
 
   printf '\n%sStep 3/5: Owner Discord user ID(s)%s\n' "$BOLD" "$RESET"
   printf '  Enable Discord Developer Mode, right-click yourself, and choose Copy User ID. Use commas for multiple owners.\n'
@@ -465,14 +453,14 @@ run_doctor() {
   else
     warn "doctor.py found startup blockers. Fix the items above, then run ./.venv/bin/python doctor.py again."
   fi
-  if grep -q '^DISCORD_TOKEN=.' .env && grep -q '^OLLAMA_MODEL=.' .env; then
+  if grep -q '^DISCORD_TOKEN=.' .env && grep -q '^OPENAI_BASE_URL=.' .env && grep -q '^OPENAI_MODEL=.' .env; then
     if ./.venv/bin/python doctor.py --probe; then
       ok "live endpoint probe succeeded"
     else
       warn "doctor.py --probe failed. Check docs/INSTALL.md troubleshooting for URL/key/model fixes."
     fi
   else
-    warn "Skipping live probe because DISCORD_TOKEN or OLLAMA_MODEL is blank."
+    warn "Skipping live probe because DISCORD_TOKEN, OPENAI_BASE_URL, or OPENAI_MODEL is blank."
   fi
 }
 

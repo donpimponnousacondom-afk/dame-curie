@@ -11,10 +11,10 @@ from bot_tools import HDImageGeneratorTool
 @pytest.fixture
 def hd_image(monkeypatch):
     config = SimpleNamespace(
-        OLLAMA_BASE_URL="https://openrouter.ai/api/v1",
-        OLLAMA_API_KEY="synthetic-chat-key",
-        OLLAMA_MODEL="synthetic-chat-model",
-        OLLAMA_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
+        OPENAI_BASE_URL="https://openrouter.ai/api/v1",
+        OPENAI_API_KEY="synthetic-chat-key",
+        OPENAI_MODEL="synthetic-chat-model",
+        OPENAI_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
         GEMINI_IMAGE_BASE_URL="",
         GEMINI_IMAGE_API_KEY="",
     )

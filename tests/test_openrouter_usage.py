@@ -7,7 +7,7 @@ import aiohttp
 import pytest
 
 from bot_tools import UsageTool
-from providers import OllamaProvider
+from providers import OpenAICompatibleProvider
 from tool_schemas import RESULT_TOOL_NAMES, build_openai_tools
 
 
@@ -20,8 +20,8 @@ def usage_tool(monkeypatch):
     bot = SimpleNamespace(
         ai_provider=provider,
         config=SimpleNamespace(
-            OLLAMA_BASE_URL="https://api.deepseek.com/v1",
-            OLLAMA_API_KEY="synthetic-stale-config-key",
+            OPENAI_BASE_URL="https://api.deepseek.com/v1",
+            OPENAI_API_KEY="synthetic-stale-config-key",
         ),
     )
     data = {
@@ -52,7 +52,7 @@ def usage_tool(monkeypatch):
     session.get.return_value = response
     get_session = AsyncMock(return_value=session)
     monkeypatch.setattr("bot_tools._get_shared_session", get_session)
-    monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-stale-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-stale-env-key")
     monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "synthetic-unrelated-compat-key")
     monkeypatch.setenv("DAME_CURIE_USAGE_URL", "https://untrusted.example.invalid/usage")
     return UsageTool(bot), session, response, get_session, data
@@ -150,7 +150,7 @@ def test_uses_fixed_origin_loaded_key_and_no_redirects(usage_tool, base):
 def test_untrusted_or_non_openrouter_primary_sends_nothing(usage_tool, base):
     tool, session, _, get_session, _ = usage_tool
     tool.bot.ai_provider.base_url = base
-    tool.bot.config.OLLAMA_BASE_URL = "https://openrouter.ai/api/v1"
+    tool.bot.config.OPENAI_BASE_URL = "https://openrouter.ai/api/v1"
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
@@ -176,7 +176,7 @@ def test_missing_loaded_key_never_borrows_environment_or_config(usage_tool, key)
 def test_missing_loaded_provider_does_not_fall_back_to_config(usage_tool):
     tool, session, _, get_session, _ = usage_tool
     del tool.bot.ai_provider
-    tool.bot.config.OLLAMA_BASE_URL = "https://openrouter.ai/api/v1"
+    tool.bot.config.OPENAI_BASE_URL = "https://openrouter.ai/api/v1"
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
@@ -187,7 +187,7 @@ def test_missing_loaded_provider_does_not_fall_back_to_config(usage_tool):
 
 def test_real_provider_uses_primary_not_fallback_or_last_response(usage_tool):
     tool, session, _, _, _ = usage_tool
-    tool.bot.ai_provider = OllamaProvider(
+    tool.bot.ai_provider = OpenAICompatibleProvider(
         base_url="https://openrouter.ai/api/v1",
         api_key="synthetic-real-primary",
         model="synthetic-primary-model",

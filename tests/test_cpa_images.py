@@ -26,11 +26,11 @@ def native_image(request, monkeypatch):
     hd = request.param is HDImageGeneratorTool
     prefix = "GEMINI_IMAGE" if hd else "IMAGE_GEN"
     config = SimpleNamespace(
-        OLLAMA_BASE_URL="https://chat.example.invalid/v1",
-        OLLAMA_API_KEY="synthetic-chat-key",
-        OLLAMA_MODEL="synthetic-chat-model",
-        OLLAMA_EXTRA_HEADERS={"X-Chat-Secret": "synthetic-chat-only"},
-        OLLAMA_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
+        OPENAI_BASE_URL="https://chat.example.invalid/v1",
+        OPENAI_API_KEY="synthetic-chat-key",
+        OPENAI_MODEL="synthetic-chat-model",
+        OPENAI_EXTRA_HEADERS={"X-Chat-Secret": "synthetic-chat-only"},
+        OPENAI_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
         GEMINI_IMAGE_BASE_URL="https://hd.example.invalid/v1",
         GEMINI_IMAGE_API_KEY="synthetic-hd-key",
         IMAGE_GEN_BASE_URL="https://normal.example.invalid/v1",

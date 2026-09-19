@@ -77,7 +77,7 @@ def _run(code, env=None):
     child_env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(("REM_", "ENABLE_", "OLLAMA_", "DAME_CURIE_", "DISCORD_"))
+        if not k.startswith(("REM_", "ENABLE_", "OPENAI_", "DAME_CURIE_", "DISCORD_"))
     }
     child_env["DAME_CURIE_ENV_FILE"] = os.devnull
     child_env.update(env or {})
@@ -114,8 +114,8 @@ def test_enable_rem_alias_turns_rem_on():
 
 MINIMUM_ENV = {
     "DISCORD_TOKEN": "test-token",
-    "OLLAMA_BASE_URL": "http://localhost:11434",
-    "OLLAMA_MODEL": "test-model",
+    "OPENAI_BASE_URL": "http://localhost:11434",
+    "OPENAI_MODEL": "test-model",
 }
 
 
@@ -133,7 +133,7 @@ def test_minimum_install_only_needs_token_and_model():
     "missing,expected",
     [
         ("DISCORD_TOKEN", "DISCORD_TOKEN"),
-        ("OLLAMA_MODEL", "OLLAMA_MODEL"),
+        ("OPENAI_MODEL", "OPENAI_MODEL"),
     ],
 )
 def test_validate_names_the_missing_requirement(missing, expected):

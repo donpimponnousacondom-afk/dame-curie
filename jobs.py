@@ -68,7 +68,7 @@ def resolve_job_budgets(control: Any, config: Any) -> dict[str, int]:
     """
     control = control or {}
     live_max_tokens = (
-        _safe_int(getattr(config, "OLLAMA_MAX_TOKENS", 16384) or 16384, 16384)
+        _safe_int(getattr(config, "OPENAI_MAX_TOKENS", 16384) or 16384, 16384)
         if config is not None
         else 16384
     )

@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from providers import OllamaProvider
+from providers import OpenAICompatibleProvider
 from test_providers import FakeErrorResponse, FakeResponse, FakeSequenceSession
 
 
 @pytest.fixture
 def provider():
-    return OllamaProvider(
+    return OpenAICompatibleProvider(
         "https://primary.example.test/v1", "main-model", 8192, 0.6,
         api_key="synthetic-primary-key",
         fallback_base_url="https://fallback.example.test/v1",
@@ -42,7 +42,7 @@ def test_primary_body_options_do_not_reach_fallback_or_vision(provider):
 
 @pytest.mark.parametrize("endpoint_name", ["primary", "fallback", "vision"])
 def test_deepinfra_gpt_oss_options_are_scoped_in_actual_post(monkeypatch, endpoint_name):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "openai/gpt-oss-120b:nitro", 8192, 0.6,
         fallback_base_url="https://fallback.example.test/v1",
         fallback_model="fallback-model", fallback_disable_reasoning=False,
@@ -79,7 +79,7 @@ def test_runtime_fields_override_reserved_extra_body(with_tools):
         "tools": [{"type": "function", "function": {"name": "injected"}}],
         "tool_choice": "required", "custom": {"enabled": True},
     }
-    provider = OllamaProvider("https://primary.example.test", "main", 8192, 0.6,
+    provider = OpenAICompatibleProvider("https://primary.example.test", "main", 8192, 0.6,
                               top_p=0.9, top_k=30, extra_body=extras)
     endpoint = provider._endpoints[0]
     messages = [{"role": "user", "content": "synthetic"}]
@@ -120,7 +120,7 @@ def test_explicit_reasoning_options_and_disable_precedence(
         "reasoning_effort": "high", "reasoning": {"effort": "high"},
         "thinking": {"type": "enabled", "budget_tokens": 4096},
     }
-    provider = OllamaProvider(base_url, "main", 8192, 0.6,
+    provider = OpenAICompatibleProvider(base_url, "main", 8192, 0.6,
                               disable_reasoning=endpoint_disabled, extra_body=extras)
     payload = provider._request_payload(provider._endpoints[0], [],
                                         disable_reasoning=call_disabled)
@@ -140,7 +140,7 @@ def test_explicit_reasoning_options_and_disable_precedence(
 def test_constructor_and_each_payload_defensively_copy_nested_body():
     body = {"custom": {"labels": ["original"]}}
     headers = {"X-Primary-Only": "original"}
-    provider = OllamaProvider("https://primary.example.test", "main", 8192, 0.6,
+    provider = OpenAICompatibleProvider("https://primary.example.test", "main", 8192, 0.6,
                               extra_body=body, extra_headers=headers)
     body["custom"]["labels"].append("caller-mutation")
     headers["X-Primary-Only"] = "caller-mutation"
@@ -179,7 +179,7 @@ def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider):
 
 @pytest.mark.parametrize("authorization_name", ["Authorization", "authorization", "AUTHORIZATION", "aUtHoRiZaTiOn"])
 def test_configured_api_key_wins_case_insensitively(authorization_name):
-    provider = OllamaProvider("https://primary.example.test", "main", 8192, 0.6,
+    provider = OpenAICompatibleProvider("https://primary.example.test", "main", 8192, 0.6,
                               api_key="synthetic-configured-key", extra_headers={
                                   authorization_name: "synthetic-custom-auth",
                                   "X-Primary-Only": "keep",
@@ -192,7 +192,7 @@ def test_configured_api_key_wins_case_insensitively(authorization_name):
 
 
 def test_custom_authorization_retained_without_configured_key():
-    provider = OllamaProvider("https://primary.example.test", "main", 8192, 0.6,
+    provider = OpenAICompatibleProvider("https://primary.example.test", "main", 8192, 0.6,
                               extra_headers={"authorization": "synthetic-custom-auth"})
     assert provider._headers() == {"authorization": "synthetic-custom-auth"}
 
@@ -227,22 +227,22 @@ def load_config(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("value", [None, "", "  \n ", "{}"])
 def test_request_option_config_defaults_are_empty_objects(load_config, value):
-    overrides = {} if value is None else {"OLLAMA_EXTRA_BODY": value, "OLLAMA_EXTRA_HEADERS": value}
+    overrides = {} if value is None else {"OPENAI_EXTRA_BODY": value, "OPENAI_EXTRA_HEADERS": value}
     config = load_config(overrides)["Config"]
-    assert config.OLLAMA_EXTRA_BODY == {}
-    assert config.OLLAMA_EXTRA_HEADERS == {}
+    assert config.OPENAI_EXTRA_BODY == {}
+    assert config.OPENAI_EXTRA_HEADERS == {}
 
 
 def test_request_option_config_parses_json_objects(load_config):
     config = load_config({
-        "OLLAMA_EXTRA_BODY": '{"reasoning_effort":"high","custom":{"enabled":true}}',
-        "OLLAMA_EXTRA_HEADERS": '{"X-Synthetic":"test-value"}',
+        "OPENAI_EXTRA_BODY": '{"reasoning_effort":"high","custom":{"enabled":true}}',
+        "OPENAI_EXTRA_HEADERS": '{"X-Synthetic":"test-value"}',
     })["Config"]
-    assert config.OLLAMA_EXTRA_BODY == {"reasoning_effort": "high", "custom": {"enabled": True}}
-    assert config.OLLAMA_EXTRA_HEADERS == {"X-Synthetic": "test-value"}
+    assert config.OPENAI_EXTRA_BODY == {"reasoning_effort": "high", "custom": {"enabled": True}}
+    assert config.OPENAI_EXTRA_HEADERS == {"X-Synthetic": "test-value"}
 
 
-@pytest.mark.parametrize("name", ["OLLAMA_EXTRA_BODY", "OLLAMA_EXTRA_HEADERS"])
+@pytest.mark.parametrize("name", ["OPENAI_EXTRA_BODY", "OPENAI_EXTRA_HEADERS"])
 @pytest.mark.parametrize("value", ['{"secret":"synthetic-secret",', '["synthetic-secret"]', '"synthetic-secret"', "null", "true", "123"])
 def test_invalid_request_option_config_is_strict_and_secret_safe(load_config, capsys, name, value):
     with pytest.raises(ValueError) as error:
@@ -263,16 +263,16 @@ def synthetic_bot(monkeypatch):
     import bot as bot_module
 
     config = SimpleNamespace(
-        OLLAMA_BASE_URL="https://primary.example.test/v1", OLLAMA_MODEL="main",
-        OLLAMA_API_KEY="synthetic-primary-key", OLLAMA_MAX_TOKENS=8192,
-        OLLAMA_TEMPERATURE=0.6, OLLAMA_TOP_P=0.95, OLLAMA_TOP_K=20,
-        OLLAMA_DISABLE_REASONING=False, OLLAMA_FALLBACK_BASE_URL="",
-        OLLAMA_FALLBACK_MODEL="", OLLAMA_FALLBACK_API_KEY="",
-        OLLAMA_FALLBACK_DISABLE_REASONING=True, OLLAMA_RETRY_ATTEMPTS=2,
-        OLLAMA_VISION_BASE_URL="", OLLAMA_VISION_MODEL="", OLLAMA_VISION_API_KEY="",
-        OLLAMA_VISION_DISABLE_REASONING=True, ENABLE_AUDIO_INPUT=False,
-        OLLAMA_EXTRA_BODY={"reasoning_effort": "high", "custom": {"main_only": True}},
-        OLLAMA_EXTRA_HEADERS={"X-Primary-Only": "synthetic"},
+        OPENAI_BASE_URL="https://primary.example.test/v1", OPENAI_MODEL="main",
+        OPENAI_API_KEY="synthetic-primary-key", OPENAI_MAX_TOKENS=8192,
+        OPENAI_TEMPERATURE=0.6, OPENAI_TOP_P=0.95, OPENAI_TOP_K=20,
+        OPENAI_DISABLE_REASONING=False, OPENAI_FALLBACK_BASE_URL="",
+        OPENAI_FALLBACK_MODEL="", OPENAI_FALLBACK_API_KEY="",
+        OPENAI_FALLBACK_DISABLE_REASONING=True, OPENAI_RETRY_ATTEMPTS=2,
+        OPENAI_VISION_BASE_URL="", OPENAI_VISION_MODEL="", OPENAI_VISION_API_KEY="",
+        OPENAI_VISION_DISABLE_REASONING=True, ENABLE_AUDIO_INPUT=False,
+        OPENAI_EXTRA_BODY={"reasoning_effort": "high", "custom": {"main_only": True}},
+        OPENAI_EXTRA_HEADERS={"X-Primary-Only": "synthetic"},
         AUX_BASE_URL="", AUX_MODEL="", AUX_API_KEY="", AUX_DISABLE_REASONING=True,
         AUTONOMY_BASE_URL="", AUTONOMY_MODEL="", AUTONOMY_API_KEY="",
         AUTONOMY_DISABLE_REASONING=False,
@@ -288,8 +288,8 @@ def synthetic_bot(monkeypatch):
     async def initialize(provider):
         provider.available = True
 
-    monkeypatch.setattr(bot_module, "OllamaProvider", OllamaProvider)
-    monkeypatch.setattr(OllamaProvider, "initialize", initialize)
+    monkeypatch.setattr(bot_module, "OpenAICompatibleProvider", OpenAICompatibleProvider)
+    monkeypatch.setattr(OpenAICompatibleProvider, "initialize", initialize)
     instance._setup_ai()
     return instance
 

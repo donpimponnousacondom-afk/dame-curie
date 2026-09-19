@@ -470,9 +470,9 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
 
 @pytest.fixture
 def runtime_provider():
-    from providers import OllamaProvider
+    from providers import OpenAICompatibleProvider
 
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         base_url="https://private-user:private-pass@loaded.example/secret-path?token=secret-query#secret-fragment",
         model="loaded-model",
         max_tokens=100,
@@ -553,7 +553,7 @@ def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metr
         ))
         bot = fake_bot(
             _is_admin=lambda uid: True, command_prefix="!", ai_provider=runtime_provider,
-            config=SimpleNamespace(OLLAMA_MODEL="stale-config-model", OLLAMA_BASE_URL="https://stale.example"),
+            config=SimpleNamespace(OPENAI_MODEL="stale-config-model", OPENAI_BASE_URL="https://stale.example"),
         )
         message = Message(content="!debug")
         measured = replace(metrics, model="old-request-override", provider="old.example", endpoint=measured_endpoint)

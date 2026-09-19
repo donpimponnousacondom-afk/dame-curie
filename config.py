@@ -35,7 +35,7 @@ ENV_FILE = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
 # .env is the SOURCE OF TRUTH — always override whatever PM2/the shell
 # injected. PM2 caches the env from first start and `--update-env` does
 # NOT re-read the .env file, so without override=True every restart kept
-# stale values (e.g. the old OLLAMA_FALLBACK_MODEL) forever.
+# stale values (e.g. the old OPENAI_FALLBACK_MODEL) forever.
 load_dotenv(ENV_FILE, override=True)
 
 
@@ -189,45 +189,45 @@ class Config:
         "TELEGRAM_WEBHOOK_PORT", 8443, min_value=1024, max_value=65535
     )
 
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", ""))
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", ""))
     # No default model on purpose: a hardcoded one that your endpoint does
     # not serve fails later, as an opaque 404 from the provider. Empty fails
     # at startup with a sentence that says what to do.
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
-    OLLAMA_REM_MODEL = os.getenv("OLLAMA_REM_MODEL") or OLLAMA_MODEL
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip()
+    OPENAI_REM_MODEL = os.getenv("OPENAI_REM_MODEL") or OPENAI_MODEL
     # max_tokens = max *output* tokens per completion (not context window).
     # minimax-m3 allows huge context but caps output ~131072; 8192 is a sane default.
-    OLLAMA_MAX_TOKENS = _int_env(
-        "OLLAMA_MAX_TOKENS", 16384, min_value=1, max_value=131072
+    OPENAI_MAX_TOKENS = _int_env(
+        "OPENAI_MAX_TOKENS", 16384, min_value=1, max_value=131072
     )
-    OLLAMA_TEMPERATURE = _float_env("OLLAMA_TEMPERATURE", 0.6, min_value=0.0)
-    OLLAMA_TOP_P = _float_env("OLLAMA_TOP_P", 0.95, min_value=0.0, max_value=1.0)
-    OLLAMA_TOP_K = _int_env("OLLAMA_TOP_K", 20, min_value=0)
-    OLLAMA_DISABLE_REASONING = _bool_env("OLLAMA_DISABLE_REASONING", False)
-    OLLAMA_EXTRA_HEADERS = _json_env("OLLAMA_EXTRA_HEADERS", strict=True)
-    OLLAMA_EXTRA_BODY = _json_env("OLLAMA_EXTRA_BODY", strict=True)
-    OLLAMA_FALLBACK_BASE_URL = os.getenv("OLLAMA_FALLBACK_BASE_URL", "").strip()
-    OLLAMA_FALLBACK_API_KEY = os.getenv("OLLAMA_FALLBACK_API_KEY", "").strip()
-    OLLAMA_FALLBACK_MODEL = os.getenv("OLLAMA_FALLBACK_MODEL", "").strip()
-    OLLAMA_FALLBACK_DISABLE_REASONING = _bool_env(
-        "OLLAMA_FALLBACK_DISABLE_REASONING", True
+    OPENAI_TEMPERATURE = _float_env("OPENAI_TEMPERATURE", 0.6, min_value=0.0)
+    OPENAI_TOP_P = _float_env("OPENAI_TOP_P", 0.95, min_value=0.0, max_value=1.0)
+    OPENAI_TOP_K = _int_env("OPENAI_TOP_K", 20, min_value=0)
+    OPENAI_DISABLE_REASONING = _bool_env("OPENAI_DISABLE_REASONING", False)
+    OPENAI_EXTRA_HEADERS = _json_env("OPENAI_EXTRA_HEADERS", strict=True)
+    OPENAI_EXTRA_BODY = _json_env("OPENAI_EXTRA_BODY", strict=True)
+    OPENAI_FALLBACK_BASE_URL = os.getenv("OPENAI_FALLBACK_BASE_URL", "").strip()
+    OPENAI_FALLBACK_API_KEY = os.getenv("OPENAI_FALLBACK_API_KEY", "").strip()
+    OPENAI_FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "").strip()
+    OPENAI_FALLBACK_DISABLE_REASONING = _bool_env(
+        "OPENAI_FALLBACK_DISABLE_REASONING", True
     )
     # Optional vision/omni model for image/video (and audio, if enabled) turns.
     # Text-only primaries like deepseek-v4-flash 400 on image_url; when this is
     # set, media requests go here first. Blank base/key inherit the primary.
-    OLLAMA_VISION_BASE_URL = os.getenv("OLLAMA_VISION_BASE_URL", "").strip()
-    OLLAMA_VISION_API_KEY = os.getenv("OLLAMA_VISION_API_KEY", "").strip()
-    OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "").strip()
-    OLLAMA_VISION_DISABLE_REASONING = _bool_env("OLLAMA_VISION_DISABLE_REASONING", True)
-    OLLAMA_RETRY_ATTEMPTS = _int_env(
-        "OLLAMA_RETRY_ATTEMPTS", 5, min_value=1, max_value=10
+    OPENAI_VISION_BASE_URL = os.getenv("OPENAI_VISION_BASE_URL", "").strip()
+    OPENAI_VISION_API_KEY = os.getenv("OPENAI_VISION_API_KEY", "").strip()
+    OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "").strip()
+    OPENAI_VISION_DISABLE_REASONING = _bool_env("OPENAI_VISION_DISABLE_REASONING", True)
+    OPENAI_RETRY_ATTEMPTS = _int_env(
+        "OPENAI_RETRY_ATTEMPTS", 5, min_value=1, max_value=10
     )
     # Up to this many remaining attempts can recover empty HTTP 200 content
     # with a different endpoint and non-streaming request. The total attempt
     # budget is not extended.
-    OLLAMA_EMPTY_RESPONSE_RETRIES = _int_env(
-        "OLLAMA_EMPTY_RESPONSE_RETRIES", 2, min_value=0, max_value=5
+    OPENAI_EMPTY_RESPONSE_RETRIES = _int_env(
+        "OPENAI_EMPTY_RESPONSE_RETRIES", 2, min_value=0, max_value=5
     )
 
     # Toggle for "omni" (audio+vision capable) model input. On by default:
@@ -358,7 +358,7 @@ class Config:
     # 2026-07-21 — used to fall through a chain in bot._synthesize_tts_wav.
     TTS_ENGINE = os.getenv("TTS_ENGINE", "auto").strip().lower()
 
-    # Optional secondary auth fallback for the primary LLM endpoint.
+    # Vendor-neutral shared auth fallback when primary/AUTONOMY/AUX keys are unset.
     OPENAI_COMPAT_API_KEY = os.getenv("OPENAI_COMPAT_API_KEY", "").strip()
 
     AUTONOMY_BASE_URL = os.getenv("AUTONOMY_BASE_URL", "").strip()
@@ -372,7 +372,7 @@ class Config:
     # These are the "context manager" brains — separate from the autonomy
     # tick loop so they can run on a different (e.g. cheaper/faster) model
     # than autonomy. Defaults fall back to the autonomy config, which in
-    # turn falls back to the main OLLAMA_* provider, so a fresh install
+    # turn falls back to the main OPENAI_* provider, so a fresh install
     # with no AUX_* vars behaves exactly as before (all background agents
     # shared one endpoint).
     AUX_BASE_URL = os.getenv("AUX_BASE_URL", "").strip()
@@ -580,25 +580,25 @@ class Config:
 
     @classmethod
     def validate(cls):
-        # The only two hard requirements. Anything else has a default or
-        # degrades to "feature off", which is the whole point of the
-        # ENABLE_*=auto design.
+        # Discord token and explicit remote endpoint/model are required.
+        # Other features default or degrade to "feature off", which is the
+        # point of the ENABLE_*=auto design.
         if not cls.DISCORD_TOKEN:
             raise ValueError(
                 "DISCORD_TOKEN is required. Run ./setup.sh, or set it in .env, "
                 "then start the bot again."
             )
-        if not cls.OLLAMA_BASE_URL:
+        if not cls.OPENAI_BASE_URL:
             raise ValueError(
-                "OLLAMA_BASE_URL is required — point it at any OpenAI-compatible "
-                "endpoint (local Ollama, OpenRouter, LM Studio, ...)."
+                "OPENAI_BASE_URL is required — set your remote OpenAI-compatible "
+                "chat endpoint explicitly; no vendor or endpoint is assumed."
             )
-        if not cls.OLLAMA_MODEL:
+        if not cls.OPENAI_MODEL:
             raise ValueError(
-                "OLLAMA_MODEL is required — set the model name your endpoint serves."
+                "OPENAI_MODEL is required — set the model name your endpoint serves."
             )
-        if cls.OLLAMA_MAX_TOKENS < 1:
-            raise ValueError("OLLAMA_MAX_TOKENS must be >= 1")
+        if cls.OPENAI_MAX_TOKENS < 1:
+            raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
 
         # Soft warnings — these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is

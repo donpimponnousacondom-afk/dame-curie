@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from providers import OllamaProvider, deepseek_reasoning_transport
+from providers import OpenAICompatibleProvider, deepseek_reasoning_transport
 from test_providers import FakeErrorResponse, FakeResponse, FakeSequenceSession
 
 
@@ -31,7 +31,7 @@ def expected_fields(transport, level):
 @pytest.mark.parametrize("base,model,transport", ROUTES)
 @pytest.mark.parametrize("level", ["", "low", "high", "max", "off"])
 def test_baseline_and_runtime_are_always_explicit(base, model, transport, level):
-    provider = OllamaProvider(base, model, 8192, 0.6, reasoning_control=lambda: level)
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, reasoning_control=lambda: level)
     assert deepseek_reasoning_transport(base, model) == transport
     payload = provider._request_payload(provider._endpoints[0], [])
     assert reasoning_fields(payload) == expected_fields(transport, level or "high")
@@ -40,7 +40,7 @@ def test_baseline_and_runtime_are_always_explicit(base, model, transport, level)
 @pytest.mark.parametrize("number", range(1, 101))
 @pytest.mark.parametrize("source", ["control", "extra_body"])
 def test_numeric_openrouter_effort_reaches_payload_as_integer(number, source):
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         ROUTES[0][0], ROUTES[0][1], 8192, 0.6,
         reasoning_control=(lambda: number) if source == "control" else None,
         extra_body={"provider": {"only": ["deepseek"]}, "reasoning": {"effort": number}} if source == "extra_body" else {"provider": {"only": ["deepseek"]}},
@@ -58,7 +58,7 @@ def test_numeric_openrouter_effort_reaches_payload_as_integer(number, source):
 @pytest.mark.parametrize("base,model,transport", ROUTES[1:])
 @pytest.mark.parametrize("value", [1, 37, 50, 75, 100])
 def test_direct_api_numeric_behavior_is_unchanged(base, model, transport, value):
-    provider = OllamaProvider(base, model, 8192, 0.6, reasoning_control=lambda: value)
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, reasoning_control=lambda: value)
     with pytest.raises(ValueError, match="DeepSeek reasoning control"):
         provider._request_payload(provider._endpoints[0], [])
 
@@ -67,7 +67,7 @@ def test_direct_api_numeric_behavior_is_unchanged(base, model, transport, value)
 @pytest.mark.parametrize("level", ["low", "max", "off"])
 @pytest.mark.parametrize("disable", [False, True])
 def test_per_call_override_wins_without_mutating_main(base, model, transport, level, disable):
-    provider = OllamaProvider(base, model, 8192, 0.6, reasoning_control=lambda: level)
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, reasoning_control=lambda: level)
     endpoint = provider._endpoints[0]
     before = provider._request_payload(endpoint, [])
     payload = provider._request_payload(endpoint, [], disable_reasoning=disable)
@@ -79,14 +79,14 @@ def test_per_call_override_wins_without_mutating_main(base, model, transport, le
 @pytest.mark.parametrize("base,model,transport", ROUTES)
 @pytest.mark.parametrize("disabled", [False, True])
 def test_endpoint_disable_has_valid_explicit_fields(base, model, transport, disabled):
-    provider = OllamaProvider(base, model, 8192, 0.6, disable_reasoning=disabled)
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, disable_reasoning=disabled)
     assert reasoning_fields(provider._request_payload(provider._endpoints[0], [])) == expected_fields(transport, "off" if disabled else "high")
 
 
 @pytest.mark.parametrize("base,model,transport", ROUTES)
 def test_live_control_changes_future_payloads_only(base, model, transport):
     control = {"deepseek_reasoning": "low"}
-    provider = OllamaProvider(base, model, 8192, 0.6, reasoning_control=lambda: control["deepseek_reasoning"])
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, reasoning_control=lambda: control["deepseek_reasoning"])
     first = provider._request_payload(provider._endpoints[0], [])
     control["deepseek_reasoning"] = "max"
     second = provider._request_payload(provider._endpoints[0], [])
@@ -103,7 +103,7 @@ def test_live_control_changes_future_payloads_only(base, model, transport):
     ({"reasoning_effort": "none"}, "off"),
 ])
 def test_existing_configuration_becomes_explicit_without_changing_intent(base, model, transport, body, expected):
-    provider = OllamaProvider(base, model, 8192, 0.6, extra_body=body)
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, extra_body=body)
     assert reasoning_fields(provider._request_payload(provider._endpoints[0], [])) == expected_fields(transport, expected)
 
 
@@ -116,7 +116,7 @@ def test_runtime_wins_conflicting_extra_options_and_preserves_routing(base, mode
         "custom": {"labels": ["keep"]},
     }
     original = deepcopy(extras)
-    provider = OllamaProvider(base, model, 8192, 0.6, extra_body=extras,
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, extra_body=extras,
                               reasoning_control=lambda: "low", api_key="synthetic-key",
                               extra_headers={"HTTP-Referer": "https://app.example/", "X-OpenRouter-Title": "Synthetic"})
     payload = provider._request_payload(provider._endpoints[0], [])
@@ -142,12 +142,12 @@ def test_runtime_wins_conflicting_extra_options_and_preserves_routing(base, mode
 ])
 def test_other_models_and_hosts_are_untouched(base, model):
     assert deepseek_reasoning_transport(base, model) == ""
-    provider = OllamaProvider(base, model, 8192, 0.6, reasoning_control=lambda: "max")
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, reasoning_control=lambda: "max")
     assert reasoning_fields(provider._request_payload(provider._endpoints[0], [])) == {}
 
 
 def test_main_control_does_not_leak_to_model_overrides_fallback_or_vision():
-    provider = OllamaProvider(ROUTES[0][0], ROUTES[0][1], 8192, 0.6,
+    provider = OpenAICompatibleProvider(ROUTES[0][0], ROUTES[0][1], 8192, 0.6,
                               reasoning_control=lambda: "max",
                               fallback_base_url="https://api.deepseek.com/v1", fallback_model="deepseek-flash",
                               vision_base_url="https://vision.example/v1", vision_model="other")
@@ -158,28 +158,28 @@ def test_main_control_does_not_leak_to_model_overrides_fallback_or_vision():
 
 @pytest.mark.parametrize("alias,expected", [("minimal", "low"), ("medium", "high"), ("xhigh", "high"), ("ultra", "max")])
 def test_official_direct_compatibility_aliases_are_canonical(alias, expected):
-    provider = OllamaProvider("https://api.deepseek.com", "deepseek-flash", 8192, 0.6, extra_body={"reasoning_effort": alias})
+    provider = OpenAICompatibleProvider("https://api.deepseek.com", "deepseek-flash", 8192, 0.6, extra_body={"reasoning_effort": alias})
     assert reasoning_fields(provider._request_payload(provider._endpoints[0], [])) == expected_fields("deepseek", expected)
 
 
 @pytest.mark.parametrize("base,model,transport", ROUTES)
 @pytest.mark.parametrize("value", [-1, 0, 101, True, False, 75.0, "75", "medium-unknown"])
 def test_unsupported_native_effort_is_not_sent(base, model, transport, value):
-    provider = OllamaProvider(base, model, 8192, 0.6, extra_body={"reasoning_effort": value})
+    provider = OpenAICompatibleProvider(base, model, 8192, 0.6, extra_body={"reasoning_effort": value})
     with pytest.raises(ValueError, match="DeepSeek reasoning supports"):
         provider._request_payload(provider._endpoints[0], [])
 
 
 @pytest.mark.parametrize("value", ["bogus", 0, 101, True, False, 75.0, "75", None, {}])
 def test_malformed_runtime_control_fails_closed(value):
-    provider = OllamaProvider(ROUTES[0][0], ROUTES[0][1], 8192, 0.6, reasoning_control=lambda: value)
+    provider = OpenAICompatibleProvider(ROUTES[0][0], ROUTES[0][1], 8192, 0.6, reasoning_control=lambda: value)
     with pytest.raises(ValueError, match="reasoning control"):
         provider._request_payload(provider._endpoints[0], [])
 
 
 def test_actual_retry_and_next_call_use_explicit_current_controls(monkeypatch):
     control = {"level": "high"}
-    provider = OllamaProvider(ROUTES[0][0], ROUTES[0][1], 8192, 0.6,
+    provider = OpenAICompatibleProvider(ROUTES[0][0], ROUTES[0][1], 8192, 0.6,
                               reasoning_control=lambda: control["level"], retry_attempts=2,
                               extra_body={"provider": {"only": ["deepseek"]}})
     provider.available = True
