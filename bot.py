@@ -382,9 +382,6 @@ from tool_registry import (  # noqa: E402 — reasoning now rides inside tool ca
     extract_reasoning,
     record_reasoning,
 )
-import site_backend  # noqa: E402
-import site_server  # noqa: E402
-import site_test  # noqa: E402
 from plugin_manager import PluginManager, PluginReloadFailure  # noqa: E402
 from tool_schemas import (  # noqa: E402
     CHAT_CORE_TOOL_NAMES,
@@ -2954,7 +2951,7 @@ class MaxwellBot(commands.Bot):
             "OPENAI_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
             "CAPTCHA_SOLVER_API_KEY", "IMAGE_GEN_API_KEY", "NVIDIA_API_KEY",
             "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY",
-            "X_AUTH_TOKEN", "X_CT0", "X_API_KEY", "DAME_CURIE_ADMIN_PASSWORD",
+            "X_AUTH_TOKEN", "X_CT0", "X_API_KEY",
         )
         credentials = [getattr(self.config, name, "") or "" for name in credential_names]
         credentials.extend(os.getenv(name, "") for name in (
@@ -5391,7 +5388,6 @@ class MaxwellBot(commands.Bot):
                 logger.info("Plugin jobs started: %d", started)
         self._tasks = [
             asyncio.create_task(self._backfill_site_graph(), name="site-graph-backfill"),
-            asyncio.create_task(self._site_cleanup_loop()),
             asyncio.create_task(self._memory_cleanup_loop()),
             asyncio.create_task(self._control_reload_loop()),
             asyncio.create_task(self._command_queue_loop()),
@@ -11493,103 +11489,6 @@ class MaxwellBot(commands.Bot):
                     self._active_request_user.pop(cid, None)
                     removed += 1
         return removed
-
-    async def _site_cleanup_loop(self):
-        # Site backend containers carry --restart unless-stopped, so docker
-        # brings them back on its own after a reboot. This pass only fixes the
-        # registry when one went away for good (prune, manual rm, a site
-        # deleted while the bot was down).
-        with contextlib.suppress(Exception):
-            await site_server.reconcile(self.config.DATA_DIR)
-        while True:
-            await asyncio.sleep(300)
-            try:
-                await self._cleanup_sites()
-            except Exception as e:
-                logger.error(f"Site cleanup error: {e}")
-            # A site_test whose probe was killed (SIGKILL, OOM, container stop)
-            # never reaches its own cleanup, so its browser profile stays on
-            # disk forever. This is the only thing that reclaims those.
-            try:
-                await asyncio.to_thread(site_test.sweep_browser_profiles)
-            except Exception as e:
-                logger.debug("Browser profile sweep failed: %s", e)
-
-    def _site_expired(self, entry: dict, now: float) -> bool:
-        """Per-site lifetime: permanent flag, then per-site ttl, then control."""
-        if entry.get("permanent"):
-            return False
-        ttl_hours = entry.get("ttl_hours")
-        if ttl_hours is None:
-            ttl_hours = self._control.get("site_ttl_hours", 24)
-        try:
-            ttl = float(ttl_hours or 0) * 3600.0
-        except (TypeError, ValueError):
-            ttl = 86400.0
-        if ttl <= 0:
-            return False
-        return now - float(entry.get("created_at", 0) or 0) > ttl
-
-    async def _cleanup_sites(self):
-        self._load_sites(quiet=True)
-        base = Path(self.config.DAME_CURIE_SITE_DIR).resolve()
-        now = datetime.now(timezone.utc).timestamp()
-        expired = []
-        for slug, data in list(self._sites.items()):
-            if not self._site_expired(data, now):
-                continue
-            try:
-                if not re.fullmatch(r"[a-z0-9-]{2,30}", slug):
-                    expired.append(slug)
-                    continue
-                path = (base / slug).resolve()
-                if (path == base or base in path.parents) and path.exists():
-                    await asyncio.to_thread(shutil.rmtree, path)
-                    logger.info(f"Deleted expired site {slug}")
-                # The site's server-side store goes with it, so a later site
-                # on the same slug never inherits the old one's data.
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        site_backend.destroy, self.config.DATA_DIR, slug
-                    )
-                # And its backend container, code, database, and secrets — an
-                # expired site must not leave a server running.
-                with contextlib.suppress(Exception):
-                    await site_server.destroy(self.config.DATA_DIR, slug)
-            except Exception as e:
-                logger.error(f"Failed to delete site {slug}: {e}")
-            expired.append(slug)
-        if expired:
-            for slug in expired:
-                self._sites.pop(slug, None)
-            sites_path = Path(self.config.DATA_DIR) / "sites.json"
-
-            # Cross-process lock so cleanup's removal can't lose a concurrent
-            # create_site/API site_update commit (and vice versa).
-            def _locked_cleanup_write():
-                with FileLock(sites_path, timeout=15.0):
-                    # Reload fresh inside the lock so we don't resurrect entries
-                    # the API just added, and drop only our expired set.
-                    fresh = {}
-                    try:
-                        if sites_path.exists():
-                            data = json.loads(sites_path.read_text(encoding="utf-8"))
-                            if isinstance(data, dict):
-                                fresh = {
-                                    k: v for k, v in data.items() if isinstance(v, dict)
-                                }
-                    except (json.JSONDecodeError, OSError, ValueError):
-                        fresh = dict(self._sites)
-                    for slug in expired:
-                        fresh.pop(slug, None)
-                    _atomic_json_write_sync(sites_path, fresh)
-                    self._sites = fresh
-                    return sites_path.stat().st_mtime if sites_path.exists() else 0.0
-
-            try:
-                self._sites_mtime = await asyncio.to_thread(_locked_cleanup_write)
-            except OSError:
-                self._sites_mtime = 0.0
 
     _SITE_REQUEST_RE = re.compile(
         r"\b(make|build|create|code|design|generate|spin\s*up|throw\s*together|cobble|craft|put\s*together)\b"

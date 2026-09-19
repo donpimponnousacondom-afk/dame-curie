@@ -208,17 +208,6 @@ DEFAULT_CONTROL = {
     # native tool_calls (or the endpoint rejects tools=).
     "native_tool_calls": True,
     "tools_enabled": True,
-    "create_site_quota_per_user": 50,
-    # Hours a generated site lives before the cleanup loop removes it.
-    # 0 = never expire. A site created with permanent=true (or extended via
-    # edit_site) ignores this. Used to be a hardcoded 86400 in two places.
-    "site_ttl_hours": 24,
-    # Inject a restrictive CSP <meta> into every generated page. Off by
-    # default: the page is the model's own document and the hosting layer is
-    # where a policy belongs — the meta tag could only ever subtract from what
-    # the page was written to do. Turn on if your static host sets no CSP for
-    # generated sites.
-    "site_inject_csp": False,
     # Unused: the full tool catalog is attached on every turn. Gating hid
     # hd_image behind more_tools and made photo requests look like a
     # from-scratch generate. Kept so existing control.json files still load.
@@ -344,6 +333,9 @@ DEAD_CONTROL_KEYS = frozenset(
         "auto_recent_window_minutes",
         "auto_inactivity_minutes",
         "auto_decider_prompt",
+        "create_site_quota_per_user",
+        "site_ttl_hours",
+        "site_inject_csp",
         # Intel engine was removed in d455e4b. These keys can linger in
         # persisted bot_control.json from older installs; strip them so
         # the dashboard's stale-key warning list stays clean.
