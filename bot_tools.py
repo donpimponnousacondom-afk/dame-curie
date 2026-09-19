@@ -5459,6 +5459,7 @@ class ShellTool(Tool):
                 cwd="/home/dame-curie",
                 env={**os.environ, "HOME": "/home/dame-curie"},
                 start_new_session=True,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -7256,8 +7257,7 @@ class SendMediaTool(Tool):
         return result
 
 
-# KiloTool removed — it was a host-level RCE escape hatch that bypassed
-# the Docker sandbox. One prompt injection and the LLM owns your box.
+# KiloTool removed — host execution bypasses the outer bot container boundary.
 
 
 class TtsTool(Tool):
