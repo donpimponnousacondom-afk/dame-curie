@@ -390,7 +390,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
                 enum=["main", "autonomy", "aux"], default="main",
             ),
             "model": _str(
-                "Optional primary-model override. Configured fallback/vision models may answer instead. No endpoint or credentials.",
+                "Optional primary-model override; configured fallback models remain unchanged and may answer instead. No endpoint or credentials.",
             ),
         },
         ["goal"],

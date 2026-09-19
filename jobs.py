@@ -351,7 +351,7 @@ class SpawnBackgroundTool(Tool):
             "bigger budgets and pings the user when done, so the channel stays "
             "free. Params: goal (what to build/do, required), context (extra "
             "spec, optional), provider (main/autonomy/aux, default main), model "
-            "(optional primary-model override; configured fallback/vision models "
+            "(optional primary-model override; configured fallback models "
             "may answer instead). Profiles use trusted configuration, never URLs or keys. "
             "After calling, reply with send_message: ONE short ack line naming the "
             "job id and requested profile/model — nothing else, no other tools."
@@ -559,7 +559,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         await _post_thread(
             thread,
             f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
-            f"{job.requested_route}. Overrides target primary only; configured fallback/vision models may answer.\n"
+            f"{job.requested_route}. Overrides target primary only; configured fallback models may answer.\n"
             f"Budgets: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. Progress lands here.",
             context=job_context,
         )

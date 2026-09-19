@@ -1,9 +1,9 @@
 """Trusted profile selection for detached jobs, independent of REM cascades."""
 
-import re
 import shlex
 from collections.abc import Callable, Mapping
 from enum import StrEnum
+from io import StringIO
 from typing import TYPE_CHECKING
 
 from providers import OpenAICompatibleProvider, ProviderEndpoint
@@ -24,18 +24,24 @@ def parse_background_request(text: str) -> tuple[str, JobProvider, str | None]:
     provider = JobProvider.MAIN
     model = None
     if text and text.split(maxsplit=1)[0] in {"--provider", "--model", "--"}:
-        separator = re.search(r"(?:^|\s)--(?:\s|$)", text)
-        if separator is None:
-            raise ValueError("usage: !bg [--provider main|autonomy|aux] [--model MODEL] -- GOAL")
-        header = shlex.split(text[:separator.start()])
-        text = text[separator.end():].strip()
+        stream = StringIO(text)
+        header = shlex.shlex(stream, posix=True)
+        header.whitespace_split = True
+        header.commenters = ""
         seen = set()
-        if len(header) % 2 or len(header) > 4:
-            raise ValueError("background header accepts --provider PROFILE and --model MODEL once each")
-        for flag, value in zip(header[::2], header[1::2]):
+        while True:
+            start = stream.tell()
+            flag = header.get_token()
+            if flag == "--" and text[start:stream.tell()].strip() == "--":
+                text = text[stream.tell():].strip()
+                break
             if flag not in {"--provider", "--model"} or flag in seen:
-                raise ValueError("background header accepts --provider PROFILE and --model MODEL once each")
+                raise ValueError("usage: !bg [--provider PROFILE] [--model MODEL] -- GOAL; each flag once")
             seen.add(flag)
+            start = stream.tell()
+            value = header.get_token()
+            if value is None or (value == "--" and text[start:stream.tell()].strip() == "--"):
+                raise ValueError(f"background header needs a value for {flag} before --")
             if flag == "--provider":
                 provider = JobProvider(value)
             else:
