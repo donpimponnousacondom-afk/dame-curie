@@ -370,160 +370,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         {"url": _str("Direct image URL (jpg/png/gif/webp)")},
         ["url"],
     ),
-    "create_site": _obj(
-        {
-            "name": _str("Short slug: lowercase, numbers, hyphens"),
-            "title": _str(
-                "Site title for listing/metadata — not a required on-page heading"
-            ),
-            "body": _str(
-                "FULL HTML document (DOCTYPE through closing tags) for index.html. "
-                "Served as-is: no restyle or layout template. Invent a new look each "
-                "time unless the user specified one. Prefer this over stuffing HTML "
-                "into chat. In visible HTML text use real line breaks or <br>, never "
-                "literal \\n; keep \\n only inside intentional JavaScript/CSS strings. "
-                "Ship the finished thing: every section written, every control wired "
-                "to code that runs, every list populated with real content. No "
-                "placeholders, no lorem ipsum, no TODO, no 'coming soon', no empty "
-                "href='#' navigation, no stub function returning a fake value. A page "
-                "whose body is just a 'Loading…' shell is a failure, not a start — if "
-                "it takes 900 lines to actually work, write 900 lines."
-            ),
-            "files": _str(
-                'Optional extra files as JSON: {"style.css": "...", "app.js": "...", '
-                '"about/index.html": "..."}. Anything a static host serves — split a '
-                "big page up, add subpages, ship a data.json. Paths are relative to "
-                "the site root."
-            ),
-            "backend": _bool(
-#                "ALWAYS true — every site MUST have a live Python backend via "
-#                "site_server (FastAPI+uvicorn on $PORT at /bot/<slug>/api/...; ws at "
-#                "/ws if realtime). Frontend never computes alone — it fetches/renders "
-#                "from the backend. Client-only sites are forbidden."
-                 "Proper PHP/Perl or cgi-bin on the remote, remember that "
-                 "remote is a Dreamhost shared server you cannot access certan things there. "
-                 "Frontend never computes alone - it fetches/renders from the backend in the remote "
-                 "in the route indicated for the remote: https://redroom.zombiedawn.net/dame/<site> "
-                 "any API need to be PHP/Perl or cgi-bin because the dreamhost, you cannot use those "
-                 "in local so you must debug things against the remote, it's instant sync automatically "
-                 "so you can create things on this local machine and you will have almost instant acces "
-                 "to the site in remote for you to debug properly against the frontend and test the "
-                 "back end\n"
-            ),
-            "permanent": _bool(
-                "Skip the auto-expiry clock so the site stays up until deleted"
-            ),
-            "encoding": _str("text (default) or base64 for exact bytes"),
-            "images": _str("Optional JSON list of local image paths to include"),
-        },
-        ["name", "title", "body"],
-    ),
-    "edit_site": _obj(
-        {
-            "name": _str("Slug of the site to edit (see list_sites)"),
-            "action": _str(
-                "list | read | write | replace | delete | rename | backend | extend"
-            ),
-            "path": _str("File inside the site, default index.html"),
-            "content": _str("New file contents for write"),
-            "files": _str(
-                'Optional extra files to write at once: {"style.css": "...", "app.js": "..."}'
-            ),
-            "find": _str("For replace: exact existing text to swap out"),
-            "replace": _str("For replace: what to put there (empty string deletes it)"),
-            "all": _bool(
-                "For replace: true = every occurrence, false = first only (default)"
-            ),
-            "title": _str("For rename: the new title"),
-            "encoding": _str("text (default) or base64 for write"),
-            "backend": _str("For backend: true | false | status | clear"),
-            "permanent": _bool("For extend: stop this site expiring"),
-            "start_line": _int(
-                "For read of a large file: 1-based line to start the window. "
-                "Omit to see the top (or the whole file if it is small)."
-            ),
-        },
-        ["name", "action"],
-    ),
-    "site_server": _obj(
-        {
-            "name": _str("Slug of the site this backend belongs to"),
-            "action": _str(
-                "list | read | write | replace | deploy | start | stop | restart | "
-                "status | logs | env | rm | delete"
-            ),
-            "files": _str(
-                'Server source as JSON: {"app.php": "...", "helpers.pl": "..."}. '
-                "write merges these into the existing source (other files stay). "
-                "deploy replaces the whole snapshot - missing files disappear. "
-#                "app.php is the entry and must listen on 0.0.0.0:$PORT. flask, "
-#                "waitress, fastapi, uvicorn, websockets, sqlalchemy, bcrypt, "
-#                "pyjwt, requests, httpx, jinja2, pillow and the stdlib are "
-#                "installed. Use fastapi+uvicorn instead of flask+waitress when "
-#                "the app needs WebSockets. Only /data is writable and only /data "
-#                "survives a restart — put the database at /data/app.db. Routes "
-#                "are served under /bot/<name>/api/."
-                "Routes are server under remote: https://redroom.zombiedawn.net/dame/ "
-                "You local routes must be /dame/<name>/api/ if you need an API backend in PHP/Perl or cgi-bin "
-                "in the remote dreamhost shared server where everything get synced automatically from this local copy\n"
-            ),
-            "path": _str(
-                "For read/replace/rm/write-one-file: which server file (default app.py)"
-            ),
-            "content": _str(
-                "For write of a single file: the new contents (or use files=)"
-            ),
-            "find": _str("For replace: exact existing text to swap out"),
-            "replace": _str("For replace: what to put there"),
-            "all": _bool(
-                "For replace: true = every occurrence, false = first only (default)"
-            ),
-            "env": _str(
-                'Secrets and config as JSON: {"API_KEY": "sk-..."}. Held outside '
-                "the site directory, never served and never echoed back; read "
-                "them with os.environ. Setting env restarts the server."
-            ),
-            "packages": _str(
-                'Extra pip packages as a JSON list, e.g. ["redis==5.0.1"]. Only '
-                "needed for something outside the installed set. Builds a per-site "
-                "image, so the first deploy takes longer."
-            ),
-            "lines": _int("For logs: how many lines (default 40, max 200)"),
-            "start_line": _int(
-                "For read of a large file: 1-based line to start the window. "
-                "Omit to see the top (or the whole file if it is small)."
-            ),
-        },
-        ["name", "action"],
-    ),
-    "delete_site": _obj(
-        {"name": _str("Slug of the site to delete")},
-        ["name"],
-    ),
-    "list_sites": _obj(
-        {
-            "all_users": _bool(
-                "Optional boolean. If true, list all published sites across all users."
-            ),
-        },
-    ),
-    "site_test": _obj(
-        {
-            "name": _str("Slug of the site to test (see list_sites)"),
-            "path": _str(
-                "Optional subpage (about/) or this site's full public URL. "
-                "Default is the homepage."
-            ),
-            "url": _str("Alias of path: this site's full public URL"),
-            "wait": _num(
-                "Seconds to let JavaScript run after load (default 2, max 15)"
-            ),
-            "screenshot": _bool(
-                "Attach a screenshot of the loaded page (default true)"
-            ),
-        },
-        ["name"],
-    ),
     "guide": _obj(
         {
             "goal": _str(
@@ -596,8 +442,8 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "shell": _obj(
         {
             "command": _str(
-                "Bash command to run in the sandbox. Newlines are only allowed "
-                "inside a heredoc. To write a file: cat << 'EOF' > path/file.py "
+                "Bash command to run directly inside the bot container. Multiline "
+                "scripts are allowed. To write a file: cat << 'EOF' > path/file.py "
                 "then the body then a line containing only EOF. Put `> file` on "
                 "the opener line, not after EOF."
             ),
@@ -817,12 +663,6 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         # text at all.
         "change_avatar",
         "list_servers",
-        "create_site",
-        "edit_site",
-        "delete_site",
-        "site_server",
-        "site_test",
-        "list_sites",
         "guide",
         "web_search",
         "fetch_url",
@@ -1803,7 +1643,7 @@ def message_chars(message: dict) -> int:
     """Prompt size of one chat message, tool_calls included.
 
     An assistant turn replayed in a tool loop carries its arguments (a
-    create_site body, a shell script, a long send_message) and those are real
+    file body, a shell script, a long send_message) and those are real
     prompt tokens — counting only ``content`` leaves a budget blind to the
     heaviest messages in the conversation.
     """
@@ -1896,43 +1736,19 @@ def _compact_old_tool_results(groups: list[list[dict]]) -> None:
             )
 
 
-# Site tools carry the page itself in arguments. Replacing that with
-# ``[large content omitted, N chars]`` made the follow-up model write the
-# placeholder onto the live site. Keep the real HTML for these.
-KEEP_FULL_TOOL_ARGS: frozenset[str] = frozenset(
-    {
-        "create_site",
-        "edit_site",
-        "site_server",
-        "site_test",
-    }
-)
-
-
 def elide_tool_calls_for_history(
     tool_calls: list[dict],
     *,
     heavy_keys: tuple[str, ...] = ("body", "content", "code", "html", "data"),
     max_chars: int = 2000,
 ) -> list[dict]:
-    """Copy tool_calls with huge argument strings elided for context budget.
-
-    Site-building tools are left intact: the next turn needs the real HTML
-    to keep editing, and an omitted-placeholder looks like page content.
-    """
+    """Copy tool_calls with huge argument strings elided for context budget."""
     import copy
     import json
 
     out = copy.deepcopy(tool_calls or [])
     for call in out:
         fn = call.get("function")
-        name = ""
-        if isinstance(fn, dict):
-            name = str(fn.get("name") or "")
-        elif isinstance(call.get("name"), str):
-            name = call["name"]
-        if name in KEEP_FULL_TOOL_ARGS:
-            continue
         if not isinstance(fn, dict):
             continue
         raw_args = fn.get("arguments")

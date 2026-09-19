@@ -237,13 +237,10 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     CreateChannelTool,
     CreateInviteTool,
     CreatePollTool,
-    CreateSiteTool,
     DeleteChannelTool,
     DeleteMessageTool,
-    DeleteSiteTool,
     EditChannelTool,
     EditMessageTool,
-    EditSiteTool,
     FetchUrlTool,
     ForwardMessageTool,
     HDImageGeneratorTool,
@@ -271,7 +268,6 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     VoiceModTool,
     EditServerTool,
     AuditLogTool,
-    ListSitesTool,
     GuideTool,
     ToolFailure,
     LookupUserTool,
@@ -291,8 +287,6 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     SetActivityTool,
     SetNicknameTool,
     ShellTool,
-    SiteServerTool,
-    SiteTestTool,
     SleepTool,
     TtsTool,
     TypingTool,
@@ -3932,16 +3926,7 @@ class MaxwellBot(commands.Bot):
         self.tools["manage_emoji"] = ManageEmojiTool(self)
         if self.config.ENABLE_AVATAR:
             self.tools["change_avatar"] = ChangeAvatarTool(self)
-        if self.config.ENABLE_CREATE_SITE:
-            self.tools["create_site"] = CreateSiteTool(self)
-            self.tools["edit_site"] = EditSiteTool(self)
-            self.tools["delete_site"] = DeleteSiteTool(self)
-            self.tools["site_server"] = SiteServerTool(self)
-            self.tools["site_test"] = SiteTestTool(self)
-            self.tools["list_sites"] = ListSitesTool(self)
-            self.tools["guide"] = GuideTool(self)
-        # Background sub-agent jobs: always registered (the tool itself is
-        # the escape hatch for long turns, independent of the site feature).
+        self.tools["guide"] = GuideTool(self)
         self.tools["spawn_background"] = SpawnBackgroundTool(self)
         if self.config.ENABLE_WEB_SEARCH:
             self.tools["web_search"] = WebSearchTool(self)

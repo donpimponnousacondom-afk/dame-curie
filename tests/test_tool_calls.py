@@ -374,27 +374,9 @@ def test_record_reasoning_does_not_raise_on_bot_failure():
     asyncio.run(run())  # no exception = pass
 
 
-def test_elide_keeps_create_site_and_edit_site_html():
+def test_elide_compacts_message_content():
     html = "<!DOCTYPE html><html><body>" + ("n" * 20_000) + "</body></html>"
     calls = [
-        {
-            "id": "1",
-            "type": "function",
-            "function": {
-                "name": "create_site",
-                "arguments": json.dumps({"name": "x", "title": "t", "body": html}),
-            },
-        },
-        {
-            "id": "2",
-            "type": "function",
-            "function": {
-                "name": "edit_site",
-                "arguments": json.dumps(
-                    {"name": "x", "action": "write", "content": html}
-                ),
-            },
-        },
         {
             "id": "3",
             "type": "function",
@@ -405,11 +387,6 @@ def test_elide_keeps_create_site_and_edit_site_html():
         },
     ]
     out = elide_tool_calls_for_history(calls)
-    create_args = json.loads(out[0]["function"]["arguments"])
-    edit_args = json.loads(out[1]["function"]["arguments"])
-    send_args = json.loads(out[2]["function"]["arguments"])
-    assert create_args["body"] == html
-    assert edit_args["content"] == html
-    assert "omitted" not in create_args["body"]
+    send_args = json.loads(out[0]["function"]["arguments"])
     assert send_args["content"].startswith("[large content omitted,")
     assert "20000" in send_args["content"] or str(len(html)) in send_args["content"]
