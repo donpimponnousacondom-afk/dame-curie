@@ -4,7 +4,7 @@
 
 **Python 3.14 is mandatory.** The host's system interpreter is unrelated to the project's required version and must not be replaced. Do not install project packages into the system Python tree or use a system-package bypass flag.
 
-Application/site images declare Python3.14.4; the provisioned shell/site images each reported Python3.14.4 during network-disabled checks. The service-readable `/opt/dame-curie/.venv` is an operator-only Python3.14.4 environment; app dependencies live in the image. These checks do not establish full bot, voice, RAG or site behavior. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
+The redesigned app image declares Python3.14.4; separate shell/site/web images are no longer part of the approved topology. Shell uses the app environment inside the outer bot container, not a host interpreter or nested container. The earlier provisioned `/opt/dame-curie/.venv` is an operator-only Python3.14.4 environment; app dependencies live in the image. Historical shell/site checks do not establish redesign acceptance. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
 
 | Name | Meaning |
 | --- | --- |
@@ -29,9 +29,11 @@ Do not use `--clear`, `--system-site-packages`, an unrelated existing environmen
 
 If root later chooses uv, verify its local availability and document the exact 3.14 selection/environment path before use. This page does not pretend a second unverified workflow is configured.
 
-## Provisioned image evidence and dependency caveat
+## Historical image evidence and dependency caveat
 
-The final app/web release is built from code revision `b2f5380`; later handoff commits are documentation-only. Site-runtime's offline `pip check` passed. The app check did **not** pass: `discord-ext-voice-recv==0.5.2a179` declares `discord-py`, while the lock intentionally installs `discord.py-self==2.1.0` into the shared `discord` namespace. The installer also explicitly reinstalls the self-fork after optional extras. Do not install the competing distribution or relax pins to silence metadata checking. Voice compatibility and a clean/explicitly resolved packaging contract remain prerequisites for future Discord activation; this round performed no Discord or voice probe. Successful API/primary-inference checks do not resolve that caveat.
+The earlier staged app/web release used code revision `b2f5380`; it is **not** the Discord-only redesign release. Historical site-runtime's offline `pip check` passed, but that image is now retired from the source design. The earlier app check did **not** pass: `discord-ext-voice-recv==0.5.2a179` declares `discord-py`, while the lock intentionally installs `discord.py-self==2.1.0` into the shared `discord` namespace. The installer also explicitly reinstalls the self-fork after optional extras. Do not install the competing distribution or relax pins to silence metadata checking. Voice compatibility and a clean/explicitly resolved packaging contract remain prerequisites for future Discord activation. Earlier API/primary-inference checks do not resolve that caveat or validate the redesign; no builds, application imports, provider/Discord probes or runtime re-observation occurred in this documentation round.
+
+The redesigned `scripts/build_for_human.sh` builds only the app image from a Git archive in the explicitly selected V2 private engine; it does not deploy or start it. It remains a build/runtime actuator requiring separate authorization, not a source check. `install.sh` installs checkout dependencies/configuration only; it does not provision/activate the bot and supplies no host-Python or PM2 deployment recipe. Do not execute either script, even for discovery, during a source-only assignment.
 
 ## Source and review
 
@@ -43,6 +45,6 @@ Root authorized a first report-only Vulture pass after the source mapping. Use [
 
 ## Execution is a separate boundary
 
-Do not import the application, run tests or even collect tests during the current cut-off. `config.py` loads dotenv at import time; the named live-provider test in `AGENTS.md` directly parses `.env` independently. A dummy environment-variable setting is not sufficient proof of isolation.
+Do not import the application, run tests or even collect tests during source-only work. `config.py` loads dotenv at import time with `override=True`; the named live-provider test in `AGENTS.md` directly parses `.env` independently. A dummy environment-variable setting is not sufficient proof of isolation. During separately authorized private reconciliation, the coordinator must audit structural settings that could override Compose (identity, container mode, storage roots and retired socket settings); this documentation task grants no private-file access.
 
 Future validation requires a separately agreed source-only environment, synthetic configuration/state, disposable databases, no private mounts or real Discord token, and no live provider/message/publisher side effects. No new tests are authorized, especially tests memorializing absence of removed features. Static source review is not runtime or image-build acceptance.

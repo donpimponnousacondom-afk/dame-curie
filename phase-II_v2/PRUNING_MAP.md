@@ -2,18 +2,20 @@
 
 ## Current implementation queue — later root decisions
 
-- V2 foundation is provisioned under the separate grant in `PROVISIONING.md`; API/web are healthy, while Discord and Ollama/model-pull remain held. Full activation is not accepted.
-- **Email: source removal reviewed and integrated** as `9b01074`/`70b8ceb`, from isolated branch `work/prune-email-20260919`; shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure remain. Main-only UI follow-up landed in `df6c97e`; final images include the cut. See `EMAIL_REMOVAL.md` and the separate staged acceptance in `PROVISIONING.md`.
+- The earlier V2 foundation was provisioned under the separate grant in `PROVISIONING.md`. Its last handoff reported API/web running and bot/Ollama/pull/shell created but never started; **runtime was not re-observed in this documentation round**. The coordinator must reconcile after reviewed source integration. Keep bot credentials blank, bot entrypoint never started, RAG false, Ollama/pull stopped and model storage empty; V1 remains protected.
+- **Email: source removal reviewed and integrated** as `9b01074`/`70b8ceb`, from isolated branch `work/prune-email-20260919`; shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure remain. Main-only UI follow-up landed in `df6c97e`; the earlier staged images included the cut. See `EMAIL_REMOVAL.md` and the separate staged acceptance in `PROVISIONING.md`.
 - **Remote inference naming: reviewed and integrated** as `b2f5380`, from isolated branch `work/openai-inference-names-20260919`. `OPENAI_*` means the compatible remote protocol, not OpenAI's service. Eighteen configured private V2 keys were atomically migrated from the 22-key map without changing values; local Ollama embeddings remain separate. See `INFERENCE_NAMING.md`.
 - **Discord-only redesign is now explicitly approved and underway.** The authoritative cut/protection contract is `REDESIGN_PLAN.md`; lane commits, reviews and integration state are in `REDESIGN_PROGRESS.md`.
-- **Logging integrates first**, using `LOGGING_PLAN.md`; legacy modes/redaction/functional memory stay. Parallel implementation is not yet terminal acceptance.
-- **Approved removals:** X/Twitter, Telegram, companion/GF second account, dashboard/API/Caddy, all bot-local website/KV/Python/FastAPI/uvicorn runtimes/tools and the separate nested shell container. No replacement API. Direct shell execution remains inside the outer V2 bot container.
-- **Protected:** publisher/syncer implementation and image/archive mirroring, local authoring paths, outbound providers/media/YouTube, Discord administration, autonomy, games/plugins, shared inbox/taint/confirmation and functional memory. The model writes files locally; the independent publisher mirrors them. No PHP/Perl/CGI installation or remote administration.
-- **After cuts:** canonical `!command` throughout active help/prompts/docs/docstrings, consistent tool/prompt boundaries and explicit per-background-job routing. Authoring/personality policy tuning remains deferred.
+- **Logging integrated first**, per the coordinator's source handoff, using `LOGGING_PLAN.md`: opt-in `logs --format screen [--no-keys]`, append-only normal screen with no repaint; legacy/default modes, redaction and functional memory stay. Source integration is not terminal acceptance; detailed review state belongs in `REDESIGN_PROGRESS.md`.
+- **Approved removals:** X/Twitter, Telegram, companion/GF second account, dashboard/API/OAuth/Caddy/web image, local website/KV/FastAPI/uvicorn servers and six `site_*` tools, human CAPTCHA HTTP fallback and separate nested shell infrastructure. No replacement server; outbound CapSolver/TwoCaptcha remain. Historical `tg:%` privacy filtering is not active Telegram.
+- **Direct shell:** Bash inside the outer V2 bot container, `/home/dame-curie` → `/state/shell`, explicit cwd/HOME, DEVNULL stdin and process-group cleanup. Same-UID shell can read bot-readable secrets; it is not an inner security boundary. No host-root/network, nested Docker or engine socket access.
+- **Deployment:** bot/Ollama/pull only, no published ports or PM2. Staged omitted/true `up`/`start`/`restart` validates but starts nothing. All-profile orphan cleanup goes only through the ownership-checked V2 wrapper. No checkout listener/socket bridge; an archive image without `.git` gives unknown checkout metadata through the existing build-capture fallback, not proof from OCI labels.
+- **Protected:** publisher/syncer and `scripts/publisher/**`, `/state/sites` authoring, `_images` files/sidecars and external mirroring, outbound providers/media/YouTube, Discord administration/autonomy/games/plugins, shared inbox/taint/confirmation/redaction and functional RAG/REM/graph memory. The model writes locally, never administers the remote. No PHP/Perl/CGI installation. V2 publisher activation/destination is unestablished; reserved `.invalid` examples are not a V1 destination.
+- **Prefix/jobs:** canonical `!command` throughout active help/prompts/docs/docstrings. `!bg GOAL` remains free prose; optional `--provider main|autonomy|aux` / `--model MODEL` header requires `-- GOAL`. `spawn_background` accepts profile/model, not URL/key/header. Same-role configuration is required for explicit routing, default main remains unchanged, overrides affect primary only and configured fallback may answer. Jobs use canonical personality/origin server prompt, with goal/context in user role. No real provider/Discord acceptance; authoring/personality tuning is deferred.
 
-The map below remains the original bounded source audit; its line references and no-execution claims are historical, not a report of the later provisioning/removal assignments.
+**Everything below is the preserved historical `a9c0fba` audit.** Source line anchors, comma-prefix examples, API/PM2/site consumers, proposed future choices and no-execution claims describe that earlier assignment; they are not current capability/operating instructions or a request to ask root for already-approved scope. Current contracts are `REDESIGN_PLAN.md`, `../docs/ARCHITECTURE.md` and `../docs/OPERATIONS.md`.
 
-## Resume here
+## Historical audit starting point
 
 - **Source baseline:** `a9c0fba` on `dev/phaseII_v2`. All source line references below refer to that unchanged application snapshot. This is a bounded static map, not runtime acceptance or proof that deployed V1 has identical source.
 - **Root's destination:** remove DNS provisioners, email and Twitter/X; determine YouTube's actual scope; preserve working TTS/image generation; establish application-subagent routing and logging boundaries. **Tools and the scattered website prompts are the highest-priority design problem.**
@@ -189,7 +191,7 @@ Console `subagent` scope is a jobs-logger heuristic, not complete per-worker cor
 
 Tool result handling also contains actual protocol behavior: result/ending groups control follow-up turns; image/audio markers become model context; site results are deliberately not cut by the general result truncator (`tool_schemas.py:842-924`; `bot.py:15690-15755`). Do not remove these as "verbose logging" while changing prompt text.
 
-## 7. Next-step contract — choose one, do not execute the table
+## 7. Historical next-step contract — superseded by REDESIGN_PLAN.md
 
 | Narrow future assignment | What must stay outside that assignment |
 | --- | --- |

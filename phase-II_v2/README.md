@@ -2,22 +2,27 @@
 
 ## Current scope update — 2026-09-19
 
-Root has now authorized V2 provisioning as exactly **dame-curie**, with a separate private rootless engine, fresh state and secret-safe provider-configuration transfer. The account/private engine, images and six containers are provisioned. Only API/web run, healthy on server loopback port18081; the capped primary-inference check returned visible text. Fresh memory/graph/model state is empty. See `PROVISIONING.md` for exact evidence and limits. Discord credentials/activity and Ollama/model-pull startup remain forbidden, RAG is disabled, and V1 cannot be modified. Root also authorized a separate-worktree email removal and read-only research of the working Hortator logger for the next Screen-safe logging slice. These narrow grants supersede the earlier historical scope below; they do not permit unrelated private-state access, feature cuts, new tests or runtime work by children.
+Root approved the full **Discord-only redesign**, with logging integrated first, then removals/direct shell, active `!` prefix, tool/prompt boundaries and per-job trusted routing. Scope is settled; root is AFK and no repeated feature-selection question is needed. `REDESIGN_PLAN.md` is the authority and `REDESIGN_PROGRESS.md` tracks integration/review. Lane source work is not deployment or terminal/provider/Discord acceptance.
 
-Active instructions have been rebuilt at root `AGENTS.md` and `docs/`; old operational material is quarantined under `legacy/v1/`. The tyranny templates now target Python 3.14 with scoped application. The source operational cut-off is now implemented and statically reviewed; it is not a runtime cutover. Root also approved quarantining the two V1 DNS provisioners unchanged and committing the unchanged sanity skill as tyranny's review twin. Email removal and remote inference naming are integrated. Twitter/X is queued, not implemented; logging remains the next implementation priority. No additional cut is implied.
+The source topology retains **bot/Ollama/ollama-pull only**, no dashboard/API/OAuth/Caddy/web image or published ports, no local website/KV/FastAPI/uvicorn servers or six `site_*` tools, no X/Telegram/companion/GF and no nested shell. Bash executes inside the outer bot container at `/home/dame-curie` → `/state/shell`, with explicit cwd/HOME, DEVNULL stdin and process-group cleanup. Same-UID shell can read bot-readable secrets; it is not an inner security boundary. No host root/network, Docker socket, replacement server, checkout listener/socket bridge, PM2 or PHP/Perl/CGI installation.
 
-- [Protected running Docker snapshot](DOCKER_INVENTORY.md)
-- [Namespace decisions and source cut-off map](CUTOFF_PLAN.md)
-- [Source checkpoint review and validation limits](SOURCE_REVIEW.md)
-- [Read-only subsystem map and surgical next-step handoff](PRUNING_MAP.md): current source baseline `a9c0fba`; tools/prompt work is the priority, with no feature removal or runtime change performed by the mapping assignment.
-- [First soft dead-code pass](DEAD_CODE_PASS.md): pinned Vulture, exact source manifest, raw findings and candidate-versus-framework triage; no removals.
-- [V2 provisioning and activation holds](PROVISIONING.md): current account/engine/configuration evidence and remaining acceptance.
-- [Screen-safe logging proposal](LOGGING_PLAN.md): reference-source research and independent review; no implementation or terminal acceptance yet.
-- Email source removal is independently reviewed and integrated (`9b01074`/`70b8ceb`); see `EMAIL_REMOVAL.md`. Final images include the cut; staged acceptance is recorded separately in `PROVISIONING.md`. Remote inference naming passed independent Flash/Luna review and landed as `b2f5380`: protocol-neutral `OPENAI_*`, distinct from local Ollama embeddings. Private V2 settings were atomically migrated; see `INFERENCE_NAMING.md`. Twitter/X remains the next queued pruning cut; see the current queue atop `PRUNING_MAP.md`.
-- [Repeatable static-audit workflow](../docs/DEAD_CODE.md)
-- [Permanent operations procedure](../docs/OPERATIONS.md)
+Publisher/syncer and `scripts/publisher/**` remain untouched. Local `/state/sites` authored directories and `_images` files/sidecars retain independent external mirroring; the model does not administer the remote. V2 publisher activation/destination is unestablished, public examples remain reserved `.invalid`, and no V1 destination is implied. Preserve Discord administration/autonomy/games/plugins/media/inbox, functional RAG/REM/graph memory, taint/confirmation/redaction and outbound CapSolver/TwoCaptcha (not the removed human CAPTCHA HTTP fallback). Historical `tg:%` filtering is privacy protection, not active Telegram.
 
-The rest of this file records the **initial grounding baseline**, before those later authorizations. This folder is temporary, project-owned working memory intended for removal when root closes the phase, not the only home of the current operating contract.
+The separate `dame-curie` account/private engine was provisioned earlier (UID/GID1005 then), but must be re-resolved before every authorized runtime operation. **No runtime re-observation occurred in this documentation round.** The earlier handoff reported API/web running and bot/Ollama/pull/shell created but never started; that is not the new topology already deployed. After reviewed source integration, the coordinator alone owns reconciliation and structural private dotenv auditing (`override=True`). Staged omitted/true `up`/`start`/`restart` is a validated no-op: nothing starts. All-profile orphan cleanup is only through the ownership-checked V2 wrapper. Keep credentials blank, bot entrypoint never started, RAG false, Ollama/pull stopped and model storage empty. Protected `maxwell-curie` V1 is untouched.
+
+Active instructions are root `AGENTS.md` and `docs/`; `legacy/` and the initial grounding record below are not operating recipes. Email removal and protocol-neutral `OPENAI_*` naming preceded the redesign; local Ollama remains the separate embedding backend. Source-only children receive no runtime/test/private-state permissions from these earlier grants.
+
+- [Approved redesign](REDESIGN_PLAN.md) and [integration progress](REDESIGN_PROGRESS.md)
+- [Documentation reconciliation](DOCUMENTATION_REDESIGN.md): owned docs, source evidence and verification limits.
+- [Permanent operations procedure](../docs/OPERATIONS.md) and [architecture/job contract](../docs/ARCHITECTURE.md)
+- [Screen-safe logging contract](LOGGING_PLAN.md): opt-in `logs --format screen [--no-keys]`, append-only normal screen; legacy/default modes unchanged. The coordinator reports source integration complete; no terminal acceptance. Exact integration/review evidence belongs in `REDESIGN_PROGRESS.md`.
+- [Pruning map](PRUNING_MAP.md): current scope summary followed by the preserved historical `a9c0fba` audit, not current line anchors or a request to choose scope again.
+- [Historical V2 provisioning](PROVISIONING.md) and [protected V1 Docker snapshot](DOCKER_INVENTORY.md): dated evidence, not current live state.
+- [Historical namespace checkpoint](CUTOFF_PLAN.md) and [source review](SOURCE_REVIEW.md)
+- [First soft dead-code pass](DEAD_CODE_PASS.md) and [authorized static-audit workflow](../docs/DEAD_CODE.md)
+- [Earlier email removal](EMAIL_REMOVAL.md) and [inference naming](INFERENCE_NAMING.md)
+
+The rest of this file records the **initial grounding baseline**, before those later authorizations. Its next-step/scope restrictions describe that historical assignment, not a repeal of the approved redesign. This folder is temporary working evidence to retire when root closes the phase, not the only home of the current operating contract.
 
 ## Initial grounding boundary (historical; superseded where noted above)
 
@@ -70,6 +75,6 @@ Checkout/Git/skill/tooling rows are coordinator observations of local files and 
 - [Adversarial review](REVIEW.md): challenges, corrections and remaining risks.
 - [Reusable review procedure](adversarial-review/SKILL.md): explicitly supplied to reviewers; not installed into `.agents/` or automatically discovered there.
 
-## Next authorization boundary
+## Initial next authorization boundary (historical; superseded above)
 
 Grounding does not choose what to remove. Root still needs to identify the first feature-removal/refactor slice and, separately, when an isolated V2 validation environment may be prepared. No real login or cutover without root's explicit approval. Backup completion alone changes neither rule.

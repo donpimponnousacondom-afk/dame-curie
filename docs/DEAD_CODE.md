@@ -61,6 +61,6 @@ The initial manifest/report are `phase-II_v2/VULTURE_INPUTS.txt` and `phase-II_v
 2. Check decorators, inheritance, string/dynamic registration, serializers, platform interfaces, CLI entrypoints and relevant existing test references. Do not execute them to answer a static question.
 3. Record **candidate**, **retain with evidence**, or **unresolved**. An unused parameter body does not make its signature disposable. An unused configuration attribute does not establish that its environment name has no other consumer.
 4. Preserve shared dependencies and manual compatibility patches. No mass whitelist, blanket decorator suppression, dummy references or unused-name renames to make the report green. Suppressions, when later warranted, require specific evidence.
-5. Root chooses a small removal slice. Verify its diff and rerun the same authorized static scope afterward; tests/runtime validation still require their separate isolated assignment. No new tests are authorized.
+5. Use the explicitly approved removal scope: `phase-II_v2/REDESIGN_PLAN.md` now authorizes the Discord-only cuts, not arbitrary deletion of Vulture findings. Verify the assigned diff; rerun an audit only under a compatible tooling grant. Tests/runtime validation still require their separate isolated assignment. No new tests are authorized.
 
 Initial results and reviewed examples: `phase-II_v2/DEAD_CODE_PASS.md`. Vulture does not establish code coverage, actual enabled features, runtime reachability or a percentage of removable LOC.

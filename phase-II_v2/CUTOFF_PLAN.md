@@ -1,5 +1,7 @@
 # dame-curie cut-off decisions and source map
 
+> **Historical naming checkpoint, not current deployment guidance.** `REDESIGN_PLAN.md` supersedes the API/web/Caddy/OAuth/PM2, nested shell/site image and startup-snapshot bridge entries below. The approved topology is bot/Ollama/pull only; staged startup starts nothing, with no new listener/socket bridge. `capture_running_build` reports unknown checkout metadata for archive images without `.git`; image labels do not prove a checkout snapshot. Use `../docs/OPERATIONS.md` and `REDESIGN_PROGRESS.md` for the current contract/integration holds. Original source anchors and evidence are retained below, not re-verified or instructions to execute.
+
 2026-09-19. Initial inventory baseline: `aa77fa0`. Source implementation baseline: `47cd6f1`, the intervening documentation-only checkpoint. These are successive local checkpoints, not conflicting sources of authority. Runtime evidence is separately scoped in `DOCKER_INVENTORY.md`.
 
 ## Root's decisions

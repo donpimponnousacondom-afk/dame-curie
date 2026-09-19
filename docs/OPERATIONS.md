@@ -24,22 +24,38 @@ Once a metadata/run-as assignment is granted, use that known account directly. D
 
 ## V2 staging gate
 
-The canonical instance wrapper reads optional `DAME_CURIE_STAGING=true|false` from private `deploy.env`; missing means **true**. Staging adds `docker/compose.staging.yaml`, selects only API/web for normal startup, and restarts only those services. Both base-only and exact base+staging Compose labels are recognized in the same checkout. Down includes all profiles for cleanup, not activation.
+The approved source topology is **`bot`, `ollama`, `ollama-pull` only**, with no published ports, dashboard/API/OAuth/Caddy, web image, local site server or nested shell container. No replacement server or PM2 deployment. Source integration is in progress; this is not a claim that deployed resources already match it.
 
-Keep Discord credentials blank and `ENABLE_RAG=false` while bot/Ollama/model-pull are held. The public Docker examples reflect this state. Do not substitute bare Compose against only the base file: it selects the full application. `discord-activation` alone is not a supported activation recipe because bot retains its Ollama dependency. Leaving staging requires root's explicit activation grant, embedding readiness and separately configured Discord credentials; changing a flag alone is not permission.
+The canonical instance wrapper reads optional `DAME_CURIE_STAGING=true|false` from private `deploy.env`; missing means **true**. With staging enabled, `up`, `start` and `restart` are **validated NO-OPs: nothing starts**. Account, private-root, engine and resource ownership checks still run before the early return, so even a staged no-op is runtime access, not a source-review command. Both exact base-only and base+staging Compose labels remain recognized for the same checkout.
 
-Moving an already-running full instance back into staging requires an explicitly authorized all-profile down first. Merely changing the flag and calling up does not stop services in now-inactive profiles. No such transition occurred in the fresh V2 provisioning.
+Keep Discord credentials blank and `ENABLE_RAG=false`. Never start the bot entrypoint, contact Discord, start Ollama/model-pull or populate/warm model storage under the current holds. Do not substitute raw base-only Compose or an activation profile: bot retains its Ollama dependency. Leaving staging requires a separate explicit activation grant and readiness checks; changing a flag alone is not permission.
 
-## Staged V2 operator entrypoint
+Staging does not stop existing resources. After reviewed source integration, only the coordinator may reconcile obsolete V2 resources with renewed account/socket and ownership checks. An authorized wrapper `down` performs `--profile '*' down --remove-orphans` internally after ownership validation, including legacy shell/site cleanup; do not run that raw Compose command separately. V1 is never a cleanup target.
 
-The verified deployment source is `/opt/dame-curie`, not the private coordinator home. Its operator venv is Python3.14 and is not the application environment; app dependencies live in the image. With a separately granted V2 lifecycle assignment, the canonical argument order is:
+The **earlier** provisioning handoff reported API/web running and bot/Ollama/pull/shell created but never started. Runtime has not been re-observed in this documentation round. That historical state is not the approved source topology or a fresh health claim; see `../phase-II_v2/PROVISIONING.md`.
+
+## V2 operator entrypoint and configuration holds
+
+The earlier provisioned operator checkout is `/opt/dame-curie`, not the private coordinator home. Its operator venv is Python3.14 and is not the application environment; app dependencies live in the image. Do not assume it contains the redesign until the coordinator records release integration. With a separately granted V2 lifecycle assignment and freshly resolved target, the canonical argument order is:
 
 ```sh
 sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
   /opt/dame-curie/scripts/instance.py dame-curie up
 ```
 
-The private `/srv/dame-curie/deploy.env` selects the engine socket, versioned app/web images, loopback port18081 and `DAME_CURIE_STAGING=true`. This is an operator recipe, not permission to run it. Do not execute it for source-only review, change the flag, or use raw base-only Compose to bypass the activation holds. Dashboard authentication is stored in private `config/bot.env`; never print it into a report. The server-loopback UI is `http://127.0.0.1:18081/admin/`, not a public deployment.
+The redesigned `deploy.env` contract selects `INSTANCE_ID`, `INSTANCE_DIR`, `ENGINE_SOCKET`, versioned `APP_IMAGE` and optional `DAME_CURIE_STAGING`. It no longer selects a web image or port. The wrapper can validate and discard a paired legacy `WEB_IMAGE`/`WEB_PORT` during transition; that does not restore either service. No private configuration was inspected here. The recipe above is not permission to run it or to bypass staging.
+
+`config.py` loads the selected dotenv file with **`override=True`**. During separately authorized private configuration reconciliation, the coordinator must audit structural keys as well as credentials: container mode, instance identity, data/site/shell/prompt roots, command prefix and retired socket settings can override injected environment values. Do not treat Compose environment entries as proof of the effective bot configuration or print private values.
+
+The `DAME_CURIE_STARTUP_GIT_SOCKET` mount/environment and checkout listener unit templates are removed from deployment. Do not provision a replacement listener/socket bridge. Existing `capture_running_build` falls back to local Git; an archive-built image without `.git` reports unknown checkout metadata. Build arguments/OCI labels are separate self-declared image metadata, not checkout-snapshot proof.
+
+Public URL examples use reserved `.invalid` destinations. V2 publisher activation and destination have not been established; do not invent a host or reuse V1's destination. Publisher/syncer files and configuration are outside this redesign's mutation scope.
+
+## Log viewer source contract
+
+The integrated logging source adds opt-in `logs --format screen [--no-keys]`; `auto`, `console`, `plain` and `jsonl` retain their existing/default behavior. Screen mode appends to the ordinary screen without repaint or alternate-screen switching. `--no-keys` is valid only with `logs --format screen`. Launching the instance log wrapper still reads private deployment selection and contacts its engine, so it needs a separate runtime/log-access grant.
+
+Controls, redaction limits and synthetic terminal acceptance requirements are in `../phase-II_v2/LOGGING_PLAN.md`; source review/integration status is in `../phase-II_v2/REDESIGN_PROGRESS.md`. No terminal acceptance is claimed. Do not use an existing production Screen session, start a producer to exercise the viewer, or confuse filtered diagnostic output with functional RAG/REM/graph storage.
 
 ## Read-only discovery
 
@@ -52,7 +68,7 @@ command -v docker
 id -u '<approved-service-account>'
 ```
 
-Use the verified CLI path and construct the local socket from that observed UID. The examples below use `/usr/bin/docker`, the path verified in this session; another host must resolve its own installed client. No remote SSH/TCP endpoint, context switch, profile sourcing or process-environment dump is needed.
+Use the verified CLI path and construct the local socket from that observed UID. The examples below use `/usr/bin/docker`, the path recorded in the earlier inventory; every new runtime assignment must resolve its actual target/client again. No remote SSH/TCP endpoint, context switch, profile sourcing or process-environment dump is needed.
 
 If running as the approved account already, use the explicit `--host` with its CLI. If root has explicitly granted run-as inventory, the noninteractive form is:
 
@@ -86,7 +102,7 @@ A read can race with another authorized operator. If an ID disappears or results
 
 ## Metadata allowlist and interpretation
 
-The scalar scope used for the current root-authorized inventory is: container ID/name, configured image reference, immutable image ID, state/health summary, creation/start timestamps, Docker client/server version, and specifically named Compose project/service/image or OCI revision/version labels. Identity/kind/site labels may be read only as exact known keys relevant to the assigned namespace. Never dump all labels.
+The scalar scope used for the earlier root-authorized inventory was: container ID/name, configured image reference, immutable image ID, state/health summary, creation/start timestamps, Docker client/server version, and specifically named Compose project/service/image or OCI revision/version labels. Identity/kind/site labels may be read only as exact known keys relevant to the assigned namespace. Never dump all labels.
 
 This is a maximum procedure allowlist, not permission for a future task. If root grants a narrower set, reduce both the command format and recorded output to that subset; do not execute a broader example unchanged. Names/versions/commits and the explicit metadata-only run-as grant were not narrowed during the inventory recorded in this phase.
 
@@ -100,7 +116,7 @@ Classify resources by exact account/engine/project/ownership metadata, not subst
 
 Unknown account, missing/unexpected socket, remote endpoint, permission denial or malformed metadata: **stop and report the exact sanitized failure**. Ask root for the specific target/run-as grant or a sanitized inventory. Do not retry as root against the default socket, scan other users' engines, change socket permissions, add groups, start a daemon or alter a Docker context.
 
-In this session the default local socket rejected access. After root explicitly supplied `maxwell-curie` and the run-as instruction, the targeted metadata-only query succeeded. This is why the account map is written down rather than rediscovered through privileged trial and error.
+During the historical inventory the default local socket rejected access. After root explicitly supplied `maxwell-curie` and the run-as instruction, the targeted metadata-only query succeeded. This is why the account map is written down rather than rediscovered through privileged trial and error.
 
 ## Mutation and acceptance remain separate
 
