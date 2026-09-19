@@ -14,7 +14,7 @@ Features tested:
   7. Chess Engine & Board Mechanics (SAN/UCI, alpha-beta negamax, FEN, image rendering)
   8. Sites & Backend Datastores (Site building, KV store, append lists, container lifecycle)
   9. X (Twitter) Client (Backends fallback, rate limits, GraphQL, mention poller)
- 10. Email & Inbox System (Notices, requests, self-mail filtering, ignored senders)
+ 10. Inbox System (Notices, requests)
  11. Security Guardrails & Response Guard (Taint gates, repetition scrubbing, echo loops, code safety)
  12. API Server & Dashboard Controls (HTTP Basic auth, login, /api/control clamping, RAG endpoints)
  13. Concurrency Safety & Bot Commands (,stop, ,prompt, ,solo, ,drug, ,jailbreak, ,context, ,rem, ,x, ,vc)
@@ -53,7 +53,6 @@ import chess_game  # noqa: E402
 import site_backend  # noqa: E402
 import x_client  # noqa: E402
 import inbox  # noqa: E402
-import email_inbox  # noqa: E402
 import response_guard  # noqa: E402
 import autonomy_social  # noqa: E402
 import watch_policy  # noqa: E402
@@ -649,22 +648,13 @@ class DeepTestHarness:
         self.run_sync_test("Tweet formatting & syndication tokens", test_x_tweet_rendering_and_rss)
 
     # =========================================================================
-    # SUITE 10: Email & Inbox Processing
+    # SUITE 10: Inbox Processing
     # =========================================================================
-    async def test_suite_email_inbox(self):
-        self.current_suite = "Email & Inbox System"
+    async def test_suite_inbox(self):
+        self.current_suite = "Inbox System"
         print(f"\n\033[1;34m=== SUITE 10: {self.current_suite} ===\033[0m")
 
         temp_dir = self.make_temp_dir()
-
-        def test_email_ignore_senders_filtering():
-            patterns = {".google.com", "noreply@github.com", "alerts@bank.org"}
-            assert email_inbox.is_ignored_sender({"from_addr": "service@google.com"}, patterns) is True
-            assert email_inbox.is_ignored_sender({"from_addr": "security@accounts.google.com"}, patterns) is True
-            assert email_inbox.is_ignored_sender({"from_addr": "noreply@github.com"}, patterns) is True
-            assert email_inbox.is_ignored_sender({"from_addr": "friend@gmail.com"}, patterns) is False
-            assert email_inbox.is_ignored_sender({"from_addr": "ceo@bank.org"}, patterns) is False
-            return "Email sender ignore filters match exact addresses and wildcard subdomains"
 
         async def test_inbox_store_lifecycle():
             store = inbox.InboxStore(data_dir=temp_dir)
@@ -691,7 +681,6 @@ class DeepTestHarness:
             assert items_after[0]["id"] == "req_001"
             return "InboxStore manages notices, requests & status transitions"
 
-        self.run_sync_test("Email sender ignore pattern matching", test_email_ignore_senders_filtering)
         await self.run_async_test("InboxStore notices vs requests lifecycle", test_inbox_store_lifecycle)
 
     # =========================================================================
@@ -847,7 +836,7 @@ class DeepTestHarness:
         self.test_suite_chess()
         self.test_suite_sites()
         await self.test_suite_x_client()
-        await self.test_suite_email_inbox()
+        await self.test_suite_inbox()
         self.test_suite_security_guards()
         self.test_suite_api()
         await self.test_suite_bot_commands()

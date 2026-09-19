@@ -36,7 +36,6 @@ def _live_bot(extra_tools=None):
             "create_site",
             "list_sites",
             "shell",
-            "email_send",
             "inbox_list",
             "inbox_act",
             "send_meme",

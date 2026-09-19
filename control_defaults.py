@@ -136,10 +136,6 @@ DEFAULT_CONTROL = {
     # first cut is made here, on the signals, and only lines that plausibly
     # want him get asked. Lower is chattier; 1.0 means only hard pings.
     "conversation_watch_pressure": 0.4,
-    # How often the background IMAP poll files new unread mail as inbox
-    # notices. Only runs when ENABLE_EMAIL_TOOLS and a mailbox password are
-    # set. Floor 30s, ceiling 1h.
-    "email_inbox_poll_seconds": 120,
     # ─── X (Twitter) ────────────────────────────────────────────────────
     # Reading X is free and always allowed when ENABLE_X is on. These four
     # govern the half that talks back.
@@ -455,10 +451,6 @@ KNOWN_TOOLS = [
     "wait",
     "update_base_personality",
     "update_server_prompt",
-    "email_send",
-    "email_read_inbox",
-    "email_get_message",
-    "email_search",
     "x_read",
     "x_post",
     "more_tools",

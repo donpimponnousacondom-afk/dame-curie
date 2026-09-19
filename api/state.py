@@ -230,9 +230,6 @@ def _sanitize_control(control):
         min(_safe_int(out.get("tool_iteration_timeout_seconds"), 3600), 14400),
     )
     out["ai_concurrency"] = max(1, min(out["ai_concurrency"], 10))
-    out["email_inbox_poll_seconds"] = max(
-        30, min(_safe_int(out.get("email_inbox_poll_seconds"), 120), 3600)
-    )
     # X: the same clamps the bot applies in _load_control, so the dashboard
     # cannot show a value the bot would quietly refuse.
     out["x_posts_per_hour"] = max(

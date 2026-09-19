@@ -88,9 +88,6 @@ def test_strip_tool_payload_leaks_removes_registered_tool_bodies():
     assert "hello" in strip_tool_payload_leaks(leaked)
     search = "<tool:search_messages>secret query</tool:search_messages> ok"
     assert "secret query" not in strip_tool_payload_leaks(search)
-    email = "<tool:email_send>to=evil</tool:email_send> visible"
-    assert "to=evil" not in strip_tool_payload_leaks(email)
-    assert "visible" in strip_tool_payload_leaks(email)
 
 
 def test_strip_tool_payload_leaks_removes_glued_create_site():

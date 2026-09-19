@@ -11,7 +11,7 @@ This is a source map and intended isolation contract, not proof of a deployed V2
 | Tools and generated sites | `bot_tools.py`, `tool_registry.py`, `tool_schemas.py`, `site_server.py`, `docker_runtime.py` | Tool dispatch, generated-site runtime and ownership/resource paths |
 | API and web routing | `api/`, `docker/Caddyfile`, `compose.yaml` | Administration and routing; a complete V2 dashboard/image build has not been established |
 | Operations and publishing | `scripts/instance.py`, `docker/`, `scripts/publisher/` | Existing lifecycle/backup/provisioning source and independent site publishing; not safe discovery commands |
-| Additional inherited capabilities | autonomy/REM, email, voice and plugins | Feature-pruning decisions remain root's; presence is not a request to extend them |
+| Additional inherited capabilities | autonomy/REM, voice and plugins | Feature-pruning decisions remain root's; presence is not a request to extend them |
 
 ## Intended identity isolation
 

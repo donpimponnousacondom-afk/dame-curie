@@ -3,7 +3,7 @@
 Design note — optional features
 -------------------------------
 Maxwell only *requires* two things: a Discord token and an OpenAI-compatible
-model endpoint. Everything else (voice, YouTube, web search, TTS, email,
+model endpoint. Everything else (voice, YouTube, web search, TTS,
 video frames, RAG embeddings) is optional and gated behind an ``ENABLE_*``
 switch.
 
@@ -310,15 +310,6 @@ class Config:
     BOT_NAME = os.getenv("BOT_NAME", "Dame Curie").strip() or "Dame Curie"
     PARTNER_NAME = os.getenv("PARTNER_NAME", "Uni").strip() or "Uni"
 
-    # Email needs a real mailbox. Without a password the four tools could
-    # only ever answer "not configured", so auto keeps them unregistered.
-    ENABLE_EMAIL_TOOLS = _feature_env(
-        "ENABLE_EMAIL_TOOLS",
-        lambda: bool(os.getenv("DAME_CURIE_EMAIL_PASSWORD", "").strip()),
-        on_text="auto: DAME_CURIE_EMAIL_PASSWORD is set",
-        off_text="auto: off, no DAME_CURIE_EMAIL_PASSWORD",
-    )
-
     # X (Twitter). Reading is free and needs no account at all — X's own
     # embed backend and any Nitter/RSSHub instance serve public profiles,
     # posts and searches — so `auto` is on. Posting needs the session
@@ -519,30 +510,6 @@ class Config:
         "DAME_CURIE_CORS_ORIGIN", DAME_CURIE_PUBLIC_BASE_URL.rstrip("/")
     )
 
-    # Local mail (maxwell@z3ki.dev). Bot talks to local Postfix for
-    # outbound and local Dovecot for inbound; no third-party relay. The
-    # default host/port values match the Postfix+Dovecot setup documented
-    # in email_integration/README.md. Override the env vars only if you
-    # intentionally point the bot at a different mail server (debugging,
-    # testing against a sandbox, etc.).
-    DAME_CURIE_SMTP_HOST = os.getenv("DAME_CURIE_SMTP_HOST", "127.0.0.1").strip()
-    DAME_CURIE_SMTP_PORT = _int_env("DAME_CURIE_SMTP_PORT", 25, min_value=1, max_value=65535)
-    DAME_CURIE_IMAP_HOST = os.getenv("DAME_CURIE_IMAP_HOST", "127.0.0.1").strip()
-    DAME_CURIE_IMAP_PORT = _int_env("DAME_CURIE_IMAP_PORT", 993, min_value=1, max_value=65535)
-    DAME_CURIE_EMAIL_USER = os.getenv("DAME_CURIE_EMAIL_USER", "").strip()
-    DAME_CURIE_EMAIL_PASSWORD = os.getenv("DAME_CURIE_EMAIL_PASSWORD", "").strip()
-    # Blank From: falls back to the mailbox itself — one less thing to fill in.
-    DAME_CURIE_EMAIL_FROM = (
-        os.getenv("DAME_CURIE_EMAIL_FROM", "").strip() or DAME_CURIE_EMAIL_USER
-    )
-    DAME_CURIE_EMAIL_FROM_NAME = os.getenv("DAME_CURIE_EMAIL_FROM_NAME", "dame-curie").strip()
-    # Senders whose mail is never filed as an inbox notice. Comma-separated;
-    # a full address, or a leading-dot domain (".google.com") for it and its
-    # subdomains. Empty by default: which machine mail matters is the
-    # operator's call. A DMARC aggregate report is pure telemetry, but a
-    # MAILER-DAEMON bounce means something he sent did not arrive, and a
-    # heuristic cannot tell those apart. The mail itself is untouched — it
-    # stays on the server and the email_* tools still read it.
     # -------------------------------------------------------------------------
     # X (Twitter). Two cookies out of a logged-in browser tab are the whole
     # of the write credential; everything else has a working default.
@@ -564,10 +531,6 @@ class Config:
     X_MAX_CHARS = _int_env("X_MAX_CHARS", 280, min_value=1, max_value=25000)
     X_TIMEOUT_SECONDS = _int_env("X_TIMEOUT_SECONDS", 20, min_value=5, max_value=120)
     X_GRAPHQL_FILE = os.getenv("X_GRAPHQL_FILE", "").strip()
-
-    DAME_CURIE_EMAIL_IGNORE_SENDERS = os.getenv(
-        "DAME_CURIE_EMAIL_IGNORE_SENDERS", ""
-    ).strip()
 
     # Admin / owner allowlists. Re-exported here so Config is the single
     # source of truth; bot_tools.refresh_owner_ids() still does a runtime
@@ -595,7 +558,6 @@ class Config:
         ("ENABLE_YOUTUBE", "YouTube"),
         ("ENABLE_CREATE_SITE", "site generation"),
         ("ENABLE_AVATAR", "avatar changes"),
-        ("ENABLE_EMAIL_TOOLS", "email tools"),
         ("ENABLE_X", "X (Twitter)"),
         ("ENABLE_SHELL", "shell (docker sandbox)"),
         ("ENABLE_RAG", "RAG vector memory"),
@@ -656,13 +618,6 @@ class Config:
                 "DAME_CURIE_OWNER_IDS is empty — admin commands (`,prompt`, "
                 "`,clearmem`, `,autonomy`, `,rem`, etc.) will be denied to "
                 "everyone. Set your Discord user ID in .env."
-            )
-        if cls.ENABLE_EMAIL_TOOLS and not cls.DAME_CURIE_EMAIL_PASSWORD:
-            _log.warning(
-                "ENABLE_EMAIL_TOOLS=true but DAME_CURIE_EMAIL_PASSWORD is empty — "
-                "the email tools will return a 'not configured' error on every "
-                "call. Either set DAME_CURIE_EMAIL_PASSWORD or set "
-                "ENABLE_EMAIL_TOOLS=false."
             )
         if cls.ENABLE_TELEGRAM and cls.TELEGRAM_TOKEN:
             _log.info(

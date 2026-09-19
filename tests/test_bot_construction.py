@@ -124,7 +124,6 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
                 "ENABLE_RAG",
                 "ENABLE_AUTONOMY",
                 "ENABLE_TELEGRAM",
-                "ENABLE_EMAIL_TOOLS",
                 "ENABLE_X",
                 "ENABLE_VC",
                 "ENABLE_TTS",

@@ -326,20 +326,6 @@ def _item(iid, kind, created, state="unread", **extra):
     return row
 
 
-def test_a_waiting_person_outranks_a_pile_of_mail(tmp_path):
-    """Mail arrives in bursts; a friend request must not be pushed out."""
-    store = InboxStore(str(tmp_path))
-    items = [
-        _item(f"email_{n}", "email", f"2026-08-24T10:{n:02d}:00Z") for n in range(20)
-    ]
-    items.append(_item("friend_9", "friend_request", "2026-08-24T09:00:00Z"))
-
-    ordered = store.planner_items(items)
-    assert ordered[0]["id"] == "friend_9"
-    # Mail is capped, so it cannot fill the tail on its own.
-    assert sum(1 for i in ordered if i["kind"] == "email") == 6
-
-
 def test_newest_first_within_a_kind(tmp_path):
     store = InboxStore(str(tmp_path))
     ordered = store.planner_items(

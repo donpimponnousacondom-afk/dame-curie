@@ -61,29 +61,6 @@ def test_extract_timeout_handles_garbage():
     assert out["cross_context_extract_timeout_seconds"] == 60
 
 
-def test_mail_poll_interval_is_clamped():
-    """IMAP login is not free; a dashboard typo must not poll every second."""
-    assert api_server._sanitize_control({})["email_inbox_poll_seconds"] == 120
-    assert (
-        api_server._sanitize_control({"email_inbox_poll_seconds": 300})[
-            "email_inbox_poll_seconds"
-        ]
-        == 300
-    )
-    assert (
-        api_server._sanitize_control({"email_inbox_poll_seconds": 1})[
-            "email_inbox_poll_seconds"
-        ]
-        == 30
-    )
-    assert (
-        api_server._sanitize_control({"email_inbox_poll_seconds": 99999})[
-            "email_inbox_poll_seconds"
-        ]
-        == 3600
-    )
-
-
 def test_extract_threshold_is_clamped_to_a_probability():
     assert api_server._sanitize_control({})["cross_context_extract_threshold"] == 0.25
     out = api_server._sanitize_control({"cross_context_extract_threshold": 0.8})

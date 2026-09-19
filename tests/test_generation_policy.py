@@ -90,7 +90,6 @@ def test_ltm_summary_overrides_shared_main_policy(monkeypatch, shared_bot, night
     bot.config.MEMORY_MESSAGE_LIMIT = 100
     bot.config.REM_EVENT_BUFFER_MAX = 10
     bot.config.REM_RUN_HISTORY = 5
-    bot.config.ENABLE_EMAIL_TOOLS = False
     bot.config.ENABLE_X = False
     bot._night_fallback_active.return_value = night_fallback
     bot.ai_provider.generate_response.return_value = '{"facts": ["root prefers Python"]}'

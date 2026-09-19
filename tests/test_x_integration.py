@@ -133,7 +133,7 @@ def test_disable_taint_gate_actually_disables_the_gate():
     """The .env switch used to be read only by the dispatcher.
 
     Every per-tool copy kept refusing, so setting it looked broken for
-    email_send, shell and x_post alike.
+    shell and x_post alike.
     """
     tool = _Tool(_tainted_bot(DISABLE_TAINT_GATE=True))
     assert _taint_gate_blocks(tool, object(), {}) is False

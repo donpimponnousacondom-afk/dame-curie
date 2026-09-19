@@ -244,10 +244,6 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     EditChannelTool,
     EditMessageTool,
     EditSiteTool,
-    EmailGetMessageTool,
-    EmailReadInboxTool,
-    EmailSearchTool,
-    EmailSendTool,
     FetchUrlTool,
     ForwardMessageTool,
     HDImageGeneratorTool,
@@ -364,7 +360,6 @@ from control_defaults import (  # noqa: E402
     update_deepseek_reasoning,
 )
 import guild_onboarding  # noqa: E402
-from email_inbox import EmailInboxPoller  # noqa: E402
 from x_client import XClient, XMentionPoller  # noqa: E402
 from inbox import (  # noqa: E402
     InboxStore,
@@ -1188,10 +1183,6 @@ KNOWN_TOOL_NAMES: frozenset[str] = frozenset(KNOWN_TOOLS) | frozenset(
         "search_messages",
         "update_base_personality",
         "update_server_prompt",
-        "email_send",
-        "email_read_inbox",
-        "email_get_message",
-        "email_search",
     }
 )
 
@@ -2216,12 +2207,6 @@ TELEGRAM_COMPATIBLE_TOOL_NAMES = {
     # model to "finish with send_message" — the tool was never offered, so
     # the instruction was unfollowable and multi-step turns went silent.
     "send_message",
-    # Email tools touch no Discord object (local Postfix/IMAP), and Telegram
-    # is admin-only, so they work as-is on this transport.
-    "email_send",
-    "email_read_inbox",
-    "email_get_message",
-    "email_search",
     # X is a different network entirely — nothing about it is Discord-shaped,
     # so both tools work unchanged on Telegram.
     "x_read",
@@ -2968,7 +2953,7 @@ class MaxwellBot(commands.Bot):
             "OLLAMA_API_KEY", "OPENAI_COMPAT_API_KEY", "OLLAMA_FALLBACK_API_KEY",
             "OLLAMA_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
             "CAPTCHA_SOLVER_API_KEY", "IMAGE_GEN_API_KEY", "NVIDIA_API_KEY",
-            "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY", "DAME_CURIE_EMAIL_PASSWORD",
+            "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY",
             "X_AUTH_TOKEN", "X_CT0", "X_API_KEY", "DAME_CURIE_ADMIN_PASSWORD",
         )
         credentials = [getattr(self.config, name, "") or "" for name in credential_names]
@@ -3861,27 +3846,6 @@ class MaxwellBot(commands.Bot):
         self.inbox = InboxStore(self.config.DATA_DIR)
         # Notice ids the last prompt carried, marked read once he speaks.
         self._inbox_shown_ids: list[str] = []
-        # Mail is pull-only through the email_* tools, so an unread message is
-        # invisible until he thinks to look. The poller files new mail as inbox
-        # notices; it stays None when no mailbox password is configured.
-        self.mail_poller: EmailInboxPoller | None = None
-        if getattr(self.config, "ENABLE_EMAIL_TOOLS", False):
-            self.mail_poller = EmailInboxPoller(
-                self.inbox,
-                {
-                    "imap_host": getattr(self.config, "DAME_CURIE_IMAP_HOST", "127.0.0.1"),
-                    "imap_port": getattr(self.config, "DAME_CURIE_IMAP_PORT", 993),
-                    "user": getattr(self.config, "DAME_CURIE_EMAIL_USER", ""),
-                    "password": getattr(self.config, "DAME_CURIE_EMAIL_PASSWORD", ""),
-                    # So the poller can recognise his own mail coming back.
-                    "from_addr": getattr(self.config, "DAME_CURIE_EMAIL_FROM", ""),
-                    "ignore_senders": getattr(
-                        self.config, "DAME_CURIE_EMAIL_IGNORE_SENDERS", ""
-                    ),
-                },
-                data_dir=self.config.DATA_DIR,
-                interval=self._mail_poll_seconds(),
-            )
 
         # X (Twitter). The client is cheap to build and needs no credentials
         # for the read half, so it exists whenever ENABLE_X is on; what it can
@@ -3915,7 +3879,7 @@ class MaxwellBot(commands.Bot):
                 data_dir=self.config.DATA_DIR,
             )
             # Mentions are the half of X somebody is waiting on, so they file
-            # as inbox notices like mail does. Public reads cannot see them —
+            # as inbox notices. Public reads cannot see them —
             # the poller stays idle without a session and says so once.
             self.x_mention_poller = XMentionPoller(
                 self.inbox,
@@ -3926,7 +3890,7 @@ class MaxwellBot(commands.Bot):
 
     def _setup_tools(self):
         # Every tool is gated by an ENABLE_* env var so a fresh install
-        # can opt out of paid APIs (NVIDIA, Mailgun) or heavy deps
+        # can opt out of paid APIs (NVIDIA) or heavy deps
         # (discord-ext-voice-recv, opencode, yt-dlp) without editing code.
         # The conditional below is a registry, not an inline if/else per
         # tool, so adding a new toggle is one line in config.py.
@@ -4030,15 +3994,6 @@ class MaxwellBot(commands.Bot):
         self.tools["vc_status"] = VcStatusTool(self)
         self.tools["vc_where"] = VcWhereTool(self)
         self.tools["leave_vc"] = LeaveVcTool(self)
-        # Email tools (local Postfix + Dovecot). Set ENABLE_EMAIL_TOOLS=false
-        # to skip all four registrations. If enabled but DAME_CURIE_EMAIL_PASSWORD
-        # is empty, the tools return a friendly "not configured" error at
-        # call time — see bot_tools.EmailSendTool and friends.
-        if self.config.ENABLE_EMAIL_TOOLS:
-            self.tools["email_send"] = EmailSendTool(self)
-            self.tools["email_read_inbox"] = EmailReadInboxTool(self)
-            self.tools["email_get_message"] = EmailGetMessageTool(self)
-            self.tools["email_search"] = EmailSearchTool(self)
 
         # X (Twitter). x_read works with no credentials at all; x_post says
         # what is missing when there is no session to post with, so both are
@@ -4707,22 +4662,6 @@ class MaxwellBot(commands.Bot):
         if meta.get("reply_to_self"):
             return False
         return bool(meta.get("reply_to_author_id"))
-
-    def _mail_poll_seconds(self) -> float:
-        raw = (getattr(self, "_control", None) or {}).get(
-            "email_inbox_poll_seconds", 120
-        )
-        try:
-            # Floor of 30s: IMAP login is not free and mail is not urgent.
-            return max(30.0, min(float(raw), 3600.0))
-        except (TypeError, ValueError):
-            return 120.0
-
-    async def _mail_poll_loop(self) -> None:
-        poller = getattr(self, "mail_poller", None)
-        if poller is None:
-            return
-        await poller.run()
 
     def _x_poll_seconds(self) -> float:
         raw = (getattr(self, "_control", None) or {}).get("x_mention_poll_seconds", 300)
@@ -5460,13 +5399,6 @@ class MaxwellBot(commands.Bot):
             asyncio.create_task(self._rem_scheduler_loop()),
             asyncio.create_task(self._watermark_save_loop(), name="watermark-save"),
         ]
-        if self.mail_poller is not None and self.mail_poller.configured():
-            self._tasks.append(
-                asyncio.create_task(self._mail_poll_loop(), name="mail-poll")
-            )
-            logger.info(
-                "Mail inbox poll scheduled every %.0fs", self.mail_poller.interval
-            )
         if self.x_mention_poller is not None and self.x_mention_poller.configured():
             self._tasks.append(
                 asyncio.create_task(self._x_mention_poll_loop(), name="x-mention-poll")
@@ -5804,7 +5736,7 @@ class MaxwellBot(commands.Bot):
         # Remember which notices this prompt carried, so they can be marked
         # read once he actually says something. Marking them here instead
         # would burn a notice on a turn he stayed silent for, and *not*
-        # marking them at all is what made the same email get announced on
+        # marking them at all is what made the same notice get announced on
         # every turn until someone dismissed it by hand.
         self._inbox_shown_ids = [
             str(i.get("id"))
@@ -10549,13 +10481,6 @@ class MaxwellBot(commands.Bot):
             control["autonomy_interval_seconds"] = max(
                 30, _safe_int(control.get("autonomy_interval_seconds", 300) or 300, 300)
             )
-            control["email_inbox_poll_seconds"] = max(
-                30,
-                min(
-                    _safe_int(control.get("email_inbox_poll_seconds", 120) or 120, 120),
-                    3600,
-                ),
-            )
             control["x_posts_per_hour"] = max(
                 0, min(_safe_int(control.get("x_posts_per_hour", 8), 8), 100)
             )
@@ -10573,12 +10498,6 @@ class MaxwellBot(commands.Bot):
                 control.pop("base_personality", None)
             self._control = control
             self._apply_x_control(control)
-            poller = getattr(self, "mail_poller", None)
-            if poller is not None:
-                # Takes effect on the next tick; the loop reads backoff_seconds
-                # fresh each time round.
-                poller.interval = float(control["email_inbox_poll_seconds"])
-                poller.max_backoff = max(poller.interval, poller.max_backoff)
             self._sync_audio_input_flags()
             # 2026-07-22: the old global progress_messages re-apply is gone —
             # progress is now per-server via _progress_servers / the env
@@ -15950,7 +15869,7 @@ class MaxwellBot(commands.Bot):
         r"dashboard|app|backend|api|server|"
         r"edit|update|change|fix|patch|rewrite|redo|tweak|delete|remove|"
         r"rename|move|clear|purge|wipe|reset|"
-        r"send|post|upload|attach|share|forward|dm|email|mail|inbox|"
+        r"send|post|upload|attach|share|forward|dm|inbox|"
         r"ban|kick|mute|unmute|timeout|unban|warn|jail|"
         r"role|roles|perm|perms|permission|channel|category|thread|invite|"
         r"server|guild|nick|nickname|avatar|status|presence|activity|playing|"
