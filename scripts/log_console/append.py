@@ -4,7 +4,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Callable
-from contextlib import ExitStack, suppress
+from contextlib import suppress
 from dataclasses import dataclass
 from time import monotonic, sleep
 
@@ -26,6 +26,7 @@ CLEANUP_INTERVAL = 0.050
 class AppendResult:
     requested: bool
     incomplete: bool
+    returncode: int | None
 
 
 class AppendLoop:
@@ -36,7 +37,9 @@ class AppendLoop:
         self.state = AppendState(terminal, self.writer)
         self.lines = AppendLines()
         self.keys = AppendKeys()
-        self.eof_deadline = 0.0
+        self.drain_deadline = 0.0
+        self.returncode: int | None = None
+        self.source_finished = False
 
     def keyboard(self) -> None:
         """Check foreground ownership immediately before every key read."""
@@ -73,9 +76,9 @@ class AppendLoop:
             poller.register(self.terminal.input_fd, select.POLLIN)
         if self.writer.blocks:
             poller.register(self.terminal.output_fd, select.POLLOUT)
-        timeout = 0 if self.lines.ready() and not self.eof_deadline else 100
-        if self.eof_deadline:
-            timeout = min(timeout, max(0, int((self.eof_deadline - monotonic()) * 1000)))
+        timeout = 0 if self.lines.ready() and not self.source_finished else 100
+        if self.drain_deadline:
+            timeout = min(timeout, max(0, int((self.drain_deadline - monotonic()) * 1000)))
         ready = dict(poller.poll(timeout))
         if self.terminal.stop:
             return
@@ -86,13 +89,25 @@ class AppendLoop:
         if self.terminal.output_fd in ready and not self.terminal.stop:
             self.writer.write_ready()
 
+    def observe_source(self, source_exit: Callable[[], int | None]) -> None:
+        """Leader exit starts a drain deadline even if descendants keep the pipe open."""
+        if self.returncode is None:
+            self.returncode = source_exit()
+            if self.returncode is not None:
+                self.state.source_status = f"leader exit={self.returncode}; pipe_eof={self.lines.eof}"
+                if not self.drain_deadline:
+                    self.drain_deadline = monotonic() + EOF_GRACE
+                self.state.notice(f"leader exited status={self.returncode}; bounded pipe/output drain, at most 250 ms")
+
     def finish_source(self) -> None:
-        """Clean EOF has a bounded output grace, not a lossless-export promise."""
-        if self.lines.eof and not self.lines.pending and not self.eof_deadline:
-            self.state.source_status = "EOF"
+        """EOF and leader exit share the first drain deadline; neither extends it."""
+        if self.lines.eof and not self.lines.pending and not self.source_finished:
+            self.source_finished = True
+            self.state.source_status = f"EOF; leader exit={self.returncode}"
             self.state.flush_repeats(force=True)
-            self.state.notice("source EOF; draining admitted output for at most 250 ms")
-            self.eof_deadline = monotonic() + EOF_GRACE
+            if not self.drain_deadline:
+                self.drain_deadline = monotonic() + EOF_GRACE
+            self.state.notice("source EOF; completing bounded pipe/output drain")
 
     def run(self, source_exit: Callable[[], int | None]) -> AppendResult:
         """Bound ingress, records, key bytes and writes independently each iteration."""
@@ -109,6 +124,9 @@ class AppendLoop:
             if not self.terminal.foreground():
                 self.terminal.stop = "terminal foreground ownership lost"
                 break
+            self.observe_source(source_exit)
+            if self.drain_deadline and monotonic() >= self.drain_deadline:
+                break
             self.keys.expire(monotonic())
             if self.keys.disabled and not self.state.keys_disabled_noticed:
                 self.state.keys_disabled_noticed = self.state.notice("keys disabled: incomplete control sequence; Ctrl-C exits")
@@ -121,12 +139,16 @@ class AppendLoop:
                     break
                 self.state.receive(line)
             self.finish_source()
-            if self.eof_deadline and ((not self.writer.blocks and source_exit() is not None) or monotonic() >= self.eof_deadline):
+            drained = self.source_finished and not self.writer.blocks and self.returncode is not None
+            if self.drain_deadline and (drained or monotonic() >= self.drain_deadline):
                 break
             self.poll()
         requested = bool(self.terminal.stop) or self.writer.broken
-        incomplete = not requested and bool(self.writer.blocks or self.writer.dropped.count or self.writer.replay_omitted or self.state.history.omitted)
-        return AppendResult(requested, incomplete)
+        incomplete = not requested and bool(
+            not self.source_finished or self.writer.blocks or self.writer.dropped.count
+            or self.writer.replay_omitted or self.state.history.omitted
+        )
+        return AppendResult(requested, incomplete, self.returncode)
 
 
 def follower_status(process: subprocess.Popen[bytes]) -> int | None:
@@ -138,60 +160,57 @@ def follower_status(process: subprocess.Popen[bytes]) -> int | None:
 
 
 def stop_follower(process: subprocess.Popen[bytes]) -> bool:
-    """Keep the leader unreaped through group signals, then verify disappearance."""
-    with ExitStack() as cleanup:
-        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP):
-            cleanup.callback(signal.signal, number, signal.getsignal(number))
-            signal.signal(number, signal.SIG_IGN)
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-        deadline = monotonic() + TERM_GRACE
-        while follower_status(process) is None:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                break
-            sleep(min(CLEANUP_INTERVAL, remaining))
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
+    """Keep the leader unreaped through group signals, under the outer signal lease."""
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    deadline = monotonic() + TERM_GRACE
+    while follower_status(process) is None:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        sleep(min(CLEANUP_INTERVAL, remaining))
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    try:
+        process.wait(timeout=REAP_GRACE)
+    except subprocess.TimeoutExpired:
+        return False
+    deadline = monotonic() + GROUP_GRACE
+    gone = False
+    while not gone:
         try:
-            process.wait(timeout=REAP_GRACE)
-        except subprocess.TimeoutExpired:
-            return False
-        deadline = monotonic() + GROUP_GRACE
-        gone = False
-        while not gone:
-            try:
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                gone = True
-            except PermissionError:
-                break
-            remaining = deadline - monotonic()
-            if gone or remaining <= 0:
-                break
-            sleep(min(CLEANUP_INTERVAL, remaining))
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            gone = True
+        except PermissionError:
+            break
+        remaining = deadline - monotonic()
+        if gone or remaining <= 0:
+            break
+        sleep(min(CLEANUP_INTERVAL, remaining))
     return gone
 
 
 def follow_screen(command: list[str], env: dict[str, str], *, no_keys: bool) -> None:
     """Keep the existing source selection but isolate its stdin/session and cleanup."""
     terminal = TerminalLease(sys.stdin.fileno(), sys.stdout.fileno(), no_keys=no_keys)
-    process = subprocess.Popen(
-        command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=False, bufsize=0, start_new_session=True,
-    )
-    try:
-        with terminal.active():
-            result = AppendLoop(process.stdout.fileno(), terminal).run(lambda: follower_status(process))
-            returncode = follower_status(process)
-    finally:
+    with terminal.signals():
+        process = subprocess.Popen(
+            command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=False, bufsize=0, start_new_session=True,
+        )
         try:
-            complete = stop_follower(process)
+            with terminal.active():
+                result = AppendLoop(process.stdout.fileno(), terminal).run(lambda: follower_status(process))
         finally:
-            process.stdout.close()
-        if not complete:
-            raise RuntimeError("Screen viewer follower cleanup incomplete after TERM/KILL/reap/group-verification deadlines")
-    if not result.requested and returncode != 0:
+            terminal.quiesce()
+            try:
+                complete = stop_follower(process)
+            finally:
+                process.stdout.close()
+            if not complete:
+                raise RuntimeError("Screen viewer follower cleanup incomplete after TERM/KILL/reap/group-verification deadlines")
+    if not result.requested and result.returncode != 0:
         raise RuntimeError("Screen viewer source exited unexpectedly or did not exit at EOF")
     if result.incomplete:
-        raise RuntimeError("Screen viewer output/evidence incomplete; bounded output grace or admission budget exhausted")
+        raise RuntimeError("Screen viewer pipe/output/evidence incomplete after bounded drain or admission limits")

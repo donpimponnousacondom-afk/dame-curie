@@ -13,6 +13,10 @@ QUEUE_BYTES = 256 * 1024
 QUEUE_BLOCKS = 128
 BLOCK_BYTES = 64 * 1024
 WRITE_QUOTA = 16 * 1024
+EXIT_SIGNALS = (
+    signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT,
+    signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU,
+)
 COLOR_TERMS = frozenset({
     "ansi", "linux", "xterm", "xterm-color", "xterm-256color",
     "screen", "screen-bce", "screen-256color", "screen-256color-bce",
@@ -69,23 +73,45 @@ class TerminalLease:
             pass
 
     @contextmanager
+    def signals(self) -> Iterator[None]:
+        """Keep signal ownership outside both terminal and follower lifetimes."""
+        handlers = {number: signal.getsignal(number) for number in EXIT_SIGNALS}
+        saved_mask = signal.pthread_sigmask(signal.SIG_BLOCK, EXIT_SIGNALS)
+        try:
+            for number in handlers:
+                signal.signal(number, self.request_stop)
+            signal.pthread_sigmask(signal.SIG_SETMASK, saved_mask)
+            yield
+        finally:
+            signal.pthread_sigmask(signal.SIG_BLOCK, EXIT_SIGNALS)
+            try:
+                for number, handler in handlers.items():
+                    signal.signal(number, handler)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, saved_mask)
+
+    def quiesce(self) -> None:
+        """Atomically ignore repeated exits before restoration, never restore originals."""
+        saved_mask = signal.pthread_sigmask(signal.SIG_BLOCK, EXIT_SIGNALS)
+        try:
+            for number in EXIT_SIGNALS:
+                signal.signal(number, signal.SIG_IGN)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, saved_mask)
+
+    @contextmanager
     def active(self) -> Iterator[None]:
-        """Restore every lease component even if another restoration operation fails."""
+        """Restore terminal resources while the enclosing signal lease stays owned."""
         flags = {fd: fcntl.fcntl(fd, fcntl.F_GETFL) for fd in (self.input_fd, self.output_fd)}
-        numbers = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT,
-                   signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU)
-        handlers = {number: signal.getsignal(number) for number in numbers}
         settings = termios.tcgetattr(self.input_fd) if self.keys else None
         with ExitStack() as cleanup:
-            for number, handler in handlers.items():
-                cleanup.callback(signal.signal, number, handler)
-                signal.signal(number, self.request_stop)
             for fd, saved in flags.items():
                 cleanup.callback(fcntl.fcntl, fd, fcntl.F_SETFL, saved)
             if self.color:
                 cleanup.callback(self.reset_color)
             if settings is not None:
                 cleanup.callback(self.restore_mode, settings)
+            cleanup.callback(self.quiesce)
             fcntl.fcntl(self.output_fd, fcntl.F_SETFL, flags[self.output_fd] | os.O_NONBLOCK)
             if self.keys:
                 changed = settings.copy()
