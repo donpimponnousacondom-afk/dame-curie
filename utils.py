@@ -1056,8 +1056,8 @@ def format_reactions_annotation(entries: list | None) -> str:
 
 
 # --- Cross-process file locking (Linux fcntl; best-effort elsewhere) ---
-# Used to reduce lost-update races on shared JSONs between bot and api processes
-# (bot_commands.json, autonomy state, rem state, etc.). Not a full DB, but
+# Used to reduce lost-update races on shared JSONs
+# (autonomy state, rem state, etc.). Not a full DB, but
 # makes the existing read-modify-write pattern much safer.
 try:
     import fcntl

@@ -358,7 +358,6 @@ import guild_onboarding  # noqa: E402
 from x_client import XClient, XMentionPoller  # noqa: E402
 from inbox import (  # noqa: E402
     InboxStore,
-    apply_inbox_action,
     needs_decision as inbox_needs_decision,
 )
 from response_guard import break_echo_loop, scrub_repetitions  # noqa: E402
@@ -392,7 +391,6 @@ from tool_schemas import (  # noqa: E402
     trim_tool_tail,
 )
 from utils import (  # fd-safe, single source of truth  # noqa: E402
-    FileLock,
     _atomic_json_write_sync,
     _coerce_utc_datetime,
     _safe_int,
@@ -5384,8 +5382,6 @@ class MaxwellBot(commands.Bot):
             asyncio.create_task(self._backfill_site_graph(), name="site-graph-backfill"),
             asyncio.create_task(self._memory_cleanup_loop()),
             asyncio.create_task(self._control_reload_loop()),
-            asyncio.create_task(self._command_queue_loop()),
-            asyncio.create_task(self._discord_state_loop()),
             asyncio.create_task(self._rem_scheduler_loop()),
             asyncio.create_task(self._watermark_save_loop(), name="watermark-save"),
         ]
@@ -5470,7 +5466,6 @@ class MaxwellBot(commands.Bot):
             await self.inbox.seed_from_bot(self)
         except Exception as e:
             logger.warning("Inbox seed failed: %s", e)
-        await self._save_discord_state()
         if self._sleep_window_active():
             await self._apply_sleep_presence(asleep=True)
         else:
@@ -5578,15 +5573,6 @@ class MaxwellBot(commands.Bot):
         with contextlib.suppress(Exception):
             self._watermarks.save()
 
-    async def _discord_state_loop(self):
-        while True:
-            await asyncio.sleep(60)
-            try:
-                if self.is_ready():
-                    await self._save_discord_state()
-            except Exception as e:
-                logger.warning(f"Discord state snapshot error: {e}")
-
     def _dispatch_plugin_event(self, event: str, *args: Any, **kwargs: Any) -> None:
         if event in {"on_message", "on_message_edit", "on_message_delete"} and any(
             ignore_operator_message(self, message) for message in args
@@ -5620,95 +5606,6 @@ class MaxwellBot(commands.Bot):
                 await asyncio.to_thread(self._watermarks.save)
             except Exception as e:
                 logger.debug("watermark save loop: %s", e)
-
-    async def _save_discord_state(self):
-        guilds = []
-        for guild in self.guilds:
-            channels = [
-                {
-                    "id": str(channel.id),
-                    "name": channel.name,
-                    "category": getattr(getattr(channel, "category", None), "name", "")
-                    or "",
-                    "position": getattr(channel, "position", 0),
-                }
-                for channel in getattr(guild, "text_channels", [])[:200]
-            ]
-            guilds.append(
-                {
-                    "id": str(guild.id),
-                    "name": guild.name,
-                    "member_count": getattr(guild, "member_count", None),
-                    "channels": channels,
-                }
-            )
-        dms = []
-        for channel in getattr(self, "private_channels", [])[:100]:
-            recipient = getattr(channel, "recipient", None)
-            recipients = getattr(channel, "recipients", None)
-            name = (
-                getattr(recipient, "display_name", None)
-                or getattr(recipient, "name", None)
-                or getattr(channel, "name", None)
-            )
-            if not name and recipients:
-                name = ", ".join(
-                    getattr(user, "display_name", getattr(user, "name", "unknown"))
-                    for user in recipients[:5]
-                )
-            dms.append(
-                {
-                    "id": str(getattr(channel, "id", "")),
-                    "name": name or "DM",
-                    "recipient_id": str(getattr(recipient, "id", ""))
-                    if recipient
-                    else "",
-                    "type": channel.__class__.__name__,
-                }
-            )
-        payload = {
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "user": {"id": str(self.user.id), "name": self.user.display_name}
-            if self.user
-            else {},
-            "guilds": guilds,
-            "dms": dms,
-            "friends": self._friends_snapshot(),
-        }
-        await asyncio.to_thread(
-            _atomic_json_write_sync,
-            Path(self.config.DATA_DIR) / "discord_state.json",
-            payload,
-        )
-
-    def _friends_snapshot(self) -> dict:
-        incoming: list[dict] = []
-        outgoing: list[dict] = []
-        friends: list[dict] = []
-        for rel in getattr(self, "relationships", None) or []:
-            user = getattr(rel, "user", None)
-            uid = str(getattr(user, "id", "") or "")
-            name = (
-                getattr(user, "display_name", None)
-                or getattr(user, "name", None)
-                or uid
-                or "?"
-            )
-            row = {"id": uid, "name": str(name)}
-            typ = str(getattr(getattr(rel, "type", None), "name", "") or "")
-            if typ == "incoming_request":
-                incoming.append(row)
-            elif typ == "outgoing_request":
-                outgoing.append(row)
-            elif typ == "friend":
-                friends.append(row)
-        return {
-            "incoming_count": len(incoming),
-            "outgoing_count": len(outgoing),
-            "friend_count": len(friends),
-            "incoming": incoming[:8],
-            "friends": friends[:8],
-        }
 
     async def _append_inbox_dynamic(self, dynamic_parts: list[str]) -> None:
         store = getattr(self, "inbox", None)
@@ -10894,284 +10791,6 @@ class MaxwellBot(commands.Bot):
                 logger.info("Knowledge graph: indexed %s/%s sites", n, len(slugs))
         except Exception as e:
             logger.debug("site graph backfill skipped: %s", e)
-
-    async def _command_queue_loop(self):
-        path = Path(self.config.DATA_DIR) / "bot_commands.json"
-        while True:
-            await asyncio.sleep(2)
-            try:
-                if not path.exists():
-                    continue
-                try:
-                    raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
-                    commands_data = json.loads(raw)
-                except Exception as read_err:
-                    # Corrupt command queue: back it up (don't lose potential data) and reset so
-                    # dashboard commands can flow again. Matches the "refuse to clobber corrupt"
-                    # spirit but for the consumer side we must recover to keep the system alive.
-                    try:
-                        backup = path.with_suffix(
-                            path.suffix + ".corrupt-" + str(_safe_int(time.time(), 0))
-                        )
-                        path.rename(backup)
-                        logger.error(
-                            f"Corrupt bot_commands.json backed up to {backup}: {read_err}"
-                        )
-                    except Exception:
-                        logger.error(
-                            f"Corrupt bot_commands.json and failed to backup: {read_err}"
-                        )
-                    commands_data = []
-                    # Recreate a clean empty queue file so future dashboard commands work immediately.
-                    try:
-                        await asyncio.to_thread(_atomic_json_write_sync, path, [])
-                    except Exception as werr:
-                        logger.error(
-                            f"Failed to reset clean bot_commands.json after corrupt: {werr}"
-                        )
-                if not isinstance(commands_data, list):
-                    continue
-                changed = False
-                for cmd in commands_data:
-                    if cmd.get("status") != "pending":
-                        continue
-                    changed = True
-                    try:
-                        typ = cmd.get("type", "")
-                        if typ == "send_message":
-                            ch = cast(
-                                Any,
-                                self.get_channel(_safe_int(cmd["channel_id"]))
-                                or await self.fetch_channel(
-                                    _safe_int(cmd["channel_id"])
-                                ),
-                            )
-                            await ch.send(cmd["content"])
-                            cmd["result"] = "sent"
-                        elif typ == "send_dm":
-                            uid = _safe_int(cmd.get("user_id"))
-                            user = self.get_user(uid) if uid else None
-                            if user is None and uid:
-                                try:
-                                    user = await self.fetch_user(uid)
-                                except Exception as e:
-                                    logger.warning(
-                                        "send_dm failed to fetch user %s: %s", uid, e
-                                    )
-                                    user = None
-                            if user is None:
-                                cmd["result"] = (
-                                    f"error: user {cmd.get('user_id')} not found"
-                                )
-                                cmd["status"] = "failed"
-                            else:
-                                try:
-                                    dm_channel = getattr(user, "dm_channel", None)
-                                    if dm_channel is None:
-                                        dm_channel = await user.create_dm()
-                                    await dm_channel.send(cmd["content"])
-                                    cmd["result"] = "dm sent"
-                                    cmd["status"] = "done"
-                                except discord.Forbidden as f_err:
-                                    cmd["result"] = (
-                                        f"error: forbidden (user has DMs disabled or blocked bot): {f_err}"
-                                    )
-                                    cmd["status"] = "failed"
-                                except Exception as dm_err:
-                                    cmd["result"] = f"error: {dm_err}"
-                                    cmd["status"] = "failed"
-                        elif typ == "set_presence":
-                            status_map = {
-                                "online": discord.Status.online,
-                                "idle": discord.Status.idle,
-                                "dnd": discord.Status.dnd,
-                                "invisible": discord.Status.invisible,
-                            }
-                            presence_status = (
-                                cmd.get("presence_status")
-                                or cmd.get("discord_status")
-                                or cmd.get("presence")
-                                or "online"
-                            )
-                            await self.change_presence(
-                                status=status_map.get(
-                                    presence_status, discord.Status.online
-                                ),
-                                activities=self._build_activities(),
-                            )
-                            cmd["result"] = "presence updated"
-                        elif typ == "set_custom_status":
-                            text = cmd.get("text", "")
-                            self._custom_status = (
-                                discord.CustomActivity(name=text, state=text)
-                                if text
-                                else None
-                            )
-                            await self.change_presence(
-                                activities=self._build_activities()
-                            )
-                            cmd["result"] = "custom status updated"
-                        elif typ == "change_avatar":
-                            url = cmd.get("url", "")
-                            if url:
-                                if not _is_safe_url(url):
-                                    cmd["result"] = "error: unsafe avatar URL"
-                                else:
-                                    session = await _get_shared_session()
-                                    async with session.get(
-                                        url,
-                                        timeout=aiohttp.ClientTimeout(total=30),
-                                        allow_redirects=False,
-                                    ) as resp:
-                                        if resp.status == 200:
-                                            content_type = resp.headers.get(
-                                                "Content-Type", ""
-                                            )
-                                            if not content_type.startswith("image/"):
-                                                cmd["result"] = (
-                                                    "error: avatar URL did not return an image"
-                                                )
-                                            else:
-                                                avatar = await _read_response_limited(
-                                                    resp, 10 * 1024 * 1024
-                                                )
-                                                if self.user is not None:
-                                                    await self.user.edit(avatar=avatar)
-                                                cmd["result"] = "avatar changed"
-                                        else:
-                                            cmd["result"] = f"HTTP {resp.status}"
-                        elif typ == "clear_memory":
-                            if cmd.get("channel_id"):
-                                cid = str(cmd["channel_id"])
-                                await self.memory.clear_channel_memory(cid)
-                                self._media_context.pop(cid, None)
-                                self._stop_until.pop(cid, None)
-                                self._drugged_until.pop(cid, None)
-                                cmd["result"] = "memory cleared"
-                        elif typ == "reload_controls":
-                            self._load_control(force=True)
-                            self._load_admins()
-                            self._load_auto_channels()
-                            self._load_blacklist()
-                            self._load_shell_whitelist()
-                            await self._load_rem_control()
-                            cmd["result"] = "controls reloaded"
-                        elif typ == "rem_run":
-                            ok, reason, run = await self._run_rem_once_guarded()
-                            cmd["result"] = (
-                                f"REM done: {(run or {}).get('audit', '')[:300]}"
-                                if ok
-                                else f"REM not started: {reason}"
-                            )
-                        elif typ == "rem_enable":
-                            self.rem_enabled = True
-                            await self._save_rem_control()
-                            cmd["result"] = "REM enabled"
-                        elif typ == "rem_disable":
-                            self.rem_enabled = False
-                            await self._save_rem_control()
-                            cmd["result"] = "REM disabled"
-                        elif typ == "autonomy_run":
-                            tick_result = await self.autonomy_engine.tick()
-                            cmd["result"] = f"autonomy tick: {tick_result}"
-                        elif typ == "autonomy_enable":
-                            control = dict(self._control)
-                            control["autonomy_enabled"] = True
-                            self._control = control
-                            await asyncio.to_thread(
-                                _atomic_json_write_sync,
-                                Path(self.config.DATA_DIR) / "bot_control.json",
-                                control,
-                            )
-                            cmd["result"] = "autonomy enabled"
-                        elif typ == "autonomy_disable":
-                            control = dict(self._control)
-                            control["autonomy_enabled"] = False
-                            self._control = control
-                            await asyncio.to_thread(
-                                _atomic_json_write_sync,
-                                Path(self.config.DATA_DIR) / "bot_control.json",
-                                control,
-                            )
-                            cmd["result"] = "autonomy disabled"
-                        elif typ == "autonomy_interval":
-                            new_interval = int(cmd.get("interval_seconds", 300))
-                            control = dict(self._control)
-                            control["autonomy_interval_seconds"] = max(30, new_interval)
-                            self._control = control
-                            await asyncio.to_thread(
-                                _atomic_json_write_sync,
-                                Path(self.config.DATA_DIR) / "bot_control.json",
-                                control,
-                            )
-                            cmd["result"] = (
-                                f"autonomy interval set to {control['autonomy_interval_seconds']}s"
-                            )
-                        elif typ == "context_cleanup_run" or typ in (
-                            "context_cleanup_enable",
-                            "context_cleanup_disable",
-                            "context_cleanup_interval",
-                        ):
-                            cmd["result"] = (
-                                "context cleanup engine removed (RAG memory active)"
-                            )
-                        elif typ == "inbox_act":
-                            cmd["result"] = await apply_inbox_action(
-                                self,
-                                action=str(cmd.get("action") or ""),
-                                item_id=str(cmd.get("item_id") or ""),
-                                user_id=str(cmd.get("user_id") or ""),
-                            )
-                        else:
-                            cmd["result"] = "unknown command"
-                    except Exception as e:
-                        cmd["result"] = f"error: {e}"
-                    cmd["status"] = "done"
-                if changed:
-                    # Race mitigation: re-load fresh list (API may have appended during our long work)
-                    # and overlay our "done" results so we don't clobber new pending commands.
-                    # Additionally hold a cross-process FileLock around the read+merge+write
-                    # to reduce (but not eliminate) window where concurrent appends are lost.
-                    snapshot = list(commands_data)  # the ones we just marked done
-
-                    def _merge_and_write(snapshot=snapshot):
-                        try:
-                            fresh_raw = path.read_text(encoding="utf-8")
-                            fresh = json.loads(fresh_raw) if fresh_raw.strip() else []
-                        except Exception:
-                            fresh = []
-                        if isinstance(fresh, list):
-                            # Match completed work by stable command id only.
-                            done_by_id = {
-                                str(our.get("id") or ""): our
-                                for our in snapshot
-                                if our.get("status") == "done" and our.get("id")
-                            }
-                            for fc in fresh:
-                                cid = str(fc.get("id") or "")
-                                if cid and cid in done_by_id:
-                                    our = done_by_id[cid]
-                                    fc["status"] = "done"
-                                    fc["result"] = our.get("result")
-                            to_write = fresh
-                        else:
-                            to_write = snapshot
-                        _atomic_json_write_sync(path, to_write)
-                        return to_write
-
-                    try:
-                        with FileLock(path, timeout=10.0):
-                            await asyncio.to_thread(_merge_and_write)
-                    except Exception as lock_err:
-                        # Fail closed on lock timeout: keep pending so the next loop
-                        # retries instead of rewriting a stale snapshot that drops API
-                        # appends. Log and continue.
-                        logger.warning(
-                            "Command queue merge deferred (lock/write failed): %s",
-                            lock_err,
-                        )
-            except Exception as e:
-                logger.error(f"Command queue error: {e}")
 
     async def _memory_cleanup_loop(self):
         # Do not stampede local Ollama on boot. Pending-row migration used
