@@ -285,24 +285,10 @@ class Config:
         lambda _tts=ENABLE_TTS: _tts and _has_binary("ffmpeg"),
         needs="ffmpeg + a TTS engine",
     )
-    # Maxwell Companion / Partner
-    GF_DISCORD_TOKEN = os.getenv("GF_DISCORD_TOKEN", "").strip()
-    GF_USER_ID = os.getenv("GF_USER_ID", "").strip()
     DAME_CURIE_USER_ID = os.getenv("DAME_CURIE_USER_ID", "1545541390392369165").strip()
-    PARTNER_USER_ID = os.getenv("PARTNER_USER_ID", "").strip()
-    # Partner-to-partner replies are intentionally finite.  A human message
-    # resets the budget; silence resets it after the configured window.
-    PARTNER_MAX_AUTO_TURNS = _int_env(
-        "PARTNER_MAX_AUTO_TURNS", 2, min_value=1, max_value=20
-    )
-    PARTNER_TURN_WINDOW_SECONDS = _float_env(
-        "PARTNER_TURN_WINDOW_SECONDS", 60.0, min_value=5.0, max_value=3600.0
-    )
-    BOT_PERSONA_TYPE = os.getenv("BOT_PERSONA_TYPE", "maxwell").strip().lower()
     CREATOR_NAME = os.getenv("CREATOR_NAME", ".normal.man").strip() or ".normal.man"
     CREATOR_ID = os.getenv("CREATOR_ID", "1482143139828596916").strip() or "1482143139828596916"
     BOT_NAME = os.getenv("BOT_NAME", "Dame Curie").strip() or "Dame Curie"
-    PARTNER_NAME = os.getenv("PARTNER_NAME", "Uni").strip() or "Uni"
 
     # Host access. Kept on by default for parity with older installs, but
     # this is THE security-relevant switch: `shell` runs commands as the bot
@@ -461,11 +447,7 @@ class Config:
     )
     REM_RUN_HISTORY = _int_env("REM_RUN_HISTORY", 50, min_value=1, max_value=1000)
 
-    DATA_DIR = os.getenv(
-        "DATA_DIR",
-        "data_gf" if os.getenv("BOT_PERSONA_TYPE", "").strip().lower()
-        in {"gf", "mommy", "mommy_gf", "luna", "mommygf"} else "data",
-    )
+    DATA_DIR = os.getenv("DATA_DIR", "data")
     DAME_CURIE_PROMPTS_DIR = os.getenv("DAME_CURIE_PROMPTS_DIR", "").strip()
     LOGS_DIR = os.getenv("LOGS_DIR", os.getenv("LOGS", "logs"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "info")

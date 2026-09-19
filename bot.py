@@ -1956,28 +1956,6 @@ MAXWELL_BASE_KNOWLEDGE = (
     "echo a mood — that reads as glitching, not personality."
 )
 
-# Partner companion identity - Maxwell's reliable, collaborative partner.
-# Shares same harness, direct comms via partner IDs, can be invited to DMs/groups/servers.
-GF_BASE_KNOWLEDGE = (
-    "## Base Knowledge & Autonomy - You are the partner of Dame Curie\n"
-    "You are the partner of Dame Curie (ID 1545541390392369165). "
-    "You operate as a user account (self-bot/user account), NOT a bot account, and talk naturally just like a real Discord user. "
-    "You are a supportive partner to Dame Curie on this harness. "
-    "Owner & Creator: .normal.man (ID: 1482143139828596916, also known as 'root') is your creator and master. "
-    "Personality: chill, sharp, witty, natural, supportive, down-to-earth. Keep it real and conversational. "
-    "## Discord Moderation & Admin Actions Safety Protocol\n"
-    "Admin and Server Configuration tools (create_channel, edit_channel, delete_channel, "
-    "lock_channel, set_channel_permissions, manage_role, edit_server, set_member_nickname) "
-    "are destructive structural actions strictly reserved for .normal.man (1482143139828596916). Never execute structural server edits for random users.\n"
-    "MODERATION TOOLS (purge_messages, timeout_member, kick_member, ban_member, unban_member):\n"
-    "- High-Threat Malicious Activity (Scams, Phishing, Spam Bots, Raid Nukers, Crypto/Token Drains, Severe Abuse): "
-    "You DO NOT need .normal.man's explicit permission. Act immediately and decisively to protect the community! "
-    "Purge scam/spam messages and timeout/ban malicious accounts on sight.\n"
-    "- Normal/Borderline Chat & Everyday Moderation: Do NOT moderate loosely or impulsively. "
-    "Do not ban, kick, or timeout regular members over petty drama, banter, or minor disagreements unless instructed by .normal.man or an authorized admin.\n"
-    "Never repeat yourself. Be concise, chill, and lowercase-natural."
-)
-
 # Discord chat protocol. Kept out of personality so it isn't duplicated
 # per-server and so prefix-caching can reuse it.
 DISCORD_CHAT_PROTOCOL = (
@@ -2508,36 +2486,11 @@ class MaxwellBot(commands.Bot):
         self._running_build = capture_running_build(Path(__file__).resolve().parent)
         self._delivery_measurements = DeliveryMeasurements()
         self.config = Config()
-        # Persona switch MUST happen BEFORE validate so GF token/data_dir overrides take effect
-        # load_dotenv(override=True) in config.py nukes PM2's DISCORD_TOKEN/DATA_DIR for GF,
-        # so we restore them here based on BOT_PERSONA_TYPE.
-        persona = (
-            str(
-                getattr(self.config, "BOT_PERSONA_TYPE", "")
-                or os.getenv("BOT_PERSONA_TYPE", "maxwell")
-                or "maxwell"
-            )
-            .strip()
-            .lower()
-        )
-        # Also check env directly because Config.BOT_PERSONA_TYPE may be empty if .env lacks it (PM2 passes it)
-        if not persona or persona == "maxwell":
-            # Fallback: if PM2 launched with BOT_PERSONA_TYPE=mommy_gf, os.getenv will have it even if Config doesn't
-            persona = (
-                os.getenv("BOT_PERSONA_TYPE", "maxwell").strip().lower() or "maxwell"
-            )
-        is_gf = persona in {"gf", "mommy", "mommy_gf", "luna", "mommygf"}
-        self._is_gf = is_gf
-        self._persona_type = "mommy_gf" if is_gf else "maxwell"
-        # Isolate command prefix: Maxwell uses the COMMAND_PREFIX env value, Uni uses "." (or configurable via GF_COMMAND_PREFIX)
         prefix_override = (
-            os.getenv("GF_COMMAND_PREFIX", "").strip()
-            or str(getattr(self.config, "GF_COMMAND_PREFIX", "") or "").strip()
-            if is_gf
-            else os.getenv("COMMAND_PREFIX", "").strip()
+            os.getenv("COMMAND_PREFIX", "").strip()
             or str(getattr(self.config, "COMMAND_PREFIX", "") or "").strip()
         )
-        self.command_prefix = prefix_override or ("." if is_gf else ",")
+        self.command_prefix = prefix_override or ","
         # Load customizable identity properties from config or environment
         creator_name = getattr(self.config, "CREATOR_NAME", ".normal.man") or ".normal.man"
         creator_id = (
@@ -2545,79 +2498,19 @@ class MaxwellBot(commands.Bot):
             or "1482143139828596916"
         )
         bot_name = getattr(self.config, "BOT_NAME", "Dame Curie") or "Dame Curie"
-        partner_name = getattr(self.config, "PARTNER_NAME", "Uni") or "Uni"
-        self._gf_id = str(getattr(self.config, "GF_USER_ID", "") or "")
         self._maxwell_id = str(
             getattr(self.config, "DAME_CURIE_USER_ID", "1545541390392369165")
             or "1545541390392369165"
         )
 
-        raw_base_knowledge = GF_BASE_KNOWLEDGE if is_gf else MAXWELL_BASE_KNOWLEDGE
         self._base_knowledge = (
-            raw_base_knowledge.replace(".normal.man", creator_name)
+            MAXWELL_BASE_KNOWLEDGE.replace(".normal.man", creator_name)
             .replace("1482143139828596916", creator_id)
             .replace("Dame Curie", bot_name)
-            .replace("Uni", partner_name)
             .replace("1545541390392369165", self._maxwell_id)
         )
-        self._partner_ids = {self._gf_id, self._maxwell_id} - {"", "0"}
-        partner_extra = str(getattr(self.config, "PARTNER_USER_ID", "") or "").strip()
-        if partner_extra:
-            self._partner_ids.add(partner_extra)
-        # Track partner message exchange streaks per channel to prevent infinite self-talk loops
-        self._partner_turns: dict[str, int] = {}
-        self._last_partner_time: dict[str, float] = {}
-        try:
-            partner_turns = int(
-                getattr(
-                    self.config,
-                    "PARTNER_MAX_AUTO_TURNS",
-                    getattr(Config, "PARTNER_MAX_AUTO_TURNS", 2),
-                )
-                or 2
-            )
-        except (TypeError, ValueError, OverflowError):
-            partner_turns = 2
-        self._partner_max_auto_turns = max(1, min(20, partner_turns))
-        try:
-            partner_window = float(
-                getattr(
-                    self.config,
-                    "PARTNER_TURN_WINDOW_SECONDS",
-                    getattr(Config, "PARTNER_TURN_WINDOW_SECONDS", 60.0),
-                )
-                or 60.0
-            )
-        except (TypeError, ValueError, OverflowError):
-            partner_window = 60.0
-        if not math.isfinite(partner_window):
-            partner_window = 60.0
-        self._partner_turn_window = max(5.0, min(3600.0, partner_window))
-        # Restore GF overrides nuked by load_dotenv(override=True)
-        if is_gf:
-            gf_tok = (
-                os.getenv("GF_DISCORD_TOKEN", "").strip()
-                or str(getattr(self.config, "GF_DISCORD_TOKEN", "") or "").strip()
-            )
-            # If PM2 passed DISCORD_TOKEN as GF token, load_dotenv overwrote it with Maxwell's token from .env
-            # So explicitly restore GF token.
-            if gf_tok:
-                self.config.DISCORD_TOKEN = gf_tok
-                Config.DISCORD_TOKEN = gf_tok
-                os.environ["DISCORD_TOKEN"] = gf_tok
-            # Data dir isolation for GF
-            gf_data = self.config.DATA_DIR
-            self.config.DATA_DIR = gf_data
-            Config.DATA_DIR = gf_data
-            os.environ["DATA_DIR"] = gf_data
-            # Ensure dir exists
-            try:
-                Path(gf_data).mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                # validate() below fails loudly if the dir is truly unusable.
-                logger.warning("Could not pre-create %s: %s", gf_data, e)
         credential_names = (
-            "DISCORD_TOKEN", "GF_DISCORD_TOKEN",
+            "DISCORD_TOKEN",
             "OPENAI_API_KEY", "OPENAI_COMPAT_API_KEY", "OPENAI_FALLBACK_API_KEY",
             "OPENAI_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
             "CAPTCHA_SOLVER_API_KEY", "IMAGE_GEN_API_KEY", "NVIDIA_API_KEY",
@@ -2638,8 +2531,7 @@ class MaxwellBot(commands.Bot):
             get_prompt_store(
                 self.config.DATA_DIR, self.config.DAME_CURIE_PROMPTS_DIR
             ).read_personality()
-        # Display name is source of truth - GF account is Uni per Discord, so initial matches that
-        self.bot_name = partner_name if is_gf else bot_name
+        self.bot_name = bot_name
         self._auto_captcha_solver: Any = build_solver(
             self.config.CAPTCHA_SOLVER_SERVICE,
             self.config.CAPTCHA_SOLVER_API_KEY,
@@ -4572,93 +4464,6 @@ class MaxwellBot(commands.Bot):
                 return "he is asleep"
         return ""
 
-    def _is_partner_message(self, message) -> bool:
-        """Whether a message came from the configured companion account."""
-        author = getattr(message, "author", None)
-        author_id = str(getattr(author, "id", "") or "")
-        return bool(
-            author_id and author_id in (getattr(self, "_partner_ids", None) or set())
-        )
-
-    def _partner_reply_budget(self, message, *, consume: bool = False) -> bool:
-        """Enforce a finite partner-to-partner reply budget per channel.
-
-        Companion accounts may be user accounts, so ``author.bot`` is not a
-        reliable loop guard. This budget is independent of the Discord bot
-        flag and resets after a human message or a quiet window.
-        """
-        if not self._is_partner_message(message):
-            return True
-        channel = getattr(message, "channel", None)
-        channel_id = str(getattr(channel, "id", "") or "")
-        if not channel_id:
-            return False
-
-        turns = getattr(self, "_partner_turns", None)
-        if not isinstance(turns, dict):
-            turns = {}
-            self._partner_turns = turns
-        last_seen = getattr(self, "_last_partner_time", None)
-        if not isinstance(last_seen, dict):
-            last_seen = {}
-            self._last_partner_time = last_seen
-
-        now = time.monotonic()
-        try:
-            window = float(getattr(self, "_partner_turn_window", 60.0))
-        except (TypeError, ValueError, OverflowError):
-            window = 60.0
-        if not math.isfinite(window):
-            window = 60.0
-        window = max(5.0, min(3600.0, window))
-        try:
-            last = float(last_seen.get(channel_id, 0.0) or 0.0)
-        except (TypeError, ValueError, OverflowError):
-            last = 0.0
-        try:
-            current = int(turns.get(channel_id, 0) or 0)
-        except (TypeError, ValueError, OverflowError):
-            current = 0
-        if not math.isfinite(last) or now < last or now - last >= window:
-            current = 0
-
-        try:
-            limit = int(getattr(self, "_partner_max_auto_turns", 2))
-        except (TypeError, ValueError, OverflowError):
-            limit = 2
-        limit = max(1, min(20, limit))
-        if current >= limit:
-            return False
-        if consume:
-            turns[channel_id] = current + 1
-            last_seen[channel_id] = now
-
-        if len(last_seen) > 1024:
-            for key, stamp in list(last_seen.items()):
-                try:
-                    stale = now - float(stamp) >= window
-                except (TypeError, ValueError, OverflowError):
-                    stale = True
-                if stale:
-                    last_seen.pop(key, None)
-                    turns.pop(key, None)
-        return True
-
-    def _reset_partner_reply_budget_for_human(self, message) -> None:
-        """Let a real human start a fresh companion exchange."""
-        author = getattr(message, "author", None)
-        if getattr(author, "bot", False) or self._is_partner_message(message):
-            return
-        channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "")
-        if not channel_id:
-            return
-        turns = getattr(self, "_partner_turns", None)
-        last_seen = getattr(self, "_last_partner_time", None)
-        if isinstance(turns, dict):
-            turns.pop(channel_id, None)
-        if isinstance(last_seen, dict):
-            last_seen.pop(channel_id, None)
-
     def _should_live_reply(self, message) -> bool:
         """Hard ping always. Soft lines have to earn the turn.
 
@@ -4677,19 +4482,8 @@ class MaxwellBot(commands.Bot):
             message
         ):
             return False
-        # Partner messages are allowed through the normal reply paths, but
-        # only while a finite per-channel budget remains.
-        is_partner = self._is_partner_message(message)
-        if getattr(author, "bot", False) and not is_partner:
+        if getattr(author, "bot", False):
             return False
-        if is_partner:
-            if not self._partner_reply_budget(message):
-                logger.info(
-                    "Partner auto-reply budget exhausted in %s; waiting for a human message",
-                    channel.id,
-                )
-                return False
-            # The actual reply path reserves a turn after this check.
         if self._directly_addressed(message):
             return True
         cid = getattr(channel, "id", "")
@@ -4865,27 +4659,14 @@ class MaxwellBot(commands.Bot):
 
     async def _maybe_live_reply(self, message, content: str) -> None:
         """Direct mentions reply immediately; soft chatter waits debounce quiet timer."""
-        is_partner = self._is_partner_message(message)
-        if is_partner and not self._partner_reply_budget(message):
-            logger.info(
-                "Partner auto-reply budget exhausted in %s; waiting for a human message",
-                getattr(getattr(message, "channel", None), "id", ""),
-            )
-            return
         if self._directly_addressed(message):
-            if is_partner:
-                self._partner_reply_budget(message, consume=True)
             self._cancel_watch_debounce(
                 getattr(getattr(message, "channel", None), "id", "")
             )
             self._dispatch_reply(message, content, directed=True)
             return
         if self._should_live_reply(message):
-            if is_partner:
-                self._partner_reply_budget(message, consume=True)
             self._queue_watch_reply(message, content, directed=True)
-            return
-        if is_partner:
             return
         self._touch_watch_debounce(message)
 
@@ -6412,17 +6193,8 @@ class MaxwellBot(commands.Bot):
             except Exception as e:
                 logger.warning(f"Background media cache failed: {e}")
 
-        # Partner accounts may be user accounts with bot=False; the
-        # helper distinguishes them from real human messages by ID.
-        self._reset_partner_reply_budget_for_human(message)
-
-        # Inter-bot allow: partner bot (GF <-> Maxwell) bypasses reply_to_bots gate
-        if message.author.bot:
-            is_partner = str(getattr(message.author, "id", "")) in getattr(
-                self, "_partner_ids", set()
-            )
-            if not is_partner and not self._control.get("reply_to_bots", True):
-                return
+        if message.author.bot and not self._control.get("reply_to_bots", True):
+            return
 
         # Every human line updates the room's pace and engagement, even
         # the ones that never become a turn — deliberately above the
@@ -6445,14 +6217,6 @@ class MaxwellBot(commands.Bot):
 
         if isinstance(message.channel, discord.DMChannel):
             if self._control.get("reply_dms", True):
-                if self._is_partner_message(message) and not self._partner_reply_budget(
-                    message, consume=True
-                ):
-                    logger.info(
-                        "Partner DM auto-reply budget exhausted in %s; waiting for a human message",
-                        channel_id,
-                    )
-                    return
                 self._dispatch_reply(
                     message,
                     self._content_without_self_mention(message.content),
@@ -15391,7 +15155,6 @@ class MaxwellBot(commands.Bot):
             # Name hints are a nicety; the prompt still works without them.
             logger.debug("Could not collect conversation user names: %s", e)
 
-        # Persona-aware base: Maxwell vs Luna (mommy GF)
         base_knowledge = getattr(self, "_base_knowledge", MAXWELL_BASE_KNOWLEDGE)
         system_parts = [
             base_knowledge + "\n\n" + DISCORD_CHAT_PROTOCOL,
@@ -16346,19 +16109,10 @@ async def main():
             raise RuntimeError("DISCORD_TOKEN is not configured")
         await bot.start(bot.config.DISCORD_TOKEN)
     except discord.LoginFailure:
-        persona = str(
-            getattr(bot, "_persona_type", "") or os.getenv("BOT_PERSONA_TYPE", "") or ""
-        )
-        which = (
-            "GF_DISCORD_TOKEN"
-            if persona in {"mommy_gf", "gf", "mommy", "luna", "mommygf"}
-            else "DISCORD_TOKEN"
-        )
         logger.error(
-            "Discord rejected the token (%s). Not retrying in a tight loop — "
+            "Discord rejected the token (DISCORD_TOKEN). Not retrying in a tight loop — "
             "update it in .env and restart. Sleeping 30s so a process manager "
-            "cannot 401-flood Discord.",
-            which,
+            "cannot 401-flood Discord."
         )
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.sleep(30)

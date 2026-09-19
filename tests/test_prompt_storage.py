@@ -1,10 +1,7 @@
 import ast
 import asyncio
 import json
-import os
 import re
-import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,16 +125,3 @@ def test_prompt_tools_share_external_store(tmp_path, external):
 
     asyncio.run(run())
     memory._db.close()
-
-
-@pytest.mark.parametrize("explicit,expected", [(None, "data_gf"), ("/tmp/custom-gf", "/tmp/custom-gf")])
-def test_gf_data_dir(explicit, expected):
-    env = dict(os.environ, DAME_CURIE_ENV_FILE="/dev/null", PYTHON_DOTENV_DISABLED="1", BOT_PERSONA_TYPE="mommy_gf")
-    env.pop("DATA_DIR", None)
-    if explicit is not None:
-        env["DATA_DIR"] = explicit
-    result = subprocess.run(
-        [sys.executable, "-c", "from config import Config; print(Config.DATA_DIR)"],
-        env=env, capture_output=True, text=True, check=True,
-    )
-    assert result.stdout.strip() == expected

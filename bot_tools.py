@@ -8050,7 +8050,7 @@ _CHESS_MENTION_RE = re.compile(r"<@!?(\d+)>")
 
 
 def _chess_bot_name(bot=None) -> str:
-    """Live people-facing name for this process (Dame Curie, Uni, a nick, …)."""
+    """Live people-facing name for this process (Dame Curie, a nick, …)."""
     user = getattr(bot, "user", None) if bot is not None else None
     name = getattr(bot, "bot_name", None) if bot is not None else None
     name = str(

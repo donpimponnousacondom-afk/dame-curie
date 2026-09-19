@@ -118,7 +118,6 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
         "DAME_CURIE_ADMIN_PASSWORD": "synthetic-constructor-password-never-used",
         "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
         "OPENAI_MODEL": "synthetic-no-network-model",
-        "BOT_PERSONA_TYPE": "maxwell",
         **dict.fromkeys(
             (
                 "ENABLE_RAG",

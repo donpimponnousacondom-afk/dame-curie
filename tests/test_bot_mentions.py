@@ -17,7 +17,6 @@ def mention_bot():
             "process_images": False,
         },
         _blacklist=set(),
-        _partner_ids=set(),
         _stop_until={},
         _cooldowns={},
         _active_requests={},
@@ -38,8 +37,6 @@ def mention_bot():
     )
     for name in (
         "_directly_addressed",
-        "_is_partner_message",
-        "_reset_partner_reply_budget_for_human",
         "_should_live_reply",
         "_maybe_live_reply",
         "_content_without_self_mention",

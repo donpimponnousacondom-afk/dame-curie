@@ -33,36 +33,6 @@ function hasOllama() {
 const venvPython = path.join(appRoot, ".venv", "bin", "python");
 const logsRoot = path.join(process.env.PM2_HOME || path.join(os.homedir(), ".pm2"), "logs");
 
-// Load .env for GF token if present (so PM2 gf app can inherit it without
-// --update-env quirks). Parse the value like dotenv does: quoted values and
-// inline comments must not become part of the Discord token.
-function envValue(text, name) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = text.match(
-    new RegExp(`^\\s*(?:export\\s+)?${escaped}\\s*=\\s*(.*?)\\s*$`, "m"),
-  );
-  if (!match) return "";
-  const raw = match[1].trim();
-  if (
-    raw.length >= 2 &&
-    ((raw.startsWith('"') && raw.endsWith('"')) ||
-      (raw.startsWith("'") && raw.endsWith("'")))
-  ) {
-    return raw.slice(1, -1);
-  }
-  return raw.replace(/\s+#.*$/, "").trim();
-}
-
-let gfToken = "";
-try {
-  const envPath = path.join(appRoot, ".env");
-  if (fs.existsSync(envPath)) {
-    const envText = fs.readFileSync(envPath, "utf8");
-    gfToken = envValue(envText, "GF_DISCORD_TOKEN");
-  }
-} catch {}
-if (!gfToken) gfToken = process.env.GF_DISCORD_TOKEN || "";
-
 const apps = [
 	{
 		name: "dame-curie-bot",
@@ -148,32 +118,6 @@ const apps = [
 		out_file: path.join(logsRoot, "dame-curie-api-out.log"),
 		log_type: "json",
 	},
-	// Mommy GF companion - second self-bot on same harness, mommy persona
-	// Runs same bot.py but with GF token and isolated data dir. Direct comms via partner IDs.
-	...(gfToken ? [{
-		name: "dame-curie-gf",
-		script: "bot.py",
-		interpreter: venvPython,
-		cwd: appRoot,
-		instances: 1,
-		autorestart: true,
-		watch: false,
-		max_memory_restart: "1G",
-		kill_timeout: 15000,
-		kill_signal: "SIGTERM",
-		stop_exit_codes: [2],
-		exp_backoff_restart_delay: 2000,
-		max_restarts: 10,
-		min_uptime: 10000,
-		env: {
-			PYTHONUNBUFFERED: "1",
-			DISCORD_TOKEN: gfToken,
-			BOT_PERSONA_TYPE: "mommy_gf",
-			DATA_DIR: "data_gf",
-		},
-		log_date_format: "YYYY-MM-DD HH:mm:ss Z",
-		merge_logs: true,
-	}] : []),
 ];
 
 module.exports = {
