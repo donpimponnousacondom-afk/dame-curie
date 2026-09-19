@@ -79,8 +79,8 @@ class AppendParser(EventParser):
     def content(
         self, envelope: Envelope, service: str | None,
     ) -> tuple[Recognition | None, str, dict[str, JSONValue], str | None]:
-        """Apply multiline redaction before structured recognition; never raw-fallback."""
-        message = self.redactor.text(envelope.message, service=service)
+        """Track multiline hiding before format-aware redaction; never raw-fallback."""
+        message = self.redactor.text(envelope.message, service=service, redacted=True)
         if len(self.redactor.private_keys) + len(self.redactor.config_depth) > HISTORY_RECORDS:
             self.continuity_lost = True
             self.redactor.private_keys.clear()
