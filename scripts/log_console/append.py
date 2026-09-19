@@ -6,7 +6,7 @@ import sys
 from collections.abc import Callable
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass
-from time import monotonic
+from time import monotonic, sleep
 
 from .append_controls import dispatch
 from .append_events import AppendLines
@@ -16,6 +16,10 @@ from .input import AppendKeys
 
 READ_QUOTA = 16 * 1024
 EOF_GRACE = 0.250
+TERM_GRACE = 5.0
+REAP_GRACE = 1.0
+GROUP_GRACE = 1.0
+CLEANUP_INTERVAL = 0.050
 
 
 @dataclass(frozen=True)
@@ -134,23 +138,39 @@ def follower_status(process: subprocess.Popen[bytes]) -> int | None:
 
 
 def stop_follower(process: subprocess.Popen[bytes]) -> bool:
-    """Bound reaping despite repeated exit signals, after the terminal is restored."""
+    """Keep the leader unreaped through group signals, then verify disappearance."""
     with ExitStack() as cleanup:
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP):
             cleanup.callback(signal.signal, number, signal.getsignal(number))
             signal.signal(number, signal.SIG_IGN)
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
+        deadline = monotonic() + TERM_GRACE
+        while follower_status(process) is None:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            sleep(min(CLEANUP_INTERVAL, remaining))
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
         try:
-            process.wait(timeout=5)
+            process.wait(timeout=REAP_GRACE)
         except subprocess.TimeoutExpired:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+            return False
+        deadline = monotonic() + GROUP_GRACE
+        gone = False
+        while not gone:
             try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                return False
-    return True
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                gone = True
+            except PermissionError:
+                break
+            remaining = deadline - monotonic()
+            if gone or remaining <= 0:
+                break
+            sleep(min(CLEANUP_INTERVAL, remaining))
+    return gone
 
 
 def follow_screen(command: list[str], env: dict[str, str], *, no_keys: bool) -> None:
@@ -170,7 +190,7 @@ def follow_screen(command: list[str], env: dict[str, str], *, no_keys: bool) -> 
         finally:
             process.stdout.close()
         if not complete:
-            raise RuntimeError("Screen viewer follower cleanup incomplete after TERM/KILL deadlines")
+            raise RuntimeError("Screen viewer follower cleanup incomplete after TERM/KILL/reap/group-verification deadlines")
     if not result.requested and returncode != 0:
         raise RuntimeError("Screen viewer source exited unexpectedly or did not exit at EOF")
     if result.incomplete:
