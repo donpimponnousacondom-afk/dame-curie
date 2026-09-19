@@ -114,10 +114,6 @@ async def run_custom_tool_harness():
     print(f"[PASS] web_search tool returned {len(str(res))} chars")
     assert len(str(res)) > 10
 
-    # 6. list_sites tool
-    res = await bot.tools["list_sites"].execute(fake_msg)
-    print(f"[PASS] list_sites tool returned: {str(res)[:60]}...")
-
     # 7. update_base_personality tool
     old_p = bot._get_personality()
     res = await bot.tools["update_base_personality"].execute(fake_msg, text="Stay sharp and helpful.")

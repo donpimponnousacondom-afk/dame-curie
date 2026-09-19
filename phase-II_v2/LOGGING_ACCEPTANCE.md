@@ -1,6 +1,6 @@
 # Disposable logging acceptance ledger
 
-Status: **partial acceptance; Screen structured-redaction correction source-reviewed, integration/rerun pending**.
+Status: **partial acceptance; structured-redaction correction integrated and synthetic rerun passed**. Pressure, foreground-transition and GNU Screen acceptance remain pending below.
 
 ## Scope and isolation
 
@@ -30,7 +30,20 @@ A valid synthetic image-start record containing a `request_id` and an `api_key` 
 
 Luna independently confirmed this is a Screen-local regression, not a legacy parsing defect. The original logging worker owns a narrow fix: retain multiline/private/config suppression, then use the existing structured redaction path before retention. Global redaction and legacy modes must not change. Current-line config/header/env-dump and private-key markers intentionally retain conservative whole-record suppression, which can hide an image ID; no broad sanitizer redesign is authorized.
 
-Fix `702366b` changes only the Screen prepass keyword/docstring and its implementation report. Luna passed its complete inherited redaction/source-line flow; global/legacy behavior and quotas are unchanged. Integration and post-fix rerun are pending. No image-ID correlation acceptance is claimed from the failing exercise.
+Fix `702366b` changes only the Screen prepass keyword/docstring and its implementation report. Luna passed its complete inherited redaction/source-line flow; global/legacy behavior and quotas are unchanged. It landed as `c2f148b`; the post-fix observations below use integrated source `9d1abc8`. No image-ID correlation acceptance is inferred from the failing pre-fix exercise.
+
+### Post-fix rerun
+
+All five previous PTY variants returned zero and retained `image.request_id=synthetic-image-7`; none reported an unparsed image or exposed either fake secret. Exact terminal/flags/handlers/mask restoration, unbound store, unloaded app modules and escape/color behavior remained unchanged. The first variant exercised eight labelled page outputs and six replay headings; counters showed pause then reset/resume. The keyless variant ignored typed `q` and completed natural EOF in 1.628 s.
+
+Additional finite, keyless pipe observations:
+
+- Generic JSON redacted its secret while preserving valid JSON, but its arbitrary `request_id` did **not** become typed correlation. A valid image-done record retained its own typed ID and redacted its password; plaintext password redaction also passed. Exit zero.
+- Config and private-key multiline continuations containing unlabelled fake secrets stayed hidden. Valid image records after each closing marker resumed normal typed IDs. A current-line headers marker intentionally suppressed the whole typed record. Exit zero.
+- Malformed image JSON was omitted without exposing its fake secret; a later valid image retained its ID. EOF reported incomplete evidence, status one, without sticky continuity loss.
+- A 70,000-character record caused sticky framing/continuity omission: subsequent unlabelled fake secret and typed ID stayed hidden. EOF reported incomplete evidence, status one.
+
+Every additional run restored flags/handlers/mask, kept the store unbound and loaded no checked application modules. No raw ESC or fake-secret value appeared. These observations validate the narrow correction and specified failure behavior, not exhaustive sanitization.
 
 ## Observed: held pipe and repeated exit signals
 
@@ -42,7 +55,6 @@ A fresh disposable controller became a Linux child subreaper for its own process
 
 ## Still pending
 
-- Integrate the source-reviewed fix and rerun valid typed JSON plus plaintext/malformed/multiline redaction paths.
 - Foreground loss, first-signal variants, Ctrl-D and deliberate-exception paths beyond the observed incomplete-drain error.
 - Pressure, sustained receive/eviction, rejected-page retry, bounded resume, split/expired control sequences, tiny-terminal and resize behavior.
 - Disposable GNU Screen copy mode, remapped prefix and detach/reattach behavior; an ordinary PTY is not Screen acceptance.

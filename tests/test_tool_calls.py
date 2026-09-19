@@ -90,9 +90,9 @@ def test_strip_tool_payload_leaks_removes_registered_tool_bodies():
     assert "secret query" not in strip_tool_payload_leaks(search)
 
 
-def test_strip_tool_payload_leaks_removes_glued_create_site():
+def test_strip_tool_payload_leaks_removes_glued_registered_tool():
     html = "<!DOCTYPE html><html><body>x</body></html>"
-    text = f'ship<tool:create_site name="drift" title="t">{html}</tool:create_site>ok'
+    text = f'ship<tool:shell command="echo ok">{html}</tool:shell>ok'
     assert strip_tool_payload_leaks(text) == "shipok"
 
 
