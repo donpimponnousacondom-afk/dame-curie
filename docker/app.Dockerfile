@@ -2,8 +2,7 @@ FROM python:3.14.4-slim-trixie AS app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
-    HOME=/home/dame-curie
+    PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl ffmpeg espeak-ng libopus0 libsodium23 \
@@ -25,7 +24,8 @@ COPY plugins/checkers/__init__.py plugins/checkers/checkers_game.py plugins/chec
 COPY assets/tokenizers/ ./assets/tokenizers/
 COPY docker/check_embeddings.py /opt/dame-curie/check_embeddings.py
 RUN mkdir -p /app/temp /state/data /state/sites /state/shell /config/prompts \
-    && ln -s /state/shell /home/dame-curie
+    && ln -sT /state/shell /home/dame-curie
+ENV HOME=/home/dame-curie
 
 ARG DAME_CURIE_BUILD_COMMIT=unknown
 ARG DAME_CURIE_BUILD_BRANCH=unknown
