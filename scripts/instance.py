@@ -17,7 +17,12 @@ from pathlib import Path
 CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
 SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE"}
+OPTIONAL_SETTINGS = {"DAME_CURIE_STAGING", "DAME_CURIE_EMBED_MODE"}
 RETIRED_SETTINGS = {"WEB_IMAGE", "WEB_PORT"}
+BASE_COMPOSE = Path("compose.yaml")
+STAGING_OVERLAY = Path("docker/compose.staging.yaml")
+EXTERNAL_EMBED_OVERLAY = Path("docker/compose.embeddings-external.yaml")
+EMBED_MODES = {"local", "external"}
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
 INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
 IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/:@-]*")
@@ -48,6 +53,29 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as archive:
 '''
 
 
+def compose_files(staging: bool, embed_mode: str) -> list[Path]:
+    """Select the exact Compose files for one staging/embedding configuration."""
+    files = [CHECKOUT / BASE_COMPOSE]
+    if staging:
+        files.append(CHECKOUT / STAGING_OVERLAY)
+    if embed_mode == "external":
+        files.append(CHECKOUT / EXTERNAL_EMBED_OVERLAY)
+    return files
+
+
+def owned_config_files() -> set[str]:
+    """Config-file labels this checkout can produce, for every supported mode.
+
+    Docker records the file list it was actually given, so accepting only these
+    derived permutations keeps provenance complete without hand-copied paths.
+    """
+    return {
+        ",".join(str(path) for path in compose_files(staging, embed_mode))
+        for staging in (True, False)
+        for embed_mode in sorted(EMBED_MODES)
+    }
+
+
 def parse_settings(text: str) -> dict[str, str]:
     """Parse literal deployment settings; expansion and shell syntax are forbidden."""
     values = {}
@@ -56,12 +84,12 @@ def parse_settings(text: str) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key not in SETTINGS | RETIRED_SETTINGS | {"DAME_CURIE_STAGING"} or key in values:
+        if not separator or key not in SETTINGS | OPTIONAL_SETTINGS | RETIRED_SETTINGS or key in values:
             raise ValueError("unknown or duplicate deploy.env setting")
         if not value or any(char.isspace() for char in value) or any(char in value for char in "'\"`$\\;"):
             raise ValueError("deploy.env values must be unquoted literals")
         values[key] = value
-    if values.keys() - RETIRED_SETTINGS - {"DAME_CURIE_STAGING"} != SETTINGS:
+    if values.keys() - RETIRED_SETTINGS - OPTIONAL_SETTINGS != SETTINGS:
         raise ValueError("deploy.env must contain exactly the documented settings")
     retired = values.keys() & RETIRED_SETTINGS
     if retired and retired != RETIRED_SETTINGS:
@@ -75,6 +103,8 @@ def parse_settings(text: str) -> dict[str, str]:
             del values[key]
     if values.get("DAME_CURIE_STAGING", "true") not in {"true", "false"}:
         raise ValueError("DAME_CURIE_STAGING must be true or false")
+    if values.get("DAME_CURIE_EMBED_MODE", "local") not in EMBED_MODES:
+        raise ValueError("DAME_CURIE_EMBED_MODE must be local or external")
     return values
 
 
@@ -151,12 +181,21 @@ class Instance:
             raise RuntimeError(f"Docker {args[0]} failed or wrote diagnostics; inspect the private engine directly")
         return result.stdout
 
+    @property
+    def staging_enabled(self) -> bool:
+        """Whether the staged no-start overlay participates in this deployment."""
+        return self.env.get("DAME_CURIE_STAGING", "true") == "true"
+
+    @property
+    def embed_mode(self) -> str:
+        """Selected embedding deployment: this project's own Ollama, or an external endpoint."""
+        return self.env.get("DAME_CURIE_EMBED_MODE", "local")
+
     def compose(self, *args: str, log_format: str = "auto", no_keys: bool = False) -> None:
         command = ["docker", "compose", "--project-name", self.project,
-                   "--project-directory", str(CHECKOUT), "--env-file", "/dev/null",
-                   "-f", str(CHECKOUT / "compose.yaml")]
-        if self.env.get("DAME_CURIE_STAGING", "true") == "true":
-            command.extend(["-f", str(CHECKOUT / "docker" / "compose.staging.yaml")])
+                   "--project-directory", str(CHECKOUT), "--env-file", "/dev/null"]
+        for path in compose_files(self.staging_enabled, self.embed_mode):
+            command.extend(["-f", str(path)])
         command.extend(args)
         if args[0] == "logs":
             if __name__ == "__main__" and not __package__:
@@ -188,6 +227,7 @@ class Instance:
 def select_owned(containers: list[dict], name: str, project: str) -> list[dict]:
     """Require ownership labels before any container can be stopped or removed."""
     owned = []
+    config_files = owned_config_files()
     for item in containers:
         labels = item.get("Config", {}).get("Labels") or {}
         compose = labels.get("com.docker.compose.project") == project
@@ -200,9 +240,7 @@ def select_owned(containers: list[dict], name: str, project: str) -> list[dict]:
                 raise ValueError("conflicting instance ownership labels")
             if labels.get("com.docker.compose.service") not in {"bot", "api", "web", "ollama", "ollama-pull"}:
                 raise ValueError("unexpected service in instance project")
-            config_files = str(CHECKOUT / "compose.yaml")
-            staging_files = f"{config_files},{CHECKOUT / 'docker' / 'compose.staging.yaml'}"
-            if labels.get("com.docker.compose.project.config_files") not in {config_files, staging_files}:
+            if labels.get("com.docker.compose.project.config_files") not in config_files:
                 raise ValueError("Compose container belongs to another checkout")
         elif not managed or labels.get("dame-curie.kind") not in {"shell", "site"}:
             raise ValueError("container name has missing or foreign ownership labels")
@@ -244,7 +282,7 @@ def lifecycle(instance: Instance, action: str, *, log_format: str = "auto", no_k
             instance.compose("--profile", "*", "down", "--remove-orphans", "--timeout", "45")
     else:
         instance.inventory()
-        if action in {"up", "start", "restart"} and instance.env.get("DAME_CURIE_STAGING", "true") == "true":
+        if action in {"up", "start", "restart"} and instance.staging_enabled:
             return
         if action == "restart":
             instance.compose("restart", "--timeout", "45", "bot")
