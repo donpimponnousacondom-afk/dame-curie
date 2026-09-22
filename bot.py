@@ -5307,7 +5307,23 @@ class MaxwellBot(commands.Bot):
         allowed = {
             str(value) for value in (self._control.get("allowed_channels", []) or [])
         }
-        return not allowed or channel_id in allowed
+        return self._channel_allowed(getattr(message, "channel", None), allowed)
+
+    def _channel_allowed(self, channel, allowed: set[str]) -> bool:
+        """Whether an allowlisted room may be spoken in.
+
+        A thread has its own channel id, so a bot-created job thread would be
+        silenced by an ``allowed_channels`` list that already names the channel
+        it was opened in. Fail-closed: anything that is not a thread of an
+        allowed parent stays blocked.
+        """
+        if not allowed:
+            return True
+        if str(getattr(channel, "id", "") or "") in allowed:
+            return True
+        if not isinstance(channel, discord.Thread):
+            return False
+        return str(getattr(channel, "parent_id", "") or "") in allowed
 
     def _replace_media_context_for_message(
         self, channel_id: str, message_id, media: list[dict]
@@ -5753,7 +5769,7 @@ class MaxwellBot(commands.Bot):
         if channel_id in set(self._control.get("blocked_channels", []) or []):
             return
         allowed = set(self._control.get("allowed_channels", []) or [])
-        if allowed and channel_id not in allowed:
+        if not self._channel_allowed(message.channel, allowed):
             return
         # !solo: this server is locked to one channel. Commands already
         # returned above, so an admin can still run `!solo off` from anywhere.
@@ -6477,9 +6493,12 @@ class MaxwellBot(commands.Bot):
                     elif not _is_adm and ((_gid and _job.guild_id != _gid) or (not _gid and _job.user_id != _uid)):
                         await message.channel.send("job not found.")
                     else:
-                        await message.channel.send(
-                            f"`{_job.id}` [{_job.status}] {_job.goal[:200]} ({_job.requested_route})"
-                        )
+                        _detail = f"`{_job.id}` [{_job.status}] {_job.goal[:200]} ({_job.requested_route})"
+                        if _job.thread_id and _job.guild_id.isdigit():
+                            _detail += f"\nprogress thread: https://discord.com/channels/{_job.guild_id}/{_job.thread_id}"
+                        elif _job.thread_error:
+                            _detail += f"\nno progress thread: {_job.thread_error}"
+                        await message.channel.send(_detail)
             elif cmd == "prompt":
                 if args is None:
                     current = self.memory.get_server_prompt(server_id)
