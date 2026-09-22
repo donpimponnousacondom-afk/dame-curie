@@ -426,14 +426,15 @@ def test_a_silent_turn_is_a_failure_not_a_pass(tmp_path):
 def test_a_reply_the_harness_cannot_read_back_is_still_a_delivery(tmp_path):
     """A readback 404 is recorded as a readback failure, never as a failed turn."""
 
-    async def direct_post(message, content):
-        """Post the way a plugin does: through HTTP, with no channel object."""
-        await bot.http.send_message(
-            str(message.channel.id), params={"content": "posted"}
-        )
-
     async def scenario():
         settings, bot, runtime = await _ready(tmp_path)
+
+        async def direct_post(message, content):
+            """Post the way a plugin does: through HTTP, with no channel object."""
+            await bot.http.send_message(
+                str(message.channel.id), params={"content": "posted"}
+            )
+
         bot.turn = direct_post
         request = _submit(settings)
         await _wait_for_record(settings, request.request_id)
@@ -752,8 +753,12 @@ def test_an_input_the_bot_never_dispatches_is_recorded_as_no_turn(tmp_path):
 
 def test_stop_interrupts_the_request_in_flight(tmp_path):
     async def scenario():
-        settings, bot, runtime = await _ready(tmp_path)
-        original_send = bot.http.send_message
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        unwrapped = bot.http.send_message  # the baseline, before the wrapper
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        assert bot.http.send_message is not unwrapped  # the wrapper is installed
 
         async def blocking(message, content):
             await bot.release.wait()
@@ -772,7 +777,7 @@ def test_stop_interrupts_the_request_in_flight(tmp_path):
         assert record.status == "interrupted"
         assert record.status in TERMINAL_STATUSES
         assert bot._turn_observer is None
-        assert bot.http.send_message is original_send  # the wrapper is gone
+        assert bot.http.send_message is unwrapped  # the wrapper is gone
         await bot._reply_queue.close()
 
     asyncio.run(scenario())
@@ -825,6 +830,9 @@ def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch):
         record = await _wait_for_record(settings, first.request_id)
         assert record.status == "timeout"
         assert "cleanup is unconfirmed" in record.failure
+        # The stuck coroutine is already running and keeps its own code; the room
+        # gets an ordinary turn again for whatever comes next.
+        bot.turn = bot._default_turn
         second = _submit(settings, task="second")
         await asyncio.sleep(0.5)
         assert not status_path(settings, second.request_id).exists()
@@ -840,14 +848,15 @@ def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch):
 def test_a_stalled_readback_cannot_downgrade_a_completed_turn(tmp_path, monkeypatch):
     """The outcome is written first; the readback is optional and bounded."""
 
-    async def direct_post(message, content):
-        await bot.http.send_message(
-            str(message.channel.id), params={"content": "posted"}
-        )
-
     async def scenario():
         monkeypatch.setattr(dirac_runtime, "READBACK_SECONDS", 0.05)
         settings, bot, runtime = await _ready(tmp_path)
+
+        async def direct_post(message, content):
+            await bot.http.send_message(
+                str(message.channel.id), params={"content": "posted"}
+            )
+
         bot.turn = direct_post
         gate = asyncio.Event()  # never set: the readback cannot finish
 
@@ -872,13 +881,14 @@ def test_a_stalled_readback_cannot_downgrade_a_completed_turn(tmp_path, monkeypa
 def test_stop_during_a_readback_keeps_the_completed_record(tmp_path):
     """A stop inside the optional readback never rewrites a terminal turn."""
 
-    async def direct_post(message, content):
-        await bot.http.send_message(
-            str(message.channel.id), params={"content": "posted"}
-        )
-
     async def scenario():
         settings, bot, runtime = await _ready(tmp_path)
+
+        async def direct_post(message, content):
+            await bot.http.send_message(
+                str(message.channel.id), params={"content": "posted"}
+            )
+
         bot.turn = direct_post
         gate = asyncio.Event()  # never set: the readback is still in flight
 

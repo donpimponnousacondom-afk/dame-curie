@@ -7,8 +7,8 @@ configuration, credential or network access; the parent runs the isolated tests 
 
 `smoke_protocol.py` (settings, immutable request, the one record, atomic and exclusive writes), `dirac_runtime.py` (the
 live poll, observer, injection, deadline, result), `scripts/dirac_smoke.py` (`submit`, `result <id>`, `pending`),
-`tests/test_dirac_smoke.py` with `tests/test_message_pipeline.py` (protocol and queue tests), and — the only edit elsewhere
-— `message_pipeline.py` (`running_message_id`, `cancel_message`).
+`tests/test_dirac_smoke.py` with `tests/test_message_pipeline.py` (protocol and queue tests), and — the only edit
+elsewhere — `message_pipeline.py` (`running_message_id`, `cancel_message`).
 
 ## Mounts and config
 
@@ -55,9 +55,8 @@ the turn posted elsewhere is not part of this receipt, and cross-channel behavio
 
 `completed` means the turn returned *and* the target channel received a real message — never that the task's goal was
 met. That outcome is on disk before the reply is read back, and the readback is capped at 5s for the whole job, so a
-stall, a failure or a stop during it cannot delay or downgrade the record. `reply_text` is fetched by the exact
-delivered ids (at most 5) and `reply_verified` stays false; an id the harness cannot read back is listed in
-`reply_readback` with its error type.
+stall, a failure or a stop during it cannot delay or downgrade the record. `reply_text` is fetched by the exact delivered
+ids (at most 5) and `reply_verified` stays false; an unreadable id is listed in `reply_readback` with its error type.
 
 ## Deadline, queue and restart
 
@@ -68,13 +67,14 @@ deadline or an interruption are written to the record.
 
 Eligibility to run is "no record exists", so the record directory is the ledger: no finished request can run again,
 however many are queued, and a restart rewrites a non-terminal record to `interrupted` rather than re-running it.
-Wiping that directory makes the requests still in the request directory runnable again; nothing here prevents that. A
-status mount that disappeared is refused rather than read as "nothing is done". A failure inside the request boundary
-always lands as a terminal record, and when even that write fails the poll loop stops with an error instead of retrying.
+Wiping that directory makes the requests still in it runnable again; nothing here prevents that. A status mount that
+disappeared is refused rather than read as "nothing is done". A failure inside the request boundary always lands as a
+terminal record, and when even that write fails the poll loop stops with an error instead of retrying.
 
 ## Cross-lane and unverified
 
 Requires the jobs lane: `response_observability.TURN_INPUT` and the `bot._turn_observer` bracketing in
-`MaxwellBot._run_queued_reply`. Not verified here: real Discord behaviour, the live HTTP client, whether `bot.http` is
-the object the SDK's own sends use, `Client.wait_until_ready` (outside the approved extract), the container mounts,
-and the parent's isolated test run.
+`MaxwellBot._run_queued_reply`. Source-verified, not live: `client.py:423-430` wires the client's own `http` into
+`ConnectionState`, so the object the runtime wraps is the one the SDK's sends use, and `client.py:1640` has
+`wait_until_ready`, awaited by the poll task and never by `setup_hook` (which that source warns would deadlock).
+Unverified here: real Discord behaviour, the live HTTP client, the container mounts, and the parent's isolated run.
