@@ -52,6 +52,10 @@ logger = logging.getLogger(__name__)
 # How long a cancelled turn is given to actually stop before the runtime says so.
 CLEANUP_SECONDS = 5.0
 
+# The whole optional reply readback, not each fetch: it only enriches a record
+# that is already terminal.
+READBACK_SECONDS = 5.0
+
 
 def sent_message_id(payload: object) -> str:
     """The created message id from a raw HTTP send result.
@@ -179,16 +183,20 @@ class DiracSmokeRuntime:
 
         The environment variable already opted in, so a missing request mount or
         an unwritable status mount fails the bot's own start: a poll loop that
-        cannot record results would deliver real operator input and lose it.
+        cannot record results would deliver real operator input and lose it. Both
+        directories must already exist — the operator prepares the mounts, and a
+        runtime that created its own status directory would be writing its ledger
+        somewhere ephemeral that disappears with the container.
         """
         if not self.settings.enabled:
             logger.info("Dirac smoke runtime disabled in %s", self.settings.config_path)
             return
-        if not self.settings.requests_dir.is_dir():
-            raise SmokeProtocolError(
-                f"requests directory is missing: {self.settings.requests_dir}"
-            )
-        self.settings.status_dir.mkdir(parents=True, exist_ok=True)
+        for name, directory in (
+            ("requests", self.settings.requests_dir),
+            ("status", self.settings.status_dir),
+        ):
+            if not directory.is_dir():
+                raise SmokeProtocolError(f"{name} directory is missing: {directory}")
         probe = self.settings.status_dir / f".write-probe-{id(self)}"
         write_json_atomic(probe, {"probe": iso_now()})
         probe.unlink()
@@ -333,6 +341,7 @@ class DiracSmokeRuntime:
             request_id=request_id, status="accepted", created_at=iso_now()
         )
         turn: _Turn | None = None
+        settled = False
         try:
             request = parse_request(read_json_object(path, "request"), request_id)
             record.created_at = request.created_at
@@ -367,7 +376,6 @@ class DiracSmokeRuntime:
             # the only way out of it without one.
             record.returned = turn.returned
             record.delivered_ids = list(turn.delivered)
-            record.write(record_path)
             if not turn.returned:
                 record.status = "failed"
                 record.failure = "the turn did not return; it raised or was cancelled"
@@ -379,14 +387,18 @@ class DiracSmokeRuntime:
                 )
             else:
                 record.status = "completed"
-                text, unreadable = await self._reply_text(
+            # The outcome reaches disk before the optional readback: a turn that
+            # really delivered stays completed even if the readback stalls, fails,
+            # or the process stops while it runs.
+            record.write(record_path)
+            settled = True
+            self._observer.discard(turn.input_id)
+            if record.status == "completed":
+                record.reply_text, record.reply_readback = await self._reply_text(
                     channel, record.delivered_ids
                 )
-                record.reply_text = text
-                record.reply_readback = unreadable
                 record.reply_verified = False
-            record.write(record_path)
-            self._observer.discard(turn.input_id)
+                record.write(record_path)
         except TimeoutError:
             # The deadline is a recorded outcome, not an error: what is known is
             # persisted, including any delivery that did happen before it.
@@ -430,6 +442,10 @@ class DiracSmokeRuntime:
             record.failure = str(refused)
             record.write(record_path)
         except asyncio.CancelledError:
+            if settled:
+                # The request already has its terminal record; a stop during the
+                # optional readback must not rewrite it as interrupted.
+                raise
             if turn is not None:
                 record.delivered_ids = list(turn.delivered)
             record.status = "interrupted"
@@ -439,6 +455,14 @@ class DiracSmokeRuntime:
             record.write(record_path)
             raise
         except Exception as exc:
+            if settled:
+                # Same reason as cancellation: the outcome is already on disk.
+                logger.error(
+                    "Dirac smoke request %s was recorded and then failed: %s",
+                    request_id,
+                    exc,
+                )
+                return
             # The type and its message, never a traceback: this record is read by
             # an operator and may be copied around.
             record.status = "failed"
@@ -531,18 +555,25 @@ class DiracSmokeRuntime:
     ) -> tuple[str, list[str]]:
         """What the delivered messages said, fetched by their exact ids.
 
-        Capped, and never assembled from recent channel history: text the harness
-        did not fetch itself is text it cannot stand behind. A readback failure is
-        recorded as exactly that and never rewrites the delivery — a message that
-        was really sent stays sent when the harness cannot read it back — so the
-        catch is narrow (the SDK's own HTTP error, and a local one) because
-        anything else is a bug rather than a missing message.
+        Capped in count and in time — the whole readback gets ``READBACK_SECONDS``,
+        not each fetch — because it only enriches a record that is already
+        terminal, and it must never hold a request open. Text the harness did not
+        fetch itself is text it cannot stand behind, so an id it cannot read is
+        recorded as exactly that and never turns a delivery into a failed turn.
+        The catch is narrow on purpose: the SDK's own HTTP error and ``OSError``,
+        which already covers a fetch that ran out of budget.
         """
         parts = []
         unreadable = []
+        expires = asyncio.get_running_loop().time() + READBACK_SECONDS
         for message_id in delivered[:REPLY_FETCH_LIMIT]:
+            remaining = expires - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                unreadable.append(f"{message_id} (readback budget spent)")
+                continue
             try:
-                message = await channel.fetch_message(int(message_id))
+                async with asyncio.timeout(remaining):
+                    message = await channel.fetch_message(int(message_id))
             except (discord.HTTPException, OSError) as exc:
                 unreadable.append(f"{message_id} ({type(exc).__name__})")
                 continue

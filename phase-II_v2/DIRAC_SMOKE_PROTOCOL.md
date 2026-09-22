@@ -5,10 +5,10 @@ configuration, credential or network access; the parent runs the isolated tests 
 
 ## Files
 
-`smoke_protocol.py` (settings, immutable request, the one record, atomic and exclusive writes),
-`dirac_runtime.py` (the live poll, observer, injection, deadline, result), `scripts/dirac_smoke.py` (`submit`,
-`result <id>`, `pending`), `tests/test_dirac_smoke.py` with `tests/test_message_pipeline.py` (protocol and queue
-tests), and — the only edit elsewhere — `message_pipeline.py` (`running_message_id`, `cancel_message`).
+`smoke_protocol.py` (settings, immutable request, the one record, atomic and exclusive writes), `dirac_runtime.py` (the
+live poll, observer, injection, deadline, result), `scripts/dirac_smoke.py` (`submit`, `result <id>`, `pending`),
+`tests/test_dirac_smoke.py` with `tests/test_message_pipeline.py` (protocol and queue tests), and — the only edit elsewhere
+— `message_pipeline.py` (`running_message_id`, `cancel_message`).
 
 ## Mounts and config
 
@@ -20,11 +20,12 @@ read-write at `/smoke-status`. Both directories resolve against the config file'
 {"enabled": true, "channel_id": 0, "operator_id": 0, "operator_name": "root", "requests_dir": "requests",
  "status_dir": "../smoke-status", "poll_seconds": 5.0}
 ```
-`enabled` must be stated; a wrong or missing one, a missing request mount or an unwritable status mount raises out of
-`start()`, so an opted-in bot does not come up looking tested. `enabled: false` is inert. `bot.setup_hook` imports
+`enabled` must be stated; a wrong or missing one, a missing request or status directory (the runtime never creates
+them) or an unwritable status mount raises out of `start()`, so an opted-in bot does not come up looking tested.
+`enabled: false` is inert. `bot.setup_hook` imports
 `dirac_runtime` only when `DAME_CURIE_DIRAC_SMOKE_CONFIG` is set, calls `SmokeSettings.from_env()`, then
 `DiracSmokeRuntime(bot, settings).start()`; shutdown calls `stop()` before the reply queue closes. The runtime sets
-`bot._turn_observer` itself.
+`bot._turn_observer` itself; `bot.py` never does.
 
 ## One request
 
@@ -45,18 +46,18 @@ polls every `poll_seconds`, takes the oldest request by file clock, and writes o
    the notice's own gateway event already consumed its dedup slot.
 4. One terminal status: `completed`, `failed`, `rejected`, `timeout` or `interrupted`.
 
-One deadline covers the whole request — resolve, notice, injection, the turn — because each can stall.
-Correlation is the notice id in `response_observability.TURN_INPUT`, set by the observer inside the turn's own
-task, so the turn's tool children inherit it and an unrelated task is never attributed. Deliveries arrive from
-`record_delivery` and from a wrapper around the client's `send_message` (file and plugin posts bypass
-`record_delivery`), which reads `payload["id"]` from the returned payload, never an attribute. Only deliveries
-into the target channel count: a message the turn posted elsewhere is not part of this receipt, and
-cross-channel behaviour is a separate scenario.
+One deadline covers the whole request — resolve, notice, injection, the turn — because each can stall. Correlation is
+the notice id in `response_observability.TURN_INPUT`, set by the observer inside the turn's own task, so the turn's tool
+children inherit it and an unrelated task is never attributed. Deliveries arrive from `record_delivery` and from a
+wrapper around the client's `send_message` (file and plugin posts bypass `record_delivery`), which reads
+`payload["id"]` from the returned payload, never an attribute. Only deliveries into the target channel count: a message
+the turn posted elsewhere is not part of this receipt, and cross-channel behaviour is a separate scenario.
 
 `completed` means the turn returned *and* the target channel received a real message — never that the task's goal was
-met. `reply_text` is fetched by the exact delivered ids (at most 5) and `reply_verified` stays false; an id the
-harness cannot read back is listed in `reply_readback` with its error type, and never turns a delivery into a
-failed turn.
+met. That outcome is on disk before the reply is read back, and the readback is capped at 5s for the whole job, so a
+stall, a failure or a stop during it cannot delay or downgrade the record. `reply_text` is fetched by the exact
+delivered ids (at most 5) and `reply_verified` stays false; an id the harness cannot read back is listed in
+`reply_readback` with its error type.
 
 ## Deadline, queue and restart
 
@@ -65,16 +66,15 @@ says which of the three happened. Every cancelled task then gets 5s to stop; if 
 is unconfirmed and the runtime starts no further request until that task is really gone. Deliveries found before a
 deadline or an interruption are written to the record.
 
-Eligibility to run is "no record exists", so the record directory is the ledger: no finished request can run
-again, however many are queued, and a restart rewrites a non-terminal record to `interrupted` rather than
-re-running it. Wiping that directory makes the requests still in the request directory runnable again; nothing
-here prevents that. A status mount that disappeared is refused rather than read as "nothing is done". A failure
-inside the request boundary always lands as a terminal record, and when even that write fails the poll loop
-stops with an error instead of retrying.
+Eligibility to run is "no record exists", so the record directory is the ledger: no finished request can run again,
+however many are queued, and a restart rewrites a non-terminal record to `interrupted` rather than re-running it.
+Wiping that directory makes the requests still in the request directory runnable again; nothing here prevents that. A
+status mount that disappeared is refused rather than read as "nothing is done". A failure inside the request boundary
+always lands as a terminal record, and when even that write fails the poll loop stops with an error instead of retrying.
 
 ## Cross-lane and unverified
 
 Requires the jobs lane: `response_observability.TURN_INPUT` and the `bot._turn_observer` bracketing in
-`MaxwellBot._run_queued_reply`. Not verified here: real Discord behaviour, the live HTTP client, whether
-`bot.http` is the object the SDK's own sends use, `Client.wait_until_ready` (outside the approved extract),
-the container mounts, and the parent's isolated test run.
+`MaxwellBot._run_queued_reply`. Not verified here: real Discord behaviour, the live HTTP client, whether `bot.http` is
+the object the SDK's own sends use, `Client.wait_until_ready` (outside the approved extract), the container mounts,
+and the parent's isolated test run.

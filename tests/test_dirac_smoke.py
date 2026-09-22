@@ -196,16 +196,20 @@ class _FakeBot:
 # --------------------------------------------------------------------------
 
 
-def _settings(tmp_path, *, enabled=True, make_requests=True):
+def _settings(tmp_path, *, enabled=True, make_requests=True, make_status=True):
     """A real config file, loaded by the real loader.
 
     ``status_dir`` is the ``../smoke-status`` form: the same config resolves to
-    the host mount and to ``/smoke-status`` next to the ``/smoke`` mount.
+    the host mount and to ``/smoke-status`` next to the ``/smoke`` mount. Both
+    directories are prepared here the way the operator prepares the real mounts:
+    the runtime requires them and never creates them.
     """
     root = tmp_path / "smoke"
     root.mkdir(parents=True, exist_ok=True)
     if make_requests:
         (root / "requests").mkdir(exist_ok=True)
+    if make_status:
+        (tmp_path / "smoke-status").mkdir(exist_ok=True)
     config = {
         "enabled": enabled,
         "channel_id": 4242,
@@ -220,9 +224,14 @@ def _settings(tmp_path, *, enabled=True, make_requests=True):
     return SmokeSettings.load(path)
 
 
-async def _ready(tmp_path, *, enabled=True, make_requests=True):
+async def _ready(tmp_path, *, enabled=True, make_requests=True, make_status=True):
     """A started runtime over a fake bot, driven by a config file on disk."""
-    settings = _settings(tmp_path, enabled=enabled, make_requests=make_requests)
+    settings = _settings(
+        tmp_path,
+        enabled=enabled,
+        make_requests=make_requests,
+        make_status=make_status,
+    )
     bot = _FakeBot(settings)
     runtime = DiracSmokeRuntime(bot, settings)
     await runtime.start()
@@ -254,13 +263,30 @@ async def _wait_for_record(settings, request_id, tries=600):
     raise AssertionError(f"{request_id} never terminated: {record}")
 
 
+async def _wait_for_reply(settings, request_id, tries=100):
+    """Wait for the optional readback to enrich an already terminal record.
+
+    The record is written before that readback, so a caller that asserts on
+    ``reply_text`` or ``reply_readback`` has to wait for the second write.
+    """
+    record = _record_of(settings, request_id)
+    for _ in range(tries):
+        if record.reply_text or record.reply_readback:
+            return record
+        await asyncio.sleep(0.05)
+        record = _record_of(settings, request_id)
+    return record
+
+
 async def _one(tmp_path, *, body=None, task="say pong", **request_kwargs):
-    """Run one request to its terminal record and hand back everything."""
+    """Run one request to its finished record and hand back everything."""
     settings, bot, runtime = await _ready(tmp_path)
     if body is not None:
         bot.turn = body
     request = _submit(settings, task=task, **request_kwargs)
     record = await _wait_for_record(settings, request.request_id)
+    if record.status == "completed":
+        record = await _wait_for_reply(settings, request.request_id)
     return settings, bot, runtime, request, record
 
 
@@ -410,7 +436,8 @@ def test_a_reply_the_harness_cannot_read_back_is_still_a_delivery(tmp_path):
         settings, bot, runtime = await _ready(tmp_path)
         bot.turn = direct_post
         request = _submit(settings)
-        record = await _wait_for_record(settings, request.request_id)
+        await _wait_for_record(settings, request.request_id)
+        record = await _wait_for_reply(settings, request.request_id)
         assert record.status == "completed"
         assert record.returned is True
         assert record.delivered_ids == [str(bot.http.next_id)]
@@ -522,12 +549,25 @@ def test_start_fails_when_the_request_mount_is_missing(tmp_path):
     asyncio.run(scenario())
 
 
+def test_start_fails_when_the_status_mount_is_missing(tmp_path):
+    """An absent mount must fail, not be manufactured as an ephemeral ledger."""
+
+    async def scenario():
+        settings = _settings(tmp_path, make_status=False)
+        runtime = DiracSmokeRuntime(_FakeBot(settings), settings)
+        with pytest.raises(SmokeProtocolError):
+            await runtime.start()
+        assert not settings.status_dir.exists()
+
+    asyncio.run(scenario())
+
+
 def test_start_fails_when_the_status_mount_cannot_be_a_directory(tmp_path):
     async def scenario():
-        settings = _settings(tmp_path)
+        settings = _settings(tmp_path, make_status=False)
         settings.status_dir.write_text("a file, not a mount", encoding="utf-8")
         runtime = DiracSmokeRuntime(_FakeBot(settings), settings)
-        with pytest.raises(OSError):
+        with pytest.raises(SmokeProtocolError):
             await runtime.start()
 
     asyncio.run(scenario())
@@ -792,6 +832,69 @@ def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch):
         held = await _wait_for_record(settings, second.request_id)
         assert held.status == "completed"
         await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_stalled_readback_cannot_downgrade_a_completed_turn(tmp_path, monkeypatch):
+    """The outcome is written first; the readback is optional and bounded."""
+
+    async def direct_post(message, content):
+        await bot.http.send_message(
+            str(message.channel.id), params={"content": "posted"}
+        )
+
+    async def scenario():
+        monkeypatch.setattr(dirac_runtime, "READBACK_SECONDS", 0.05)
+        settings, bot, runtime = await _ready(tmp_path)
+        bot.turn = direct_post
+        gate = asyncio.Event()  # never set: the readback cannot finish
+
+        async def stalled_fetch(message_id):
+            await gate.wait()
+
+        bot.channels[int(settings.channel_id)].fetch_message = stalled_fetch
+        request = _submit(settings)
+        await _wait_for_record(settings, request.request_id)
+        record = await _wait_for_reply(settings, request.request_id)
+        assert record.status == "completed"
+        assert record.returned is True
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert record.reply_text == ""
+        assert record.reply_readback == [f"{bot.http.next_id} (TimeoutError)"]
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_stop_during_a_readback_keeps_the_completed_record(tmp_path):
+    """A stop inside the optional readback never rewrites a terminal turn."""
+
+    async def direct_post(message, content):
+        await bot.http.send_message(
+            str(message.channel.id), params={"content": "posted"}
+        )
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        bot.turn = direct_post
+        gate = asyncio.Event()  # never set: the readback is still in flight
+
+        async def stalled_fetch(message_id):
+            await gate.wait()
+
+        bot.channels[int(settings.channel_id)].fetch_message = stalled_fetch
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "completed"
+        await runtime.stop()
+        record = _record_of(settings, request.request_id)
+        assert record.status == "completed"  # not interrupted, not failed
+        assert record.returned is True
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert record.reply_text == ""
         await bot._reply_queue.close()
 
     asyncio.run(scenario())
