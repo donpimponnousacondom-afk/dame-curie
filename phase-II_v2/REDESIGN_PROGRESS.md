@@ -1,6 +1,14 @@
 # Discord-only redesign: integration ledger
 
-## Current checkpoint
+## Current checkpoint — Dirac integration, 2026-09-22
+
+Root's new AFK grant authorizes autonomous implementation, scoped worktree agents, isolated retesting, labelled live tool/thread/site scenarios, shared V1 embedding API use and a separate Dirac publisher destination. Temporary Dirac authentication stays; canonical Dame cutover remains deferred. Publisher changes and Dirac remote setup are now specifically in scope, unlike the earlier immutable-publisher phase. V1 data and publishing destinations remain separate.
+
+Baseline `7b4398c`; four new Flash worktrees cover shared embedding deployment, Discord jobs/threads, honest smoke injection, and publisher integration. The coordinator owns runtime/private/SSH work and actual acceptance. Follow `../TODO.md` and `DIRAC_INTEGRATION.md`; failed checks remain failures until a separately recorded rerun passes. No earlier whole-application acceptance is inferred.
+
+The source review found concrete deployment/launcher gaps: local Ollama is mandatory in standard Compose, readiness hardcodes its endpoint, the temporary launcher still suppressed callbacks/forwarded limited provider configuration, and its tmpfs state disappeared on recreation. The five-minute summarizer is not itself an automatic defect; empty/insufficient memory returns zero silently. Root later explained deliberate process killing, so exit137 is not an inferred OOM regression.
+
+## Previous checkpoint — held redesign release
 
 All implementation lanes are integrated: core source `9d1abc8`, followed by residual template/dashboard/PM2 cleanup `562ed29` and `a913437`, from contract base `43ce047` after staged foundation `ac38b84`. Logging landed first. The structured-redaction correction and bounded pipe/PTY, pressure, resize/control, exit/error, foreground-loss and fresh GNU Screen exercises passed; exhaustive coverage is not claimed (`LOGGING_ACCEPTANCE.md`). Final existing-fixture alignment has independent source signoff, without new tests or execution.
 

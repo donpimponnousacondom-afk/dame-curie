@@ -1,5 +1,15 @@
 # Phase II session ledger
 
+## 2026-09-22 — autonomous Dirac integration grant
+
+Root requested a few hours of independent work: proper review, Flash implementation agents in worktrees, incremental local commits, real useful model/tool tests, Discord subagent/thread functionality, and a separate Dirac remote publishing folder using the available SSH arrangement. Tests must identify themselves as harness smoke tests authorized by root, not human Discord messages; model self-diagnosis is evidence to check, not acceptance by itself. Useful billing against the existing configured endpoint is authorized; endpoint/vendor changes and wasteful token burning are not goals.
+
+Temporary Dirac auth stays. Shared V1 Ollama is intentional, but V1 memory/publishing destinations are not to be reused. Root explained deliberately killing processes during connectivity trouble; the earlier exit137 does not establish OOM or product failure. No automatic restart followed those events.
+
+No `TODO.md` exists in the current checkout. A new root checklist continues the existing redesign/session ledgers, without recovering unrelated history. Baseline `7b4398c`; new worktrees `dirac-shared-rag`, `dirac-discord-jobs`, `dirac-smoke-runtime`, `dirac-publisher` were created at 06:13 UTC. Existing worktrees and untracked report/skill deliverables were left alone. Detailed lane ownership, boundaries and receipts belong in `DIRAC_INTEGRATION.md`.
+
+Publisher scout verified that `static.htaccess` is an unreferenced source artifact, not a deployed restriction: the publisher copies authored files (including per-site `.htaccess`) and executable bits; it neither proves nor configures remote PHP/Perl/CGI support. The coordinator rejected an unsolicited generic `refused_roots` policy; actual destination isolation will be verified during the explicitly authorized Dirac setup.
+
 ## 2026-09-19 — grounding only
 
 Starting point: clean `dev/phaseII_v2`, one reachable commit `c460324` (`Initial commit`). Root requested reconnaissance, temporary organized notes and frequent local checkpoints while another agent finishes the backup. No implementation, removal, runtime validation or production work is authorized in this slice.

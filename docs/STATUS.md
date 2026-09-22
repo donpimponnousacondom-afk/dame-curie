@@ -1,5 +1,13 @@
 # dame-curie status
 
+## Current assignment — 2026-09-22
+
+**Dirac integration is in progress under root's new autonomous implementation/runtime/publishing grant.** Temporary Dirac auth stays; canonical Dame cutover is deferred. Four Flash worktrees cover shared-RAG deployment, Discord subagent/job threads, an honest operator smoke protocol, and isolated publication. The coordinator handles private configuration/runtime/SSH and records real receipts. No fresh runtime state or full acceptance is claimed yet. Follow `../TODO.md` and `../phase-II_v2/DIRAC_INTEGRATION.md`; human-readable history continues in `../phase-II_v2/REDESIGN_PROGRESS.md` and `../phase-II_v2/SESSION_LOG.md`.
+
+The following Sept20 milestone is historical. Later Screen/Dirac sessions and root-authorized V1 Ollama port work occurred; root subsequently killed processes while troubleshooting. Old held-service/helper receipts must not be treated as a current inventory. Publisher/shared-embedding work is now explicitly authorized for isolated Dirac use; V1 data and existing publishing destinations remain protected.
+
+## Previous milestone — 2026-09-20
+
 Updated 2026-09-20. This ledger concerns V2, not the archived V1 rollout history. **The Discord-only source redesign is integrated and its reviewed release is installed in a held staged state. Canonical V2 services remain unstarted.** Old V2 API/web/shell containers are removed. Canonical bot/Ollama/model-pull are created, never started, restart=no and without published ports. Root subsequently authorized bounded, isolated Discord validation using a different temporary account in one explicit guild/channel—not canonical Dame activation. Ollama/model-pull remain held; publisher/mirroring and protected V1 are untouched. Bounded logging/terminal exercises passed within their documented limits. Scoped nonvoice runtime checks passed on Sept20: text/commands/native files/checkers/messages, plus offline memory/export checks. Earlier milestones below are historical, not current acceptance.
 
 ## Current Discord-only milestone
