@@ -61,10 +61,11 @@ previously created containers look like foreign resources to `stop`/`down`/`back
 
 * `bot.depends_on: !reset []` — Compose refuses a dependency on a service disabled by the
   active profiles, so the local health dependency has to be removed, not merely hidden.
-* `ollama`, `ollama-pull` → `profiles: !override [local-embeddings]` — neither service
-  starts by default, including on a bare `docker compose up`, and `!override` also replaces
-  the staged overlay's `rag-activation` profile so no profile can start a local model
-  service in this mode.
+* `ollama`, `ollama-pull` → `profiles: !override [local-embeddings]` — neither service is in
+  the default startup set, so the wrapper's `up bot` and a bare `docker compose up` skip
+  them, and `!override` also replaces the staged overlay's `rag-activation` profile. This is
+  a startup default, not a lock: `--profile local-embeddings` or an explicit `up ollama`
+  still starts them.
 * `bot.environment.DAME_CURIE_EMBED_MODE: external` and
   `DAME_CURIE_EMBED_BASE_URL: !reset null` — the base file's local service URL is cleared so
   it cannot be mistaken for a shared endpoint; the endpoint must come from the private
@@ -78,11 +79,13 @@ Compose would reject the overlay, affecting the external deployment only.
 ### Local embedding metadata in the base file
 
 `compose.yaml` now injects two non-secret values into the bot environment:
-`DAME_CURIE_EMBED_MODE: local` and `DAME_CURIE_EMBED_BASE_URL: http://ollama:11434`. A value
-in `bot.env` still wins over both, because `config.py` loads that file with `override=True`.
-This is what lets the readiness gate resolve the endpoint with the same precedence the bot
-uses, including for a bare host install where the `config.py` default
-(`http://localhost:11434`) is the correct one.
+`DAME_CURIE_EMBED_MODE: local` and `DAME_CURIE_EMBED_BASE_URL: http://ollama:11434`. A
+different URL in `bot.env` wins over the injected one, because `config.py` loads that file
+with `override=True`, and the readiness gate applies the same precedence. The mode is
+deliberately different: it is deployment metadata read from the process environment only, so
+`bot.env` cannot redirect the probe. Compose is what keeps these two consistent. Injecting the
+URL is what lets the endpoint resolve correctly for a bare host install as well, where the
+`config.py` default (`http://localhost:11434`) is the right answer.
 
 ## Readiness
 
@@ -124,6 +127,15 @@ environment only, and the private dotenv file cannot flip it, because this gate 
 Nothing is printed on success, and no endpoint, model, vector or credential is printed on
 failure. The gate still fails closed: a non-zero exit keeps the Compose entrypoint from
 `exec`-ing the bot.
+
+The CLI entry point wraps the probe in one boundary for expected request and configuration
+failures (an HTTP error, a connection or timeout failure, a decoding failure, or this gate's
+own configuration error). It prints only the exception type, plus the HTTP status when the
+endpoint answered, and detaches the original exception so its message cannot appear as
+traceback context — those messages can contain the endpoint URL or a credential, as an
+invalid `Authorization` header value does. Unexpected exception types are not caught, and
+nothing is swallowed: the boundary exists so the failure is reported without the secret, not
+so it can be ignored.
 
 ## What the coordinator must set for shared V1 embeddings
 
@@ -174,6 +186,10 @@ run under an isolated environment.
   silently degraded configuration.
 * The readiness gate verifies one synthetic vector request. It cannot prove RAG storage,
   retrieval, REM or long-run embedding health.
+* The CLI boundary reports only the exception type and, for a response, its HTTP status. That
+  is the whole diagnostic a failing gate leaves behind, so a refusal has to be diagnosed from
+  the coordinator's own runtime side (engine, network, endpoint logs) rather than from a
+  message that might quote a credential.
 * No claim is made about any deployed Dirac resource, image or private configuration, and
   the Compose version quoted above is the coordinator's report rather than a check performed
   here. Feature flags, private keys and the temporary Dirac identity remain the coordinator's

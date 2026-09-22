@@ -270,16 +270,83 @@ def test_readiness_main_treats_a_bare_dotenv_key_as_no_value(
     ]
 
 
-def test_readiness_main_requires_an_explicit_external_endpoint(tmp_path, monkeypatch):
+def test_readiness_main_requires_an_explicit_external_endpoint(
+    tmp_path, monkeypatch, capsys
+):
     isolate_readiness(
         monkeypatch, tmp_path, {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": ""}
     )
     monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "external")
     transport = Mock(side_effect=AssertionError("readiness used an inferred endpoint"))
     monkeypatch.setattr("urllib.request.urlopen", transport)
-    with pytest.raises(ValueError, match="DAME_CURIE_EMBED_BASE_URL"):
+    with pytest.raises(SystemExit) as exit_info:
         run_readiness()
+    assert exit_info.value.code == 1
     transport.assert_not_called()
+    assert capsys.readouterr().err.strip() == "embedding readiness failed: ValueError"
+
+
+def test_readiness_cli_reports_a_status_without_the_endpoint(
+    embeddings_server, tmp_path, monkeypatch, capsys
+):
+    url, state = embeddings_server
+    state["status"] = 401
+    isolate_readiness(
+        monkeypatch,
+        tmp_path,
+        {
+            "ENABLE_RAG": "true",
+            "DAME_CURIE_EMBED_BASE_URL": url,
+            "DAME_CURIE_EMBED_API_KEY": "synthetic-secret",
+        },
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err.strip()
+    assert stderr == "embedding readiness failed: HTTPError (HTTP 401)"
+    assert url not in stderr and "synthetic-secret" not in stderr
+
+
+def test_readiness_cli_never_echoes_a_rejected_credential(
+    tmp_path, monkeypatch, capsys
+):
+    """A header value urllib rejects still carries the credential in its own message."""
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/embed")
+    monkeypatch.setenv("DAME_CURIE_EMBED_API_KEY", "synthetic-secret\nX-Forged: 1")
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert stderr.startswith("embedding readiness failed: ")
+    assert len(stderr.strip().splitlines()) == 1
+    assert "synthetic-secret" not in stderr and "X-Forged" not in stderr
+
+
+def test_readiness_cli_never_echoes_an_invalid_endpoint(tmp_path, monkeypatch, capsys):
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://[::1")
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert stderr.strip() == "embedding readiness failed: ValueError"
+    assert "[::1" not in stderr and "http" not in stderr
+
+
+def test_readiness_cli_keeps_unexpected_errors_visible(tmp_path, monkeypatch):
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/embed")
+    monkeypatch.setattr(
+        "urllib.request.urlopen", Mock(side_effect=RuntimeError("unexpected"))
+    )
+    with pytest.raises(RuntimeError, match="unexpected"):
+        run_readiness()
 
 
 def test_readiness_main_probes_the_injected_local_endpoint(

@@ -108,11 +108,12 @@ services:
       DAME_CURIE_ENV_FILE: /config/bot.env
       DAME_CURIE_CONTAINER_MODE: "true"
       DAME_CURIE_INSTANCE_ID: ${INSTANCE_ID}
-      # Local embedding deployment metadata and the URL of this project's own
-      # Ollama. Both are read by the readiness gate in check_embeddings.py and
-      # by config.py, and a value set in bot.env still wins over them, which is
-      # the same precedence the application applies. Switching to a shared
-      # endpoint means selecting the external overlay, which clears the URL.
+      # The local embedding deployment: its mode, plus the URL of this
+      # project's own Ollama. config.py reads the URL and check_embeddings.py
+      # reads both. A different URL in bot.env wins over this one, as it does
+      # for the application; the mode is deployment metadata and is deliberately
+      # not taken from bot.env. The external overlay switches the mode and
+      # clears the URL.
       DAME_CURIE_EMBED_MODE: local
       DAME_CURIE_EMBED_BASE_URL: http://ollama:11434
     volumes:

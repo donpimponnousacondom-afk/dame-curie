@@ -21,6 +21,7 @@ and it must not import the application's dependencies.
 import json
 import math
 import os
+import sys
 from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values
@@ -187,5 +188,27 @@ def main() -> None:
     )
 
 
+def cli() -> None:
+    """Run the gate for Compose and report expected failures without echoing them.
+
+    Request and configuration errors can carry the endpoint URL or a credential
+    in their message, so only the exception type -- plus the HTTP status when
+    the endpoint answered -- reaches stderr, and the original exception is
+    detached so its message cannot surface as traceback context either.
+    Unexpected exceptions keep their traceback, and nothing is swallowed: the
+    non-zero exit is what stops the Compose entrypoint from exec'ing the bot.
+    """
+    try:
+        main()
+    except (OSError, ValueError) as error:
+        # HTTPError/URLError, connection and timeout failures, JSON decoding,
+        # and this gate's own configuration errors.
+        status = getattr(error, "code", None)
+        detail = f" (HTTP {status})" if isinstance(status, int) else ""
+        reason = f"embedding readiness failed: {type(error).__name__}{detail}"
+        print(reason, file=sys.stderr)
+        raise SystemExit(1) from None
+
+
 if __name__ == "__main__":
-    main()
+    cli()
