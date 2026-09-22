@@ -777,7 +777,8 @@ def test_stop_interrupts_the_request_in_flight(tmp_path):
         assert record.status == "interrupted"
         assert record.status in TERMINAL_STATUSES
         assert bot._turn_observer is None
-        assert bot.http.send_message is unwrapped  # the wrapper is gone
+        assert bot.http.send_message.__self__ is unwrapped.__self__
+        assert bot.http.send_message.__func__ is unwrapped.__func__
         await bot._reply_queue.close()
 
     asyncio.run(scenario())
