@@ -9,6 +9,7 @@ from bot_tools import (
     _normalize_web_hit,
     _sanitize_web_query,
 )
+from smoke_protocol import build_request, compose_notice
 from tool_schemas import RESULT_TOOL_NAMES, build_openai_tools
 
 
@@ -70,15 +71,6 @@ def test_needs_up_to_date_stable_trivia_is_not_auto_search():
     assert MaxwellBot._needs_up_to_date_info("what is the capital of france") is False
 
 
-# The harness notice header mirrors smoke_protocol.compose_notice (the smoke
-# lane's module, not present in this worktree). Keep it in step with that
-# template; it deliberately carries no model/recency word of its own.
-SMOKE_HEADER = (
-    "\N{WARNING SIGN} HARNESS SMOKE TEST <@1504398705539944560>\n"
-    "No human typed this. Root authorized it while AFK.\n"
-    "Permission actor: root (1482143139828596916), separate from the author of this text.\n"
-    "Task follows.\n"
-)
 SMOKE_TASK = (
     "THIS IS A SMOKE TEST from the operator harness. "
     "Correction to my earlier status request: source exposes spawn_background plus the "
@@ -101,8 +93,13 @@ def test_needs_up_to_date_ignores_the_wrapped_harness_status_request():
     Its only AI-topic hit is the "model" column the task asks to print, and its
     only recency hit is "no new jobs"; they sit in different clauses.
     """
-    assert MaxwellBot._needs_up_to_date_info(SMOKE_HEADER) is False
-    assert MaxwellBot._needs_up_to_date_info(SMOKE_HEADER + SMOKE_TASK) is False
+    notice = compose_notice(
+        build_request(request_id="a" * 32, task=SMOKE_TASK),
+        operator_name="root", operator_id=1482143139828596916,
+        bot_id=1504398705539944560,
+    )
+    assert MaxwellBot._needs_up_to_date_info(notice.removesuffix(SMOKE_TASK)) is False
+    assert MaxwellBot._needs_up_to_date_info(notice) is False
 
 
 def test_needs_up_to_date_separates_model_and_recency_clauses():
