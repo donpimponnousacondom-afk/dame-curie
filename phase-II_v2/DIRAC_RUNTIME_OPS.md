@@ -94,7 +94,14 @@ sudo -n -H -u dame-curie -- ... dirac.py logs [--no-keys]   # existing follow_lo
 ```
 
 `-I` is safe here: the operator restores its own script directory before
-importing its sibling `instance`/`log_filter` modules.
+importing its sibling `instance`/`log_filter` modules. Invoked as root, the
+operator re-executes **its own** script as the service account (the shared
+`service_account(entrypoint=...)` helper, whose default keeps `instance.py`
+re-entering itself), so `sudo ... dirac.py status` stays in `dirac.py` instead of
+being handed to the canonical wrapper's parser. The operator venv must provide
+`python-dotenv` - the image lock pins `python-dotenv==1.2.3`, and the staged
+operator venv was given exactly that package; without it the operator fails at
+import rather than doing anything.
 
 `start`/`stop`/`restart` serialize on the canonical
 `/srv/dame-curie/.operations.lock`, so a Dirac mutation and an `instance.py`
