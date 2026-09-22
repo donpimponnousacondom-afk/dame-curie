@@ -557,7 +557,6 @@ def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
     assert "no progress thread: Forbidden" in channel.sent[1]
 
 
-
 # allowed_channels: a thread inherits an allowed parent, never a blocked one
 
 
@@ -581,12 +580,13 @@ def test_channel_allowed_inherits_an_allowed_parent_but_not_a_blocked_one(monkey
         bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="200")), allowed_ids)
         is False
     )
-    # An explicit thread allowance does not silently beat the parent deny.
+    # An explicit thread allowance is the operator's own choice and survives a
+    # blocked parent; only the inherited allowance is withheld.
     assert (
         bot._channel_allowed(
             FakeThreadChannel(SimpleNamespace(id="200")), {"100", "555"}
         )
-        is False
+        is True
     )
     # A plain channel is never judged by its category id.
     assert bot._channel_allowed(FakeChannel("100", parent_id="200"), allowed_ids) is True
@@ -608,6 +608,14 @@ def test_edit_gate_applies_the_same_parent_rule(monkeypatch):
             bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
         )
         is False
+    )
+    # Same explicit-choice rule through the edit gate.
+    explicit = AllowlistBot(allowed=["100", "555"], blocked=["200"])
+    assert (
+        MaxwellBot._message_update_allowed(
+            explicit, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
+        )
+        is True
     )
 
 
