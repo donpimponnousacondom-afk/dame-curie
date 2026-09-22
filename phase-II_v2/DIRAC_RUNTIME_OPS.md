@@ -101,7 +101,10 @@ importing its sibling `instance`/`log_filter` modules.
 operation fail loudly instead of interleaving. `stop` never removes. `start`
 reports an existing owned container's state (status, exit code, OOM flag,
 finished time, image) and refuses; recreate needs the explicit
-`start --replace` after `logs`. Ownership needs both the reserved label and the
+`start --replace` after `logs`, and that replacement writes the same bounded
+previous-state JSON to **stderr** immediately before the removal, so stdout
+stays the machine-readable result of the command. Ownership needs both the
+reserved label and the
 reserved name: a container carrying `dame-curie.dirac=dirac-v2` under any other
 name is refused, and a foreign container squatting on the name `dirac-v2`
 surfaces as a Docker create conflict rather than as a silent removal. `status`

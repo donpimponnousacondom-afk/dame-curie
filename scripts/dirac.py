@@ -156,7 +156,7 @@ def outbound_bridge(instance: Instance) -> tuple[str, str]:
 
 
 def derived_config(root: Path, uid: int, gateway: str) -> tuple[bool, str]:
-    """Validate Dirac's private derived bot.env; return (rag_enabled, problem) without reading credentials."""
+    """Validate Dirac's private derived bot.env; return (rag_enabled, problem) without reporting credentials."""
     path = root / "config" / "bot.env"
     if path.is_symlink() or not path.is_file():
         return False, f"missing private derived config: {path}"
@@ -287,6 +287,7 @@ def start(instance: Instance, uid: int, args: argparse.Namespace) -> dict[str, o
                 f"finished {state['finished_at']}, image {state['image_ref']}, oom {state['oom_killed']}); "
                 "follow logs, then rerun start --replace"
             )
+        print(json.dumps({"replacing": NAME, "previous": state}, sort_keys=True), file=sys.stderr)
         instance.docker("rm", existing)
     container = instance.docker(*create_arguments(root, image, bridge, smoke)).strip()
     instance.docker("start", container)

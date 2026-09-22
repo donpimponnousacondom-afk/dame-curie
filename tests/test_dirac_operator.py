@@ -228,6 +228,36 @@ def test_outbound_bridge_requires_this_instance(dirac):
         dirac.outbound_bridge(engine)
 
 
+def test_start_replace_reports_the_previous_state_before_removing(dirac, tmp_path, monkeypatch):
+    root = private_tree(tmp_path / "dirac")
+    write_derived(root, "http://172.23.0.1:11434")
+    engine = FakeEngine({
+        ("network", "ls"): "dame-curie_outbound\n",
+        ("network", "inspect"): "dame-curie|outbound|172.23.0.1\n",
+        ("image",): "sha256:" + "a" * 64 + "\n",
+        ("ps", "-aq"): "abc123\n",
+        ("inspect", "abc123", "--format", "{{.Name}}"): "/dirac-v2\n",
+        ("inspect", "abc123", "--format", dirac.STATE_FORMAT):
+            "exited|1|false|2026-09-22T00:00:00Z|sha256:bbbb|dame-curie-app:test\n",
+        ("rm",): "abc123\n",
+        ("create",): "newcontainer\n",
+        ("start",): "dirac-v2\n",
+    })
+    engine.path = root.parent
+    monkeypatch.setattr(dirac, "print", lambda *values, **kwargs: engine.calls.append(("print", str(values[0]))))
+    monkeypatch.setattr(dirac.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""))
+    args = SimpleNamespace(action="start", image="dame-curie-app:test", replace=True,
+                           smoke_root=None, smoke_status=None)
+    report = dirac.start(engine, os.getuid(), args)
+    replacement = next(call for call in engine.calls if call[0] == "print")
+    assert '"exit_code": "1"' in replacement[1]
+    assert '"previous"' in replacement[1] and '"replacing"' in replacement[1]
+    assert engine.calls[engine.calls.index(replacement) + 1][0] == "rm"
+    assert engine.calls[-1][0] == "print" and '"action": "start"' in engine.calls[-1][1]
+    assert report["embedding_readiness"] == "ok"
+
+
 def test_status_reports_absent_container_without_mutating(dirac, tmp_path):
     root = private_tree(tmp_path / "dirac")
     write_derived(root, "http://172.23.0.1:11434")
