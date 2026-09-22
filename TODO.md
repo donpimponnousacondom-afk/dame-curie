@@ -28,7 +28,7 @@ No earlier `TODO.md` is present in the current checkout (both exact-name and cas
 ## Known follow-up, not covered by this acceptance
 
 - Root's archive report: the image limit is applied to non-text files and unsupported archives are misdirected to `see_image`. Root then explicitly requested 20 MB: the live setting is now 20 MiB (20,971,520 bytes), hot-reload verified without a restart. Archive handling is not repaired by that setting change.
-- [ ] Deliver root's requested source-based inventory of enforced attachment limits, distinguishing defaults, live settings, transport, media/prompt budgets and unverified Discord assumptions. Root will compare it with the other bot's limits.
+- [x] Deliver the reviewed inventory in `phase-II_v2/DIRAC_ATTACHMENT_LIMITS.md`: defaults versus live settings, incoming/outgoing caps, count/aggregate distinctions and media/prompt limits. Incorrect draft conclusions were rejected and corrected against the actual branches. Root will compare it with the other bot's limits.
 - The private embedding relay forwards the full Ollama API, not an endpoint allowlist; no model-management operations were exercised. Do not treat it as a security boundary.
 - See the handoff for boot/restart policy, publisher recovery, job-resumption, classifier/game-label and untested-feature limits. Scoped readiness does not mean every feature or failure mode passed.
 
