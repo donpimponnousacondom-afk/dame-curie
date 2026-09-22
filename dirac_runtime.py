@@ -10,8 +10,12 @@ Correlation is the notice's own message id, carried by
 ``response_observability.TURN_INPUT`` into everything the turn spawns. Deliveries
 come from ``record_delivery`` and from a wrapper around the client's
 ``send_message``, which is what catches file and plugin posts; only deliveries in
-the target channel count for the receipt. The runtime sets ``bot._turn_observer``
-itself; ``bot.py`` never does.
+the target channel count for the receipt. ``completed`` needs more than a
+delivery: the turn's own model call has to have returned usable output, and one of
+the messages in the receipt has to be model output — posted outside that call and
+not one of the bot's own notices. A notice and the "thinking: …" placeholder stay
+in the receipt as evidence, with their text, but they are not an answer. The
+runtime sets ``bot._turn_observer`` itself; ``bot.py`` never does.
 
 Eligibility to run is the absence of a record, so the record directory *is* the
 ledger: a request that has one never runs again, and wiping that directory makes
@@ -27,7 +31,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from response_observability import TURN_INPUT
+from response_observability import NOTICE_SEND, TURN_INPUT
 from smoke_protocol import (
     REPLY_FETCH_LIMIT,
     TERMINAL_STATUSES,
@@ -73,13 +77,21 @@ def sent_message_id(payload: object) -> str:
 
 @dataclass
 class _Turn:
-    """One injected input as the observer sees it."""
+    """One injected input as the observer sees it.
+
+    ``delivered`` is everything the room received; ``output`` is the part of it
+    that is not a bot notice and was posted while a model completion stood.
+    ``model_ok`` is the latest own call, ``model_answered`` any of them.
+    """
 
     input_id: str
     channel_id: str
     task: asyncio.Task | None = None
     returned: bool = False
     delivered: list[str] = field(default_factory=list)
+    output: list[str] = field(default_factory=list)
+    model_ok: bool = False
+    model_answered: bool = False
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -87,9 +99,10 @@ class _TurnObserver:
     """The synchronous observer ``bot.py`` duck-types on ``bot._turn_observer``.
 
     ``bot._run_queued_reply`` calls ``start`` and ``finish`` on the turn's own
-    task, and ``record_delivery`` calls ``delivered`` from wherever a message was
-    created. Every method here is synchronous and non-blocking by contract: an
-    await or a raise in any of them would land in the middle of a real reply.
+    task, ``record_delivery`` calls ``delivered`` from wherever a message was
+    created, and the generation wrapper calls ``model_result``. Every method here
+    is synchronous and non-blocking by contract: an await or a raise in any of
+    them would land in the middle of a real reply.
     """
 
     def __init__(self) -> None:
@@ -109,13 +122,44 @@ class _TurnObserver:
             turn.task = task
         return token
 
-    def delivered(self, input_id: str, channel_id: str, message_id: str) -> None:
+    def _own_turn(self, input_id: str) -> _Turn | None:
+        """The open turn, only when its own task is the one calling.
+
+        A background job the turn spawned inherits the input id, and its model call
+        is not this answer.
+        """
+        turn = self._turns.get(input_id)
+        if turn is None or turn.done.is_set():
+            return None
+        if turn.task is not asyncio.current_task():
+            return None
+        return turn
+
+    def model_result(self, input_id: str, ok: bool) -> None:
+        """Record how this input's own latest model call ended.
+
+        Anything but text or a tool call leaves the turn with no model output, so
+        what it posts next is a notice about that.
+        """
+        turn = self._own_turn(input_id)
+        if turn is not None:
+            turn.model_ok = bool(ok)
+            if ok:
+                turn.model_answered = True
+
+    def delivered(
+        self, input_id: str, channel_id: str, message_id: str, notice: bool = False
+    ) -> None:
         """Record one real delivery into this input's own room, once.
 
         A message the turn posted somewhere else is not part of this receipt: the
         record is evidence for the target channel, and implying more than that
-        would overstate what was verified. Cross-channel behaviour is a separate
-        scenario with its own checks.
+        would overstate what was verified.
+
+        ``notice`` marks a bot notice or a progress placeholder, which are
+        deliveries but never output. The same id can arrive twice — a placeholder
+        posted as progress and later edited into the reply is reported again by the
+        reply path — so an id first seen as progress joins the output then.
         """
         turn = self._turns.get(input_id)
         if turn is None or turn.done.is_set():
@@ -123,8 +167,15 @@ class _TurnObserver:
         if str(channel_id) != turn.channel_id:
             return
         message_key = str(message_id or "")
-        if message_key and message_key not in turn.delivered:
+        if not message_key:
+            return
+        if message_key not in turn.delivered:
             turn.delivered.append(message_key)
+        if notice:
+            if message_key in turn.output:
+                turn.output.remove(message_key)
+        elif turn.model_ok and message_key not in turn.output:
+            turn.output.append(message_key)
 
     def finish(self, input_id: str, channel_id: str, returned: bool, token) -> None:
         """Close the input: late deliveries can no longer join its result."""
@@ -150,17 +201,38 @@ class _NoticeInput:
     one substitution the grant calls for, because the actor is not the author of
     the text and must not be claimed to be. ``__dict__`` is kept in the slots so
     the bot can still stash its own per-message bookkeeping on the input.
+
+    ``notice_author`` names the account that really posted the notice, so memory,
+    REM and fact extraction attribute the text to the bot that wrote it rather than
+    to the operator whose authority the input carries. It is pinned when the proxy
+    is built over the real notice and carried through ``_rebind_snapshot``, never
+    re-read from a later snapshot: a snapshot can be rebuilt from this proxy, and
+    then its author is the permission actor.
     """
 
-    __slots__ = ("_message", "_author", "__dict__")
+    __slots__ = ("_message", "_author", "_notice_author", "__dict__")
 
-    def __init__(self, message, author) -> None:
+    def __init__(self, message, author, notice_author=None) -> None:
         self._message = message
         self._author = author
+        self._notice_author = (
+            notice_author
+            if notice_author is not None
+            else getattr(message, "author", None)
+        )
 
     @property
     def author(self):
         return self._author
+
+    @property
+    def notice_author(self):
+        """The account that posted the real notice this input stands for."""
+        return self._notice_author
+
+    def _rebind_snapshot(self, message):
+        """The same notice as a fresh fetch, same actor and same poster."""
+        return _NoticeInput(message, self._author, self._notice_author)
 
     def __getattr__(self, name: str):
         return getattr(self._message, name)
@@ -177,6 +249,8 @@ class DiracSmokeRuntime:
         self._stuck: asyncio.Task | None = None
         self._http = None
         self._http_send = None
+        self._generate_wrapper = None
+        self._generate_original = None
 
     async def start(self) -> None:
         """Validate the mounts, then arm observation. A bad setup raises here.
@@ -202,6 +276,7 @@ class DiracSmokeRuntime:
         probe.unlink()
         self._interrupt_stale()
         self._observe_sends()
+        self._observe_generation()
         self.bot._turn_observer = self._observer
         self._poll = asyncio.create_task(self._poll_loop(), name="dirac-smoke-poll")
         self._poll.add_done_callback(self._poll_stopped)
@@ -234,6 +309,14 @@ class DiracSmokeRuntime:
             self._http.send_message = self._http_send
         self._http = None
         self._http_send = None
+        if self._generate_wrapper is not None:
+            if self.bot.__dict__.get("_generate_response") is self._generate_wrapper:
+                if self._generate_original is None:
+                    del self.bot._generate_response
+                else:
+                    self.bot._generate_response = self._generate_original
+            self._generate_wrapper = None
+            self._generate_original = None
         self.bot._turn_observer = None
 
     # ---- setup ------------------------------------------------------------
@@ -278,13 +361,49 @@ class DiracSmokeRuntime:
             input_id = TURN_INPUT.get()
             if input_id:
                 observer.delivered(
-                    input_id, str(channel_id), sent_message_id(payload)
+                    input_id,
+                    str(channel_id),
+                    sent_message_id(payload),
+                    NOTICE_SEND.get(),
                 )
             return payload
 
         http.send_message = observed_send
         self._http = http
         self._http_send = original
+
+    def _observe_generation(self) -> None:
+        """Report whether this turn's model call produced anything.
+
+        ``bot._generate_response`` is what the reply path awaits for the answer
+        and each follow-up, and the one place that tells a turn the model answered
+        from a turn a gate or an error answered. The result is a ``ProviderResult``
+        (a ``str`` subclass: text is ``str(result)``, calls are
+        ``result.tool_calls``), returned untouched, installed on the instance and
+        removed by ``stop()``.
+        """
+        original = getattr(self.bot, "_generate_response", None)
+        if not callable(original):
+            raise SmokeProtocolError(
+                "bot._generate_response is unavailable; whether a turn produced "
+                "model output cannot be observed"
+            )
+        observer = self._observer
+
+        async def observed_generate(messages, **kwargs):
+            input_id = TURN_INPUT.get()
+            # Pessimistic until this call proves otherwise: what the turn posts
+            # while a call fails, or comes back empty, is a notice about that.
+            observer.model_result(input_id, False)
+            result = await original(messages, **kwargs)
+            text = bool(result) and bool(str(result).strip())
+            tool_calls = getattr(result, "tool_calls", None)
+            observer.model_result(input_id, text or bool(tool_calls))
+            return result
+
+        self._generate_original = self.bot.__dict__.get("_generate_response")
+        self.bot._generate_response = observed_generate
+        self._generate_wrapper = observed_generate
 
     def _poll_stopped(self, task: asyncio.Task) -> None:
         """Report a stopped poll loop. Status IO never becomes a retry loop."""
@@ -330,10 +449,9 @@ class DiracSmokeRuntime:
     async def _handle(self, path: Path) -> None:
         """One request, from accepted to a terminal record.
 
-        Everything a real request can fail at is inside the single try below, so a
-        failure always lands as a terminal record instead of an ``accepted``
-        status that never moves again. Cancellation is the one outcome that must
-        propagate, and it records the interruption first.
+        A request the operator deleted before it could be read was withdrawn: no
+        record, and the poll loop carries on. Everything else a request can fail at
+        stays inside the try below, so a failure is always a terminal record.
         """
         request_id = path.stem
         record_path = status_path(self.settings, request_id)
@@ -343,7 +461,15 @@ class DiracSmokeRuntime:
         turn: _Turn | None = None
         settled = False
         try:
-            request = parse_request(read_json_object(path, "request"), request_id)
+            try:
+                raw = read_json_object(path, "request")
+            except FileNotFoundError:
+                # Withdrawn between discovery and this read: nothing has been
+                # accepted for it, so it leaves no record at all. A file that is
+                # there but unreadable or malformed falls through to the record
+                # below, as it always did.
+                return
+            request = parse_request(raw, request_id)
             record.created_at = request.created_at
             record.thread_id = request.thread_id
             record.channel_id = request.thread_id or str(self.settings.channel_id)
@@ -385,15 +511,34 @@ class DiracSmokeRuntime:
                     "the turn returned without delivering a visible message "
                     "(no_response)"
                 )
-            else:
+            elif turn.output:
                 record.status = "completed"
+            elif turn.model_answered:
+                record.status = "failed"
+                record.failure = (
+                    "the turn's model call completed but published no reply this "
+                    "record could see: the messages in it are progress or notices, "
+                    "or the answer was handed to a background edit that had not "
+                    "landed; reply_text shows what the channel has"
+                )
+            else:
+                # Notices and the placeholder stay in the receipt: they were
+                # really posted, but nothing in them proves a model completion.
+                record.status = "failed"
+                record.failure = (
+                    "the turn's model call did not complete: the messages it "
+                    "posted are a bot notice (a sleep gate, a public error) or a "
+                    "progress message, not an answer"
+                )
             # The outcome reaches disk before the optional readback: a turn that
             # really delivered stays completed even if the readback stalls, fails,
             # or the process stops while it runs.
             record.write(record_path)
             settled = True
             self._observer.discard(turn.input_id)
-            if record.status == "completed":
+            if record.delivered_ids:
+                # Also when the failure delivered something: that text is what
+                # the operator reads to see why the turn was not a pass.
                 record.reply_text, record.reply_readback = await self._reply_text(
                     channel, record.delivered_ids
                 )

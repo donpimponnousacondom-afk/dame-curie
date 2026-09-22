@@ -2,19 +2,22 @@
 
 No Discord, no bot process, no provider and no network: the fake client's
 ``send_message`` returns the raw payload dict the SDK's own HTTP client returns,
-the fake channel routes its sends through that method, and the reply queue and
-``MaxwellBot._run_queued_reply`` are the real ones. What is faked is the
-transport, not the path — the notice, its injection, the correlation ContextVar
-and the single record all run the code that runs against the live bot.
+the fake channel routes its sends through that method, the fake bot's
+``_generate_response`` stands in for the provider the runtime observes, and the
+reply queue and ``MaxwellBot._run_queued_reply`` are the real ones. What is faked
+is the transport, not the path — the notice, its injection, the correlation
+ContextVar and the single record all run the code that runs against the live bot.
 
 Not covered here: real Discord behaviour, the bot's real gates (allowlist,
-blacklist, ``bot_enabled``), the live HTTP client, and the container mounts.
+blacklist, ``bot_enabled``), the live HTTP client, memory/REM persistence,
+and the container mounts.
 """
 
 import asyncio
 import json
 import os
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -23,9 +26,12 @@ import pytest
 
 import dirac_runtime
 from bot import MaxwellBot
+from providers import ProviderResult
+from tool_progress import ToolProgress
 from dirac_runtime import DiracSmokeRuntime, _TurnObserver, sent_message_id
 from message_pipeline import ReplyQueue
-from response_observability import TURN_INPUT
+from rag_memory import _detect_source
+from response_observability import TURN_INPUT, notice_send, record_delivery
 from smoke_protocol import (
     NOTICE_HEADER_LIMIT,
     NOTICE_LIMIT,
@@ -135,6 +141,9 @@ class _Input:
 class _FakeBot:
     """The parts of ``MaxwellBot`` the smoke runtime touches, and no more."""
 
+    # The real classmethod, so a turn can drive the real late-embed refresh.
+    _media_link_refs = MaxwellBot._media_link_refs
+
     def __init__(self, settings) -> None:
         self.user = SimpleNamespace(id=555000111)
         self.http = _FakeHTTP()
@@ -144,6 +153,7 @@ class _FakeBot:
         self.dispatch = True
         self.injected = []
         self.turn = self._default_turn
+        self.generate = self._default_generate
         self.release = asyncio.Event()
         self.channels = {}
         self.users = {
@@ -187,7 +197,16 @@ class _FakeBot:
         """The bot's own wrapper, so the observer bracketing under test is real."""
         return await MaxwellBot._run_queued_reply(self, message, content)
 
+    async def _default_generate(self):
+        """One model completion, in the shape the provider really returns."""
+        return ProviderResult("pong")
+
+    async def _generate_response(self, messages, **kwargs):
+        """The bot's own generation entry point, which the runtime observes."""
+        return await self.generate()
+
     async def _default_turn(self, message, content):
+        await self._generate_response([{"role": "user", "content": content}])
         await message.channel.send("smoke reply")
 
 
@@ -279,13 +298,18 @@ async def _wait_for_reply(settings, request_id, tries=100):
 
 
 async def _one(tmp_path, *, body=None, task="say pong", **request_kwargs):
-    """Run one request to its finished record and hand back everything."""
+    """Run one request to its finished record and hand back everything.
+
+    Any record that delivered something gets its readback too, which the runtime
+    writes after the terminal state: a failure that delivered a notice still has
+    the notice text in it.
+    """
     settings, bot, runtime = await _ready(tmp_path)
     if body is not None:
         bot.turn = body
     request = _submit(settings, task=task, **request_kwargs)
     record = await _wait_for_record(settings, request.request_id)
-    if record.status == "completed":
+    if record.delivered_ids:
         record = await _wait_for_reply(settings, request.request_id)
     return settings, bot, runtime, request, record
 
@@ -358,6 +382,112 @@ def test_the_notice_states_the_grant_and_fits_one_message(tmp_path):
         )
 
 
+def test_the_observer_counts_output_apart_from_deliveries():
+    """Every real send is evidence; only unmarked model output makes a turn pass."""
+
+    async def scenario():
+        observer = _TurnObserver()
+        turn = observer.open("1", "4242")
+        token = observer.start("1", "4242", asyncio.current_task())
+        observer.delivered("1", "4242", "notice", True)  # a bot notice
+        observer.delivered("1", "4242", "progress", True)  # the placeholder
+        observer.model_result("1", True)
+        assert turn.model_answered is True
+        observer.delivered("1", "4242", "answer")
+        observer.delivered("1", "4242", "progress")  # the same placeholder, now reply
+        observer.delivered("1", "4242", "answer")  # the same message twice
+        assert turn.delivered == ["notice", "progress", "answer"]
+        assert turn.output == ["answer", "progress"]
+
+        observer.model_result("1", False)  # the call after it failed
+        observer.delivered("1", "4242", "error notice")
+        assert turn.output == ["answer", "progress"]
+        assert turn.delivered == ["notice", "progress", "answer", "error notice"]
+        # Another task's model call is not this turn's answer.
+        turn.model_ok = False
+
+        async def other_task_call():
+            observer.model_result("1", True)
+
+        other = asyncio.create_task(other_task_call())
+        await other
+        assert turn.model_ok is False
+        observer.finish("1", "4242", True, token)
+        assert TURN_INPUT.get() == ""
+
+    asyncio.run(scenario())
+
+
+def test_a_refreshed_notice_keeps_the_granted_actor(tmp_path):
+    """A late-embed refresh must not hand the turn the bot's own message."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        seen = {}
+
+        async def refreshing(message, content):
+            refreshed = await MaxwellBot._wait_for_late_embeds(bot, message, content)
+            # The refresh is a fresh fetch of the notice, posted by the bot.
+            assert refreshed is not message
+            assert refreshed.author.id == bot.user.id
+            message = MaxwellBot._preserve_input_actor(message, refreshed)
+            seen["actor"] = message.author.id
+            seen["author"] = message.notice_author.id
+            await bot._generate_response([{"role": "user", "content": content}])
+            await message.channel.send("answered after the refresh")
+
+        bot.turn = refreshing
+        request = _submit(settings, task="describe https://example.test/a.png")
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "completed"
+        # The permission actor survives the swap; the author does not change.
+        assert seen == {"actor": settings.operator_id, "author": bot.user.id}
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_refreshed_snapshot_cannot_change_the_notice_provenance(tmp_path):
+    """A snapshot rebuilt from the proxy says the actor, not who posted the text."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        seen = {}
+
+        async def rebuilt_from_the_actor(message, content):
+            # What a snapshot rebuilt from this input looks like: the message id is
+            # the notice's, the author is the permission actor the proxy exposes.
+            snapshot = _FakeMessage(
+                {"id": str(message.id)}, message.channel, author=message.author
+            )
+            assert snapshot.author.id == settings.operator_id
+            rebound = MaxwellBot._preserve_input_actor(message, snapshot)
+            author = MaxwellBot._memory_author(rebound)
+            seen["actor"] = rebound.author.id
+            seen["author"] = rebound.notice_author.id
+            seen["row_author"] = author.id
+            seen["row_is_bot"] = MaxwellBot._memory_author_is_bot(bot, author)
+            await bot._generate_response([{"role": "user", "content": content}])
+            await message.channel.send("answered")
+
+        bot.turn = rebuilt_from_the_actor
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "completed"
+        # Pinned provenance: the snapshot's author cannot overwrite the poster.
+        assert seen == {
+            "actor": settings.operator_id,
+            "author": bot.user.id,
+            "row_author": bot.user.id,
+            "row_is_bot": True,
+        }
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
 def test_a_delivery_is_read_from_the_payload_dict_only():
     """The SDK returns the raw payload; an attribute read sees nothing at all."""
     assert sent_message_id({"id": "42"}) == "42"
@@ -369,6 +499,44 @@ def test_a_delivery_is_read_from_the_payload_dict_only():
 # --------------------------------------------------------------------------
 # one request, end to end
 # --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("instance_override", [False, True])
+def test_stop_restores_the_original_generation_method(tmp_path, instance_override):
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        original = bot._generate_response
+        if instance_override:
+            bot._generate_response = original
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        assert bot._generate_response is not original
+        await runtime.stop()
+        assert bot._generate_response == original
+        assert ("_generate_response" in bot.__dict__) is instance_override
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("response", [None, ProviderResult("")])
+def test_an_empty_model_result_does_not_make_a_send_a_completion(tmp_path, response):
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+
+        async def generate():
+            return response
+
+        bot.generate = generate
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "failed"
+        assert record.delivered_ids
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
 
 
 def test_a_visible_turn_is_completed_with_its_exact_delivery(tmp_path):
@@ -389,16 +557,239 @@ def test_a_visible_turn_is_completed_with_its_exact_delivery(tmp_path):
         notice = bot.injected[0]
         assert record.notice_id == str(notice.id)
         # The real notice was posted by the bot; the input the turn sees is
-        # authored by the configured operator actor instead.
+        # authored by the configured operator actor instead, and names the bot as
+        # the account that really posted the text.
         posted = bot.channels[int(settings.channel_id)].sent[0]
         assert posted.author.id == bot.user.id
         assert notice.author.id == settings.operator_id
+        assert notice.notice_author.id == bot.user.id
         assert isinstance(notice.author.id, int)
         assert f"<@{bot.user.id}>" in notice.content
         assert request.task in notice.content
         # The notice was posted by the poll task, which is nobody's turn: it is
         # never mistaken for something this request delivered.
         assert record.notice_id not in record.delivered_ids
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_notice_row_is_the_self_accounts_own_not_human_traffic(tmp_path):
+    """A self client signs in as a user account, so ``.bot`` proves nothing."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        request = _submit(settings)
+        await _wait_for_record(settings, request.request_id)
+        notice = bot.injected[0]
+        posted = bot.channels[int(settings.channel_id)].sent[0]
+        # The real self account: a user account, whose own messages say bot=False.
+        assert getattr(bot.user, "bot", False) is False
+        assert getattr(posted.author, "bot", False) is False
+        for message in (notice, posted):
+            author = MaxwellBot._memory_author(message)
+            assert author.id == bot.user.id
+            assert MaxwellBot._memory_author_is_bot(bot, author) is True
+        writer = object.__new__(MaxwellBot)
+        writer._connection = SimpleNamespace(user=bot.user)
+        writer._message_memory_content = lambda message: message.content
+        writer._reply_meta_from_message = lambda message: {}
+        for message in (notice, posted):
+            row = writer._message_memory_item(message)
+            assert row["author_id"] == str(bot.user.id)
+            assert row["author_is_bot"] is True
+            assert _detect_source(row) == "bot"
+        # A raw payload carries the id as text while the client holds an int.
+        assert (
+            MaxwellBot._memory_author_is_bot(
+                bot, SimpleNamespace(id=str(bot.user.id), display_name="dame", bot=False)
+            )
+            is True
+        )
+        assert (
+            MaxwellBot._memory_author_is_bot(
+                bot,
+                SimpleNamespace(id=str(settings.operator_id), display_name="root", bot=False),
+            )
+            is False
+        )
+        # The operator is still a person, and still the permission actor.
+        assert MaxwellBot._memory_author_is_bot(bot, notice.author) is False
+        assert notice.author.id == settings.operator_id
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_marked_notice_after_a_good_call_does_not_pass_the_turn(tmp_path):
+    """A public error posted after the model answered is still not the answer."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+
+        async def good():
+            return ProviderResult("the answer")
+
+        async def render_fails(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
+            with notice_send():
+                sent = await message.channel.send("something went wrong on my end")
+                record_delivery(bot, message.channel, sent, None)
+
+        bot.generate = good
+        bot.turn = render_fails
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "failed"
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert "published no reply" in record.failure
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_notice_with_no_model_call_is_a_failed_turn(tmp_path):
+    """A gate notice is a delivery, but a turn no model completed is not a pass."""
+
+    async def notice_only(message, content):
+        # What a sleep gate and a public error both do: post and return.
+        await message.channel.send("the dame is sleeping rn, back in ~3m.")
+
+    async def scenario():
+        settings, bot, runtime, request, record = await _one(tmp_path, body=notice_only)
+        assert record.status == "failed"
+        assert record.returned is True
+        # The notice stays in the receipt: it is what the operator reads to see
+        # why this request did not pass.
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert "model call did not complete" in record.failure
+        assert record.reply_text.startswith("the dame is sleeping")
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_progress_post_after_the_model_returns_is_not_output(tmp_path):
+    """The real placeholder is marked where it is posted, not timed by the harness."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        seen = {}
+
+        async def progress_after_the_call(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
+            # A real ToolProgress, posted after the model call has already
+            # returned: nothing about the timing says progress, the mark does.
+            progress = ToolProgress(message)
+            await progress.start()
+            seen["posted"] = getattr(progress.posted, "id", None)
+
+        bot.turn = progress_after_the_call
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert seen["posted"] == int(str(bot.http.next_id))
+        assert record.status == "failed"
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert "published no reply" in record.failure
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_error_notice_after_a_failed_call_is_not_output(tmp_path):
+    """A public error is posted after the model call failed, not as an answer."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+
+        async def failing():
+            raise RuntimeError("provider down")
+
+        async def error_turn(message, content):
+            try:
+                await bot._generate_response([{"role": "user", "content": content}])
+            except RuntimeError:
+                await message.channel.send("something went wrong on my end")
+
+        bot.generate = failing
+        bot.turn = error_turn
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "failed"
+        assert record.returned is True
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_error_notice_after_a_good_call_is_not_output_either(tmp_path):
+    """The last call decides, so a later failure cannot pass on its own notice."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        calls = []
+
+        async def flaky():
+            calls.append(1)
+            if len(calls) > 1:
+                raise RuntimeError("follow-up down")
+            return ProviderResult("working on it", tool_calls=[{"id": "1"}])
+
+        async def partial(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
+            try:
+                await bot._generate_response([{"role": "user", "content": content}])
+            except RuntimeError:
+                await message.channel.send("something went wrong on my end")
+
+        bot.generate = flaky
+        bot.turn = partial
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "failed"
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_answer_delivered_before_a_later_failure_still_counts(tmp_path):
+    """The record is about delivery: what the model published is still evidence."""
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        calls = []
+
+        async def flaky():
+            calls.append(1)
+            if len(calls) > 1:
+                raise RuntimeError("follow-up down")
+            return ProviderResult("here it is")
+
+        async def partial(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
+            await message.channel.send("here it is")
+            try:
+                await bot._generate_response([{"role": "user", "content": content}])
+            except RuntimeError:
+                await message.channel.send("something went wrong on my end")
+
+        bot.generate = flaky
+        bot.turn = partial
+        request = _submit(settings)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "completed"
+        # The answer and the notice are both deliveries; only the answer counts.
+        assert len(record.delivered_ids) == 2
+        assert record.delivered_ids[0] == str(bot.http.next_id - 1)
         await runtime.stop()
         await bot._reply_queue.close()
 
@@ -430,7 +821,12 @@ def test_a_reply_the_harness_cannot_read_back_is_still_a_delivery(tmp_path):
         settings, bot, runtime = await _ready(tmp_path)
 
         async def direct_post(message, content):
-            """Post the way a plugin does: through HTTP, with no channel object."""
+            """Post the way a plugin does: through HTTP, with no channel object.
+
+            The model call is the turn's own, as it is for a real plugin post; the
+            delivery then happens outside it, so the record counts it.
+            """
+            await bot._generate_response([{"role": "user", "content": content}])
             await bot.http.send_message(
                 str(message.channel.id), params={"content": "posted"}
             )
@@ -671,6 +1067,74 @@ def test_more_than_300_completed_requests_are_never_replayed(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# a request the operator deletes
+# --------------------------------------------------------------------------
+
+
+def test_a_request_deleted_before_it_is_read_is_withdrawn_without_a_record(tmp_path):
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        request = _submit(settings)
+        path = request_path(settings, request.request_id)
+        path.unlink()  # the operator deletes it between discovery and the read
+        await runtime._handle(path)
+        assert not status_path(settings, request.request_id).exists()
+        assert bot.injected == []
+        assert bot.http.calls == []
+        await runtime.stop()
+
+    asyncio.run(scenario())
+
+
+def test_a_vanished_request_does_not_stop_the_poll_loop(tmp_path, monkeypatch):
+    """The next request still runs, before and after the withdrawn one."""
+    real_listing = dirac_runtime.request_files
+
+    async def scenario():
+        settings, bot, runtime = await _ready(tmp_path)
+        phantom = request_path(settings, "f" * 32)
+        real = _submit(settings, task="say pong")
+        listings = []
+
+        def with_phantom_once(settings_):
+            listings.append(1)
+            if len(listings) == 1:
+                return [phantom]
+            return real_listing(settings_)
+
+        monkeypatch.setattr(dirac_runtime, "request_files", with_phantom_once)
+        record = await _wait_for_record(settings, real.request_id)
+        assert len(listings) > 1  # the loop polled again after the phantom
+        assert record.status == "completed"
+        assert not status_path(settings, phantom.stem).exists()
+        assert runtime._poll is not None
+        assert runtime._poll.done() is False
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_request_deleted_between_the_scan_and_the_stamp_is_skipped(
+    tmp_path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    request = build_request(request_id="d" * 32, task="withdrawn")
+    path = request_path(settings, request.request_id)
+    create_json_exclusive(path, request.as_json())
+    real_glob = Path.glob
+
+    def vanishing_glob(self, pattern):
+        """Yield what the scan saw, after the operator deleted it."""
+        for found in real_glob(self, pattern):
+            found.unlink()
+            yield found
+
+    monkeypatch.setattr(Path, "glob", vanishing_glob)
+    assert request_files(settings) == []
+
+
+# --------------------------------------------------------------------------
 # deadline, queue and shutdown
 # --------------------------------------------------------------------------
 
@@ -854,6 +1318,7 @@ def test_a_stalled_readback_cannot_downgrade_a_completed_turn(tmp_path, monkeypa
         settings, bot, runtime = await _ready(tmp_path)
 
         async def direct_post(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
             await bot.http.send_message(
                 str(message.channel.id), params={"content": "posted"}
             )
@@ -886,6 +1351,7 @@ def test_stop_during_a_readback_keeps_the_completed_record(tmp_path):
         settings, bot, runtime = await _ready(tmp_path)
 
         async def direct_post(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
             await bot.http.send_message(
                 str(message.channel.id), params={"content": "posted"}
             )

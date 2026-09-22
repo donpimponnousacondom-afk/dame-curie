@@ -1,6 +1,8 @@
 """Per-call Discord presentation, delivered-message measurements, and build identity."""
 
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,6 +29,22 @@ logger = logging.getLogger(__name__)
 # it; record_delivery reads it. Empty means the delivery belongs to no observed
 # input.
 TURN_INPUT: ContextVar[str] = ContextVar("turn_input", default="")
+
+# True while the bot posts one of its own notices — a sleep gate, a public error.
+# A notice is a real message in the channel but never the model's answer, so the
+# turn observer records it as evidence and not as output. Set only around the
+# send, by notice_send.
+NOTICE_SEND: ContextVar[bool] = ContextVar("notice_send", default=False)
+
+
+@contextmanager
+def notice_send() -> Iterator[None]:
+    """Mark the sends inside this block as the bot's own notices."""
+    token = NOTICE_SEND.set(True)
+    try:
+        yield
+    finally:
+        NOTICE_SEND.reset(token)
 
 
 FOOTER_MARKER = "\u2063\u2060\u2063\u2060"
@@ -290,7 +308,7 @@ def record_delivery(
         and channel_id is not None
     ):
         try:
-            observer.delivered(input_id, str(channel_id), str(message_id))
+            observer.delivered(input_id, str(channel_id), str(message_id), NOTICE_SEND.get())
         except Exception:
             # Optional instrumentation may never cost a real delivery.
             logger.exception("turn observer delivery hook failed")

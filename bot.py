@@ -33,6 +33,7 @@ from response_observability import (
     format_debug,
     format_runtime_provider,
     latest_delivered_footer,
+    notice_send,
     prepare_delivery,
     record_delivered_footer,
     record_delivery,
@@ -5029,9 +5030,39 @@ class MaxwellBot(commands.Bot):
             ),
         )
 
+    @staticmethod
+    def _memory_author(message):
+        """The account a message is attributed to in memory, REM and extraction.
+
+        ``message.author`` is the permission actor, which for an injected smoke
+        input is not the author of the text; such an input names the account that
+        really posted the notice, so both write paths agree.
+        """
+        notice_author = getattr(message, "notice_author", None)
+        if notice_author is not None:
+            return notice_author
+        return getattr(message, "author", None)
+
+    def _memory_author_is_bot(self, author) -> bool:
+        """Whether a row about ``author`` is the bot's own, not a person's.
+
+        discord.py-self signs in as a user account, so the bot's own messages carry
+        ``bot=False`` and identity has to come from the client's own id — as text,
+        because a raw payload carries it as a string.
+        """
+        if bool(getattr(author, "bot", False)):
+            return True
+        own_id = getattr(getattr(self, "user", None), "id", None)
+        author_id = getattr(author, "id", None)
+        return bool(own_id) and bool(author_id) and str(author_id) == str(own_id)
+
     def _message_memory_item(self, message, *, edited: bool = False) -> dict:
-        """Build one idempotent transcript row from the latest message state."""
-        author = getattr(message, "author", None)
+        """Build one idempotent transcript row from the latest message state.
+
+        Author and authorship come from provenance: a smoke notice is the self
+        account's own post, not human traffic.
+        """
+        author = self._memory_author(message)
         item = {
             "author": getattr(author, "display_name", "System")
             if author is not None
@@ -5039,9 +5070,7 @@ class MaxwellBot(commands.Bot):
             "author_id": str(getattr(author, "id", "system"))
             if author is not None
             else "system",
-            "author_is_bot": bool(getattr(author, "bot", False))
-            if author is not None
-            else False,
+            "author_is_bot": self._memory_author_is_bot(author),
             "content": self._message_memory_content(message),
             "message_id": str(getattr(message, "id", "") or ""),
             "timestamp": _message_created_at_iso(message),
@@ -5089,10 +5118,13 @@ class MaxwellBot(commands.Bot):
 
     @staticmethod
     def _coerce_raw_author(author, previous=None):
-        """Discord omits ``bot`` on human authors. Raw updates must still have it."""
-        prev_author = (
-            getattr(previous, "author", None) if previous is not None else None
-        )
+        """Discord omits ``bot`` on human authors. Raw updates must still have it.
+
+        The fallback is the poster of the message being updated: a partial payload
+        carries no author, and the snapshot it merges with can be a synthetic
+        input whose ``author`` is the operator, not the poster.
+        """
+        prev_author = MaxwellBot._memory_author(previous)
         if author is None or not getattr(author, "id", None):
             author = prev_author
         if author is None or not getattr(author, "id", None):
@@ -5171,7 +5203,7 @@ class MaxwellBot(commands.Bot):
         author = (
             self._raw_update_namespace(author_data)
             if author_data
-            else getattr(previous, "author", None)
+            else self._memory_author(previous)
         )
         author = self._coerce_raw_author(author, previous)
         guild = getattr(channel, "guild", None)
@@ -5437,6 +5469,20 @@ class MaxwellBot(commands.Bot):
             if value is state:
                 store.pop(key, None)
 
+    @staticmethod
+    def _preserve_input_actor(previous, refreshed):
+        """Keep an injected permission actor across a message-object refresh.
+
+        A refresh replaces the input with a fresh fetch of the same message, which
+        is authored by whoever really posted it — the bot, for a smoke notice. An
+        input handed over under an explicit actor re-wraps the snapshot around that
+        actor, so the turn does not turn into the bot reading its own message.
+        """
+        rebind = getattr(previous, "_rebind_snapshot", None)
+        if refreshed is not previous and callable(rebind):
+            return rebind(refreshed)
+        return refreshed
+
     async def _wait_for_late_embeds(self, message, content: str):
         """Fetch one fresh Discord snapshot before a media turn starts."""
         if getattr(message, "embeds", None):
@@ -5486,7 +5532,7 @@ class MaxwellBot(commands.Bot):
         if latest is None or latest_media is None:
             return message, content, media, active_media, media_summary, messages
         refresh_version = state.get("version", 0)
-        message = latest
+        message = self._preserve_input_actor(message, latest)
         content = str(getattr(latest, "content", "") or "")
         media = list(latest_media)
         current_images = [item for item in media if item.get("is_image")]
@@ -5999,7 +6045,9 @@ class MaxwellBot(commands.Bot):
                         embed_titles.append(str(title)[:120])
                     embed_note = "[embeds: " + "; ".join(embed_titles) + "]"
                     memory_content = f"{memory_content} {embed_note}".strip()
-                _ma = getattr(message, "author", None)
+                # The account that really posted the text, not the actor the
+                # input answers as: a smoke notice is not a human event.
+                _ma = self._memory_author(message)
                 memory_item = {
                     "author": getattr(_ma, "display_name", "System")
                     if _ma is not None
@@ -6007,9 +6055,7 @@ class MaxwellBot(commands.Bot):
                     "author_id": str(getattr(_ma, "id", "system"))
                     if _ma is not None
                     else "system",
-                    "author_is_bot": bool(getattr(_ma, "bot", False))
-                    if _ma is not None
-                    else False,
+                    "author_is_bot": self._memory_author_is_bot(_ma),
                     "content": render_discord_context_text(
                         message,
                         memory_content or "[media attached]",
@@ -9211,6 +9257,9 @@ class MaxwellBot(commands.Bot):
                 for user in list(getattr(message, "mentions", []) or [])[:10]
             ]
             reply_meta = self._reply_meta_from_message(message)
+            # Who spoke is provenance: naming the operator here would file a
+            # harness notice as something a human said.
+            speaker = self._memory_author(message)
 
             await self.rem_log.record(
                 {
@@ -9218,10 +9267,10 @@ class MaxwellBot(commands.Bot):
                     "channel_id": str(message.channel.id),
                     "guild_id": str(message.guild.id) if message.guild else None,
                     "message_id": str(msg_id or ""),
-                    "user_id": str(message.author.id)
+                    "user_id": str(speaker.id)
                     if role == "user"
                     else (str(self.user.id) if self.user else ""),
-                    "user_name": message.author.display_name
+                    "user_name": speaker.display_name
                     if role == "user"
                     else self.bot_name,
                     "role": role,
@@ -9457,6 +9506,11 @@ class MaxwellBot(commands.Bot):
         if not self._control.get(
             "cross_context_enabled", True
         ) or not self._control.get("cross_context_extract_enabled", True):
+            return False
+        if getattr(message, "notice_author", None) is not None:
+            # A synthetic input names the bot as the real author: its text is a
+            # harness instruction, so there is no human fact in it to extract. The
+            # message is still written to memory and REM.
             return False
         combined = message_combined_content(message)
         has_media = any(
@@ -12146,7 +12200,7 @@ class MaxwellBot(commands.Bot):
             f"the dame is sleeping rn, back in ~{remaining}. "
             "drop a message and i'll see it when i wake up."
         )
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), notice_send():
             await message.channel.send(
                 body,
                 reference=message if hasattr(message, "id") else None,
@@ -12204,7 +12258,9 @@ class MaxwellBot(commands.Bot):
             # MESSAGE_CREATE can precede Discord's unfurl by a few hundred
             # milliseconds. Refresh once before extracting so a direct ping
             # gets the thumbnail/embed in its first provider request.
-            refreshed_message = await self._wait_for_late_embeds(message, content)
+            refreshed_message = self._preserve_input_actor(
+                message, await self._wait_for_late_embeds(message, content)
+            )
             if refreshed_message is not message:
                 message = refreshed_message
                 content = str(getattr(message, "content", "") or "")
@@ -12764,7 +12820,8 @@ class MaxwellBot(commands.Bot):
                 )
                 if self._control.get("error_replies", True):
                     try:
-                        await send_public_error(self, message.channel)
+                        with notice_send():
+                            await send_public_error(self, message.channel)
                         normal_reply_sent = True
                     except discord.Forbidden as _exc:
                         pass
@@ -13190,7 +13247,8 @@ class MaxwellBot(commands.Bot):
             logger.warning(f"Provider usage exhausted while handling message: {e}")
             if self._control.get("error_replies", True):
                 try:
-                    await send_public_error(self, message.channel)
+                    with notice_send():
+                        await send_public_error(self, message.channel)
                     normal_reply_sent = True
                 except discord.Forbidden as _exc:
                     pass
@@ -13198,7 +13256,8 @@ class MaxwellBot(commands.Bot):
             logger.warning("Provider returned no usable response: %s", e)
             if self._control.get("error_replies", True):
                 try:
-                    await send_public_error(self, message.channel)
+                    with notice_send():
+                        await send_public_error(self, message.channel)
                     normal_reply_sent = True
                 except discord.Forbidden as _exc:
                     pass
@@ -13206,7 +13265,8 @@ class MaxwellBot(commands.Bot):
             logger.error(f"Error handling message: {e}\n{traceback.format_exc()}")
             if self._control.get("error_replies", True):
                 try:
-                    await send_public_error(self, message.channel)
+                    with notice_send():
+                        await send_public_error(self, message.channel)
                     normal_reply_sent = True
                 except discord.Forbidden as _exc:
                     pass

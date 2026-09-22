@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import discord
 
 from bot import MaxwellBot
+from dirac_runtime import _NoticeInput
 
 
 class _Memory:
@@ -353,3 +354,72 @@ def test_raw_uncached_fetch_failure_can_reply_via_channel():
         assert str(reference["channel_id"]) == "22"
 
     asyncio.run(scenario())
+
+# --------------------------------------------------------------------------
+# a partial update of a synthetic input
+# --------------------------------------------------------------------------
+
+_SELF_ACCOUNT_ID = 555000111
+_OPERATOR_ID = 1482143139828596916
+
+
+def _smoke_bot(notice_id=707):
+    """A bot whose last snapshot for ``notice_id`` is the injected smoke input.
+
+    The notice was posted by the self account; the input a turn answers as carries
+    the operator's authority instead.
+    """
+    bot = _bot()
+    self_account = SimpleNamespace(id=_SELF_ACCOUNT_ID, display_name="dame", bot=False)
+    operator = SimpleNamespace(id=_OPERATOR_ID, display_name="root", bot=False)
+    notice = _message(notice_id, "HARNESS SMOKE TEST\nsay pong")
+    notice.author = self_account
+    bot.user = self_account
+    bot._message_snapshots[str(notice_id)] = _NoticeInput(notice, operator)
+    return bot, self_account, operator, notice
+
+
+def test_partial_update_without_author_keeps_the_poster_not_the_actor():
+    """An embed-only payload carries no author: the row must not become the operator's."""
+    bot, self_account, operator, _notice = _smoke_bot()
+    payload = SimpleNamespace(
+        cached_message=None,
+        message_id=707,
+        channel_id=22,
+        data={
+            "id": "707",
+            "channel_id": "22",
+            "embeds": [{"title": "late preview", "description": "unfurled"}],
+        },
+    )
+
+    merged = asyncio.run(bot._message_from_raw_update(payload))
+
+    assert merged.author.id == self_account.id
+    assert merged.author.id != operator.id
+    assert MaxwellBot._memory_author(merged).id == self_account.id
+    assert MaxwellBot._memory_author_is_bot(bot, merged.author) is True
+
+
+def test_partial_update_without_author_survives_a_failed_fetch():
+    """The same update when the channel fetch cannot answer."""
+    bot, self_account, operator, _notice = _smoke_bot(notice_id=808)
+    channel = _ReplyChannel()
+
+    async def unavailable(_message_id):
+        raise RuntimeError("fetch unavailable")
+
+    channel.fetch_message = unavailable
+    bot.get_channel = lambda _channel_id: channel
+    payload = SimpleNamespace(
+        cached_message=None,
+        message_id=808,
+        channel_id=22,
+        data={"id": "808", "channel_id": "22", "embeds": [{"title": "late preview"}]},
+    )
+
+    merged = asyncio.run(bot._message_from_raw_update(payload))
+
+    assert merged.author.id == self_account.id
+    assert merged.author.id != operator.id
+    assert MaxwellBot._memory_author_is_bot(bot, merged.author) is True

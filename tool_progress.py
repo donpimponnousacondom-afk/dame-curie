@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # create_task() whose handle nobody holds can be collected mid-flight, which
 # here means a progress message that never gets edited to its final content or
 # never gets deleted. Hold a strong ref until the task completes.
+from response_observability import notice_send  # noqa: E402
 from utils import _spawn_background as _fire_and_forget  # noqa: E402
 
 
@@ -237,7 +238,10 @@ class ToolProgress:
             if self._stopped or self._tool_streaming or self._posted is not None:
                 return
             content = self._render()
-            posted = await self._post_reply(content)
+            # Transient progress, never an answer: the turn's output is what it
+            # posts outside these, or this message turned into the reply later.
+            with notice_send():
+                posted = await self._post_reply(content)
             if self._stopped:
                 if posted is not None:
                     with contextlib.suppress(Exception):
@@ -405,7 +409,8 @@ class ToolProgress:
             if not first_flush and now - self._last_edit < _TOKEN_TICK_INTERVAL:
                 return
             try:
-                await self._posted.edit(content=content)
+                with notice_send():
+                    await self._posted.edit(content=content)
                 self._last_edit = time.monotonic()
                 self._last_content = content
                 self._edits_made += 1

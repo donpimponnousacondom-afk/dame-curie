@@ -259,8 +259,10 @@ class SmokeRecord:
 
     ``status`` is the whole state machine. ``accepted`` and ``running`` are the
     only non-terminal states; everything in ``TERMINAL_STATUSES`` is final. A
-    ``completed`` record means the turn returned and the target channel received a
-    real message — never that the task's goal was achieved. ``reply_text`` is the
+    ``completed`` record means the turn returned, its own model call produced
+    usable output, and the target channel received model output rather than only a
+    notice or a progress placeholder — never that the task's goal was achieved,
+    and never that a tool's own claim about itself was verified. ``reply_text`` is the
     harness's own fetch of the exact delivered ids, so it is evidence of what was
     delivered, not an evaluation, and ``reply_verified`` stays false.
     ``reply_readback`` names the ids that could not be read back and why: a
@@ -369,10 +371,18 @@ def request_files(settings: SmokeSettings) -> list[Path]:
     Ordered by file modification time, not by name: request ids are random, so a
     name-based order is not an arrival order. Dot-prefixed names are the
     temporaries of the two writers here and are never requests.
+
+    A file that cannot be stamped right now — deleted between the directory scan
+    and the stamp, or unreadable for the moment — is skipped, not an error: a
+    withdrawn request is no reason to stop reading the ones still there, and the
+    next poll picks it up if it is really there.
     """
-    found = [
-        path
-        for path in settings.requests_dir.glob("*.json")
-        if not path.name.startswith(".")
-    ]
-    return sorted(found, key=lambda path: (path.stat().st_mtime, path.name))
+    found = []
+    for path in settings.requests_dir.glob("*.json"):
+        if path.name.startswith("."):
+            continue
+        try:
+            found.append((path.stat().st_mtime, path.name, path))
+        except OSError:
+            continue
+    return [path for _, _, path in sorted(found)]
