@@ -11,8 +11,8 @@ No earlier `TODO.md` is present in the current checkout (both exact-name and cas
 - [x] Read the handoff and challenge unsupported findings against source and actual receipts.
 - [x] Preserve the successful Discord/native-tool checks; root-initiated process killing is not an inferred OOM/product failure.
 - [x] Establish baseline `7b4398c` and four separate Flash implementation worktrees.
-- [ ] Support external/shared embeddings and RAG-off without forcing a second local Ollama/pull chain.
-- [ ] Make embedding readiness honor the configured endpoint/model/dimensions/authentication.
+- [x] Support external/shared embeddings and RAG-off without forcing a second local Ollama/pull chain; real Compose merge checked without activation.
+- [x] Make embedding readiness honor the configured endpoint/model/dimensions/authentication; isolated checks passed.
 - [ ] Replace the temporary test launcher restrictions with a supported, complete Dirac runtime/configuration path.
 - [ ] Give Dirac separate persistent configuration, memory, shell, sites and publisher state.
 - [ ] Preserve/reconcile Discord job/subagent/thread routing, ownership, progress, results and cancellation.

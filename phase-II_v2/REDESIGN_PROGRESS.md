@@ -8,6 +8,12 @@ Baseline `7b4398c`; four new Flash worktrees cover shared embedding deployment, 
 
 The source review found concrete deployment/launcher gaps: local Ollama is mandatory in standard Compose, readiness hardcodes its endpoint, the temporary launcher still suppressed callbacks/forwarded limited provider configuration, and its tmpfs state disappeared on recreation. The five-minute summarizer is not itself an automatic defect; empty/insufficient memory returns zero silently. Root later explained deliberate process killing, so exit137 is not an inferred OOM regression.
 
+### Integrated and tested — before live activation
+
+Accepted lanes are integrated through `1984a26`; the rejected smoke prototype remains outside main. The isolated Python3.14.4 rerun passed **316 tests plus 28 subtests**, with Ruff F checks on the new modules and Dirac tests. Earlier failed QA/controller attempts are retained in `DIRAC_INTEGRATION.md`. Real Compose 2.39.4 merges passed for standard and staged external embeddings without starting services.
+
+The full derived Dirac configuration and private persistent roots now exist; temporary account identity was independently checked by REST, and canonical config bytes were preserved. A separate remote subtree and private publisher credentials were prepared; the unchanged publisher's `--once` pinned only those new roots, with zero sites. New image `dame-curie-app:1984a26` (`sha256:c5d049e2dc9dd70aeed2ad6f39fbb876c12db7d278c22b861a8edced41ac9bea`) built successfully. Source installation, relay/bot/watcher activation and live model/HTTP/persistence/Screen acceptance remain next; a build is not a running-service receipt.
+
 ## Previous checkpoint — held redesign release
 
 All implementation lanes are integrated: core source `9d1abc8`, followed by residual template/dashboard/PM2 cleanup `562ed29` and `a913437`, from contract base `43ce047` after staged foundation `ac38b84`. Logging landed first. The structured-redaction correction and bounded pipe/PTY, pressure, resize/control, exit/error, foreground-loss and fresh GNU Screen exercises passed; exhaustive coverage is not claimed (`LOGGING_ACCEPTANCE.md`). Final existing-fixture alignment has independent source signoff, without new tests or execution.

@@ -10,6 +10,12 @@ No `TODO.md` exists in the current checkout. A new root checklist continues the 
 
 Publisher scout verified that `static.htaccess` is an unreferenced source artifact, not a deployed restriction: the publisher copies authored files (including per-site `.htaccess`) and executable bits; it neither proves nor configures remote PHP/Perl/CGI support. The coordinator rejected an unsolicited generic `refused_roots` policy; actual destination isolation will be verified during the explicitly authorized Dirac setup.
 
+### Pre-activation integration checkpoint
+
+All accepted source lanes are integrated; original smoke branch `4aae612` was rejected and never deployed. Parent review and independent Flash review found actual recursion/thread-scope, receipt durability, cancellation and diagnostic-privacy defects; fixes were checked in the combined tree, not accepted from AST-only reports. Isolated reruns retained their failures and ultimately passed 316 tests plus 28 subtests at `1984a26`. The committed archive built image `dame-curie-app:1984a26`; it has not yet been selected or started.
+
+Coordinator-only work verified temporary identity, prepared full derived configuration and durable Dirac roots, and created/pinned a separate remote publishing subtree. Canonical private config stayed byte-identical; every declared OPENAI value was compared unchanged in the derived file. No V1 data was copied. Initial publisher `--once` succeeded with zero sites; no HTTP script-execution claim follows from that. Detailed IDs, QA failures, fixes, reruns and remaining activation gates are in `DIRAC_INTEGRATION.md`. The old installed source remains at `/opt/dame-curie` at this checkpoint; it is an archive without `.git`, with an operator venv to preserve.
+
 ## 2026-09-19 — grounding only
 
 Starting point: clean `dev/phaseII_v2`, one reachable commit `c460324` (`Initial commit`). Root requested reconnaissance, temporary organized notes and frequent local checkpoints while another agent finishes the backup. No implementation, removal, runtime validation or production work is authorized in this slice.
