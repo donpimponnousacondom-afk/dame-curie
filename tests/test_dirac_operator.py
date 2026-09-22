@@ -6,6 +6,7 @@ engine, no container, no private configuration and no application module.
 
 import importlib.util
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -88,6 +89,7 @@ def test_create_arguments_pin_the_reviewed_runtime(dirac, tmp_path):
     assert arguments[arguments.index("--pids-limit") + 1] == "256"
     assert arguments[arguments.index("--restart") + 1] == "no"
     assert arguments[arguments.index("--stop-timeout") + 1] == "45"
+    assert arguments[arguments.index("--pull") + 1] == "never"
     assert arguments[arguments.index("--cap-drop") + 1] == "ALL"
     assert "no-new-privileges:true" in arguments
     assert arguments[arguments.index("--network") + 1] == "dame-curie_outbound"
@@ -155,6 +157,31 @@ def test_derived_config_requires_the_bridge_endpoint(dirac, tmp_path):
     assert "private" in dirac.derived_config(root, os.getuid(), "172.23.0.1")[1]
 
 
+def test_derived_config_problems_never_echo_config_values(dirac, tmp_path):
+    root = private_tree(tmp_path / "dirac")
+    write_derived(root, "http://dirac:sekrit@172.23.0.1:notaport")
+    enabled, problem = dirac.derived_config(root, os.getuid(), "172.23.0.1")
+    assert enabled is False
+    assert problem == "derived config is unreadable or not private"
+    assert "sekrit" not in problem
+
+
+def test_embedding_readiness_reports_only_the_outcome_class(dirac, monkeypatch):
+    engine = FakeEngine({})
+    captured: dict[str, object] = {}
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 1, "", "Authorization: Bearer sekrit-token\n")
+
+    monkeypatch.setattr(dirac.subprocess, "run", run)
+    assert dirac.embedding_readiness(engine, True) == "failed: exit 1"
+    assert captured["argv"] == [
+        "docker", "exec", "dirac-v2", "python", "/opt/dame-curie/check_embeddings.py",
+    ]
+    assert dirac.embedding_readiness(engine, False).startswith("skipped")
+
+
 def test_derived_config_requires_container_roots(dirac, tmp_path):
     root = private_tree(tmp_path / "dirac")
     config = root / "config" / "bot.env"
@@ -215,4 +242,6 @@ def test_status_reports_absent_container_without_mutating(dirac, tmp_path):
     assert report["present"] is False
     assert report["endpoint"] == "http://172.23.0.1:11434"
     assert report["config"] == "ok"
+    assert report["embedding_readiness"] == "not running"
+    assert "readiness" not in report  # the status field names the embedding check, not Discord readiness
     assert engine.calls[-1] == ("ps", "-aq", "--filter", "label=dame-curie.dirac=dirac-v2")

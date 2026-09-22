@@ -77,8 +77,9 @@ as-is. The container joins the canonical instance's outbound bridge
 (`<INSTANCE_ID>_outbound`, labels `com.docker.compose.project`/`network`
 validated) and needs no host alias: the integrated in-image check preflights the
 configured endpoint, which the CLI requires to be the bridge gateway the relay
-binds. Nothing pulls: an image reference is resolved with `image inspect` and the
-immutable ID is used, or the command fails.
+binds. Nothing pulls: an image reference is resolved with `image inspect` to its
+immutable ID and the create carries `--pull never`, so a vanished image fails
+loudly instead of being fetched.
 
 ## Operator interface
 
@@ -86,7 +87,7 @@ immutable ID is used, or the command fails.
 sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
   /opt/dame-curie/scripts/dirac.py start  [--image REF] [--replace] \
   [--smoke-root /srv/dame-curie/dirac/smoke] [--smoke-status /srv/dame-curie/dirac/smoke-status]
-sudo -n -H -u dame-curie -- ... dirac.py status     # JSON; 0 only when running and ready
+sudo -n -H -u dame-curie -- ... dirac.py status     # JSON; 0 only when running and embedding-ready
 sudo -n -H -u dame-curie -- ... dirac.py stop       # keeps the container and its evidence
 sudo -n -H -u dame-curie -- ... dirac.py restart
 sudo -n -H -u dame-curie -- ... dirac.py logs [--no-keys]   # existing follow_logs(format=screen)
@@ -105,8 +106,13 @@ reserved name: a container carrying `dame-curie.dirac=dirac-v2` under any other
 name is refused, and a foreign container squatting on the name `dirac-v2`
 surfaces as a Docker create conflict rather than as a silent removal. `status`
 is read-only: container state, bridge, endpoint, config verdict and the reviewed
-embedding readiness; it exits non-zero when the container is absent, stopped,
-misconfigured or not ready.
+embedding check; it exits non-zero when the container is absent, stopped,
+misconfigured or not ready. Its `embedding_readiness` field means exactly that -
+a running container whose embedding path works - and is **not** Discord
+readiness; the coordinator confirms the actual temporary identity on the first
+turn. A bad derived configuration is reported as a fixed reason class and a
+failed embedding check as its exit code only, so no configuration value, URL or
+credential can appear in `status` output; investigate a failure privately.
 
 ### Smoke mounts
 
@@ -137,8 +143,15 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dirac-relay.service
 The unit runs `scripts/dirac_relay.py` with the operator venv interpreter as
 root (required for `setns` and `nsenter`), with `--network dame-curie_outbound`,
 `--engine-pid-file /run/user/$(id -u dame-curie)/docker.pid` and
-`--v1-container maxwell-curie-ollama-1`. It resolves both service accounts
-through `pwd`, validates the bridge's compose project/network labels, reads its
+`--v1-container maxwell-curie-ollama-1`. Only the relay process itself keeps
+host root; every Docker call it makes runs as the mapped service account through
+`runuser` with a scrubbed environment (`env -i`, `HOME`, `PATH`,
+`DOCKER_CONFIG=/nonexistent`) and an explicit `--host` for that account, so no
+root client and no inherited Docker context can leak in. Each account's socket
+is checked as a real, unsymlinked socket owned by that account, and its `info`
+must report rootless plus its own expected `DockerRootDir`; `--v2-engine-id` and
+`--v1-engine-id` optionally pin each engine identity, and there is no fallback
+engine. It then validates the bridge's compose project/network labels, reads its
 gateway, resolves the daemon PID (owning account checked, or an explicit
 `/proc/<pid>/ns/net` whose PID must be owned by that account), refuses a
 namespace identical to its own, `setns` into the V2 daemon's network namespace
@@ -148,7 +161,9 @@ read-only (running, `com.docker.compose.project=maxwell-curie`,
 and forks the one fixed helper
 `nsenter --net=/proc/<pid>/ns/net -- socat - TCP4:127.0.0.1:11434`, capped at 32
 live helpers with per-connection re-resolution, so a V1 recreate is followed
-rather than cached. There is no proxy command, no arbitrary target, no V1
+rather than cached. Helpers are reaped by polling the live set on the next
+connection; there is no signal-handler trickery that could make a failed Docker
+call look successful. There is no proxy command, no arbitrary target, no V1
 mutation and no published port; the bind lives inside the V2 daemon namespace,
 so it is not exposed to the host or the LAN. The unit restarts forever with a
 10-second delay, so a daemon that starts later does not leave it permanently
@@ -197,12 +212,17 @@ status`), then remove the container (`docker rm dirac-v2`, or
 5. Readiness assumes the integrated `check_embeddings.py` preflights the
    configured endpoint and reads `DAME_CURIE_EMBED_MODE` from process
    environment. On an image that still hardcodes `http://ollama:11434`, the entry
-   check and `status` readiness fail loudly - that is a stale image, not a
-   silent pass.
+   check and `status`'s `embedding_readiness` fail loudly - that is a stale
+   image, not a silent pass. Neither result says anything about Discord; the
+   coordinator verifies the real temporary identity on the first turn.
 6. `check_embeddings.py` skips its probe when `ENABLE_RAG` is false; `status`
    reports that as `skipped`, not as proof of a working relay.
 7. Readiness polling can overshoot `READY_TIMEOUT` by one check attempt, because
    a single in-image attempt has its own 180-second request timeout.
+8. Engine identity is not pinned by default: the shipped unit relies on account,
+   socket, rootless and `DockerRootDir` checks, and `--v2-engine-id` /
+   `--v1-engine-id` exist for a deployment that wants the observed IDs
+   (`12fb714d-...` V2, `91b4c99d-...` V1) enforced explicitly.
 
 ## Validation performed
 
@@ -210,7 +230,10 @@ status`), then remove the container (`docker rm dirac-v2`, or
 Python 3.14 venv only. An independent adversarial source review of the diff was
 run and its findings are folded in (sibling-import path, read-only smoke root,
 smoke path containment, relay helper reaping and cap, engine/target ownership
-checks, unit restart policy). No import of the application, no test execution,
-no dependency install, no engine or container access. `tests/test_dirac_operator.py`
-and `tests/test_dirac_relay.py` are provided unexecuted and use scripted engines
-only.
+checks, unit restart policy), followed by the coordinator's own review fixes
+(per-account Docker calls with a scrubbed environment, socket/rootless/Docker
+root validation, no SIGCHLD trickery, `--pull never`, class-only status text,
+`embedding_readiness` naming). No import of the application, no test execution,
+no dependency install, no engine or container access.
+`tests/test_dirac_operator.py` and `tests/test_dirac_relay.py` are provided
+unexecuted and drive scripted engines only.

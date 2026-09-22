@@ -166,8 +166,8 @@ def derived_config(root: Path, uid: int, gateway: str) -> tuple[bool, str]:
         enabled = str(values.get("ENABLE_RAG") or "auto").strip().lower() not in DISABLED
         endpoint = urlsplit(str(values.get("DAME_CURIE_EMBED_BASE_URL") or ""))
         port = endpoint.port
-    except (OSError, ValueError) as error:
-        return False, str(error)
+    except (OSError, ValueError):
+        return False, "derived config is unreadable or not private"
     for key, expected in REQUIRED_ROOTS.items():
         if values.get(key) != expected:
             return False, f"derived bot.env must set {key}={expected}"
@@ -209,7 +209,7 @@ def create_arguments(root: Path, image: str, bridge: str, smoke: dict[str, Path]
         "create", "--name", NAME, "--label", CONTAINER_LABEL, "--init",
         "--user", "0:0", "--restart", "no", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--memory", "4g",
-        "--cpus", "4", "--stop-timeout", STOP_TIMEOUT, "--network", bridge,
+        "--cpus", "4", "--stop-timeout", STOP_TIMEOUT, "--pull", "never", "--network", bridge,
         "--log-driver", "local", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
         "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
         "--tmpfs", "/app/temp:rw,nosuid,nodev,size=256m,mode=1777",
@@ -231,15 +231,14 @@ def create_arguments(root: Path, image: str, bridge: str, smoke: dict[str, Path]
 
 
 def embedding_readiness(instance: Instance, enabled: bool) -> str:
-    """Run the reviewed in-image check through the configured endpoint, or report that it is off."""
+    """Run the reviewed in-image check and report only its outcome class, never provider text."""
     if not enabled:
         return "skipped: ENABLE_RAG is off in the derived config"
     result = subprocess.run(["docker", "exec", NAME, "python", CHECK_PROGRAM],
                             env=instance.env, capture_output=True, text=True)
     if result.returncode == 0:
         return "ok"
-    detail = (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}").splitlines()[-1]
-    return f"failed: {detail[-200:]}"
+    return f"failed: exit {result.returncode}"
 
 
 def wait_ready(instance: Instance, container: str, enabled: bool, timeout: float) -> str:
@@ -292,7 +291,8 @@ def start(instance: Instance, uid: int, args: argparse.Namespace) -> dict[str, o
     container = instance.docker(*create_arguments(root, image, bridge, smoke)).strip()
     instance.docker("start", container)
     return {"action": "start", "container": NAME, "id": container, "image": image, "bridge": bridge,
-            "endpoint": endpoint(gateway), "readiness": wait_ready(instance, container, enabled, READY_TIMEOUT)}
+            "endpoint": endpoint(gateway),
+            "embedding_readiness": wait_ready(instance, container, enabled, READY_TIMEOUT)}
 
 
 def restart(instance: Instance, uid: int) -> dict[str, object]:
@@ -303,7 +303,8 @@ def restart(instance: Instance, uid: int) -> dict[str, object]:
         raise ValueError(f"{NAME} does not exist; use start")
     instance.docker("restart", "--time", STOP_TIMEOUT, container)
     return {"action": "restart", "container": NAME, "id": container, "bridge": bridge,
-            "endpoint": endpoint(gateway), "readiness": wait_ready(instance, container, enabled, READY_TIMEOUT)}
+            "endpoint": endpoint(gateway),
+            "embedding_readiness": wait_ready(instance, container, enabled, READY_TIMEOUT)}
 
 
 def stop(instance: Instance) -> dict[str, object]:
@@ -320,20 +321,20 @@ def stop(instance: Instance) -> dict[str, object]:
 
 
 def status(instance: Instance, uid: int) -> tuple[dict[str, object], int]:
-    """Report container, bridge endpoint, derived config and readiness without mutating anything."""
+    """Report container, bridge endpoint, derived config and embedding readiness without mutating anything."""
     bridge, gateway = outbound_bridge(instance)
     enabled, problem = derived_config(state_root(instance, uid), uid, gateway)
     container = owned_container(instance)
     report: dict[str, object] = {"action": "status", "container": NAME, "present": container is not None,
                                  "bridge": bridge, "endpoint": endpoint(gateway),
-                                 "config": problem or "ok", "readiness": "not running"}
+                                 "config": problem or "ok", "embedding_readiness": "not running"}
     if container is None or problem:
         return report, 1
     report.update(container_state(instance, container))
     if report["status"] != "running":
         return report, 1
-    report["readiness"] = embedding_readiness(instance, enabled)
-    return report, 1 if str(report["readiness"]).startswith("failed") else 0
+    report["embedding_readiness"] = embedding_readiness(instance, enabled)
+    return report, 1 if str(report["embedding_readiness"]).startswith("failed") else 0
 
 
 def logs(instance: Instance, no_keys: bool) -> None:
@@ -369,7 +370,7 @@ def main() -> None:
         else:
             report = restart(instance, account.pw_uid)
     print(json.dumps(report, sort_keys=True))
-    if str(report.get("readiness", "ok")).startswith("failed"):
+    if str(report.get("embedding_readiness", "ok")).startswith("failed"):
         sys.exit(1)
 
 
