@@ -44,8 +44,9 @@ and passes those files to `docker compose -f ...` in that order:
 | `true` | `external` | `compose.yaml`, `docker/compose.staging.yaml`, `docker/compose.embeddings-external.yaml` |
 | `false` | `external` | `compose.yaml`, `docker/compose.embeddings-external.yaml` |
 
-Two rows are exactly what the wrapper selected before this change, and `compose.yaml` plus
-`docker/compose.staging.yaml` are unchanged by it.
+The first two rows are exactly what the wrapper selected before this change.
+`docker/compose.staging.yaml` is untouched by it, and `compose.yaml` changes only by the two
+injected values described below.
 
 Ownership provenance is derived from the same helper: `owned_config_files()` builds the four
 exact `com.docker.compose.project.config_files` strings this checkout can produce, and
@@ -99,11 +100,14 @@ without importing the application, and probes exactly the backend the bot will c
 Local and external modes resolve the endpoint identically, so a private file that points the
 bot somewhere else also moves the probe. The two modes differ only in the request shape:
 
-* local: unchanged pre-existing probe — `{"model", "input", "keep_alive": -1}`, which also
-  keeps the just-pulled model resident;
+* local: the pre-existing probe — `{"model", "input", "keep_alive": -1}` for the
+  `/api/embed` form, which also keeps the just-pulled model resident;
 * external: the shape `rag_memory` itself sends — `{"model", "input"}` plus
   `"truncate": false` for an `/api/embed` URL, and no Ollama-only `keep_alive` on someone
   else's service.
+
+Whichever mode is selected, an Ollama-only field is only added to the `/api/embed` form, so a
+compatible `/v1/embeddings` service always receives exactly what the bot would send it.
 
 Endpoint form mirrors `rag_memory._embed_endpoint`: a full `/api/embed` or `/embeddings` URL
 is used as-is, a `/v1` base becomes `/v1/embeddings`, anything else is treated as an Ollama
@@ -129,7 +133,8 @@ failure. The gate still fails closed: a non-zero exit keeps the Compose entrypoi
    coordinator provides>`, and `DAME_CURIE_EMBED_MODEL`/`DAME_CURIE_EMBED_DIM` matching that
    model, plus `DAME_CURIE_EMBED_API_KEY` only if it needs one. `ENABLE_RAG=true`, or blank
    or unset, enables RAG; `ENABLE_RAG=false` makes the startup probe a no-op.
-3. Confirm Compose ≥ 2.28.1 on the V2 engine before the first `external` run.
+3. Compose ≥ 2.28.1 is required for the overlay; the coordinator reports the V2 engine as
+   2.39.4.
 
 No local Ollama container, no model pull, no V1 state, database or secret is mounted or
 read by this lane. V2 RAG data stays in the instance's own data root. The overlay adds no
@@ -169,6 +174,7 @@ run under an isolated environment.
   silently degraded configuration.
 * The readiness gate verifies one synthetic vector request. It cannot prove RAG storage,
   retrieval, REM or long-run embedding health.
-* No claim is made about any deployed Dirac resource, image, private configuration or
-  Compose version. Feature flags, private keys and the temporary Dirac identity remain the
-  coordinator's runtime lane.
+* No claim is made about any deployed Dirac resource, image or private configuration, and
+  the Compose version quoted above is the coordinator's report rather than a check performed
+  here. Feature flags, private keys and the temporary Dirac identity remain the coordinator's
+  runtime lane.
