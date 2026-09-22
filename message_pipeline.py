@@ -113,6 +113,10 @@ class _Pending:
 @dataclass
 class _ChannelState:
     running: asyncio.Task | None = None
+    # Which input ``running`` is answering, so one input can be cancelled by id
+    # without touching the channel. Set with ``running``, before the turn's first
+    # await, so the identity is never briefly unknown.
+    running_message_id: str = ""
     queue: list[_Pending] = field(default_factory=list)
     pump: asyncio.Task | None = None
 
@@ -307,6 +311,7 @@ class ReplyQueue:
                     return
                 task = asyncio.ensure_future(handler(entry.message, entry.content))
                 state.running = task
+                state.running_message_id = entry.message_id
                 try:
                     await asyncio.shield(task)
                 except asyncio.CancelledError:
@@ -331,6 +336,7 @@ class ReplyQueue:
                     logger.exception("Reply turn failed in %s", cid)
                 finally:
                     state.running = None
+                    state.running_message_id = ""
         finally:
             state.pump = None
             if not state.queue and state.running is None:
@@ -353,6 +359,32 @@ class ReplyQueue:
         if running is not None and not running.done():
             running.cancel()
             return True
+        return False
+
+    def cancel_message(self, channel_id: Any, message_id: Any) -> bool:
+        """Cancel exactly one input: the pending entry, or the turn it became.
+
+        ``cancel_channel`` is the wrong tool for an expiring caller — it cancels
+        whatever turn is running, which may be answering someone else. This
+        matches on the message id instead, and the id also covers the window
+        before the turn's task exists, when removing the pending entry is the
+        only way to stop an expired input from running later, unobserved.
+        """
+        cid = str(channel_id or "")
+        mid = str(message_id or "")
+        state = self._channels.get(cid)
+        if state is None or not mid:
+            return False
+        if state.running_message_id == mid:
+            running = state.running
+            if running is not None and not running.done():
+                running.cancel()
+                return True
+            return False
+        for index, entry in enumerate(state.queue):
+            if entry.message_id == mid:
+                del state.queue[index]
+                return True
         return False
 
     async def close(self) -> None:
