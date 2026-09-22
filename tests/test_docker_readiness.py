@@ -326,16 +326,23 @@ def test_readiness_cli_never_echoes_a_rejected_credential(
     assert "synthetic-secret" not in stderr and "X-Forged" not in stderr
 
 
-def test_readiness_cli_never_echoes_an_invalid_endpoint(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("url,error_type", [
+    ("http://[::1", "ValueError"),
+    ("http://127.0.0.1:1/synthetic-secret path", "InvalidURL"),
+])
+def test_readiness_cli_never_echoes_an_invalid_endpoint(
+    tmp_path, monkeypatch, capsys, url, error_type
+):
     isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
     monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
-    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://[::1")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", url)
     with pytest.raises(SystemExit) as exit_info:
         run_readiness()
     assert exit_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert stderr.strip() == "embedding readiness failed: ValueError"
+    assert stderr.strip() == f"embedding readiness failed: {error_type}"
     assert "[::1" not in stderr and "http" not in stderr
+    assert "synthetic-secret" not in stderr
 
 
 def test_readiness_cli_keeps_unexpected_errors_visible(tmp_path, monkeypatch):

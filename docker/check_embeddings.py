@@ -22,6 +22,7 @@ import json
 import math
 import os
 import sys
+from http.client import HTTPException
 from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values
@@ -200,8 +201,8 @@ def cli() -> None:
     """
     try:
         main()
-    except (OSError, ValueError) as error:
-        # HTTPError/URLError, connection and timeout failures, JSON decoding,
+    except (OSError, ValueError, HTTPException) as error:
+        # HTTPError/URLError, HTTP protocol errors, timeouts, JSON decoding,
         # and this gate's own configuration errors.
         status = getattr(error, "code", None)
         detail = f" (HTTP {status})" if isinstance(status, int) else ""
