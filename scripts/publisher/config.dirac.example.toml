@@ -1,0 +1,51 @@
+# Dirac independent static publisher - TEMPLATE, not a live configuration.
+#
+# Copy to /srv/dame-curie/dirac/publisher/config/publisher.toml, set it mode 0600 and
+# make it owned by the Dirac publisher's service user. Replace every value marked
+# PRIVATE FACT with real private facts before the first run.
+#
+# This is a SECOND instance of the same publisher code as dame-curie. Each instance
+# owns a distinct local state directory and a distinct remote destination; ownership
+# is keyed on (host, user, port, site_root, image_root) plus the state directory, and
+# the remote guard refuses any root identity mismatch. There is no source-level check
+# that these roots belong to Dirac rather than another project, so the distinct remote
+# destination is an operator responsibility that must be verified before the first
+# write. See phase-II_v2/DIRAC_PUBLISHING.md.
+
+# Local authoring root. This is the directory the Dirac shell sees as /state/sites, so
+# shell-authored sites are exactly what gets published.
+source = "/srv/dame-curie/dirac/sites"
+
+# Private staging and ownership state. Both must already exist, be mode 0700 and be
+# owned by the Dirac publisher's service user; the publisher refuses anything looser.
+staging = "/srv/dame-curie/dirac/publisher/staging"
+state = "/srv/dame-curie/dirac/publisher/state"
+
+# PRIVATE FACT: SSH identity and host-key file. Reusing the existing publisher SSH key
+# is supported, but this must be a private COPY of it: private_file() requires a regular
+# file with st_nlink == 1, mode 0600, owned by the service user. A symlink or a hardlink
+# to the dame-curie key is refused, and so is any key owned by another account.
+key = "/srv/dame-curie/dirac/publisher/config/publisher_key"
+known_hosts = "/srv/dame-curie/dirac/publisher/config/publisher_known_hosts"
+
+# Local paths that are never published. Keep Dirac's private authoring subtree out of
+# the public mirror.
+private_paths = ["/srv/dame-curie/dirac/sites/operator-private"]
+
+# PRIVATE FACT: remote SSH endpoint. StrictHostKeyChecking=yes is unconditional and the
+# host key must already be present in known_hosts before the first run.
+host = "static.example.invalid"
+user = "publisher"
+port = 22
+
+# PRIVATE FACT: Dirac's own remote roots on the shared host. These must be distinct from
+# every other project's roots before the first write, because the first run adopts
+# whatever is named here and pins it. Keep this outside the dame-curie publisher-owned
+# site and archive subtrees; both roots must be disjoint from each other in both
+# directions or validate() refuses the configuration.
+site_root = "/srv/example-dirac-static/dirac"
+image_root = "/srv/example-dirac-static/images"
+
+rescan_seconds = 60.0
+settle_seconds = 0.3
+timeout_seconds = 120
