@@ -5346,16 +5346,26 @@ class MaxwellBot(commands.Bot):
 
         A thread has its own channel id, so a bot-created job thread would be
         silenced by an ``allowed_channels`` list that already names the channel
-        it was opened in. Fail-closed: anything that is not a thread of an
-        allowed parent stays blocked.
+        it was opened in. It inherits that allowance only while its parent is
+        not explicitly blocked: a blocked parent still denies its threads, and
+        nothing else is widened.
         """
         if not allowed:
             return True
-        if str(getattr(channel, "id", "") or "") in allowed:
-            return True
-        if not isinstance(channel, discord.Thread):
+        channel_id = str(getattr(channel, "id", "") or "")
+        # Only a thread answers to a parent channel; anything else answers to
+        # itself, so a category id can never decide a plain channel's fate.
+        parent_id = (
+            str(getattr(channel, "parent_id", "") or "")
+            if isinstance(channel, discord.Thread)
+            else channel_id
+        )
+        blocked = {
+            str(value) for value in (self._control.get("blocked_channels", []) or [])
+        }
+        if parent_id and parent_id in blocked:
             return False
-        return str(getattr(channel, "parent_id", "") or "") in allowed
+        return channel_id in allowed or parent_id in allowed
 
     def _replace_media_context_for_message(
         self, channel_id: str, message_id, media: list[dict]

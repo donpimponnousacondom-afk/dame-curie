@@ -43,8 +43,9 @@ class FakeThread:
 
 
 class FakeChannel:
-    def __init__(self, cid="222"):
+    def __init__(self, cid="222", parent_id=""):
         self.id = cid
+        self.parent_id = parent_id
         self.sent = []
         self.thread = FakeThread()
 
@@ -93,16 +94,63 @@ class FakeParentChannel(FakeChannel):
 
 
 class FakeThreadChannel:
-    """A live Discord thread: sendable, and it has a parent channel."""
+    """A live Discord thread: sendable, and it names its parent channel."""
 
     def __init__(self, parent):
         self.id = "555"
         self.parent = parent
+        self.parent_id = str(getattr(parent, "id", "") or "")
         self.sent = []
 
     async def send(self, text):
         self.sent.append(text)
         return None
+
+
+class GateMessage:
+    """The message surface the allowlist gates read."""
+
+    def __init__(self, channel):
+        self.id = "900"
+        self.channel = channel
+        self.content = "hello there"
+        self.author = SimpleNamespace(id=111, bot=False, display_name="root")
+        self.guild = SimpleNamespace(id=333)
+
+
+class AllowlistBot:
+    """Only the bot surface the allowed_channels gates actually touch."""
+
+    _blacklist = set()
+    _stop_until = {}
+    command_prefix = "!"
+    user = SimpleNamespace(id=42)
+
+    _channel_allowed = MaxwellBot._channel_allowed
+    _solo_blocks = MaxwellBot._solo_blocks
+    _solo_channel_for = MaxwellBot._solo_channel_for
+    _message_update_allowed = MaxwellBot._message_update_allowed
+
+    def __init__(self, allowed=(), blocked=()):
+        self._control = {
+            "bot_enabled": True,
+            "allowed_channels": list(allowed),
+            "blocked_channels": list(blocked),
+        }
+        self.dispatched = []
+
+    def _is_admin(self, user_id):
+        return False
+
+    def _load_control(self):
+        return None
+
+    def clear_message_taint(self, message):
+        return None
+
+    def _dispatch_reply(self, message, content, *, directed):
+        self.dispatched.append((str(getattr(message, "id", "")), bool(directed)))
+        return "started"
 
 
 class FakeRefusingMessage(FakeMessage):
@@ -508,3 +556,64 @@ def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
     assert "https://discord.com/channels/333/thread-1" in channel.sent[0]
     assert "no progress thread: Forbidden" in channel.sent[1]
 
+
+
+# allowed_channels: a thread inherits an allowed parent, never a blocked one
+
+
+def test_channel_allowed_inherits_an_allowed_parent_but_not_a_blocked_one(monkeypatch):
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    bot = AllowlistBot(allowed=["100"], blocked=["200"])
+    allowed_ids = {"100"}
+    assert bot._channel_allowed(FakeChannel("100"), allowed_ids) is True
+    assert bot._channel_allowed(FakeChannel("999"), allowed_ids) is False
+    assert (
+        bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="100")), allowed_ids)
+        is True
+    )
+    assert (
+        bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="999")), allowed_ids)
+        is False
+    )
+    # The regression: a thread of a blocked parent was denied before the
+    # inheritance existed, so it must stay denied.
+    assert (
+        bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="200")), allowed_ids)
+        is False
+    )
+    # An explicit thread allowance does not silently beat the parent deny.
+    assert (
+        bot._channel_allowed(
+            FakeThreadChannel(SimpleNamespace(id="200")), {"100", "555"}
+        )
+        is False
+    )
+    # A plain channel is never judged by its category id.
+    assert bot._channel_allowed(FakeChannel("100", parent_id="200"), allowed_ids) is True
+
+
+def test_edit_gate_applies_the_same_parent_rule(monkeypatch):
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    bot = AllowlistBot(allowed=["100"], blocked=["200"])
+    assert MaxwellBot._message_update_allowed(bot, GateMessage(FakeChannel("100"))) is True
+    assert MaxwellBot._message_update_allowed(bot, GateMessage(FakeChannel("999"))) is False
+    assert (
+        MaxwellBot._message_update_allowed(
+            bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="100")))
+        )
+        is True
+    )
+    assert (
+        MaxwellBot._message_update_allowed(
+            bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
+        )
+        is False
+    )
+
+
+def test_on_message_gate_denies_a_thread_of_a_blocked_parent(monkeypatch):
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    bot = AllowlistBot(allowed=["100"], blocked=["200"])
+    message = GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
+    asyncio.run(MaxwellBot._on_message_impl(bot, message))
+    assert bot.dispatched == []

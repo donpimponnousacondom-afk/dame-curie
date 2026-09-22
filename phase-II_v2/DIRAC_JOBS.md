@@ -61,9 +61,12 @@ No parallel job framework was added.
    built from the job's own guild/thread ids, or the recorded `thread_error`. `allowed_channels` is
    an exact channel-id whitelist and a thread has its own id, so a job thread (and any follow-up in
    it) was dropped once an allowlist was configured; `_channel_allowed` now lets a thread inherit
-   its parent channel's allowance in both gates (`on_message` and `_message_update_allowed`). This
-   is fail-closed and inert while `allowed_channels` is empty, its current default. Autonomy's own
-   gate still lists channels only.
+   its parent channel's allowance in both gates (`on_message` and `_message_update_allowed`). A
+   thread of an explicitly blocked parent keeps the denial it had before that inheritance existed,
+   including when the thread's own id is listed: the parent deny wins, matching the gate order that
+   already checks `blocked_channels` before `allowed_channels`. A plain channel is judged by its own
+   id only, never by its category id. Inert while `allowed_channels` is empty, its current default.
+   Autonomy's own gate still lists channels only.
 
 ## Provenance of the SDK claims
 
