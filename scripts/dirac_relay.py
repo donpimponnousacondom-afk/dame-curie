@@ -17,8 +17,10 @@ import argparse
 import ipaddress
 import os
 import pwd
+import signal
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 NSENTER, SOCAT = "/usr/bin/nsenter", "/usr/bin/socat"
@@ -102,9 +104,10 @@ def serve(listener: socket.socket, socket_url: str, container: str, project: str
         connection, _ = listener.accept()
         pid = target_pid(socket_url, container, project, service)
         if pid is None:
+            print(f"no running {container} in project {project}; refusing the connection", file=sys.stderr, flush=True)
             connection.close()
             continue
-        subprocess.Popen(forward_argv(pid), stdin=connection, stdout=connection, stderr=subprocess.DEVNULL)
+        subprocess.Popen(forward_argv(pid), stdin=connection, stdout=connection)
         connection.close()
 
 
@@ -134,6 +137,7 @@ def main() -> None:
     listener.bind((gateway, TARGET_PORT))
     listener.listen(BACKLOG)
     print(f"dirac relay bound {gateway}:{TARGET_PORT} -> {args.v1_container} loopback", flush=True)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # forwarded helpers are reaped without a wait loop
     serve(listener, v1_socket, args.v1_container, args.v1_project, args.v1_service)
 
 
