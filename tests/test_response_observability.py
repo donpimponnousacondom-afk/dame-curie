@@ -101,7 +101,7 @@ class RecordingObserver:
         self.started.append((input_id, channel_id, task))
         return self.token
 
-    def delivered(self, input_id, channel_id, message_id):
+    def delivered(self, input_id, channel_id, message_id, notice=False):
         self.delivered_calls.append((input_id, channel_id, message_id))
 
     def finish(self, input_id, channel_id, returned, token):
@@ -129,7 +129,7 @@ def test_delivery_without_turn_input_or_observer_is_unchanged(metrics):
 
 def test_broken_observer_cannot_cost_a_delivery(metrics):
     class BrokenObserver(RecordingObserver):
-        def delivered(self, input_id, channel_id, message_id):
+        def delivered(self, input_id, channel_id, message_id, notice=False):
             raise RuntimeError("observer down")
 
     bot = fake_bot(_turn_observer=BrokenObserver())
