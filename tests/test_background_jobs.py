@@ -315,6 +315,10 @@ def test_spawn_tool_second_spawn_tells_model_to_ack(tmp_path):
 
 
 class RunnerStubBot(StubBot):
+    """Runner seams plus the allowlist gate the real bot always has."""
+
+    _channel_allowed = MaxwellBot._channel_allowed
+
     def __init__(self, manager):
         super().__init__(manager)
         self.slot_priority = None
@@ -429,13 +433,15 @@ def test_runner_splits_long_delivery_messages(tmp_path):
 # progress thread targeting and honest thread failure
 
 
-def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_path, monkeypatch):
+@pytest.mark.parametrize("configured_ids", [[], ["666"], [666]])
+def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_path, monkeypatch, configured_ids):
     """A job started inside a thread cannot nest: progress goes to its parent."""
     monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = RunnerStubBot(manager)
+        bot._control["allowed_channels"] = configured_ids
         parent = FakeParentChannel()
         channel = FakeThreadChannel(parent)
         message = FakeRefusingMessage(channel=channel)
@@ -625,3 +631,89 @@ def test_on_message_gate_denies_a_thread_of_a_blocked_parent(monkeypatch):
     message = GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
     asyncio.run(MaxwellBot._on_message_impl(bot, message))
     assert bot.dispatched == []
+
+
+# a job inside an explicitly allowed thread must not touch its refused parent
+
+
+class ThreadScopedJobBot(RunnerStubBot):
+    """A bot whose allowlist names one thread inside a refused parent."""
+
+    def __init__(self, manager, allowed, blocked):
+        super().__init__(manager)
+        self._control = {
+            "allowed_channels": list(allowed),
+            "blocked_channels": list(blocked),
+            "error_replies": True,
+        }
+
+
+def test_runner_never_creates_a_progress_thread_in_a_blocked_parent(tmp_path, monkeypatch):
+    """The allowed thread is usable; the refused parent gets nothing at all."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = ThreadScopedJobBot(manager, allowed=["555"], blocked=["666"])
+        parent = FakeParentChannel("666")
+        channel = FakeThreadChannel(parent)
+        message = FakeRefusingMessage(channel=channel)
+        job = manager.create(
+            guild_id="g", channel_id="555", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), parent, channel
+
+    job, parent, channel = asyncio.run(scenario())
+    # The refused parent is untouched: no thread, and not one single message.
+    assert parent.created_threads == []
+    assert parent.sent == []
+    # The job itself still runs to completion where the requester is.
+    assert job.status == "done"
+    assert job.thread_id == ""
+    assert job.thread_error == "the origin thread's parent channel is not allowed for this bot"
+    assert any("no progress thread" in text for text in channel.sent)
+    assert any("<@111>" in text and job.id in text for text in channel.sent)
+
+
+def test_runner_still_places_progress_in_a_refused_parent_for_a_plain_channel(tmp_path, monkeypatch):
+    """A plain-channel !bg keeps its existing placement, refused parent or not."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = ThreadScopedJobBot(manager, allowed=["555"], blocked=["222"])
+        message = FakeMessage()
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_id == "thread-1"
+    assert job.thread_error == ""
+    assert channel.thread.sent[0].startswith(f"Job `{job.id}` running")
+
+
+def test_placement_gate_refuses_a_blocked_parent_and_keeps_an_allowed_one(monkeypatch):
+    """The gate scope the job runner uses, on a bot shaped like the real one."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    gate_bot = AllowlistBot(allowed=["100", "555", "777"], blocked=["200", "666"])
+    allowed = set(gate_bot._control["allowed_channels"])
+    assert gate_bot._channel_allowed(FakeChannel("100"), allowed) is True
+    # A parent that is not the allowlist's: refused as a job target.
+    assert gate_bot._channel_allowed(FakeChannel("999"), allowed) is False
+    # A parent explicitly blocked: refused as a job target.
+    assert gate_bot._channel_allowed(FakeChannel("666"), allowed) is False
+    # An allowed, unblocked parent still hosts the progress thread.
+    assert gate_bot._channel_allowed(FakeChannel("777"), allowed) is True
+    # An explicitly allowed thread under a blocked parent keeps its own
+    # allowance; the job simply never creates anything in that parent.
+    assert (
+        gate_bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="666")), allowed)
+        is True
+    )

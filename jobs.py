@@ -11,9 +11,11 @@ budgets (more thinking, more output, longer timeout than a live turn).
 When the job finishes it mentions the requester in the origin channel with
 the result data. Progress lands in a ``build: <goal>`` thread — in the origin
 thread's parent channel when the job was started from inside a thread, since
-Discord cannot nest them. A progress thread that cannot be created or written
-to is reported in the origin channel and recorded on the job; it is never
-implied by a "done" message.
+Discord cannot nest them, and only when the bot's own gates allow it to act
+in that parent; a job started from an explicitly allowed thread under a
+blocked parent keeps its progress in the origin thread. A progress thread
+that cannot be created or written to is reported in the origin channel and
+recorded on the job; it is never implied by a "done" message.
 
 Additive by design: this module never monkey-patches the bot. It reuses the
 bot's own seams (``_generate_response``, ``_build_openai_tools``,
@@ -556,7 +558,11 @@ async def run_background_job(bot: Any, job_id: str) -> None:
 
     # Progress thread: keeps the origin channel clean while work runs. Discord
     # cannot nest threads, so a job started inside one gets its progress thread
-    # in that thread's own parent channel instead of losing it.
+    # in that thread's own parent channel instead of losing it — but only when
+    # the bot's own gates allow it to act there. A job started from an
+    # explicitly allowed thread whose parent is refused stays in that thread:
+    # the allowance is the thread's own, and it is never turned into a new
+    # thread or post in the refused parent.
     thread = None
     thread_err = ""
     thread_name = f"build: {_short(job.goal, 40)}"
@@ -565,10 +571,13 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         import discord  # local import: no hard dep at module load
 
         if isinstance(channel, discord.Thread):
+            allowed = {str(value) for value in (bot._control.get("allowed_channels", []) or [])}
             if parent is None:
                 thread_err = "the origin thread's parent channel is unknown"
             elif getattr(parent, "type", None) is discord.ChannelType.forum:
                 thread_err = "the origin thread lives in a forum channel"
+            elif not bot._channel_allowed(parent, allowed):
+                thread_err = "the origin thread's parent channel is not allowed for this bot"
             else:
                 thread = await parent.create_thread(
                     name=thread_name,
@@ -599,6 +608,9 @@ async def run_background_job(bot: Any, job_id: str) -> None:
             thread = None
     if thread is None:
         logger.info("background job %s: no thread (%s)", job.id, thread_err or "DMs have no threads")
+        # No thread means the origin channel is the only place this job can
+        # report. For a thread origin that is the thread itself, never the
+        # parent it was refused from.
         if thread_err and orig_message.guild is not None:
             manager.mark(job.id, thread_error=thread_err)
             if (getattr(bot, "_control", {}) or {}).get("error_replies", True):
