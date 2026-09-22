@@ -10,6 +10,7 @@ from provider_telemetry import CallMetrics
 from response_observability import (
     DEFAULT_FOOTER_FORMAT,
     FOOTER_MARKER,
+    TURN_INPUT,
     DeliveryMeasurements,
     RunningBuild,
     capture_running_build,
@@ -85,6 +86,117 @@ def fake_bot(**kwargs):
         user=SimpleNamespace(id=42),
         **kwargs,
     )
+
+
+class RecordingObserver:
+    """Stands in for the optional Dirac smoke observer."""
+
+    def __init__(self):
+        self.token = object()
+        self.started = []
+        self.delivered_calls = []
+        self.finished = []
+
+    def start(self, input_id, channel_id, task):
+        self.started.append((input_id, channel_id, task))
+        return self.token
+
+    def delivered(self, input_id, channel_id, message_id):
+        self.delivered_calls.append((input_id, channel_id, message_id))
+
+    def finish(self, input_id, channel_id, returned, token):
+        self.finished.append((input_id, channel_id, returned, token))
+
+
+def test_record_delivery_reports_only_the_active_turn_input(metrics):
+    observer = RecordingObserver()
+    bot = fake_bot(_turn_observer=observer)
+    token = TURN_INPUT.set("4242")
+    try:
+        record_delivery(bot, Channel(100), SimpleNamespace(id=11), metrics)
+    finally:
+        TURN_INPUT.reset(token)
+    assert observer.delivered_calls == [("4242", "100", "11")]
+
+
+def test_delivery_without_turn_input_or_observer_is_unchanged(metrics):
+    record_delivery(fake_bot(), Channel(100), SimpleNamespace(id=11), metrics)
+    observer = RecordingObserver()
+    assert TURN_INPUT.get() == ""
+    record_delivery(fake_bot(_turn_observer=observer), Channel(100), SimpleNamespace(id=11), metrics)
+    assert observer.delivered_calls == []
+
+
+def test_broken_observer_cannot_cost_a_delivery(metrics):
+    class BrokenObserver(RecordingObserver):
+        def delivered(self, input_id, channel_id, message_id):
+            raise RuntimeError("observer down")
+
+    bot = fake_bot(_turn_observer=BrokenObserver())
+    registry = bot._delivery_measurements = DeliveryMeasurements()
+    token = TURN_INPUT.set("4242")
+    try:
+        record_delivery(bot, Channel(100), SimpleNamespace(id=11), metrics)
+    finally:
+        TURN_INPUT.reset(token)
+    assert registry.lookup("100", "11") is not None
+
+
+def test_run_queued_reply_brackets_the_turn_with_the_observer():
+    from bot import MaxwellBot
+
+    async def scenario():
+        observer = RecordingObserver()
+        seen = []
+
+        async def handle(message, content):
+            seen.append((str(message.id), content))
+            return "answer"
+
+        bot = SimpleNamespace(_turn_observer=observer, _handle_message=handle)
+        message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
+        result = await MaxwellBot._run_queued_reply(bot, message, "hi")
+        return observer, seen, result
+
+    observer, seen, result = asyncio.run(scenario())
+    assert result == "answer"
+    assert seen == [("77", "hi")]
+    assert [(i, c) for i, c, _ in observer.started] == [("77", "100")]
+    assert observer.started[0][2] is not None  # the turn's own task
+    assert observer.finished == [("77", "100", True, observer.token)]
+
+
+def test_run_queued_reply_closes_the_input_when_the_turn_raises():
+    from bot import MaxwellBot
+
+    async def scenario():
+        observer = RecordingObserver()
+
+        async def handle(message, content):
+            raise RuntimeError("turn failed")
+
+        bot = SimpleNamespace(_turn_observer=observer, _handle_message=handle)
+        message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
+        with pytest.raises(RuntimeError):
+            await MaxwellBot._run_queued_reply(bot, message, "hi")
+        return observer
+
+    observer = asyncio.run(scenario())
+    assert observer.finished == [("77", "100", False, observer.token)]
+
+
+def test_run_queued_reply_forwards_unchanged_without_an_observer():
+    from bot import MaxwellBot
+
+    async def scenario():
+        async def handle(message, content):
+            return "answer"
+
+        bot = SimpleNamespace(_handle_message=handle)
+        message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
+        return await MaxwellBot._run_queued_reply(bot, message, "hi")
+
+    assert asyncio.run(scenario()) == "answer"
 
 
 def test_footer_tokens_and_estimates(metrics):

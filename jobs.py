@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident
 from job_routing import JobProvider, resolve_job_endpoint
 from tools import Tool
-from response_observability import prepare_delivery, record_delivery
+from response_observability import TURN_INPUT, prepare_delivery, record_delivery
 from utils import _safe_int, _spawn_background
 
 if TYPE_CHECKING:
@@ -505,6 +505,9 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     Never raises: every failure mode ends with the job marked and (when
     possible) a friendly message to the requester.
     """
+    # This task inherits the spawning turn's context. A detached job is not part
+    # of that turn, so its deliveries must never join the turn's input record.
+    TURN_INPUT.set("")
     manager = getattr(bot, "bg_jobs", None)
     job = manager.get(job_id) if manager is not None else None
     if job is None:

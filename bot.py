@@ -3560,6 +3560,29 @@ class MaxwellBot(commands.Bot):
             )
         return outcome
 
+    async def _run_queued_reply(self, message, content: str | None = None):
+        """ReplyQueue handler: one turn, with the optional input observer.
+
+        Without ``_turn_observer`` this only forwards to ``_handle_message``.
+        With one, the observer marks the turn's input inside this task — so the
+        turn's own tools inherit it — and closes it in ``finally`` even on
+        cancellation. A late delivery (a background job finishing after the
+        turn) therefore cannot join a finished result.
+        """
+        observer = getattr(self, "_turn_observer", None)
+        if observer is None:
+            return await self._handle_message(message, content)
+        input_id = str(getattr(message, "id", "") or "")
+        channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "")
+        token = observer.start(input_id, channel_id, asyncio.current_task())
+        returned = False
+        try:
+            result = await self._handle_message(message, content)
+            returned = True
+            return result
+        finally:
+            observer.finish(input_id, channel_id, returned, token)
+
     def _should_interrupt_inflight(self, message) -> bool:
         """Cancel the in-flight turn only when THIS user hard-pings again.
 
@@ -4577,7 +4600,7 @@ class MaxwellBot(commands.Bot):
         # The reply queue is the single serialization point for generating a
         # reply. Bound here (not at construction) because it needs the running
         # loop's task factory for tracking.
-        self._reply_queue.bind(self._handle_message, task_factory=self._track_task)
+        self._reply_queue.bind(self._run_queued_reply, task_factory=self._track_task)
         self._watermarks.load()
         logger.info(
             "Reply queue bound; %d channel watermark(s) restored",
@@ -4603,6 +4626,15 @@ class MaxwellBot(commands.Bot):
             await self.autonomy_engine.start()
         else:
             logger.info("Autonomy engine not started (ENABLE_AUTONOMY=false)")
+        # Optional Dirac smoke runtime. Unset means inert: nothing is imported
+        # and nothing changes. An operator who opted in gets a loud failure
+        # rather than a session that looks like it ran the smoke check.
+        if os.getenv("DAME_CURIE_DIRAC_SMOKE_CONFIG", "").strip():
+            import dirac_runtime  # lazy: only when the operator opted in
+
+            smoke = dirac_runtime.DiracSmokeRuntime(self, dirac_runtime.SmokeSettings.from_env())
+            await smoke.start()
+            self._dirac_smoke = smoke
         logger.info("Bot setup complete")
 
     async def on_error(self, event, *args, **kwargs):
@@ -15754,6 +15786,15 @@ async def main():
         # from the outage are unrecoverable.
         with contextlib.suppress(Exception):
             bot._watermarks.save()
+        # Stop the smoke runtime while turns can still deliver, before the queue
+        # closes under them.
+        smoke = getattr(bot, "_dirac_smoke", None)
+        if smoke is not None:
+            bot._dirac_smoke = None
+            try:
+                await smoke.stop()
+            except Exception:
+                logger.exception("Dirac smoke runtime failed to stop")
         with contextlib.suppress(Exception):
             await bot._reply_queue.close()
         with contextlib.suppress(Exception):

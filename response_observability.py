@@ -1,10 +1,12 @@
 """Per-call Discord presentation, delivered-message measurements, and build identity."""
 
 from collections import OrderedDict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import logging
 import os
 import platform
 import re
@@ -16,6 +18,15 @@ from urllib.parse import urlsplit
 
 from provider_telemetry import CallMetrics
 from utils import FileLock, _atomic_json_write_sync
+
+
+logger = logging.getLogger(__name__)
+
+# Which operator input a delivered message belongs to. The turn handler sets it
+# inside the turn's own task, so everything that turn awaits or spawns inherits
+# it; record_delivery reads it. Empty means the delivery belongs to no observed
+# input.
+TURN_INPUT: ContextVar[str] = ContextVar("turn_input", default="")
 
 
 FOOTER_MARKER = "\u2063\u2060\u2063\u2060"
@@ -269,6 +280,20 @@ def record_delivery(
         if registry is None:
             registry = bot._delivery_measurements = DeliveryMeasurements()
         registry.record(str(channel_id), str(message_id), metrics)
+    observer = getattr(bot, "_turn_observer", None)
+    input_id = TURN_INPUT.get()
+    if (
+        observer is not None
+        and input_id
+        and platform == "discord"
+        and message_id is not None
+        and channel_id is not None
+    ):
+        try:
+            observer.delivered(input_id, str(channel_id), str(message_id))
+        except Exception:
+            # Optional instrumentation may never cost a real delivery.
+            logger.exception("turn observer delivery hook failed")
 
 
 def format_runtime_provider(provider) -> str:

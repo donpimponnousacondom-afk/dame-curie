@@ -5,8 +5,10 @@ runtime, private configuration, credential, Docker, log or network access was us
 final integration and the live exercise.
 
 Owned paths: `jobs.py`, `job_routing.py`, `bot.py` job/thread sections, `bot_tools.py`,
-`tool_schemas.py`, `tool_prompts.py`, focused job/thread tests, this file. Untouched: `compose.yaml`,
-`config.py`, `docker/**`, `scripts/publisher/**`, shared ledgers, `docs/**`, `autonomy.py`.
+`tool_schemas.py`, `tool_prompts.py`, `response_observability.py` (added for the observer hook),
+focused job/thread/observability tests, this file. Untouched: `compose.yaml`, `config.py`,
+`docker/**`, `scripts/publisher/**`, shared ledgers, `docs/**`, `autonomy.py`,
+`message_pipeline.py`.
 
 ## What already existed (read, not rebuilt)
 
@@ -98,29 +100,72 @@ Not verified and not relied on silently:
   imported and no test was collected or executed.
 - Not run: the focused tests added to `tests/test_background_jobs.py` (thread-origin parent-channel
   targeting, creation-failure honesty, direct-message quietness, manager-based recursion refusal,
-  `!job` link/error line); ruff (not installed in the permitted interpreter, and no install is
-  authorized in this lane); any Discord, provider or container behavior.
+  `!job` link/error line) and to `tests/test_response_observability.py` (input-scoped delivery
+  reporting, inert-without-observer, a raising observer not costing a delivery, `_run_queued_reply`
+  bracketing on success and on failure, and the no-observer forward); ruff (not installed in the
+  permitted interpreter, and no install is authorized in this lane); any Discord, provider or
+  container behavior.
 - Unverified runtime edges: actual thread creation/permission in the authorized guild, the
   parent-channel shape above, allowlist inheritance with a non-empty `allowed_channels`, the
   `!job` link format, and the honest-failure notice path against a real API error.
 
-## Cross-lane interface (proposed, not implemented)
+## Cross-lane interface (implemented; smoke module still cf3's)
 
-The optional smoke lane asked, via the coordinator, for a ready/shutdown attach point and a
-correlated turn-completion signal. Current facts:
+The coordinator and the smoke lane agreed this contract; it is source-only and inert unless an
+operator opts in. `dirac_runtime.py` does not exist in this repository and was not created here.
 
-- `on_message` returns after `_dispatch_reply`, which only reports
-  `started|queued|coalesced|duplicate|dropped`. A running turn is observable only as
-  `bot._active_requests[channel_id]` (registered just before real LLM work, popped in `finally`)
-  and `ReplyQueue.active/depth/stats`; neither is a future tied to the inbound message.
-- Delivered ids exist in `bot._delivery_measurements.records` (measured deliveries only) and
-  `bot._delivered_footers` (any delivery carrying a footer), both keyed `(channel_id, message_id)`.
-  A harness can correlate by channel plus a new key, but not to the input message.
-- Proposal, for coordinator and smoke agreement before any code: keep the observer object owned by
-  the smoke module (`bot._turn_observer = ...`) and have `bot.py` only call it; collect the ids a
-  turn delivered by appending to a turn-local list in `record_delivery` when
-  `_active_requests[channel_id] is asyncio.current_task()`; call the observer once at the end of the
-  turn with inbound message id, channel id, delivered ids and outcome. Roughly ten lines, no
-  behavior change when unset, and `dirac_runtime.py` is never imported by `bot.py`. The ready/
-  shutdown attach would be a lazily imported, env-gated call in the existing ready/close paths, with
-  start-once idempotence owned by the smoke object because `on_ready` repeats on reconnect.
+Correlation is a `ContextVar`, not a channel/time window and not task identity, because the turn's
+tool work runs in child tasks:
+
+- `response_observability.TURN_INPUT: ContextVar[str]` (default `""`) names the operator input a
+  delivery belongs to.
+- `MaxwellBot._run_queued_reply` is the bound `ReplyQueue` handler (bot.py, replaces the direct
+  `_handle_message` bind). With no `_turn_observer` it is a pure forward. With one it calls
+  `observer.start(input_id, channel_id, asyncio.current_task())` **inside the turn's own task**,
+  awaits the turn, then calls `observer.finish(input_id, channel_id, returned, token)` in `finally`,
+  so cancellation closes the input too.
+- `record_delivery` (response_observability.py) reads `TURN_INPUT` and calls
+  `observer.delivered(input_id, channel_id, message_id)` for Discord deliveries. A raising observer
+  is logged and recorded, never allowed to cost a real delivery. No observer attribute means
+  byte-identical behaviour.
+- `run_background_job` clears `TURN_INPUT` at the top of the job task: the task inherits the
+  spawning turn's context, and a detached job is not part of that turn.
+
+Observer protocol, implemented by cf3, duck-typed by `bot.py`. All three are synchronous, must not
+block, must not await and must not raise:
+
+```python
+def start(input_id: str, channel_id: str, task) -> object      # set TURN_INPUT; return the token
+def delivered(input_id: str, channel_id: str, message_id: str) -> None   # ignore unknown/closed inputs
+def finish(input_id: str, channel_id: str, returned: bool, token) -> None  # reset token; close input
+```
+
+Outcome semantics the smoke harness must respect:
+
+- `returned=False`: the turn raised or was cancelled. Never a pass.
+- `returned=True` with ids: the turn completed and those messages were delivered.
+- `returned=True` with zero ids: the turn completed without any `record_delivery`-visible message.
+  Legitimate for a silent turn (`no_response`), but a smoke request that expects visible output must
+  treat this as a failure, not a pass.
+
+**Delivery coverage is partial — do not read it as "all message creates".** `record_delivery` is
+called by the main reply path (bot.py:13133, plus the progress-transition callback at bot.py:13084),
+by the `send_message` tool (bot_tools.py:4924) and by message edits (bot_tools.py:1873). It is
+**not** called by `SendFileTool._send_blob` (bot_tools.py:5214, `message.reply(file=...)` /
+`message.channel.send(file=...)`) or by plugin-posted messages, so those creates are invisible to
+`observer.delivered`. The smoke runtime observes HTTP sends for all creates; the ContextVar decides
+which creates belong to which input.
+
+Lifecycle, both inline at their only call sites, no helper methods:
+
+- `setup_hook`, after the autonomy start: if `DAME_CURIE_DIRAC_SMOKE_CONFIG` is blank nothing is
+  imported and nothing changes; otherwise `dirac_runtime` is imported lazily, its
+  `SmokeSettings.from_env()` and `DiracSmokeRuntime(self, settings)` are constructed, and
+  `await runtime.start()` must succeed before `bot._dirac_smoke` is set. A start failure propagates
+  out of `setup_hook` — an opted-in, misconfigured run must not come up looking like a pass.
+- `main()` shutdown `finally`, immediately before `bot._reply_queue.close()`: the runtime is stopped
+  while turns can still deliver. A stop failure is logged and never blocks shutdown.
+
+Methods cf3 must expose: `SmokeSettings.from_env()`, `DiracSmokeRuntime(bot, settings)`,
+`await runtime.start()`, `await runtime.stop()`; the runtime sets `bot._turn_observer` itself.
+`bot.py` never sets that attribute and imports `dirac_runtime` only in the opted-in branch.
