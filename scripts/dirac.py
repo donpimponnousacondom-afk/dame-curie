@@ -357,7 +357,8 @@ def main() -> None:
     args = parse_args()
     if args.action == "logs":
         sys.dont_write_bytecode = True
-    account = service_account(ACCOUNT, for_logs=args.action == "logs")
+    account = service_account(ACCOUNT, for_logs=args.action == "logs",
+                              entrypoint=Path(__file__).resolve())
     instance = Instance(ACCOUNT, account)
     if args.action == "logs":
         logs(instance, args.no_keys)

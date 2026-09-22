@@ -108,8 +108,12 @@ def parse_settings(text: str) -> dict[str, str]:
     return values
 
 
-def service_account(instance: str, *, for_logs: bool = False):
-    """Select the fixed service identity, dropping host root before any I/O."""
+def service_account(instance: str, *, for_logs: bool = False, entrypoint: Path | None = None):
+    """Select the fixed service identity, dropping host root before any I/O.
+
+    A root invocation re-executes `entrypoint` as that identity; it defaults to
+    this module, so every existing caller re-enters `instance.py` unchanged.
+    """
     if not INSTANCE.fullmatch(instance) or len(instance) > 30:
         raise ValueError("instance must be dame-curie or dame-curie-<identity>, up to 30 characters")
     account = pwd.getpwnam(instance)
@@ -126,7 +130,8 @@ def service_account(instance: str, *, for_logs: bool = False):
             "runuser", "-u", account.pw_name, "--", "/usr/bin/env", "-i",
             f"HOME={account.pw_dir}", "PATH=/usr/local/bin:/usr/bin:/bin",
             f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}", *terminal_settings,
-            sys.executable, *(("-B",) if for_logs else ()), str(Path(__file__).resolve()), *sys.argv[1:],
+            sys.executable, *(("-B",) if for_logs else ()),
+            str(entrypoint or Path(__file__).resolve()), *sys.argv[1:],
         ])
     if os.geteuid() != account.pw_uid:
         raise ValueError("run as host root or the instance's own service user")

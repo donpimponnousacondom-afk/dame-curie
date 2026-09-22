@@ -33,6 +33,55 @@ def dirac() -> ModuleType:
     return load_module("dirac_operator", ROOT / "scripts" / "dirac.py")
 
 
+@pytest.fixture(scope="module")
+def instance_script() -> ModuleType:
+    return load_module("instance_operator", ROOT / "scripts" / "instance.py")
+
+
+def test_root_dispatch_reexecs_the_calling_script(instance_script, monkeypatch):
+    class Account:
+        pw_name = "dame-curie"
+        pw_uid = 1005
+        pw_dir = "/home/dame-curie"
+
+    monkeypatch.setattr(instance_script.pwd, "getpwnam", lambda name: Account())
+    monkeypatch.setattr(instance_script.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(instance_script.sys, "argv", ["instance.py"])
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("NO_COLOR", "1")
+    executed: list[list[str]] = []
+    monkeypatch.setattr(instance_script.os, "execv", lambda path, argv: executed.append(argv))
+    delegated = Path("/opt/dame-curie/scripts/dirac.py")
+    instance_script.service_account("dame-curie")
+    instance_script.service_account("dame-curie", entrypoint=delegated)
+    instance_script.service_account("dame-curie", for_logs=True, entrypoint=delegated)
+    default, explicit, logs = executed
+    for argv in executed:
+        assert argv[:6] == ["runuser", "-u", "dame-curie", "--", "/usr/bin/env", "-i"]
+        assert "HOME=/home/dame-curie" in argv
+        assert "PATH=/usr/local/bin:/usr/bin:/bin" in argv
+        assert "XDG_RUNTIME_DIR=/run/user/1005" in argv
+    assert default[-1] == str(Path(instance_script.__file__).resolve())
+    assert explicit[-1] == str(delegated)
+    assert logs[-1] == str(delegated) and "-B" in logs
+    assert "TERM=xterm-256color" in logs and "NO_COLOR=1" in logs
+
+
+def test_main_passes_its_own_entrypoint_to_root_dispatch(dirac, monkeypatch):
+    recorded: dict[str, object] = {}
+
+    def capture(instance: str, *, for_logs: bool = False, entrypoint: Path | None = None) -> None:
+        recorded.update(instance=instance, for_logs=for_logs, entrypoint=entrypoint)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(dirac, "service_account", capture)
+    monkeypatch.setattr(dirac.sys, "argv", ["dirac.py", "status"])
+    with pytest.raises(SystemExit):
+        dirac.main()
+    assert recorded == {"instance": "dame-curie", "for_logs": False,
+                        "entrypoint": Path(dirac.__file__).resolve()}
+
+
 class FakeEngine:
     """Scripted engine: records calls and answers by longest matching argument prefix."""
 
