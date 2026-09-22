@@ -234,14 +234,28 @@ before concluding that a destination is the intended one.
    write.
 3. **Remote PHP/Perl/CGI capability and per-directory override policy are untested**, and
    no executable-hosting mode exists.
-4. **The unit is not installed, enabled or started.** Service identity is confirmed by
-   the coordinator: it runs as the existing `dame-curie` account with no new service
-   account, `WorkingDirectory=/opt/dame-curie`, and the Dirac roots under
-   `/srv/dame-curie/dirac`.
+4. **The unit is not installed, enabled or started**, and the remote folders do not exist
+   as a result of this lane. Service identity is confirmed by the coordinator: it runs as
+   the existing `dame-curie` account with no new service account,
+   `WorkingDirectory=/opt/dame-curie`, and the Dirac roots under `/srv/dame-curie/dirac`.
 5. **No end-to-end mirroring was performed.** Authoring, staging, transfer and remote
    result were not exercised; this lane is source and documentation only.
-6. **The unit is not installed, enabled or started**, and the remote folders do not
-   exist as a result of this lane.
+6. **Observed source bug, reported not fixed — service mode wedges if a remote site
+   directory disappears out of band.** `mirror.py:92-95` claims a site only when
+   `site.identity` is empty, and `site.identity` is set only from a successful claim
+   (`mirror.py:41,94`) and is never cleared. The remote guard *is* written to recreate a
+   missing site directory (`guard.py:153-164`: `FileNotFoundError` → prepare → rename),
+   but the incremental path never reaches that branch because it reuses the cached
+   identity, so `child_directory()` raises `FileNotFoundError` → exit 73 →
+   `RemoteFailure`. In service mode that propagates out of `Publisher.run()` and the
+   unit restart-loops on the same site, re-hashing and re-staging the whole source each
+   time while sites sorting after the broken name are never published. Recovery today:
+   run the instance once with `--once`, which claims unconditionally (`mirror.py:40-41`)
+   and heals the binding, or delete and recreate the local site. This matters for Dirac
+   specifically because its remote folders are created during setup, so an out-of-band
+   creation/removal is likely at exactly the moment the service is first started. The
+   minimal fix (invalidate the binding on transfer failure and re-claim next pass) is a
+   behavior change and was **not** made; it needs the coordinator's decision.
 
 ## What was checked, and how
 
@@ -251,7 +265,13 @@ before concluding that a destination is the intended one.
   `eligible()` excludes only first-level dotfiles (so `<site>/.htaccess` is publishable).
 - `git status` / `git diff` review of every changed path; `config.py` was reverted to
   `HEAD` after the coordinator's decision and the diff is empty.
-- Python 3.14 AST compilation of the changed Python files.
+- Python 3.14 AST parsing of all 12 `scripts/publisher/*.py` files with the parent venv
+  interpreter (3.14.4), and `tomllib` parsing of both TOML templates confirming the same
+  14 expected keys and no key identical between them. No Python source file was changed
+  by this lane, so there was nothing new to test.
+
+Everything above is source consistency, not runtime proof. No observed behaviour was
+confirmed against a running publisher, a remote host or a live destination.
 
 Not performed, and not claimed: no application import, no test collection or execution,
 no publisher process, no SSH, no network, no Docker, no `/srv`, `/opt` or private

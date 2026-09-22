@@ -88,6 +88,25 @@ instance cannot be repointed without clearing its state directory — but on a *
 state directory the configured destination is adopted and pinned as-is, with no check
 that it belongs to this project. Verify the destination before the first write.
 
+The isolation between instances is not uniform, and the difference matters:
+
+- **Site trees are ownership-checked.** Each remote site directory carries a private
+  marker, and the guard refuses to transfer into or delete a directory whose marker and
+  device/inode identity do not match. A second instance pointed at another instance's
+  `site_root` therefore **fails closed** on a name collision — it cannot corrupt an
+  existing owned site.
+- **The image archive is not.** The `archive` action writes straight into `image_root`
+  with no marker, no token and no per-instance namespace; the only protection is the
+  root device/inode pin held in the owning instance's state. Two instances configured
+  with the same `image_root` will both write there and silently overwrite same-named
+  images and prompt sidecars. The archive is flat by design (one `_images` destination
+  serves all sites), so it cannot be namespaced per site — a distinct `image_root` per
+  instance is the only separation.
+- **Creation is not restricted.** A second instance pointed at another instance's
+  `site_root` can still create *new* directories there, because a claim succeeds for any
+  name that does not already exist. Names it never claimed are never removed by it, but
+  they will be served.
+
 ## Verifying a publication
 
 Local, no credentials:
@@ -125,7 +144,7 @@ credentials or file contents.
 | `private file permissions refused` / `private directory permissions refused` | Config, key, `known_hosts`, `staging` or `state` is not mode 0600/0700, is a symlink/hardlink, or is owned by another account. |
 | `private configuration changed` | The TOML was replaced or altered while being read. |
 | `ownership configuration changed` | `host`/`user`/`port`/`site_root`/`image_root` no longer match the saved state. |
-| `remote root is refused` / `remote roots overlap` | `site_root` and `image_root` overlap, or one is `/`. |
+| `remote filesystem root refused` / `remote roots overlap` | `site_root` and `image_root` overlap or nest, or one of them is `/`. |
 | `SSH host refused` / `SSH user refused` | The value fails the strict host/user pattern. |
 | `SSH credential path expansion refused` | A `%`, `${` or newline in the key, `known_hosts` or `state` path. |
 | `credential tripwire refused scan` | A source file matches a credential pattern or PEM header. Blocks **all** publishing until removed. |
