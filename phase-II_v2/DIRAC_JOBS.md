@@ -67,44 +67,63 @@ No parallel job framework was added.
 
 ## Provenance of the SDK claims
 
-Approved copy used for every load-bearing claim: `/tmp/curie-sdk-public-u5v2n7g8/message.py`
-(and `abc.py`). Line references are to that copy.
+SDK: **discord.py-self 2.1.0**, read from the frozen 734c050 image. Approved copies and line
+references:
 
+- `/tmp/curie-sdk-public-u5v2n7g8/message.py` and `abc.py` (first capture).
+- `/tmp/curie-sdk-dirac-k2y3w7f0/channel.py`, `threads.py`, `mixins.py` (coordinator's second
+  capture). All three questions this lane had flagged as unverified are answered there, and the code
+  needed no change:
+
+- `TextChannel.create_thread` (`channel.py:839`) is
+  `(*, name, message=None, auto_archive_duration=MISSING, type=None, reason=None, invitable=True,
+  slowmode_delay=None)`. Its body (`channel.py:903-913`) sets `type = ChannelType.private_thread`
+  when `type is None`, then, **when `message is None`**, calls
+  `start_thread_without_message(self.id, name=..., auto_archive_duration=..., type=type.value, ...)`;
+  otherwise `start_thread_with_message(self.id, message.id, ...)`. So the parent-channel progress
+  thread — `parent.create_thread(name=..., auto_archive_duration=60,
+  type=discord.ChannelType.public_thread)` with no `message` — is the SDK's supported shape, and the
+  explicit `type` is what keeps it a public thread instead of the private-thread default.
+- `Thread.parent` (`threads.py:236-241`) returns
+  `Optional[Union[TextChannel, ForumChannel]]` via `self.guild.get_channel(self.parent_id)`, so it is
+  genuinely optional and the "parent channel is unknown" branch is real, not defensive. `parent_id`
+  is set at `threads.py:180`. `Thread` defines **no** `create_thread` (the only definitions in
+  `channel.py` are `TextChannel.create_thread` at 839 and `ForumChannel.create_thread` at 2938),
+  which is why the old `elif hasattr(channel, "create_thread")` rescue could never run for a thread
+  origin and why `isinstance(channel, discord.Thread)` is the correct discriminator.
+- `class Hashable(EqualityComparable): __slots__ = ()` (`mixins.py:42-43`), plus `PartialMessage`
+  slots (`message.py:933`), `Message` slots (`message.py:1942`) and no `'__dict__'` anywhere in
+  `message.py`: an SDK `Message` instance cannot take a new attribute, so the original
+  `orig_message._bg_job = True` write could not have worked. That claim is now supported rather than
+  inferred — although the guard no longer depends on it, because it is a ContextVar.
 - `from .threads import Thread` (74): `discord.Thread` is a real public name.
-- `PartialMessage.__slots__` (933) and `Message.__slots__` (1942) are declared, and the file contains
-  no `'__dict__'`. Whether an instance accepts a new attribute also depends on base classes outside
-  the approved set (`discord.utils.Hashable`), so this lane stops relying on that question: the
-  recursion guard is a ContextVar, which does not care how the SDK object is laid out. The parent can
-  settle the MRO detail from an actual SDK extract; nothing here depends on it either way.
-- `create_thread` (1384) body: `start_thread_with_message(self.channel.id, self.id, ...)` and
+- `Message.create_thread` (1384) body: `start_thread_with_message(self.channel.id, self.id, ...)` and
   `raise ValueError('This message does not have guild info attached')` when `self.guild is None`.
 - `isinstance(channel, Thread) and channel.parent_id == ref.channel_id` (2086): both the thread
   discriminator and `parent_id` used by `_channel_allowed` are the SDK's own idiom.
 - `getattr(self.channel, 'parent', self.channel).type is ChannelType.forum` (2533) and
   `ChannelType.news_thread/public_thread/private_thread` (942-944): `channel.parent`, `channel.type`
-  and `ChannelType.forum` are real attributes.
+  and `ChannelType.forum` are real attributes. `ForumChannel.type` (`channel.py:2607-2611`) is
+  `Literal[ChannelType.forum, ChannelType.media]`.
 - `abc.py` 651/714/1761/2899 declare `__slots__ = ()`.
 
 Disclosure: before the coordinator flagged it, this lane had also read
 `/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/discord/{message,channel,threads}.py`
 and `/home/codexy/.cache/uv/archive-v0/z8PskheNH7OW6BCc/discord/message.py`. Those are **not**
-approved inputs and no claim in the code rests on them: every fact above was re-checked in the
-approved copy. The earlier "Message has no `__slots__`, the attribute write sticks" statement this
-lane sent the coordinator was wrong (the first grep was truncated with `head -3`); the approved copy
-shows the opposite and the fix removes the dependency on instance layout entirely.
+approved inputs and nothing rests on them: every fact above was re-checked in the approved copies.
+The earlier "Message has no `__slots__`, the attribute write sticks" statement this lane sent the
+coordinator was wrong (the first grep was truncated with `head -3`); the approved copies show the
+opposite, and the fix removes the dependency on instance layout entirely.
 
-Not verified and not relied on silently:
+Still not a source fact, and relied on only as behaviour:
 
-- `TextChannel.create_thread(message=None, type=ChannelType.public_thread)` — the standalone public
-  thread shape used for a parent-channel progress thread. `channel.py` is not in the approved set,
-  and the repo only demonstrates the `message=` form (`bot_tools.py:4318-4329`). If the shape is
-  wrong, the result is an honest failure notice plus a running job, never a silent success. Parent
-  should confirm it from the selected image or accept it at live exercise.
-- That Discord rejects `POST /channels/{thread}/threads`. This is API behavior, not a source fact;
-  what the source guarantees is that the old code sent the request to the thread's own id.
-- `discord.utils.Hashable` declaring `__slots__ = ()` (the file is not in the approved set). No
-  longer load-bearing: the recursion guard is a ContextVar and nothing in this lane writes an
-  attribute onto an SDK object.
+- That Discord rejects `POST /channels/{thread}/threads`. That is API behaviour, not something these
+  files show; what the source guarantees is that the old code sent the request to the thread's own
+  id.
+- A media-channel post (`ForumChannel.type` can be `ChannelType.media`, `channel.py:2607-2611`) is
+  classified as a thread whose parent is not `ChannelType.forum`, so the standalone-thread call is
+  attempted and `ForumChannel.create_thread` (2938) rejects the unexpected `type` keyword. That ends
+  in the honest failure notice and a running job, not a silent success. Not exercised.
 
 ## Validation
 
@@ -121,8 +140,8 @@ Not verified and not relied on silently:
   raising observer not costing a delivery, `_run_queued_reply` bracketing on success and on failure,
   and the no-observer forward); ruff (not installed in the permitted interpreter, and no install is
   authorized in this lane); any Discord, provider or container behavior.
-- Unverified runtime edges: actual thread creation/permission in the authorized guild, the
-  parent-channel shape above, allowlist inheritance with a non-empty `allowed_channels`, the
+- Unverified runtime edges: actual thread creation/permission in the authorized guild (the API shape
+  itself is now source-verified), allowlist inheritance with a non-empty `allowed_channels`, the
   `!job` link format, and the honest-failure notice path against a real API error.
 
 ## Cross-lane interface (implemented; smoke module still cf3's)
