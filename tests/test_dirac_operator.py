@@ -244,8 +244,11 @@ def test_start_replace_reports_the_previous_state_before_removing(dirac, tmp_pat
         ("start",): "dirac-v2\n",
     })
     engine.path = root.parent
-    monkeypatch.setattr(dirac, "print", lambda *values, **kwargs: engine.calls.append(("print", str(values[0]))),
-                        raising=False)
+    monkeypatch.setattr(
+        dirac, "print",
+        lambda *values, **kwargs: engine.calls.append(("print", str(values[0]), kwargs.get("file"))),
+        raising=False,
+    )
     monkeypatch.setattr(dirac.subprocess, "run",
                         lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""))
     args = SimpleNamespace(action="start", image="dame-curie-app:test", replace=True,
@@ -255,7 +258,9 @@ def test_start_replace_reports_the_previous_state_before_removing(dirac, tmp_pat
     assert '"exit_code": "1"' in replacement[1]
     assert '"previous"' in replacement[1] and '"replacing"' in replacement[1]
     assert engine.calls[engine.calls.index(replacement) + 1][0] == "rm"
-    assert engine.calls[-1][0] == "print" and '"action": "start"' in engine.calls[-1][1]
+    assert replacement[2] is dirac.sys.stderr
+    assert sum(call[0] == "print" for call in engine.calls) == 1
+    assert report["action"] == "start"
     assert report["embedding_readiness"] == "ok"
 
 
