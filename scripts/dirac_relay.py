@@ -67,7 +67,7 @@ EMBED_PATHS = ("/api/embed", "/api/embeddings", "/v1/embeddings")
 # is streamed through instead of being buffered.
 HEAD_LIMIT = 64 * 1024
 COPY_CHUNK, READ_TIMEOUT = 64 * 1024, 60.0
-DOCKER_TIMEOUT, HELPER_SOCKET_TIMEOUT = 30.0, 120.0
+DOCKER_TIMEOUT, HELPER_SOCKET_TIMEOUT = 30.0, 180.0
 HEADER_NAME_BYTES = frozenset(b"!#$%&'*+-.^_`|~" + bytes(range(48, 58)) + bytes(range(65, 91)) + bytes(range(97, 123)))
 # A replaced daemon is noticed within one poll; the operator CLI already polls
 # readiness at this same interval, so no new timing scale is introduced.

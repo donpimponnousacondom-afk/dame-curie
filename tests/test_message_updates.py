@@ -374,7 +374,7 @@ def _smoke_bot(notice_id=707):
     operator = SimpleNamespace(id=_OPERATOR_ID, display_name="root", bot=False)
     notice = _message(notice_id, "HARNESS SMOKE TEST\nsay pong")
     notice.author = self_account
-    bot.user = self_account
+    bot._connection = SimpleNamespace(user=self_account)
     bot._message_snapshots[str(notice_id)] = _NoticeInput(notice, operator)
     return bot, self_account, operator, notice
 
