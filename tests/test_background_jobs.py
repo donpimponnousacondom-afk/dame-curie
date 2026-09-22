@@ -460,7 +460,9 @@ def test_spawn_tool_refuses_a_message_that_already_serves_a_job(tmp_path):
 
 def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
     async def scenario():
-        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        manager = BackgroundJobManager(
+            data_path=str(tmp_path / "jobs.json"), max_jobs=2, max_per_user=1
+        )
         channel = FakeChannel("222")
         bot = SimpleNamespace(
             command_prefix="!",
