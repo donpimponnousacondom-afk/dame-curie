@@ -131,10 +131,11 @@ def test_validate_engine_requires_rootless_private_root_and_pinned_identity(rela
         relay.validate_engine(FakeEngine({"info": info_json()}), "someone-elses-engine")
 
 
-def test_forward_argv_is_fixed(relay):
-    assert relay.forward_argv(3689769) == [
+def test_the_helper_argv_is_fixed(relay):
+    assert relay.helper_argv(3689769, "/usr/bin/python3") == [
         "/usr/bin/nsenter", "--net=/proc/3689769/ns/net", "--",
-        "/usr/bin/socat", "-", "TCP4:127.0.0.1:11434",
+        "/usr/bin/python3", "-I", "-S", "-B", "-c", relay.HELPER_PROGRAM,
+        "127.0.0.1", "11434", str(relay.HELPER_SOCKET_TIMEOUT),
     ]
 
 
