@@ -134,6 +134,25 @@ def test_deploy_env_accepts_only_the_documented_embed_modes():
         ops.parse_settings(deploy_text("DAME_CURIE_EMBED_MODE=shared"))
 
 
+def test_ownership_still_accepts_the_canonical_file_lists():
+    """Both file lists the wrapper produced before this change stay valid."""
+    for staging in (False, True):
+        labels = {
+            "com.docker.compose.project": "dame-curie",
+            "com.docker.compose.service": "bot",
+            "com.docker.compose.project.config_files": ",".join(
+                str(path) for path in ops.compose_files(staging, "local")
+            ),
+        }
+        item = {
+            "Id": "bot",
+            "Name": "/dame-curie-bot",
+            "Config": {"Labels": labels},
+            "State": {"Running": False},
+        }
+        assert ops.select_owned([item], "dame-curie", "dame-curie") == [item]
+
+
 def test_ownership_accepts_every_selected_file_list_and_rejects_other_checkouts():
     labels = {
         "com.docker.compose.project": "dame-curie",

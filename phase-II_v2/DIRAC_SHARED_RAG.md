@@ -144,9 +144,10 @@ reachable URL in the private configuration above.
   `tests/test_docker_readiness.py`, `tests/test_shared_embeddings_deployment.py` under the
   parent checkout's Python 3.14 venv interpreter. Syntax only; no import.
 * A structural YAML parse of `compose.yaml`, `docker/compose.staging.yaml` and
-  `docker/compose.embeddings-external.yaml` with a tag-aware reader, confirming the three
-  service names and that `!reset`/`!override` appear on exactly `bot.depends_on`,
-  `bot.environment.DAME_CURIE_EMBED_BASE_URL` and the two `profiles` keys.
+  `docker/compose.embeddings-external.yaml` with a tag-aware reader (PyYAML 6.0.3 under a
+  separate isolated Python 3.14 environment, because the parent venv has no PyYAML),
+  confirming the three service names and that `!reset`/`!override` appear on exactly
+  `bot.depends_on`, `bot.environment.DAME_CURIE_EMBED_BASE_URL` and the two `profiles` keys.
 * `git diff` review of the whole change, including a re-read of the final file contents.
 
 Not run: `docker compose config`, any container or engine command, any test collection or

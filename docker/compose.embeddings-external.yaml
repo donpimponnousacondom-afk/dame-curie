@@ -17,8 +17,8 @@
 #     docker/check_embeddings.py that a shared endpoint is in use, and
 #     DAME_CURIE_EMBED_BASE_URL is cleared so the local service URL cannot be
 #     mistaken for the shared one. The endpoint must then come from the private
-#     bot.env; the gate fails closed when it does not.
-#   * A value in bot.env always wins over both keys, matching config.py.
+#     bot.env, which wins over these injected values, as it does for config.py;
+#     the gate fails closed when nothing configures one.
 #
 # Requires Docker Compose >= 2.28.1: the `!reset` tag itself needs 2.24, and
 # resetting `depends_on` specifically was only fixed in 2.28.1
