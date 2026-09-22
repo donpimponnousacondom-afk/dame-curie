@@ -13,12 +13,12 @@ No earlier `TODO.md` is present in the current checkout (both exact-name and cas
 - [x] Establish baseline `7b4398c` and four separate Flash implementation worktrees.
 - [x] Support external/shared embeddings and RAG-off without forcing a second local Ollama/pull chain; real Compose merge checked without activation.
 - [x] Make embedding readiness honor the configured endpoint/model/dimensions/authentication; isolated checks passed.
-- [ ] Replace the temporary test launcher restrictions with a supported, complete Dirac runtime/configuration path.
-- [ ] Give Dirac separate persistent configuration, memory, shell, sites and publisher state.
-- [ ] Preserve/reconcile Discord job/subagent/thread routing, ownership, progress, results and cancellation.
-- [ ] Add an explicitly labelled operator smoke-test protocol using the real bot/provider/tools; never fabricate human gateway messages or tool receipts.
-- [ ] Configure SSH publication into an isolated Dirac remote subtree and verify static authoring/mirroring.
-- [ ] Check PHP/Perl/CGI at the intended destination; report unsupported execution honestly, do not silently restore removed local servers.
+- [x] Replace the temporary launcher restrictions with the ordinary bot and complete derived configuration; actual temporary identity reached Gateway ready.
+- [x] Give Dirac separate persistent configuration, memory, shell, sites and publisher state; actual mounts verified, restart proof still pending.
+- [x] Integrate job/thread routing and cancellation fixes; two real jobs and parent/thread-origin routing passed, with scoped foreground timeout cancellation also observed.
+- [x] Add the labelled real-model smoke protocol; actual shell/job/Discord receipts observed without fabricated gateway events.
+- [x] Configure isolated SSH publication and verify actual static bytes over HTTPS.
+- [x] Verify PHP/Perl/CGI exact HTTP response bodies; all three execute at the Dirac destination, without a local server or global remote changes.
 - [ ] Run isolated checks and real useful model/tool/site/thread/RAG scenarios in the approved Discord channel and its test threads.
 - [ ] Record failures and fixes separately; rerun the failing scenario rather than upgrading an old result.
 - [ ] Independently review integrated changes, package/build only the reviewed source and commit coherent slices.

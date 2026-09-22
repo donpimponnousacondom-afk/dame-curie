@@ -16,6 +16,12 @@ All accepted source lanes are integrated; original smoke branch `4aae612` was re
 
 Coordinator-only work verified temporary identity, prepared full derived configuration and durable Dirac roots, and created/pinned a separate remote publishing subtree. Canonical private config stayed byte-identical; every declared OPENAI value was compared unchanged in the derived file. No V1 data was copied. Initial publisher `--once` succeeded with zero sites; no HTTP script-execution claim follows from that. Detailed IDs, QA failures, fixes, reruns and remaining activation gates are in `DIRAC_INTEGRATION.md`. The old installed source remains at `/opt/dame-curie` at this checkpoint; it is an archive without `.git`, with an operator venv to preserve.
 
+### Live activation and first real scenarios
+
+At 08:33:26 UTC, replacement container `7fb28aacad9b396f668ea0b90ca3a2afcf19e0e6e62b2162f4a65781e8b1ee34` reached the actual temporary Gateway identity after a separately retained missing-personality startup failure. New test personality provenance is explicit. The operator archive and minimal venv were exchanged with the old installation retained; only the staged venv received pinned python-dotenv 1.2.3. A discovered root CLI re-exec bug was fixed, isolated-tested and installed as a host-only patch; canonical services and selector stayed held/unchanged.
+
+The private relay returned an actual embedding without changing model inventory. Independent metadata proved its listener is in V2's network namespace, not the host's. The publisher mirrored model-authored files only into Dirac; exact HTTPS responses proved PHP, Perl and CGI execution as well as static-byte publication. Two real jobs completed, including thread-origin creation of a sibling public thread. Native shell results, Discord thread ownership and real vector/LTM database contents were verified independently. One later self-diagnostic status turn timed out after real tools; its unsupported status-tool assumption belonged to the coordinator's request and is not papered over. A new Screen viewer passed q-only shutdown and persistent-session checks. All request/job/thread IDs, limits and pending reruns are in `DIRAC_INTEGRATION.md`.
+
 ## 2026-09-19 — grounding only
 
 Starting point: clean `dev/phaseII_v2`, one reachable commit `c460324` (`Initial commit`). Root requested reconnaissance, temporary organized notes and frequent local checkpoints while another agent finishes the backup. No implementation, removal, runtime validation or production work is authorized in this slice.

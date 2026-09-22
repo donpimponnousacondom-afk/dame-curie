@@ -14,6 +14,12 @@ Accepted lanes are integrated through `1984a26`; the rejected smoke prototype re
 
 The full derived Dirac configuration and private persistent roots now exist; temporary account identity was independently checked by REST, and canonical config bytes were preserved. A separate remote subtree and private publisher credentials were prepared; the unchanged publisher's `--once` pinned only those new roots, with zero sites. New image `dame-curie-app:1984a26` (`sha256:c5d049e2dc9dd70aeed2ad6f39fbb876c12db7d278c22b861a8edced41ac9bea`) built successfully. Source installation, relay/bot/watcher activation and live model/HTTP/persistence/Screen acceptance remain next; a build is not a running-service receipt.
 
+### Live Dirac checkpoint — 09:06 UTC
+
+Temporary bot `dirac-v2` is Gateway-ready as 1504398705539944560 on image `1984a26`; canonical Dame services remain held. Relay and separate publisher watcher are active. Rollout exposed and corrected a missing staged operator dependency, a real root-entrypoint re-exec bug (36 focused checks passed), and an uninitialized external personality file. The new `DIRAC_TEST_PERSONALITY.txt` is explicitly newly authored, not recovered tmpfs content.
+
+Real shell output and two background jobs passed, including a new sibling job thread launched from an existing bot-owned thread. Independent checks verified actual thread ownership/parent/type, exact local sentinel files, exact published HTML, and real PHP/CGI/Perl HTTP execution. Dirac's own RAG database contains message/output/LTM/shared-context rows with real 1,024-dimensional vectors. A separate diagnostic request timed out; its false assumption about a native status tool is owned and a bounded corrected rerun is tracked separately. `screen -r dirac-v2` attaches the verified new viewer; q stops only the viewer. Detailed IDs and remaining restart/media/memory acceptance are in `DIRAC_INTEGRATION.md`.
+
 ## Previous checkpoint — held redesign release
 
 All implementation lanes are integrated: core source `9d1abc8`, followed by residual template/dashboard/PM2 cleanup `562ed29` and `a913437`, from contract base `43ce047` after staged foundation `ac38b84`. Logging landed first. The structured-redaction correction and bounded pipe/PTY, pressure, resize/control, exit/error, foreground-loss and fresh GNU Screen exercises passed; exhaustive coverage is not claimed (`LOGGING_ACCEPTANCE.md`). Final existing-fixture alignment has independent source signoff, without new tests or execution.

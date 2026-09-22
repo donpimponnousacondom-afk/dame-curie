@@ -88,8 +88,52 @@ The new remote `dirac` subtree was created only after confirming absence. Its si
 
 `bash-23` built `dame-curie-app:1984a26`, ID `sha256:c5d049e2dc9dd70aeed2ad6f39fbb876c12db7d278c22b861a8edced41ac9bea`, from the committed archive. Dependencies reused the existing pinned layers. Build succeeded; it did not install source, change selectors, start a bot or activate a service.
 
-Still pending: install the reviewed operator source; pin/start the private namespace relay; select the new image only for Dirac; run the ordinary bot with durable binds and the optional protocol; start the separate publisher watcher; exercise real model/tool/thread/site/RAG scenarios; verify HTTP script execution and restart persistence; leave a real Screen/logger handoff. Canonical bot/Ollama/pull remain held and the canonical image selector is unchanged.
+At that pre-activation checkpoint, still pending: install the reviewed operator source; pin/start the private namespace relay; select the new image only for Dirac; run the ordinary bot with durable binds and the optional protocol; start the separate publisher watcher; exercise real model/tool/thread/site/RAG scenarios; verify HTTP script execution and restart persistence; leave a real Screen/logger handoff. Canonical bot/Ollama/pull remain held and the canonical image selector is unchanged.
 
 Source-traced publisher availability caveat: watch reconciliation reuses stored remote site identities; an out-of-band remote site deletion can therefore leave repeated sync failures. The separate `--once` reclaim path has not yet been exercised for that failure. Normal initial root pinning is not evidence for this recovery case.
 
 The relay is raw TCP, not an HTTP allowlist. Its Docker queries are read-only and mapped to the two service accounts, but forwarded traffic exposes the Ollama API on the private V2 bridge. No claim of explicit user acceptance of destructive model-management endpoints is made. Exercises must use the existing embedding model only and must not mutate V1 models, data, ports or containers. A V2 daemon network-namespace replacement requires relay restart; per-connection V1 container PID lookup follows ordinary V1 container recreation.
+
+### Live activation and first acceptance — 08:15–09:06 UTC
+
+**Temporary Dirac is now running; canonical Dame bot/Ollama/pull are still held.** Fresh inventory verified both engine IDs, only the three Created canonical V2 containers, and the same healthy V1 Ollama before rollout.
+
+#### Rollout failures, corrections and receipts
+
+1. Source archive `1984a26` was staged with a copy of the existing operator venv. The import gate failed because that minimal venv did not contain python-dotenv; the original installation was not exchanged at that point. Installing exactly `python-dotenv==1.2.3` (the existing image lock) into the *staged operator venv* passed under Python3.14.4. The new archive was then installed at `/opt/dame-curie`; `/opt/dame-curie-pre-dirac-734c050` retains the prior source and venv. Host system Python was not modified.
+2. Actual root CLI `dirac.py status` failed with exit2: the reused `service_account()` re-exec hardcoded `instance.py`. Patch `7070c01` gives it an explicit entrypoint and passes Dirac's own script; unchanged canonical/logging dispatch and the new path passed **36 isolated checks** at `380ebe8`. The parent also corrected the fake exec fixture to model a non-returning exec. The two corrected operator files and lane doc were installed; bot image remains `1984a26`, since this patch is host-only. Subsequent actual root `status` returned the expected absent-container JSON with exit1, not an argparse error.
+3. New `dirac-relay.service` and `dirac-publisher.service` were started (not enabled for boot). Relay override pins both observed engine IDs. A real embedding from the new app image returned one finite, nonzero 1,024-dimensional vector; before/after `/api/tags` matched and contained only `qwen3-embedding:0.6b`. No bot/config/state mount was given to that probe.
+4. First bot launch `bash-25`, container `ccb09615d78aa15b07c50dcfddf2f1bc3e12ffcd009a099f6fe612a5d2a189f6`, passed embedding readiness but then exited1, not OOM. Missing external `personality.txt` caused PromptStorageError. This was the coordinator's incomplete initialization, not a demonstrated prompt-store defect. Its bounded startup log was retained privately before replacement. New public seed `DIRAC_TEST_PERSONALITY.txt` explicitly says the previous tmpfs prompt was not recovered; only that new test personality was installed into Dirac's writable prompts root.
+5. Explicit `start --replace` (`bash-26`) printed the old exited-state evidence to stderr before removal, then started container **`7fb28aacad9b396f668ea0b90ca3a2afcf19e0e6e62b2162f4a65781e8b1ee34`** at `2026-09-22T08:33:26.873249295Z`. Image is `sha256:c5d049e2dc9dd70aeed2ad6f39fbb876c12db7d278c22b861a8edced41ac9bea`. Independent bounded log inspection confirmed actual setup completion and Gateway-ready identity **1504398705539944560**, with no startup traceback.
+6. Actual seven bind mounts matched the private Dirac roots, including config RO / nested prompts RW and smoke requests RO / status RW. Relay network-namespace inode equals the live V2 daemon's and differs from the host's. Host TCP port11434 has no listener. This is an observed namespace boundary, not an Ollama HTTP-method filter.
+
+#### Real smoke ledger
+
+| Request / scenario | Observed result | Independent verification |
+| --- | --- | --- |
+| `b943d9f1303f40b6b0ce6b76b00bdd1a` — ordinary shell | Completed; notice `1551874647946043465`, reply `1551874746000347177`; explicitly identified itself as a harness smoke test | `/srv/dame-curie/dirac/shell/dirac-smoke/first.txt` exactly equals `DIRAC-LIVE-20260922-8f29a6` plus newline; actual reply reports Python3.14.4 and no anomaly beyond the expected HOME/cwd distinction |
+| `11283ba4001a4445b61b099a1835576b` — site worker from parent | Completed acknowledgement `1551876070381195326`; actual job `c927c30f`, requested main/configured model, done | Actual Discord thread `1551875915644932137`, owner1504398705539944560, parent1550960386939817984, public type11; bot progress/result message IDs fetched independently; local and remote files checked below |
+| `bb525036ac044d9fa9d7e516d6a3f570` — status self-diagnosis | **Timeout**, no target-channel delivery, returned=false; notice `1551877164549279746`; only that input cancelled | This did not fail the completed site job. It ran two shell calls and three message searches. One real provider response took101s. The coordinator had imprecisely requested a native job-status tool: source actually exposes spawn_background plus the human `!job` command. No application patch is claimed from this timeout |
+| `09e120f6ca614e5eaf8e7c05016e8554` — conversational turn inside first job thread | Completed; notice `1551880035319676990`, reply `1551880074733682699`; actual second job `0df54176`, done | Exact `DIRAC-THREAD-20260922-613f` plus newline in `from-thread.txt`. Second job source is first thread; new standalone sibling `1551880062251442216` was independently fetched and has the approved parent, temporary bot owner and public type11. This exercises inherited channel permission and fixes the thread-origin routing case |
+| `58f492c47390487289bc8249671d1455` — separate corrected status rerun | Protocol completed with reply `1551882348617011282`, but **scenario refused by the taint gate**; notice `1551882189229137921` | Dirac explicitly reports no fresh read: automatic web results tainted the turn before its one shell call. The guard stays enabled; no synthetic confirmation or alternate execution is counted as a passing rerun. Source tracing of the automatic search trigger is in progress |
+
+The protocol's `reply_verified=false` deliberately does not certify model claims. Optional `reply_readback` records readback problems; an empty list with returned text is not a readback failure. Scenario verification above is a separate coordinator result.
+
+#### Real publication and execution
+
+The live publisher watched the worker-authored site at `/state/sites/dirac-smoke`. Independent HTTPS GETs returned:
+
+- `https://redroom.zombiedawn.net/dirac/sites/dirac-smoke/index.html`: HTTP200, HTML, **5,434 bytes exactly matching the local file**.
+- `probe.php`: HTTP200, exactly `DIRAC-PHP-72cda` plus newline (16 bytes), not PHP source.
+- `probe.cgi`: HTTP200 text/plain, exactly `DIRAC-CGI-72cda` plus newline (16 bytes), not Perl source.
+- `probe.pl`: HTTP200 text/plain, exactly `DIRAC-PERL-72cda` plus newline (17 bytes), not Perl source.
+
+Both Perl probes were executable locally. **PHP, CGI and Perl execution genuinely passed at this destination.** No per-site `.htaccess`, global server change, interpreter installation or local web server was needed. Publication used the operator-managed SSH service. The page's interactive click behavior has not yet been browser-tested.
+
+#### Memory and viewer observations
+
+Read-only metadata from Dirac's own `dame-curie-rag.db` showed 20 bot_output, 7 ltm, 26 message and 3 shared_context rows; every stored vector length was 4,096 bytes. One independently decoded sample was finite/nonzero and 1,024-dimensional. This establishes actual bot memory/vector writes and LTM activity, beyond the embedding health probe. It does not yet certify restart persistence, semantic recall quality or complete REM coverage.
+
+A fresh disposable GNU Screen logger was opened, sent `q`, and verified gone while Dirac remained running with the same container. Persistent viewer **`dirac-v2`** was then launched and its window verified. Attach as codexy with `screen -r dirac-v2`; `q` exits that viewer, not the bot. The earlier attached `dame_curie` and every unrelated Screen session were left untouched.
+
+Still to verify before final acceptance: explain the status rerun's automatic-web/taint refusal without disabling the safeguard; selected media/game handling; memory recall/REM details; graceful restart and persistence/no-replay; final live inventory and Screen handoff. The publisher's out-of-band deletion recovery caveat remains distinct from the passing initial publication scenario.
