@@ -76,13 +76,12 @@ STOPPING = threading.Event()
 
 # The helper enters V1's network namespace and speaks to its loopback with the
 # stdlib only. It knows nothing about HTTP: it copies this process's pipes to the
-# socket, half-closes the write side so the upstream request is framed complete,
-# and copies the response back until the upstream closes.
+# socket, then copies the response back until Connection: close takes effect.
+# Content-Length frames the request; a TCP half-close can cancel the Go handler.
 HELPER_PROGRAM = (
     "import os,socket,sys\n"
     "s=socket.create_connection((sys.argv[1],int(sys.argv[2])),timeout=float(sys.argv[3]))\n"
     "while (d:=os.read(0,65536)): s.sendall(d)\n"
-    "s.shutdown(socket.SHUT_WR)\n"
     "while (d:=s.recv(65536)): os.write(1,d)\n"
 )
 
@@ -370,7 +369,7 @@ def upstream_request(
 def stream_request(
     connection: socket.socket, child: subprocess.Popen, request: bytes, body: bytes, length: int,
 ) -> None:
-    """Send the framed request and its measured body, then half-close so upstream sees it complete."""
+    """Stream exactly the framed body, then close the helper input pipe."""
     assert child.stdin is not None
     child.stdin.write(request)
     child.stdin.write(body[:length])

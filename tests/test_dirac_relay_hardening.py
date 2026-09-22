@@ -13,6 +13,7 @@ need the coordinator's isolated runtime.
 
 import importlib.util
 import os
+import select
 import socket
 import subprocess
 import sys
@@ -75,6 +76,7 @@ class Upstream:
 
     def __init__(self) -> None:
         self.received: list[bytes] = []
+        self.client_half_closed: list[bool] = []
         self.listener = socket.socket()
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listener.bind(("127.0.0.1", 0))
@@ -114,6 +116,8 @@ class Upstream:
                         break
                     body += block
                 self.received.append(head + b"\r\n\r\n" + body)
+                readable = select.select([connection], [], [], 0.02)[0]
+                self.client_half_closed.append(bool(readable) and connection.recv(1, socket.MSG_PEEK) == b"")
                 connection.sendall(UPSTREAM_RESPONSE)
                 connection.shutdown(socket.SHUT_WR)
 
@@ -222,6 +226,12 @@ def test_the_query_string_is_preserved_on_the_forwarded_target(relay, upstream, 
     code, _ = exchange(relay, request("POST", target), upstream.port)
     assert code == 200
     assert upstream.received[0].split(b" ")[1] == target.encode()
+
+
+def test_the_helper_does_not_half_close_before_the_upstream_response(relay, upstream):
+    code, _ = exchange(relay, request("POST", "/api/embed"), upstream.port)
+    assert code == 200
+    assert upstream.client_half_closed == [False]
 
 
 def test_an_absolute_form_target_is_forwarded_as_its_path(relay, upstream):
