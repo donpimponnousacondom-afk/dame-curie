@@ -4,9 +4,21 @@
 
 Root authorized autonomous implementation, isolated retesting, live labelled smoke scenarios, separate Dirac publishing over the existing SSH arrangement, and small local commits while AFK. Keep temporary Dirac authentication. Reuse the existing V1 embedding service without sharing V1 data or launching a duplicate model. Canonical Dame cutover is not this assignment.
 
-No earlier `TODO.md` is present in the current checkout (both exact-name and case-pattern discovery returned none). This checklist continues the existing `phase-II_v2/REDESIGN_PROGRESS.md` and `phase-II_v2/SESSION_LOG.md`; their historical receipts remain intact.
+This checklist was created at the start of the integration, when no earlier TODO existed. Historical receipts remain in `phase-II_v2/REDESIGN_PROGRESS.md` and `phase-II_v2/SESSION_LOG.md`.
 
-## Work queue
+## Bounded hardening — completed at `65fe79e`
+
+- [x] Challenge feedback rather than assume it: actual earlier V1 cap was 10 MiB; retain root's explicit 20 MiB override. Stop broader controls/REM work.
+- [x] Restrict the relay to framed embedding requests; isolate its interpreter, contain lookup errors and detect stale daemon namespaces.
+- [x] Require usable model output plus non-notice delivery; preserve real poster versus permission actor through late/partial refreshes; contain request deletion races.
+- [x] Refuse writable smoke-mount overlap; mask publisher direct access to bot roots and canonical publisher configuration.
+- [x] Reject both unallowlisted and explicitly blocked parents for thread-origin jobs, including allow/block intersections; keep output in origin.
+- [x] Pass 341 focused isolated tests at `65fe79e`; preserve the 19 baseline failures outside that claim and all earlier failed/controller receipts.
+- [x] Deploy digest-pinned `65fe79e`, retain private state/log/source snapshots, and leave canonical services held.
+- [x] Observe real embedding/filter responses, publisher namespace masks, model output and one blocked-parent worker with real shell/publication. Restore temporary policy and retain 20 MiB.
+- [x] Record exact tested/deployed revisions, remaining limits and operator handoff without a Git push.
+
+## Earlier integration checklist — `9a3fa43`
 
 - [x] Read the handoff and challenge unsupported findings against source and actual receipts.
 - [x] Preserve the successful Discord/native-tool checks; root-initiated process killing is not an inferred OOM/product failure.
@@ -29,7 +41,7 @@ No earlier `TODO.md` is present in the current checkout (both exact-name and cas
 
 - Root's archive report: the image limit is applied to non-text files and unsupported archives are misdirected to `see_image`. Root then explicitly requested 20 MB: the live setting is now 20 MiB (20,971,520 bytes), hot-reload verified without a restart. Archive handling is not repaired by that setting change.
 - [x] Deliver the reviewed inventory in `phase-II_v2/DIRAC_ATTACHMENT_LIMITS.md`: defaults versus live settings, incoming/outgoing caps, count/aggregate distinctions and media/prompt limits. Incorrect draft conclusions were rejected and corrected against the actual branches. Root will compare it with the other bot's limits.
-- The private embedding relay forwards the full Ollama API, not an endpoint allowlist; no model-management operations were exercised. Do not treat it as a security boundary.
+- Full-API relay exposure is fixed; permitted embedding arguments remain client-controlled, so endpoint filtering is not independent model/resource isolation. Publisher direct-path masks likewise are not separate-UID isolation. No live model-management operations were exercised.
 - See the handoff for boot/restart policy, publisher recovery, job-resumption, classifier/game-label and untested-feature limits. Scoped readiness does not mean every feature or failure mode passed.
 
 ## Execution boundaries

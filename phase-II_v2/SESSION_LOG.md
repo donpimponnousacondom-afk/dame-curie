@@ -1,5 +1,15 @@
 # Phase II session ledger
 
+## 2026-09-22 — bounded hardening closure
+
+Root asked to stop broader V1/control/REM investigation and close the obvious exposed surfaces. The earlier authorized cap check found V1 at 10 MiB, contrary to feedback; root's explicit 20 MiB override stayed in place. Archive classification was not changed. Synthetic context was not purged, and no general controls or REM migration was performed.
+
+Reviewed source fixes cover the relay HTTP/lifecycle boundary, smoke model-output classification and bot-poster attribution, actor preservation through late/partial updates, deleted requests, operator mount overlap, publisher direct-path masks and thread-origin routing. Coordinator review rejected unsupported agent claims and corrected real SDK assumptions, parser/framing defects, a missing stop event and premature upstream TCP half-close. Unauthorized agent test counts were withdrawn. Isolated QA also exposed fixture/controller errors and 19 baseline-reproducing failures; exact outcomes remain in `DIRAC_INTEGRATION.md`.
+
+`901200d` was first installed with real relay/model/unit checks. Before the final job exercise, the coordinator caught an additional explicit-block/allowlist intersection: the parent helper alone did not enforce plain-channel blocks. Narrow correction `65fe79e` passed **341 isolated tests**, then replaced only the app while preserving the validated relay/publisher processes. The initial tag-versus-digest preflight stopped without mutation; final image selection stayed digest-pinned. Prior source/venvs, state and Docker logs were retained privately.
+
+Final live request `d45ee9cab96145d4b3f9ab828bb5b87c` and worker `c25d1824` passed with the parent simultaneously allowlisted and blocked. Output stayed associated with the allowed origin, no progress-thread ID was created, the precise parent-refusal reason was recorded, and the exact native-shell marker appeared over public HTTPS. The controller restored its temporary policy fields and observed their reload; 20 MiB remained. The viewer alone was recreated after its old container exited. Canonical Dame remains held; no V1 data/model-management work, broad audit, Git push or whole-application certification. Current commands and limitations: `DIRAC_HANDOFF.md`.
+
 ## 2026-09-22 — autonomous Dirac integration grant
 
 Root requested a few hours of independent work: proper review, Flash implementation agents in worktrees, incremental local commits, real useful model/tool tests, Discord subagent/thread functionality, and a separate Dirac remote publishing folder using the available SSH arrangement. Tests must identify themselves as harness smoke tests authorized by root, not human Discord messages; model self-diagnosis is evidence to check, not acceptance by itself. Useful billing against the existing configured endpoint is authorized; endpoint/vendor changes and wasteful token burning are not goals.

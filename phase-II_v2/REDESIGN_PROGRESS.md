@@ -1,6 +1,14 @@
 # Discord-only redesign: integration ledger
 
-## Current checkpoint — Dirac integration, 2026-09-22
+## Current checkpoint — bounded hardening, 2026-09-22
+
+Root stopped broader V1/control/REM work and retained the 20 MiB override. Confirmed exposed defects were fixed: embedding-only HTTP relay with lifecycle/error handling, honest completion and poster/actor provenance, late/partial refreshes, deleted-request races, writable mount overlap, publisher direct-path masks and thread-origin parent policy. The final coordinator correction makes an explicit parent block win even when that parent is also allowlisted.
+
+**Tested and deployed source `65fe79e`; 341 focused isolated tests passed**, Python 3.14.4, no network/credentials/private mounts. Nineteen extra test failures reproduced on the unchanged baseline and are not hidden in the green count. App image `sha256:0b18300d4c1f5614c1bf9822cd944310b527949b4ec16eb673c5c8a085f2b1a6`; container `d534d4f538a76269f3b650375ac093dbcea4b0549759b509a7162976deeedb70`. Later documentation is not another image revision.
+
+The relay returned a real embedding and local 403/405 policy responses. Effective unit flags/engine pins and publisher namespace masks were checked. Model-only smoke passed on intermediate `901200d`; final-source worker `c25d1824` completed under the allow/block intersection, refused a new parent thread and produced the exact local marker subsequently served over HTTPS by the publisher. Temporary policy was restored and hot-loaded. Private rollback evidence and prior receipts remain; canonical services stay Created, units disabled for boot, bot restart=no. No V1 model-management call, memory purge or Git push. Exact versioned receipts and residual limits: `DIRAC_INTEGRATION.md` / `DIRAC_HANDOFF.md`.
+
+## Historical checkpoint — Dirac integration, 2026-09-22
 
 Root's new AFK grant authorizes autonomous implementation, scoped worktree agents, isolated retesting, labelled live tool/thread/site scenarios, shared V1 embedding API use and a separate Dirac publisher destination. Temporary Dirac authentication stays; canonical Dame cutover remains deferred. Publisher changes and Dirac remote setup are now specifically in scope, unlike the earlier immutable-publisher phase. V1 data and publishing destinations remain separate.
 

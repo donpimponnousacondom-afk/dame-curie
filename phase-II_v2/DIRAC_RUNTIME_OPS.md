@@ -1,8 +1,8 @@
 # Dirac runtime operator (host lifecycle)
 
-Status: **source-only**. Nothing here has been executed: no engine call, no
-container, no unit install, no relay start. Every runtime step below is the
-coordinator's to run with a fresh account/socket/engine resolution.
+Host lifecycle reference. Current deployment and dated checks are recorded in
+`DIRAC_HANDOFF.md`; this document is not itself an activation grant. Re-resolve
+the mapped account, socket and engine before an authorized operation.
 
 ## What this lane owns
 
@@ -12,11 +12,9 @@ starting the ordinary bot entrypoint with a private derived configuration. It is
 not bot-side injection, not a second Discord login and not a replacement
 supervisor.
 
-New files: `scripts/dirac.py`, `scripts/dirac_relay.py`,
-`docker/dirac-relay.service`, `tests/test_dirac_operator.py`,
-`tests/test_dirac_relay.py`. Untouched: `scripts/instance.py`, `compose.yaml`,
-`bot.py`, `jobs.py`, publisher files, `config.py`, the Dockerfile and every
-smoke-protocol file.
+Implementation: `scripts/dirac.py`, `scripts/dirac_relay.py` and
+`docker/dirac-relay.service`. The Dirac publisher has its own unit. Canonical
+lifecycle and Compose configuration are not changed by this hardening.
 
 ## Parent-created layout (the CLI validates, never creates)
 
@@ -138,7 +136,10 @@ be mounted into or written from this container.
   status location as `status_dir='../smoke-status'`, resolved from the config
   file's parent so both lanes agree on one host pair.
 
-No synthetic catalog and no 235-second time bomb exist in this lane.
+The writable status path cannot be the Dirac root or overlap the read-only
+configuration or smoke-request tree in either direction. Comparisons resolve
+both sides, so `..` spelling does not bypass the boundary; symlinked paths are
+refused by the private-path checks.
 
 ## Shared RAG relay (root, separate process)
 
@@ -147,7 +148,7 @@ other engine's bridge is reachable from the Dirac container.
 
 ```sh
 sudo install -m 0644 docker/dirac-relay.service /etc/systemd/system/dirac-relay.service
-sudo systemctl daemon-reload && sudo systemctl enable --now dirac-relay.service
+sudo systemctl daemon-reload && sudo systemctl start dirac-relay.service
 ```
 
 The unit runs `scripts/dirac_relay.py` with the operator venv interpreter as
@@ -168,22 +169,30 @@ namespace identical to its own, `setns` into the V2 daemon's network namespace
 and binds only `<gateway>:11434`. Per connection it re-inspects the V1 container
 read-only (running, `com.docker.compose.project=maxwell-curie`,
 `com.docker.compose.service=ollama`, and the resolved PID owned by V1's account)
-and forks the one fixed helper
-`nsenter --net=/proc/<pid>/ns/net -- socat - TCP4:127.0.0.1:11434`, capped at 32
-live helpers with per-connection re-resolution, so a V1 recreate is followed
-rather than cached. Helpers are reaped by polling the live set on the next
-connection; there is no signal-handler trickery that could make a failed Docker
-call look successful. There is no proxy command, no arbitrary target, no V1
-mutation and no published port; the bind lives inside the V2 daemon namespace,
-so it is not exposed to the host or the LAN. The unit restarts forever with a
-10-second delay, so a daemon that starts later does not leave it permanently
-failed.
+and starts a fixed `nsenter --net=/proc/<pid>/ns/net -- python -I -S -B`
+standard-library pipe helper aimed only at `127.0.0.1:11434`. At most 32 connection
+workers run. Lookup failures return 503 for that connection; the accept loop
+survives a disconnected client. Client reads time out after 60s idle, Docker
+queries after 30s, and upstream socket waits after 180s (the readiness probe's
+existing timeout). These are relay transport bounds, not migrated V1 controls.
 
-The relay is a raw TCP forward, so anything that can reach the bridge can speak
-to Ollama's full local API, including its unauthenticated destructive endpoints.
-Only V2-engine containers can reach it, and that is the coordinator's accepted
-trade for the shared RAG design; if that changes, the fix belongs in the
-bridge/firewall, not in a request filter here.
+Only **POST `/api/embed`, `/api/embeddings`, `/v1/embeddings`** are forwarded.
+Methods and paths outside that set receive local 405/403 responses. Strict header
+validation prevents line-injection; framing becomes one Content-Length and
+Connection: close. Exactly one request body is streamed and any pipelined bytes
+are discarded. Transfer-Encoding is refused with 411; Expect handshakes with
+417. The configured JSON clients use Content-Length. Body/query/auth values are
+not replaced, and no body-size cap was invented.
+
+The daemon PID, process start time and namespace are checked before every accept,
+including under continuous traffic; idle checks occur every 5s. A stale binding
+exits 75 so systemd restarts in the current namespace. The unit uses `-I -S -B`
+and restarts after 10s. Temporary deployment does **not** enable it for boot.
+
+This is an endpoint boundary, not independent model/resource isolation: permitted
+embedding arguments remain client-controlled. It blocks administrative routes,
+but does not claim embeddings cannot affect backend resource residency. The old
+full-API exposure was not an accepted trade; it was a defect addressed here.
 
 ## Known interaction with canonical teardown
 
@@ -205,15 +214,15 @@ status`), then remove the container (`docker rm dirac-v2`, or
 | `-c` program with monkeypatched events and a temporary identity | ordinary `python bot.py` |
 | read-only `/` probe with `--user 0:0` tmpfs config | writable app filesystem like normal Compose |
 
-## Unverified assumptions (coordinator confirms)
+## Deployment-specific checks
 
 1. `172.23.0.1:11434` on `dame-curie_outbound` was observed; the CLI re-derives
    it. If that bridge is recreated with a different subnet, the derived endpoint
    goes stale - `start`/`status` then fail loudly, and recovery is updating
    `bot.env` plus `start --replace`.
 2. `{{(index .IPAM.Config 0).Gateway}}` assumes one subnet on that bridge.
-3. Reachability from the container's veth to that gateway inside the same
-   namespace is design-verified only; the coordinator's exercise must confirm it.
+3. Reachability and HTTP policy must be checked on the deployed relay revision;
+   an earlier raw-TCP success is not evidence for the replacement filter.
 4. The daemon PID file, its ownership and the namespace mapping were verified by
    the coordinator, not by this lane. The relay's per-connection V1 PID check
    assumes V1 container PIDs are visible in the host PID namespace with V1's
@@ -236,14 +245,14 @@ status`), then remove the container (`docker rm dirac-v2`, or
 
 ## Validation performed
 
-`ast.parse`/`compile` of the new modules and tests with the parent checkout's
-Python 3.14 venv only. An independent adversarial source review of the diff was
-run and its findings are folded in (sibling-import path, read-only smoke root,
-smoke path containment, relay helper reaping and cap, engine/target ownership
-checks, unit restart policy), followed by the coordinator's own review fixes
-(per-account Docker calls with a scrubbed environment, socket/rootless/Docker
-root validation, no SIGCHLD trickery, `--pull never`, class-only status text,
-`embedding_readiness` naming). No import of the application, no test execution,
-no dependency install, no engine or container access.
-`tests/test_dirac_operator.py` and `tests/test_dirac_relay.py` are provided
-unexecuted and drive scripted engines only.
+At `65fe79e`, the coordinator ran **341 focused tests** in the frozen Python
+3.14.4 QA image, with no network, credentials or private mounts. Selected Ruff
+F821/F822/F823 checks passed with target `py314`. Relay tests exercise the real
+parser and pipe helper against an isolated loopback stand-in; namespace retirement
+uses synthetic lifecycle checks, not a live V1/V2 daemon restart.
+
+Three extra, unchanged test files produced 19 failures which reproduced on
+baseline `eca42e0` (incomplete mention/instance doubles and an old backup identity
+assertion). They remain outside the 333-pass claim. No whole-repository green
+claim is made. Deployment, real embedding replies and identity receipts belong
+in `DIRAC_HANDOFF.md` / `DIRAC_INTEGRATION.md`.

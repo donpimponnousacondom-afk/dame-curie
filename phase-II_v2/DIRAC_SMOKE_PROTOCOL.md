@@ -1,14 +1,15 @@
 # Dirac operator smoke protocol
 
-Lane `work/dirac-smoke-lean`, worktree `dirac-smoke-lean`, base `7b4398c`. Source-only: no runtime, container, private
-configuration, credential or network access; the parent runs the isolated tests and the live exercise.
+Current source contract. The deployed revision and dated runtime evidence are in `DIRAC_HANDOFF.md`;
+older receipts are not retroactively reclassified by this hardening.
 
 ## Files
 
 `smoke_protocol.py` (settings, immutable request, the one record, atomic and exclusive writes), `dirac_runtime.py` (the
 live poll, observer, injection, deadline, result), `scripts/dirac_smoke.py` (`submit`, `result <id>`, `pending`),
-`tests/test_dirac_smoke.py` with `tests/test_message_pipeline.py` (protocol and queue tests), and — the only edit
-elsewhere — `message_pipeline.py` (`running_message_id`, `cancel_message`).
+`tests/test_dirac_smoke.py` with queue/update/observability regressions. `bot.py` supplies turn boundaries and
+provenance-preserving refreshes; `response_observability.py` and `tool_progress.py` mark non-answer deliveries.
+`message_pipeline.py` supplies `running_message_id` and `cancel_message`.
 
 ## Mounts and config
 
@@ -43,7 +44,10 @@ polls every `poll_seconds`, takes the oldest request by file clock, and writes o
    to the real message and overrides only `author`: the configured operator id, fetched as a real SDK user,
    refused when it is not an integer or is the bot. Injection is `bot._on_message_impl`, so the bot's own
    gates (`bot_enabled`, blacklist, allowlist, sleep) decide as always; `on_message` stays bypassed because
-   the notice's own gateway event already consumed its dedup slot.
+   the notice's own gateway event already consumed its dedup slot. `notice_author` pins the real poster across
+   late fetches and partial updates. Memory attribution uses that poster, including self-account IDs whose
+   Discord `bot` flag is false; the operator remains the permission actor. Synthetic instructions are not
+   extracted as human facts. No memory purge or broader REM change is part of this fix.
 4. One terminal status: `completed`, `failed`, `rejected`, `timeout` or `interrupted`.
 
 One deadline covers the whole request — resolve, notice, injection, the turn — because each can stall. Correlation is
@@ -53,10 +57,18 @@ wrapper around the client's `send_message` (file and plugin posts bypass `record
 `payload["id"]` from the returned payload, never an attribute. Only deliveries into the target channel count: a message
 the turn posted elsewhere is not part of this receipt, and cross-channel behaviour is a separate scenario.
 
-`completed` means the turn returned *and* the target channel received a real message — never that the task's goal was
-met. That outcome is on disk before the reply is read back, and the readback is capped at 5s for the whole job, so a
-stall, a failure or a stop during it cannot delay or downgrade the record. `reply_text` is fetched by the exact delivered
-ids (at most 5) and `reply_verified` stays false; an unreadable id is listed in `reply_readback` with its error type.
+`completed` requires a returned turn, a usable result from its own model call (text or tool calls), and a target-channel
+delivery while that successful result stands which is not marked as a notice. The runtime observes the real
+`_generate_response` contract and restores any pre-existing instance override on shutdown. Sleep notices, public
+errors and transient progress are explicitly marked; their IDs remain evidence, but cannot pass a turn. A real
+answer delivered before a later provider failure still counts. None of this proves the requested task's goal was met.
+
+The terminal outcome is written before optional readback. On ordinary turn settlement, records with delivered IDs,
+including failed notice-only turns, get readback (at most 5 IDs, 5s total). Deadline/interruption receipts retain known
+IDs but do not promise readback. `reply_verified` stays false; unreadable IDs are listed in `reply_readback`.
+A stall, failure or shutdown during readback cannot downgrade a completed record. A final edit
+that only lands after the turn closes is conservatively not counted; its answer may appear in readback without
+changing the failed outcome.
 
 ## Deadline, queue and restart
 
@@ -69,12 +81,13 @@ Eligibility to run is "no record exists", so the record directory is the ledger:
 however many are queued, and a restart rewrites a non-terminal record to `interrupted` rather than re-running it.
 Wiping that directory makes the requests still in it runnable again; nothing here prevents that. A status mount that
 disappeared is refused rather than read as "nothing is done". A failure inside the request boundary always lands as a
-terminal record, and when even that write fails the poll loop stops with an error instead of retrying.
+terminal record, and when even that write fails the poll loop stops with an error instead of retrying. A request
+unlinked before reading is withdrawn without a receipt; a vanished/unstatable entry is skipped during listing,
+so it does not kill polling. Malformed or unreadable request contents still produce a failed record.
 
-## Cross-lane and unverified
+## Evidence boundary
 
-Requires the jobs lane: `response_observability.TURN_INPUT` and the `bot._turn_observer` bracketing in
-`MaxwellBot._run_queued_reply`. Source-verified, not live: `client.py:423-430` wires the client's own `http` into
-`ConnectionState`, so the object the runtime wraps is the one the SDK's sends use, and `client.py:1640` has
-`wait_until_ready`, awaited by the poll task and never by `setup_hook` (which that source warns would deadlock).
-Unverified here: real Discord behaviour, the live HTTP client, the container mounts, and the parent's isolated run.
+The SDK routes sends through the wrapped HTTP client. Readiness is awaited by the poll task, never by
+`setup_hook`. The isolated hardening run at `65fe79e` passed 341 focused tests with Python 3.14.4 and no network
+or private mounts. These tests do not impersonate Discord Gateway events or establish live task success;
+use the exact-version runtime receipts in `DIRAC_HANDOFF.md` and `DIRAC_INTEGRATION.md`.

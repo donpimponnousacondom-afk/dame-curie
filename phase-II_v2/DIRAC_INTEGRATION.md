@@ -1,6 +1,58 @@
 # Dirac end-to-end integration — 2026-09-22
 
-## Authority and goal
+## Current hardening — 2026-09-22
+
+This section supersedes the old raw-relay/source-only claims below. Root narrowed the round to confirmed exposed defects, explicitly stopped broader V1/control/REM work, and retained the **20 MiB override**. No canonical activation, V1 data copy, model management, memory purge or Git push was authorized or performed.
+
+### Exact revisions and isolated receipts
+
+- Integrated operator/publisher masks `eb3f2f1`, job placement `4153a10`, smoke/provenance/races `3671160`, HTTP relay `1783e26`; coordinator follow-ups corrected real SDK fixtures, parser edges, process lifetime and the allowlist/blocklist intersection.
+- Final tested/runtime source: **`65fe79e262fb6f7a385ef5e07530bc432d888185`**. **341 tests passed in 22.54s**, 12 focused test files; selected Ruff F821/F822/F823 checks passed with `--target-version py314`.
+- Frozen QA image: `sha256:a81175b66e37c3aabcb2d6f92e087af49974126e87e60064bbfd890695383792`, Python 3.14.4, pytest 9.0.2, Ruff 0.15.7. Git archive input only, network none, read-only root, disposable synthetic state, no real dotenv/credentials/private mounts. No application imports or tests on host/worktrees were accepted.
+- Initial QA controller omitted Ruff's Python target and stopped on valid 3.14 deferred annotations; the harness was corrected, not the source annotations. The first test batch exposed two invalid SDK `user` setters in new fixtures, corrected to the real connection property. It also found 19 failures in three unchanged files; all 19 reproduced at `eca42e0` (177 tests: 158 passed, 19 failed). These remain outside the focused green claim.
+- Intermediate reviewed runs: 333 passed at `469a356`; 334 at `901200d`. Before final job validation, coordinator review caught the still-missing explicit block check when a parent was also allowlisted. `65fe79e` adds that check and eight matrix cases using the real permission helper. No claim that the earlier 334-pass run covered that intersection.
+- Agent-side execution outside the isolated lane was unauthorized; those claimed counts were withdrawn and are not acceptance evidence.
+
+### Runtime sequence
+
+| Stage | Exact image | Container / observation |
+| --- | --- | --- |
+| Previous deployment | `9a3fa43`, `sha256:077db691648c0e98af7a4d0c54cd3b4c240d11018b140da3666ff04b1ad2147c` | `6036186ac04afb39cb7db2a32ef0bea304dbb2c36799ce0a607dbc0244d14f88`; stopped cleanly 12:47:08 UTC |
+| First hardening activation | `901200d`, `sha256:a2f05bb1b46a0c72b16c7f6f88454dbcb1e2a527f2f1fb9c45628388672b96b6` | `ee25bd78ad1dbb4fc57306c8a0c1fd297825ba5d519dc1431ddad7020a0e4779`; embedding ready, Gateway `1504398705539944560` |
+| Final job-gate correction | `65fe79e`, `sha256:0b18300d4c1f5614c1bf9822cd944310b527949b4ec16eb673c5c8a085f2b1a6` | `d534d4f538a76269f3b650375ac093dbcea4b0549759b509a7162976deeedb70`; embedding ready, restart=no |
+
+The first deployment preflight correctly stopped before mutations because the coordinator assumed a tag while the existing selector held a digest. The corrected rollout **preserved digest pinning**. State/log/unit snapshot: `/var/backups/dirac-v2/20260922T124707Z-901200d`; subsequent app-state/log snapshot: `20260922T131039Z-65fe79e`. Old source/venvs are preserved as recorded in `DIRAC_HANDOFF.md`. The final app-only replacement left the already-verified relay/publisher processes running.
+
+### Finding disposition and live evidence
+
+| Feedback | Actual correction / boundary | Evidence |
+| --- | --- | --- |
+| 1: full API relay | Exact POST embedding route allowlist; single-request framing, strict headers, pipeline slicing; chunked/Expect refused. Permitted embedding arguments can still affect resource residency. | Isolated malformed/smuggling/management-route tests. Live `901200d`: POST `/api/embed` 200, one finite/nonzero 1024-vector; harmless unknown POST 403; GET `/api/embed` 405. Same relay code in final `65fe79e`; final startup readiness passed. No live delete/pull/tags inventory. |
+| 2: notice-only completion | Requires own-task usable model result and non-notice delivery. Sleep/public errors/transient progress excluded; delivered IDs retained and ordinary failed settlements read back. | Focused positive/negative tests; real model-only request `7782a27c1ced4ccc834049047da5abc2` on `901200d` completed, exact marker read back. Notice `1551939327678877787`, output `1551939346486136843`. `reply_verified` remains false by protocol. |
+| 3–4: provenance and late refresh | Poster pinned separately from permission actor, including partial no-author updates and self accounts with `.bot=False`; both memory row paths use real poster; synthetic human-fact extraction skipped. | Real SDK-shaped fixtures, memory-row assertions, failed-fetch/partial-update coverage. Synthetic context retained, not purged; no broader REM claim or linked-media live rerun. |
+| 5: relay lifecycle/failures | Per-connection lookup failures return 503; bounded waits; PID/start-time/namespace watchdog checked under load. Framed helper does not prematurely half-close upstream TCP. | Real pipe/loopback tests plus synthetic retirement/capacity cases; live relay restart, real embedding success. No real daemon restart was performed. |
+| 6: privileged imports | Root-owned installation is not service-user writable; relay and its helper use isolated stdlib interpreters. Installed engine-ID drop-in was updated too, rather than silently overriding the new unit with old flags. | Effective live ExecStart has `-I -S -B` and both engine pins. No writable-root-import exploit was demonstrated. |
+| 7: parent placement | Explicit parent block wins even if parent is allowlisted; absent parent allowance also refuses a sibling; progress/refusal/final output stays in origin thread. | Real-helper matrix tests; final live worker receipt is recorded below. Plain-channel command behavior unchanged. |
+| 8: publisher direct paths | Hide Dirac bot roots and canonical publisher config, retain own config/sites/staging/state. | Actual running mount namespace under UID1005: six existing bot roots unreadable; own config readable; sites read-only; staging/state writable. Same-UID privileges are not a separate-user security boundary; held canonical reverse isolation deferred. |
+| 9: writable smoke mount | Reject root/config/request-tree overlap in either direction, resolving both operands. | Isolated root/overlap/dot-segment/symlink regressions; deployed operator source. No live writable-config remount attempted. |
+| 10: request unlink race | Skip vanished/unstatable listing entries; deletion before read is withdrawal; malformed/unreadable contents fail individually. | Focused race tests; ordinary live polling processed new receipts. No claim of a live unlink-race injection. |
+| 11–12: false ledgers | Separate tested source, image, running container, host units and later documentation. Removed source-only/full-API accepted-trade claims from current references. | This section, `DIRAC_HANDOFF.md`, `DIRAC_RUNTIME_OPS.md`, `DIRAC_SMOKE_PROTOCOL.md`, `docs/STATUS.md`. |
+
+### Final blocked-parent / publication receipt
+
+- Final source `65fe79e`, container `d534d4f538a76269f3b650375ac093dbcea4b0549759b509a7162976deeedb70`, image `sha256:0b18300d4c1f5614c1bf9822cd944310b527949b4ec16eb673c5c8a085f2b1a6`.
+- Controller ran as UID1005, not host root. An initial launch failed before any mutation because the coordinator's scratch script was not readable by that account; its non-secret file mode was corrected. No bot failure or failed smoke receipt was invented for that controller error.
+- Temporarily explicitly allowlisted bot-owned thread `1551880062251442216` and blocked parent `1550960386939817984` **while retaining the parent's allowlist entry**. The control reload acknowledgement was observed before injection. The request visibly identified itself as a smoke test, not a human message.
+- Request `d45ee9cab96145d4b3f9ab828bb5b87c` completed. Notice `1551945685916581981`; correlated acknowledgement `1551945825825984644`; actual job ID `c25d1824` was independently read back in the acknowledgement.
+- That job reached `done`, origin thread `1551880062251442216`, progress-thread ID empty, and exact placement error `the origin thread's parent channel is not allowed for this bot`. This is runtime routing evidence plus tested control flow, not a separate inventory of every Discord thread.
+- Native shell created `sites/dirac-smoke/hardening-65fe79e.txt`; coordinator compared its bytes with the exact requested ASCII marker and newline. [Public marker](https://redroom.zombiedawn.net/dirac/sites/dirac-smoke/hardening-65fe79e.txt) returned HTTP 200 with `SMOKE TEST: DIRAC-HARDENING-65fe79e`, verifying the unchanged publisher's real path after its mount-mask update. No manual remote upload or remote administration substituted for the watcher.
+- The controller restored only its two temporary policy fields, preserving other settings, and observed the restoration hot reload. Incoming limit remained 20 MiB. This was one worker; no new background task was left running.
+- Final installed ownership check under UID1005: all 11 checked entrypoint/import/interpreter paths root-owned and not service-user writable; no writable ancestor. The old viewer had exited when its container stopped; only named `dirac-v2` was recreated for the replacement. Final Screen query: `1089102.dirac-v2`, detached, window `0 env`.
+- Final preservation check compared bot.env and publisher TOML byte-for-byte against the private pre-hardening snapshot without exposing values, lengths or fingerprints; both matched. Every control value also matched that snapshot semantically after restoration. Active jobs and pending smoke requests were both zero. Canonical bot/Ollama/pull were still Created; relay/publisher remained active and disabled for boot; final app remained running with restart=no.
+
+The report's asserted higher V1 attachment cap was false: the separately authorized earlier key-level read found **V1 10 MiB**. Root's **20 MiB** is an explicit retained override, not inferred parity. No further control/REM inventory or archive feature was undertaken.
+
+## Earlier integration authority and goal
 
 Root granted autonomous implementation/review/integration, worktree-based Flash agents, small local commits and appropriately isolated retesting while AFK. The goal is a usable temporary Dirac V2 runtime, not canonical Dame credential cutover. The latest grant explicitly permits publisher/syncer work and SSH setup of a separate Dirac folder, useful real inference/tool requests, Discord test noise in guild `1504753066396618815` / channel `1550960386939817984` and its test threads, and labelled operator smoke injection. Do not impersonate a real human gateway message or fake success. Root will review Discord outputs.
 
