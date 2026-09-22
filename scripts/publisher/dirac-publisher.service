@@ -19,7 +19,15 @@ ProtectHome=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/dame-curie /srv/dame-curie/dirac/sites
 ReadWritePaths=/srv/dame-curie/dirac/publisher/staging /srv/dame-curie/dirac/publisher/state
-InaccessiblePaths=-/srv/dame-curie/data -/srv/dame-curie/config -/srv/dame-curie/logs -/srv/dame-curie/shell
+# The Dirac instance's own bot roots, and the canonical instance's bot roots and
+# publisher credentials, are hidden: this unit runs as `dame-curie`, the same
+# account as both, so file modes cannot separate them. The Dirac publisher's own
+# credentials under /srv/dame-curie/dirac/publisher/config stay readable.
+InaccessiblePaths=-/srv/dame-curie/config -/srv/dame-curie/data \
+                  -/srv/dame-curie/logs -/srv/dame-curie/shell \
+                  -/srv/dame-curie/publisher/config \
+                  -/srv/dame-curie/dirac/config -/srv/dame-curie/dirac/data \
+                  -/srv/dame-curie/dirac/logs -/srv/dame-curie/dirac/shell
 
 [Install]
 WantedBy=multi-user.target

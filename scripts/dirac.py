@@ -92,7 +92,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def smoke_sources(root: Path, uid: int, args: argparse.Namespace) -> dict[str, Path]:
-    """Accept only private smoke directories inside the Dirac root; canonical state is never mountable."""
+    """Accept only private smoke directories inside the Dirac root; canonical state is never mountable.
+
+    A writable smoke directory may not be the Dirac root itself and may not
+    equal, contain or sit inside a read-only mount of this container, because
+    either direction of that overlap makes the read-only tree writable through
+    the second mount.
+    """
     sources: dict[str, Path] = {}
     for option in SMOKE_MOUNTS:
         source = getattr(args, option)
@@ -105,6 +111,18 @@ def smoke_sources(root: Path, uid: int, args: argparse.Namespace) -> dict[str, P
             raise ValueError(f"--{flag} must be a real directory: {source}")
         require_private(source, uid)
         sources[option] = source
+    read_only = [*((root / relative).resolve() for relative, _, readonly in BINDS if readonly),
+                 *(source.resolve() for option, source in sources.items() if option in SMOKE_READ_ONLY)]
+    for option, source in sources.items():
+        if option in SMOKE_READ_ONLY:
+            continue
+        flag = option.replace("_", "-")
+        target = source.resolve()
+        if root.is_relative_to(target):
+            raise ValueError(f"--{flag} must not mount the Dirac root itself: {source}")
+        for path in read_only:
+            if target.is_relative_to(path) or path.is_relative_to(target):
+                raise ValueError(f"--{flag} must not overlap the read-only mount {path}")
     return sources
 
 
