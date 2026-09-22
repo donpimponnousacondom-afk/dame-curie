@@ -16,7 +16,9 @@ import json
 import os
 import time
 from types import SimpleNamespace
+from uuid import uuid4
 
+import discord
 import pytest
 
 import dirac_runtime
@@ -27,15 +29,14 @@ from response_observability import TURN_INPUT
 from smoke_protocol import (
     NOTICE_HEADER_LIMIT,
     NOTICE_LIMIT,
+    TERMINAL_STATUSES,
     SmokeProtocolError,
     SmokeRecord,
     SmokeSettings,
     build_request,
     compose_notice,
     create_json_exclusive,
-    is_terminal,
     iso_now,
-    new_request_id,
     read_json_object,
     request_files,
     request_path,
@@ -76,6 +77,16 @@ class _FakeMessage:
         self.author = author
 
 
+class _ReadbackNotFound(discord.NotFound):
+    """The readback's own 404: a real SDK exception type with no HTTP response."""
+
+    def __init__(self) -> None:
+        pass
+
+    def __str__(self) -> str:
+        return "404 Not Found (Unknown Message)"
+
+
 class _FakeChannel:
     """A channel whose ``send`` goes through ``http.send_message``, as the SDK does."""
 
@@ -99,7 +110,10 @@ class _FakeChannel:
         return message
 
     async def fetch_message(self, message_id):
-        return self.messages[message_id]
+        message = self.messages.get(message_id)
+        if message is None:
+            raise _ReadbackNotFound()
+        return message
 
 
 class _FakeThread(_FakeChannel):
@@ -200,7 +214,6 @@ def _settings(tmp_path, *, enabled=True, make_requests=True):
         "requests_dir": "requests",
         "status_dir": "../smoke-status",
         "poll_seconds": 0.25,
-        "deadline_seconds": 60.0,
     }
     path = root / "config.json"
     path.write_text(json.dumps(config), encoding="utf-8")
@@ -217,7 +230,7 @@ async def _ready(tmp_path, *, enabled=True, make_requests=True):
 
 
 def _submit(settings, task="say pong", **kwargs):
-    request = build_request(request_id=new_request_id(), task=task, **kwargs)
+    request = build_request(request_id=uuid4().hex, task=task, **kwargs)
     create_json_exclusive(request_path(settings, request.request_id), request.as_json())
     return request
 
@@ -235,7 +248,7 @@ async def _wait_for_record(settings, request_id, tries=600):
         path = status_path(settings, request_id)
         if path.exists():
             record = _record_of(settings, request_id)
-            if is_terminal(record.status):
+            if record.status in TERMINAL_STATUSES:
                 return record
         await asyncio.sleep(0.05)
     raise AssertionError(f"{request_id} never terminated: {record}")
@@ -344,6 +357,7 @@ def test_a_visible_turn_is_completed_with_its_exact_delivery(tmp_path):
             {"content": "smoke reply"},
         )
         assert record.reply_text == "smoke reply"
+        assert record.reply_readback == []
         assert record.reply_verified is False
         assert record.channel_id == str(settings.channel_id)
         notice = bot.injected[0]
@@ -365,14 +379,14 @@ def test_a_visible_turn_is_completed_with_its_exact_delivery(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_silent_turn_fails_unless_the_request_allows_it(tmp_path):
+def test_a_silent_turn_is_a_failure_not_a_pass(tmp_path):
+    """`completed` requires a visible delivery, whatever the turn intended."""
+
     async def silent(message, content):
         return None
 
     async def scenario():
-        settings, bot, runtime, request, record = await _one(
-            tmp_path, body=silent, expect_visible=True
-        )
+        settings, bot, runtime, request, record = await _one(tmp_path, body=silent)
         assert record.status == "failed"
         assert record.returned is True
         assert record.delivered_ids == []
@@ -383,23 +397,9 @@ def test_a_silent_turn_fails_unless_the_request_allows_it(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_silent_turn_that_the_request_allows_is_completed(tmp_path):
-    async def silent(message, content):
-        return None
+def test_a_reply_the_harness_cannot_read_back_is_still_a_delivery(tmp_path):
+    """A readback 404 is recorded as a readback failure, never as a failed turn."""
 
-    async def scenario():
-        settings, bot, runtime, request, record = await _one(
-            tmp_path, body=silent, expect_visible=False
-        )
-        assert record.status == "completed"
-        assert record.failure == "no_response, which this request allowed"
-        await runtime.stop()
-        await bot._reply_queue.close()
-
-    asyncio.run(scenario())
-
-
-def test_a_reply_that_cannot_be_fetched_keeps_the_delivery_evidence(tmp_path):
     async def direct_post(message, content):
         """Post the way a plugin does: through HTTP, with no channel object."""
         await bot.http.send_message(
@@ -411,9 +411,11 @@ def test_a_reply_that_cannot_be_fetched_keeps_the_delivery_evidence(tmp_path):
         bot.turn = direct_post
         request = _submit(settings)
         record = await _wait_for_record(settings, request.request_id)
-        assert record.status == "failed"
-        assert record.delivered_ids  # what was delivered is still evidence
-        assert "KeyError" in record.failure
+        assert record.status == "completed"
+        assert record.returned is True
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert record.reply_text == ""
+        assert record.reply_readback == [f"{bot.http.next_id} (_ReadbackNotFound)"]
         await runtime.stop()
         await bot._reply_queue.close()
 
@@ -425,6 +427,7 @@ def test_the_observer_ignores_unrelated_and_late_deliveries():
     turn = observer.open("1", "4242")
     observer.delivered("", "4242", "x")  # a task that is nobody's turn
     observer.delivered("99", "4242", "x")  # an input nobody opened
+    observer.delivered("1", "7777", "x")  # another room's output
     observer.delivered("1", "4242", "a")
     observer.delivered("1", "4242", "a")  # the same message twice
     observer.delivered("1", "4242", "")
@@ -450,7 +453,7 @@ def test_a_direct_message_channel_is_rejected_and_nothing_is_injected(tmp_path):
         request = _submit(settings)
         record = await _wait_for_record(settings, request.request_id)
         assert record.status == "rejected"
-        assert is_terminal(record.status)
+        assert record.status in TERMINAL_STATUSES
         assert "direct message" in record.failure
         assert bot.injected == []
         assert bot.http.calls == []
@@ -557,7 +560,7 @@ def test_a_nonterminal_record_is_interrupted_and_never_rerun(tmp_path):
         await runtime.start()
         record = _record_of(settings, request.request_id)
         assert record.status == "interrupted"
-        assert is_terminal(record.status)
+        assert record.status in TERMINAL_STATUSES
         assert "never re-run" in record.failure
         assert runtime._next_request() is None
         await asyncio.sleep(settings.poll_seconds * 1.5)
@@ -727,9 +730,68 @@ def test_stop_interrupts_the_request_in_flight(tmp_path):
         await runtime.stop()
         record = _record_of(settings, request.request_id)
         assert record.status == "interrupted"
-        assert is_terminal(record.status)
+        assert record.status in TERMINAL_STATUSES
         assert bot._turn_observer is None
         assert bot.http.send_message is original_send  # the wrapper is gone
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_deadline_covers_the_notice_not_only_the_turn(tmp_path):
+    """Resolving and posting the notice can stall too, and that is bounded."""
+
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        bot.channels.clear()  # nothing cached: the fetch is on the path
+        release = asyncio.Event()  # never set
+
+        async def stalled_fetch(channel_id):
+            await release.wait()
+
+        bot.fetch_channel = stalled_fetch
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        request = _submit(settings, deadline_seconds=1.0)
+        record = await _wait_for_record(settings, request.request_id)
+        assert record.status == "timeout"
+        assert "never injected" in record.failure
+        assert record.notice_id == ""
+        assert bot.injected == []
+        await runtime.stop()
+
+    asyncio.run(scenario())
+
+
+def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch):
+    """A turn that ignores its cancel is reported, and nothing new starts."""
+
+    async def scenario():
+        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.05)
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+
+        async def stubborn(message, content):
+            try:
+                await bot.release.wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(1.0)  # swallows the cancel, for now
+
+        bot.turn = stubborn
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        first = _submit(settings, deadline_seconds=1.0)
+        record = await _wait_for_record(settings, first.request_id)
+        assert record.status == "timeout"
+        assert "cleanup is unconfirmed" in record.failure
+        second = _submit(settings, task="second")
+        await asyncio.sleep(0.5)
+        assert not status_path(settings, second.request_id).exists()
+        # Once the stuck task is really gone, the queue moves again.
+        held = await _wait_for_record(settings, second.request_id)
+        assert held.status == "completed"
+        await runtime.stop()
         await bot._reply_queue.close()
 
     asyncio.run(scenario())

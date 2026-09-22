@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Submit and read Dirac smoke requests.
 
-The same file works on the host and inside the bot container: every path comes
-from the config and is resolved against the config's own directory. This tool
-never talks to Discord and never touches the bot — it publishes one immutable
-request that the bot's smoke runtime will pick up, and reads the record back.
+Submit on the host: the container sees the request mount read-only, so writing a
+request is a host operation, while ``result`` and ``pending`` read the same two
+mounts from either side. The same file works in both places because every path
+comes from the config and resolves against the config's own directory. This tool
+never talks to Discord and never touches the bot.
+
+The record directory is the ledger, and eligibility to run is "no record exists",
+so an operator who wipes that directory makes the requests still sitting in the
+request directory runnable again. Nothing here promises otherwise.
 """
 
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,10 +25,8 @@ from smoke_protocol import (
     DEFAULT_DEADLINE_SECONDS,
     SmokeSettings,
     build_request,
-    clock_of,
     create_json_exclusive,
     iso_now,
-    new_request_id,
     read_json_object,
     request_files,
     request_path,
@@ -64,7 +69,7 @@ def _submit(settings: SmokeSettings, args: argparse.Namespace) -> int:
     if args.task_file:
         task = Path(args.task_file).read_text(encoding="utf-8")
     request = build_request(
-        request_id=new_request_id(),
+        request_id=uuid4().hex,
         task=task,
         thread_id=args.thread,
         deadline_seconds=args.deadline,
@@ -96,11 +101,22 @@ def _result(settings: SmokeSettings, request_id: str) -> int:
 
 
 def _pending(settings: SmokeSettings) -> int:
-    """Requests the runtime has not accepted yet, in the order it will run them."""
+    """Requests the runtime has not accepted yet, in the order it will run them.
+
+    The clock is the file's own modification time: request ids are random, so a
+    name order is not an arrival order.
+    """
     rows = []
     for path in request_files(settings):
-        if not status_path(settings, path.stem).exists():
-            rows.append({"request_id": path.stem, "queued_at": clock_of(path)})
+        if status_path(settings, path.stem).exists():
+            continue
+        queued_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        rows.append(
+            {
+                "request_id": path.stem,
+                "queued_at": queued_at.isoformat(timespec="seconds"),
+            }
+        )
     print(json.dumps(rows, indent=2))
     return 0
 

@@ -18,7 +18,6 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 SMOKE_CONFIG_ENV = "DAME_CURIE_DIRAC_SMOKE_CONFIG"
 
@@ -45,17 +44,6 @@ class SmokeProtocolError(RuntimeError):
 def iso_now() -> str:
     """Current UTC time in the one format every request and record uses."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def clock_of(path: Path) -> str:
-    """The arrival clock of a file, in the same UTC format as the records.
-
-    File modification time is what orders requests: ids are random, so name order
-    is not arrival order.
-    """
-    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(
-        timespec="seconds"
-    )
 
 
 def config_id(raw: object, field_name: str) -> int:
@@ -102,7 +90,6 @@ class SmokeSettings:
     operator_id: int
     operator_name: str
     poll_seconds: float
-    deadline_seconds: float
 
     @classmethod
     def from_env(cls) -> SmokeSettings:
@@ -147,27 +134,23 @@ class SmokeSettings:
             poll_seconds=_number(
                 raw, "poll_seconds", DEFAULT_POLL_SECONDS, 0.25, 300.0
             ),
-            deadline_seconds=_number(
-                raw, "deadline_seconds", DEFAULT_DEADLINE_SECONDS, 5.0, 86400.0
-            ),
         )
-
-
-def new_request_id() -> str:
-    """A fresh request id. It correlates files; it is never authentication."""
-    return uuid4().hex
 
 
 @dataclass(frozen=True)
 class SmokeRequest:
-    """One operator instruction. Written once by the CLI and never edited."""
+    """One operator instruction. Written once by the CLI and never edited.
+
+    The deadline is the request's own, not a config knob: it bounds the whole
+    execution (resolve, notice, injection, the turn) and is recorded with the
+    request that asked for it.
+    """
 
     request_id: str
     created_at: str
     task: str
     thread_id: str
     deadline_seconds: float
-    expect_visible: bool
 
     def as_json(self) -> dict:
         return asdict(self)
@@ -179,7 +162,6 @@ def build_request(
     task: str,
     thread_id: str = "",
     deadline_seconds: float = DEFAULT_DEADLINE_SECONDS,
-    expect_visible: bool = True,
     created_at: str = "",
 ) -> SmokeRequest:
     """Validate one request and freeze it.
@@ -212,7 +194,6 @@ def build_request(
         task=text,
         thread_id=thread,
         deadline_seconds=float(deadline_seconds),
-        expect_visible=bool(expect_visible),
     )
 
 
@@ -225,9 +206,6 @@ def parse_request(raw: dict, request_id: str) -> SmokeRequest:
     task = raw.get("task")
     if not isinstance(task, str):
         raise SmokeProtocolError("request task must be text")
-    expect_visible = raw.get("expect_visible", True)
-    if not isinstance(expect_visible, bool):
-        raise SmokeProtocolError("request expect_visible must be true or false")
     thread = raw.get("thread_id") or ""
     if not isinstance(thread, str):
         raise SmokeProtocolError("request thread_id must be text")
@@ -242,7 +220,6 @@ def parse_request(raw: dict, request_id: str) -> SmokeRequest:
         task=task,
         thread_id=thread,
         deadline_seconds=raw.get("deadline_seconds", DEFAULT_DEADLINE_SECONDS),
-        expect_visible=expect_visible,
         created_at=created_at,
     )
 
@@ -282,10 +259,12 @@ class SmokeRecord:
 
     ``status`` is the whole state machine. ``accepted`` and ``running`` are the
     only non-terminal states; everything in ``TERMINAL_STATUSES`` is final. A
-    ``completed`` record means the turn was delivered and nothing more — it is
-    never a claim that the task's goal was achieved. ``reply_text`` is the
+    ``completed`` record means the turn returned and the target channel received a
+    real message — never that the task's goal was achieved. ``reply_text`` is the
     harness's own fetch of the exact delivered ids, so it is evidence of what was
     delivered, not an evaluation, and ``reply_verified`` stays false.
+    ``reply_readback`` names the ids that could not be read back and why: a
+    delivery that happened is not undone by a harness readback failure.
     """
 
     request_id: str
@@ -300,6 +279,7 @@ class SmokeRecord:
     failure: str = ""
     reply_text: str = ""
     reply_verified: bool = False
+    reply_readback: list[str] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, raw: dict) -> SmokeRecord:
@@ -317,6 +297,7 @@ class SmokeRecord:
             failure=str(raw.get("failure") or ""),
             reply_text=str(raw.get("reply_text") or ""),
             reply_verified=bool(raw.get("reply_verified", False)),
+            reply_readback=[str(item) for item in raw.get("reply_readback") or []],
         )
 
     def as_json(self) -> dict:
@@ -326,11 +307,6 @@ class SmokeRecord:
         """Stamp the clock and publish this record atomically, mode 0600."""
         self.updated_at = iso_now()
         write_json_atomic(path, self.as_json())
-
-
-def is_terminal(status: str) -> bool:
-    """True once a request can never run again."""
-    return status in TERMINAL_STATUSES
 
 
 def read_json_object(path: Path, what: str) -> dict:

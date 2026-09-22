@@ -9,8 +9,14 @@ gates drop is recorded as a request that never became a turn, never retried.
 Correlation is the notice's own message id, carried by
 ``response_observability.TURN_INPUT`` into everything the turn spawns. Deliveries
 come from ``record_delivery`` and from a wrapper around the client's
-``send_message``, which is what catches file and plugin posts. The runtime sets
-``bot._turn_observer`` itself; ``bot.py`` never does.
+``send_message``, which is what catches file and plugin posts; only deliveries in
+the target channel count for the receipt. The runtime sets ``bot._turn_observer``
+itself; ``bot.py`` never does.
+
+Eligibility to run is the absence of a record, so the record directory *is* the
+ledger: a request that has one never runs again, and wiping that directory makes
+the requests still in the request directory runnable again. Nothing here promises
+otherwise.
 """
 
 import asyncio
@@ -24,12 +30,12 @@ import discord
 from response_observability import TURN_INPUT
 from smoke_protocol import (
     REPLY_FETCH_LIMIT,
+    TERMINAL_STATUSES,
     SmokeProtocolError,
     SmokeRecord,
     SmokeRequest,
     SmokeSettings,
     compose_notice,
-    is_terminal,
     iso_now,
     parse_request,
     read_json_object,
@@ -42,6 +48,9 @@ if TYPE_CHECKING:
     from bot import MaxwellBot
 
 logger = logging.getLogger(__name__)
+
+# How long a cancelled turn is given to actually stop before the runtime says so.
+CLEANUP_SECONDS = 5.0
 
 
 def sent_message_id(payload: object) -> str:
@@ -97,9 +106,17 @@ class _TurnObserver:
         return token
 
     def delivered(self, input_id: str, channel_id: str, message_id: str) -> None:
-        """Record one real delivery, once, and never after the turn closed."""
+        """Record one real delivery into this input's own room, once.
+
+        A message the turn posted somewhere else is not part of this receipt: the
+        record is evidence for the target channel, and implying more than that
+        would overstate what was verified. Cross-channel behaviour is a separate
+        scenario with its own checks.
+        """
         turn = self._turns.get(input_id)
         if turn is None or turn.done.is_set():
+            return
+        if str(channel_id) != turn.channel_id:
             return
         message_key = str(message_id or "")
         if message_key and message_key not in turn.delivered:
@@ -153,6 +170,7 @@ class DiracSmokeRuntime:
         self.settings = settings
         self._observer = _TurnObserver()
         self._poll: asyncio.Task | None = None
+        self._stuck: asyncio.Task | None = None
         self._http = None
         self._http_send = None
 
@@ -190,18 +208,19 @@ class DiracSmokeRuntime:
         """Stop polling, cancel only what this runtime owns, then unhook.
 
         Inputs are cancelled before the observer is cleared, and each owned turn is
-        awaited so its ``finally`` resets the ContextVar before the bot goes away.
+        awaited, briefly and boundedly, so its ``finally`` resets the ContextVar
+        before the bot goes away. A turn that will not stop is reported as
+        unconfirmed rather than claimed as stopped.
         """
         if not self.settings.enabled:
             return
         poll, self._poll = self._poll, None
         if poll is not None and not poll.done():
             poll.cancel()
-            await asyncio.wait({poll})
+            await self._wait_for_settle(poll)
         for turn in self._observer.outstanding():
             self._cancel_input(turn.channel_id, turn.input_id)
-            if turn.task is not None and not turn.task.done():
-                await asyncio.wait({turn.task})
+            await self._wait_for_settle(turn.task)
             self._observer.discard(turn.input_id)
         if self._http is not None and self._http_send is not None:
             self._http.send_message = self._http_send
@@ -220,7 +239,7 @@ class DiracSmokeRuntime:
         """
         for path in sorted(self.settings.status_dir.glob("*.json")):
             record = SmokeRecord.from_json(read_json_object(path, "record"))
-            if is_terminal(record.status):
+            if record.status in TERMINAL_STATUSES:
                 continue
             record.status = "interrupted"
             record.failure = (
@@ -271,6 +290,12 @@ class DiracSmokeRuntime:
         TURN_INPUT.set("")  # this task is nobody's turn; its posts are not replies
         while True:
             await asyncio.sleep(self.settings.poll_seconds)
+            if self._stuck is not None:
+                if not self._stuck.done():
+                    # An old turn that ignored its cancel is still running in a
+                    # room. Starting another request now would overlap them.
+                    continue
+                self._stuck = None
             path = self._next_request()
             if path is None:
                 continue
@@ -307,37 +332,106 @@ class DiracSmokeRuntime:
         record = SmokeRecord(
             request_id=request_id, status="accepted", created_at=iso_now()
         )
+        turn: _Turn | None = None
         try:
             request = parse_request(read_json_object(path, "request"), request_id)
             record.created_at = request.created_at
             record.thread_id = request.thread_id
             record.channel_id = request.thread_id or str(self.settings.channel_id)
             record.write(record_path)
-            channel = await self._target_channel(request)
-            operator = await self._operator()
-            operator_name = self.settings.operator_name or str(
-                getattr(operator, "display_name", "") or ""
-            )
-            notice = await channel.send(
-                compose_notice(
-                    request,
-                    operator_name=operator_name,
-                    operator_id=self.settings.operator_id,
-                    bot_id=int(self.bot.user.id),
+            # One deadline for the whole request. Resolving the target, fetching
+            # the operator and posting the notice can stall too, and a deadline
+            # that only started at the turn would leave those unbounded.
+            async with asyncio.timeout(request.deadline_seconds):
+                channel = await self._target_channel(request)
+                operator = await self._operator()
+                operator_name = self.settings.operator_name or str(
+                    getattr(operator, "display_name", "") or ""
                 )
-            )
-            input_id = str(notice.id)
-            record.notice_id = input_id
-            record.status = "running"
+                notice = await channel.send(
+                    compose_notice(
+                        request,
+                        operator_name=operator_name,
+                        operator_id=self.settings.operator_id,
+                        bot_id=int(self.bot.user.id),
+                    )
+                )
+                input_id = str(notice.id)
+                record.notice_id = input_id
+                record.status = "running"
+                record.write(record_path)
+                turn = self._observer.open(input_id, str(channel.id))
+                await self.bot._on_message_impl(_NoticeInput(notice, operator))
+                await turn.done.wait()
+            # The block above only completes with the turn closed; the deadline is
+            # the only way out of it without one.
+            record.returned = turn.returned
+            record.delivered_ids = list(turn.delivered)
             record.write(record_path)
-            turn = self._observer.open(input_id, str(channel.id))
-            await self.bot._on_message_impl(_NoticeInput(notice, operator))
-            await self._settle(record, record_path, request, channel, turn)
+            if not turn.returned:
+                record.status = "failed"
+                record.failure = "the turn did not return; it raised or was cancelled"
+            elif not record.delivered_ids:
+                record.status = "failed"
+                record.failure = (
+                    "the turn returned without delivering a visible message "
+                    "(no_response)"
+                )
+            else:
+                record.status = "completed"
+                text, unreadable = await self._reply_text(
+                    channel, record.delivered_ids
+                )
+                record.reply_text = text
+                record.reply_readback = unreadable
+                record.reply_verified = False
+            record.write(record_path)
+            self._observer.discard(turn.input_id)
+        except TimeoutError:
+            # The deadline is a recorded outcome, not an error: what is known is
+            # persisted, including any delivery that did happen before it.
+            if turn is not None:
+                record.delivered_ids = list(turn.delivered)
+            if turn is None:
+                record.status = "timeout"
+                record.failure = (
+                    "the deadline expired before the notice was delivered; the "
+                    "request was never injected"
+                )
+            else:
+                queued = self._cancel_input(turn.channel_id, turn.input_id)
+                settled = await self._wait_for_settle(turn.task)
+                record.status = "timeout"
+                if turn.task is not None:
+                    record.failure = (
+                        "the turn exceeded its deadline; only this input was "
+                        "cancelled"
+                    )
+                elif queued:
+                    record.failure = (
+                        "the input was still waiting in the reply queue and was "
+                        "removed unexecuted"
+                    )
+                else:
+                    record.failure = (
+                        "no turn was dispatched for the notice within the deadline; "
+                        "the bot's own gates or the reply queue dropped it"
+                    )
+                if not settled:
+                    record.failure += (
+                        "; the cancelled turn had not stopped within "
+                        f"{CLEANUP_SECONDS:g}s, so cleanup is unconfirmed"
+                    )
+            record.write(record_path)
+            if turn is not None:
+                self._observer.discard(turn.input_id)
         except SmokeProtocolError as refused:
             record.status = "rejected"
             record.failure = str(refused)
             record.write(record_path)
         except asyncio.CancelledError:
+            if turn is not None:
+                record.delivered_ids = list(turn.delivered)
             record.status = "interrupted"
             record.failure = (
                 "the smoke runtime stopped while this request was in flight"
@@ -412,84 +506,48 @@ class DiracSmokeRuntime:
             )
         return channel
 
-    async def _settle(
-        self,
-        record: SmokeRecord,
-        record_path: Path,
-        request: SmokeRequest,
-        channel,
-        turn: _Turn,
-    ) -> None:
-        """Wait for the turn, then record what actually happened."""
-        await self._wait_for_turn(turn, request.deadline_seconds)
-        if not turn.done.is_set():
-            queued = self._cancel_input(turn.channel_id, turn.input_id)
-            if turn.task is not None and not turn.task.done():
-                await asyncio.wait({turn.task})
-            record.status = "timeout"
-            if turn.task is not None:
-                record.failure = (
-                    "the turn exceeded its deadline; only this input was cancelled"
-                )
-            elif queued:
-                record.failure = (
-                    "the input was still waiting in the reply queue and was "
-                    "removed unexecuted"
-                )
-            else:
-                record.failure = (
-                    "no turn was dispatched for the notice within the deadline; "
-                    "the bot's own gates or the reply queue dropped it"
-                )
-            record.write(record_path)
-            self._observer.discard(turn.input_id)
-            return
-        record.returned = turn.returned
-        record.delivered_ids = list(turn.delivered)
-        record.write(record_path)
-        if not turn.returned:
-            record.status = "failed"
-            record.failure = "the turn did not return; it raised or was cancelled"
-        elif not record.delivered_ids:
-            if request.expect_visible:
-                record.status = "failed"
-                record.failure = (
-                    "the turn returned without delivering a visible message "
-                    "(no_response)"
-                )
-            else:
-                record.status = "completed"
-                record.failure = "no_response, which this request allowed"
-        else:
-            record.status = "completed"
-            record.reply_text = await self._reply_text(channel, record.delivered_ids)
-            record.reply_verified = False
-        record.write(record_path)
-        self._observer.discard(turn.input_id)
+    async def _wait_for_settle(self, task: asyncio.Task | None) -> bool:
+        """Wait up to ``CLEANUP_SECONDS`` for a cancelled task to actually stop.
 
-    async def _wait_for_turn(self, turn: _Turn, deadline: float) -> None:
-        """Wait up to ``deadline`` for the turn's own task to close.
-
-        ``asyncio.wait`` rather than ``wait_for``: the deadline is an expected
-        outcome here, recorded rather than raised.
+        A cancellation is a request, not a result. When the task has not stopped,
+        the runtime says so instead of claiming a stopped turn, and it starts no
+        further request until that task is really gone.
         """
-        waiter = asyncio.ensure_future(turn.done.wait())
-        done, _ = await asyncio.wait({waiter}, timeout=deadline)
-        if not done:
-            waiter.cancel()
-            await asyncio.wait({waiter})
+        if task is None or task.done():
+            return True
+        await asyncio.wait({task}, timeout=CLEANUP_SECONDS)
+        if task.done():
+            return True
+        self._stuck = task
+        logger.warning(
+            "Dirac smoke: a cancelled task had not stopped after %gs: %r",
+            CLEANUP_SECONDS,
+            task,
+        )
+        return False
 
-    async def _reply_text(self, channel, delivered: list[str]) -> str:
+    async def _reply_text(
+        self, channel, delivered: list[str]
+    ) -> tuple[str, list[str]]:
         """What the delivered messages said, fetched by their exact ids.
 
         Capped, and never assembled from recent channel history: text the harness
-        did not fetch itself is text it cannot stand behind.
+        did not fetch itself is text it cannot stand behind. A readback failure is
+        recorded as exactly that and never rewrites the delivery — a message that
+        was really sent stays sent when the harness cannot read it back — so the
+        catch is narrow (the SDK's own HTTP error, and a local one) because
+        anything else is a bug rather than a missing message.
         """
         parts = []
+        unreadable = []
         for message_id in delivered[:REPLY_FETCH_LIMIT]:
-            message = await channel.fetch_message(int(message_id))
+            try:
+                message = await channel.fetch_message(int(message_id))
+            except (discord.HTTPException, OSError) as exc:
+                unreadable.append(f"{message_id} ({type(exc).__name__})")
+                continue
             parts.append(str(getattr(message, "content", "") or ""))
-        return "\n---\n".join(parts)
+        return "\n---\n".join(parts), unreadable
 
     def _cancel_input(self, channel_id: str, input_id: str) -> bool:
         """Cancel exactly this input: not the channel, not the queue behind it."""
@@ -497,3 +555,4 @@ class DiracSmokeRuntime:
         if queue is None:
             return False
         return bool(queue.cancel_message(channel_id, input_id))
+
