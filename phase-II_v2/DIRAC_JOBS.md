@@ -33,20 +33,30 @@ No parallel job framework was added.
 1. **Thread target (`jobs.py`).** `Message.create_thread` posts to
    `start_thread_with_message(self.channel.id, ...)` and every `Message` exposes `create_thread`, so
    a job started inside a thread called `POST /channels/{thread}/threads` and the old
-   `elif hasattr(channel, "create_thread")` rescue could never run. Such a job now creates a
-   standalone public thread in the origin thread's own parent channel; the origin-message path runs
-   exactly as before for every channel that can create a thread.
+   `elif hasattr(channel, "create_thread")` rescue could never run. The origin channel is now
+   classified explicitly with `isinstance(channel, discord.Thread)` — the SDK's own idiom — and such
+   a job creates a standalone public thread in the origin thread's own parent channel. A thread whose
+   parent cannot be resolved is reported, not guessed at. The origin-message path runs exactly as
+   before for every channel that is not a thread. Test fakes bind this by monkeypatching
+   `discord.Thread`, not by duck-typing their way past the discriminator.
 2. **Honest thread failure (`jobs.py`).** Creation failure was only `logger.info`; a created-but-
    unwritable thread was swallowed in `_post_thread`. Both now record `thread_error` on the job
    (new persisted field, default `""`, old records load unchanged) and post one line in the origin
-   channel: the work still runs, the missing progress is stated rather than implied by "done".
-   `thread_id` is cleared when a thread carries no progress, so nothing links an empty thread.
-   Direct-message jobs stay quiet because threads are impossible there, not merely unavailable.
-3. **Recursion guard (`jobs.py`).** `orig_message._bg_job = True` could not work: the SDK `Message`
-   declares `__slots__`, so the write raised inside a bare `except Exception: pass`. The only real
-   bound left was the per-user cap. The job runtime now carries the origin message id
-   (`mark_in_job` / `is_in_job`) and `SpawnBackgroundTool` refuses that message. The old
-   `getattr(message, "_bg_job", False)` read is kept so existing fixtures still exercise it.
+   channel, gated by the same `error_replies` control as every other job notice. The wording states
+   what happened and what still happens ("there is no progress thread (<reason>). The job continues;
+   its result lands here."): a failed first post is recorded as `initial progress post failed`, not
+   as a permanent inability to post, and that thread is not retried for this job. `thread_id` is
+   cleared when a thread carries no progress, so nothing links an empty thread. Direct-message jobs
+   stay quiet because threads are impossible there, not merely unavailable.
+3. **Recursion guard (`jobs.py`).** `orig_message._bg_job = True` was the only guard, and the
+   approved SDK copy declares `__slots__` on `Message`, so the write could not be relied on. A
+   message-id marker is not the answer either: the origin message is shared with the live turn that
+   started the job, so a marker made the live turn's own second attempt look like a nested job and
+   told the model to do the long work inline. The guard is now `jobs.JOB_TURN`, a ContextVar set
+   around the job's own tool loop: the job task and every tool subtask it spawns see it, the live
+   turn's task does not. A live turn that asks again still gets the requester's real limit
+   (`ALREADY RUNNING`, ack and stop), and a job's own turn gets `ALREADY INSIDE`. No manager state and
+   no message attribute is involved.
 4. **Thread association and allowlist (`bot.py`).** `!job <id>` now appends the progress-thread link
    built from the job's own guild/thread ids, or the recorded `thread_error`. `allowed_channels` is
    an exact channel-id whitelist and a thread has its own id, so a job thread (and any follow-up in
@@ -61,8 +71,11 @@ Approved copy used for every load-bearing claim: `/tmp/curie-sdk-public-u5v2n7g8
 (and `abc.py`). Line references are to that copy.
 
 - `from .threads import Thread` (74): `discord.Thread` is a real public name.
-- `PartialMessage.__slots__` (933), `Message.__slots__` (1942), and no `'__dict__'` anywhere in the
-  file: SDK messages are slotted, which is why fix 3 exists.
+- `PartialMessage.__slots__` (933) and `Message.__slots__` (1942) are declared, and the file contains
+  no `'__dict__'`. Whether an instance accepts a new attribute also depends on base classes outside
+  the approved set (`discord.utils.Hashable`), so this lane stops relying on that question: the
+  recursion guard is a ContextVar, which does not care how the SDK object is laid out. The parent can
+  settle the MRO detail from an actual SDK extract; nothing here depends on it either way.
 - `create_thread` (1384) body: `start_thread_with_message(self.channel.id, self.id, ...)` and
   `raise ValueError('This message does not have guild info attached')` when `self.guild is None`.
 - `isinstance(channel, Thread) and channel.parent_id == ref.channel_id` (2086): both the thread
@@ -70,7 +83,7 @@ Approved copy used for every load-bearing claim: `/tmp/curie-sdk-public-u5v2n7g8
 - `getattr(self.channel, 'parent', self.channel).type is ChannelType.forum` (2533) and
   `ChannelType.news_thread/public_thread/private_thread` (942-944): `channel.parent`, `channel.type`
   and `ChannelType.forum` are real attributes.
-- `abc.py` 651/714/1761/2899 declare `__slots__ = ()`: slot-only bases are the SDK's pattern.
+- `abc.py` 651/714/1761/2899 declare `__slots__ = ()`.
 
 Disclosure: before the coordinator flagged it, this lane had also read
 `/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/discord/{message,channel,threads}.py`
@@ -90,21 +103,24 @@ Not verified and not relied on silently:
 - That Discord rejects `POST /channels/{thread}/threads`. This is API behavior, not a source fact;
   what the source guarantees is that the old code sent the request to the thread's own id.
 - `discord.utils.Hashable` declaring `__slots__ = ()` (the file is not in the approved set). No
-  longer load-bearing: nothing in this lane writes an attribute onto an SDK object.
+  longer load-bearing: the recursion guard is a ContextVar and nothing in this lane writes an
+  attribute onto an SDK object.
 
 ## Validation
 
-- Passed: Python 3.14 `py_compile` and `ast.parse` of `jobs.py`, `bot.py`,
-  `tests/test_background_jobs.py` using `/home/codexy/deepseek/dame-curie/.venv/bin/python -I -B
-  -X pycache_prefix=/tmp/dirac-jobs-validation`; `git diff --check` clean. No application module was
+- Passed: Python 3.14 `py_compile` of `jobs.py`, `bot.py`, `response_observability.py`,
+  `tests/test_background_jobs.py`, `tests/test_response_observability.py` using
+  `/home/codexy/deepseek/dame-curie/.venv/bin/python -I -B -X
+  pycache_prefix=/tmp/dirac-jobs-validation`; `git diff --check` clean. No application module was
   imported and no test was collected or executed.
-- Not run: the focused tests added to `tests/test_background_jobs.py` (thread-origin parent-channel
-  targeting, creation-failure honesty, direct-message quietness, manager-based recursion refusal,
-  `!job` link/error line) and to `tests/test_response_observability.py` (input-scoped delivery
-  reporting, inert-without-observer, a raising observer not costing a delivery, `_run_queued_reply`
-  bracketing on success and on failure, and the no-observer forward); ruff (not installed in the
-  permitted interpreter, and no install is authorized in this lane); any Discord, provider or
-  container behavior.
+- Not run: the focused tests in `tests/test_background_jobs.py` (thread-origin parent-channel
+  targeting with `discord.Thread` monkeypatched, creation-failure honesty, the `error_replies` gate
+  on that notice, direct-message quietness, ContextVar recursion refusal, a live turn's second
+  attempt staying `ALREADY RUNNING`, `!job` link/error line) and in
+  `tests/test_response_observability.py` (input-scoped delivery reporting, inert-without-observer, a
+  raising observer not costing a delivery, `_run_queued_reply` bracketing on success and on failure,
+  and the no-observer forward); ruff (not installed in the permitted interpreter, and no install is
+  authorized in this lane); any Discord, provider or container behavior.
 - Unverified runtime edges: actual thread creation/permission in the authorized guild, the
   parent-channel shape above, allowlist inheritance with a non-empty `allowed_channels`, the
   `!job` link format, and the honest-failure notice path against a real API error.

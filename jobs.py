@@ -31,6 +31,7 @@ import os
 import re
 import secrets
 import time
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +69,13 @@ BG_MAX_PER_USER_DEFAULT = 1
 # Job tools never include this: a background turn that spawns another
 # background turn is recursion, not progress.
 _NO_RECURSE_TOOL = "spawn_background"
+
+# True while a detached job is running its own tool loop. Every tool subtask the
+# job spawns inherits it, while the live turn that started the job is a
+# different task and keeps its own value, so a second spawn from the live turn
+# is still answered with the requester's real limit instead of "you are inside a
+# job".
+JOB_TURN: ContextVar[bool] = ContextVar("job_turn", default=False)
 
 
 def resolve_job_budgets(control: Any, config: Any) -> dict[str, int]:
@@ -305,18 +313,6 @@ class BackgroundJobManager:
     def attach_runtime(self, job_id: str, **objects: Any) -> None:
         self._runtime[str(job_id)] = dict(objects)
 
-    def mark_in_job(self, job_id: str, message: Any) -> None:
-        """Record that a detached job turn now owns this origin message."""
-        entry = self._runtime.setdefault(str(job_id), {})
-        entry["in_job_message_id"] = str(getattr(message, "id", "") or "")
-
-    def is_in_job(self, message: Any) -> bool:
-        """Whether a detached job already owns this message (no nested jobs)."""
-        mid = str(getattr(message, "id", "") or "")
-        return bool(mid) and any(
-            rt.get("in_job_message_id") == mid for rt in self._runtime.values()
-        )
-
     def runtime(self, job_id: str) -> dict[str, Any]:
         return self._runtime.get(str(job_id), {})
 
@@ -379,12 +375,10 @@ class SpawnBackgroundTool(Tool):
         self, message: Any, goal: str | None = None, context: str | None = None,
         provider: str = "main", model: str | None = None, **kwargs: Any,
     ) -> str:
+        if JOB_TURN.get():
+            return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
         bot = getattr(self, "bot", None)
         manager = getattr(bot, "bg_jobs", None) if bot is not None else None
-        if getattr(message, "_bg_job", False) or (
-            manager is not None and manager.is_in_job(message)
-        ):
-            return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
         if manager is None:
             return "ERROR: background jobs are not enabled on this bot. Do the work inline."
         raw_goal = str(goal or kwargs.get("text") or kwargs.get("prompt") or "").strip()
@@ -567,12 +561,13 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     thread_err = ""
     thread_name = f"build: {_short(job.goal, 40)}"
     parent = getattr(channel, "parent", None)
-    nested_in_thread = parent is not None and not hasattr(channel, "create_thread")
     try:
-        if nested_in_thread and hasattr(parent, "create_thread"):
-            import discord  # local import: no hard dep at module load
+        import discord  # local import: no hard dep at module load
 
-            if getattr(parent, "type", None) is discord.ChannelType.forum:
+        if isinstance(channel, discord.Thread):
+            if parent is None:
+                thread_err = "the origin thread's parent channel is unknown"
+            elif getattr(parent, "type", None) is discord.ChannelType.forum:
                 thread_err = "the origin thread lives in a forum channel"
             else:
                 thread = await parent.create_thread(
@@ -596,27 +591,23 @@ async def run_background_job(bot: Any, job_id: str) -> None:
             f"Budgets: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. Progress lands here.",
             context=job_context,
         ):
-            # A thread nobody can write to carries no progress: say so instead
-            # of linking an empty thread from a "done" job.
-            thread_err = "the progress thread exists but I cannot post in it"
+            # A thread whose first post failed carries no progress, and it is
+            # not retried for this job: stop advertising it as the progress
+            # location rather than linking an empty thread from a "done" job.
+            thread_err = "initial progress post failed"
             manager.mark(job.id, thread_id="", thread_error=thread_err)
             thread = None
     if thread is None:
         logger.info("background job %s: no thread (%s)", job.id, thread_err or "DMs have no threads")
         if thread_err and orig_message.guild is not None:
             manager.mark(job.id, thread_error=thread_err)
-            await _post_thread(
-                channel,
-                f"job `{job.id}` is running, but I could not open a progress thread ({thread_err}). "
-                "No step progress; the result still lands here.",
-                context=job_context,
-            )
-
-    # Marking the SDK message with an attribute does NOT work: Message is
-    # slotted, so the write raises and a bare except would hide it. The job
-    # runtime carries the origin message instead, which is what the recursion
-    # guard in SpawnBackgroundTool reads.
-    manager.mark_in_job(job.id, orig_message)
+            if (getattr(bot, "_control", {}) or {}).get("error_replies", True):
+                await _post_thread(
+                    channel,
+                    f"job `{job.id}` is running, but there is no progress thread ({thread_err}). "
+                    "The job continues; its result lands here.",
+                    context=job_context,
+                )
 
     try:
         from tool_schemas import TURN_ENDING_TOOL_NAMES
@@ -654,6 +645,10 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     deadline = time.monotonic() + float(timeout)
     job_provider = None
     effective_route = ""
+    # Inside the job's own task, so every tool subtask it spawns inherits the
+    # value and refuses to spawn another job. The live turn that started this
+    # job runs in its own task and is unaffected.
+    job_turn_token = JOB_TURN.set(True)
     try:
         for step in range(max(1, max_iters)):
             if time.monotonic() > deadline:
@@ -799,6 +794,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         await _post_thread(thread, f"Job `{job.id}` cancelled.", context=job_context)
         raise
     finally:
+        JOB_TURN.reset(job_turn_token)
         try:
             if job_provider is not None:
                 await job_provider.close()

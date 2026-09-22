@@ -8,11 +8,13 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import discord
 import pytest
 
 from bot import MaxwellBot
 from error_reporting import PUBLIC_ERROR_TEXT
 from jobs import (
+    JOB_TURN,
     BackgroundJobManager,
     SpawnBackgroundTool,
     resolve_job_budgets,
@@ -235,22 +237,29 @@ def test_spawn_tool_refuses_recursion(tmp_path):
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         tool = SpawnBackgroundTool(StubBot(manager))
-        message = FakeMessage()
-        message._bg_job = True
-        return await tool.execute(message, goal="nested")
+        token = JOB_TURN.set(True)
+        try:
+            return await tool.execute(FakeMessage(), goal="nested")
+        finally:
+            JOB_TURN.reset(token)
 
     assert "ALREADY INSIDE" in asyncio.run(scenario())
 
 
 def test_spawn_tool_second_spawn_tells_model_to_ack(tmp_path):
+    """The live turn's own second attempt is a limit, not "you are inside a job"."""
+
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         tool = SpawnBackgroundTool(StubBot(manager))
-        await tool.execute(FakeMessage(), goal="first")
-        return await tool.execute(FakeMessage(), goal="second")
+        message = FakeMessage()
+        first = await tool.execute(message, goal="first")
+        assert "Background job `" in first
+        return await tool.execute(message, goal="second")
 
     result = asyncio.run(scenario())
     assert "ALREADY RUNNING" in result
+    assert "ALREADY INSIDE" not in result
     assert "send_message" in result
 
 
@@ -372,8 +381,9 @@ def test_runner_splits_long_delivery_messages(tmp_path):
 # progress thread targeting and honest thread failure
 
 
-def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_path):
+def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_path, monkeypatch):
     """A job started inside a thread cannot nest: progress goes to its parent."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
@@ -394,7 +404,7 @@ def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_pat
     assert job.thread_id == "thread-1"
     assert job.thread_error == ""
     assert parent.thread.sent[0].startswith(f"Job `{job.id}` running")
-    assert not any("could not open a progress thread" in text for text in channel.sent)
+    assert not any("no progress thread" in text for text in channel.sent)
 
 
 def test_runner_reports_missing_progress_thread_instead_of_silent_success(tmp_path):
@@ -415,12 +425,32 @@ def test_runner_reports_missing_progress_thread_instead_of_silent_success(tmp_pa
     assert job.status == "done"
     assert job.thread_id == ""
     assert job.thread_error == "RuntimeError"
-    notices = [
-        text for text in channel.sent if "could not open a progress thread" in text
-    ]
+    notices = [text for text in channel.sent if "no progress thread" in text]
     assert len(notices) == 1
+    assert "The job continues; its result lands here." in notices[0]
     assert PUBLIC_ERROR_TEXT not in channel.sent
     assert any("<@111>" in text and job.id in text for text in channel.sent)
+
+
+def test_runner_keeps_thread_failure_quiet_when_error_replies_are_off(tmp_path):
+    """The record is still honest even when the notice is configured away."""
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        bot._control = {"error_replies": False}
+        message = FakeRefusingMessage()
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_error == "RuntimeError"
+    assert not any("no progress thread" in text for text in channel.sent)
 
 
 def test_runner_dm_job_reports_no_thread_without_claiming_one(tmp_path):
@@ -440,22 +470,6 @@ def test_runner_dm_job_reports_no_thread_without_claiming_one(tmp_path):
     assert job.thread_id == ""
     assert job.thread_error == ""
     assert not any("progress thread" in text for text in channel.sent)
-
-
-def test_spawn_tool_refuses_a_message_that_already_serves_a_job(tmp_path):
-    """Recursion is refused without writing an attribute onto the SDK message."""
-
-    async def scenario():
-        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
-        tool = SpawnBackgroundTool(StubBot(manager))
-        message = FakeMessage()
-        job = manager.create(guild_id="g", channel_id="222", user_id="111", goal="first")
-        manager.mark_in_job(job.id, message)
-        assert not hasattr(message, "_bg_job")
-        return await tool.execute(message, goal="second")
-
-    result = asyncio.run(scenario())
-    assert "ALREADY INSIDE" in result
 
 
 def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
