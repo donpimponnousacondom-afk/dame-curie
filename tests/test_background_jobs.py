@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bot import MaxwellBot
 from error_reporting import PUBLIC_ERROR_TEXT
 from jobs import (
     BackgroundJobManager,
@@ -57,6 +58,7 @@ class FakeGuild:
 
 class FakeMessage:
     def __init__(self, channel=None, content=",bg a portfolio site"):
+        self.id = "900"
         self.channel = channel or FakeChannel()
         self.content = content
         self.author = FakeAuthor()
@@ -73,6 +75,50 @@ class StubBot:
         self.config = FakeConfig()
         self.memory = SimpleNamespace(get_server_prompt=lambda server_id: None)
         self._get_personality = lambda: "Synthetic personality"
+
+
+class FakeParentChannel(FakeChannel):
+    """The channel that owns a thread; a job started in the thread lands here."""
+
+    def __init__(self, cid="666"):
+        super().__init__(cid)
+        self.created_threads = []
+
+    async def create_thread(self, **kwargs):
+        self.created_threads.append(kwargs)
+        self.thread = FakeThread()
+        return self.thread
+
+
+class FakeThreadChannel:
+    """A live Discord thread: sendable, and it has a parent channel."""
+
+    def __init__(self, parent):
+        self.id = "555"
+        self.parent = parent
+        self.sent = []
+
+    async def send(self, text):
+        self.sent.append(text)
+        return None
+
+
+class FakeRefusingMessage(FakeMessage):
+    """A thread origin, where Discord refuses a thread of a thread."""
+
+    async def create_thread(self, name=None, auto_archive_duration=None):
+        raise RuntimeError("no nested threads")
+
+
+class FakeDMMessage(FakeMessage):
+    """A DM: discord.py refuses to create a thread without guild info."""
+
+    def __init__(self, channel=None):
+        super().__init__(channel=channel)
+        self.guild = None
+
+    async def create_thread(self, name=None, auto_archive_duration=None):
+        raise ValueError("This message does not have guild info attached")
 
 
 # budgets
@@ -321,4 +367,128 @@ def test_runner_splits_long_delivery_messages(tmp_path):
     assert len(channel.sent) >= 2
     for msg in channel.sent:
         assert len(msg) <= 1900
+
+
+# progress thread targeting and honest thread failure
+
+
+def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_path):
+    """A job started inside a thread cannot nest: progress goes to its parent."""
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        parent = FakeParentChannel()
+        channel = FakeThreadChannel(parent)
+        message = FakeRefusingMessage(channel=channel)
+        job = manager.create(
+            guild_id="g", channel_id="555", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), parent, channel
+
+    job, parent, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert [entry["name"] for entry in parent.created_threads] == ["build: a portfolio site"]
+    assert job.thread_id == "thread-1"
+    assert job.thread_error == ""
+    assert parent.thread.sent[0].startswith(f"Job `{job.id}` running")
+    assert not any("could not open a progress thread" in text for text in channel.sent)
+
+
+def test_runner_reports_missing_progress_thread_instead_of_silent_success(tmp_path):
+    """The work still finishes; the missing thread is stated, not implied."""
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        message = FakeRefusingMessage()
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_id == ""
+    assert job.thread_error == "RuntimeError"
+    notices = [
+        text for text in channel.sent if "could not open a progress thread" in text
+    ]
+    assert len(notices) == 1
+    assert PUBLIC_ERROR_TEXT not in channel.sent
+    assert any("<@111>" in text and job.id in text for text in channel.sent)
+
+
+def test_runner_dm_job_reports_no_thread_without_claiming_one(tmp_path):
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        message = FakeDMMessage()
+        job = manager.create(
+            guild_id="DM", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_id == ""
+    assert job.thread_error == ""
+    assert not any("progress thread" in text for text in channel.sent)
+
+
+def test_spawn_tool_refuses_a_message_that_already_serves_a_job(tmp_path):
+    """Recursion is refused without writing an attribute onto the SDK message."""
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        tool = SpawnBackgroundTool(StubBot(manager))
+        message = FakeMessage()
+        job = manager.create(guild_id="g", channel_id="222", user_id="111", goal="first")
+        manager.mark_in_job(job.id, message)
+        assert not hasattr(message, "_bg_job")
+        return await tool.execute(message, goal="second")
+
+    result = asyncio.run(scenario())
+    assert "ALREADY INSIDE" in result
+
+
+def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        channel = FakeChannel("222")
+        bot = SimpleNamespace(
+            command_prefix="!",
+            _control={},
+            _is_admin=lambda _uid: False,
+            bg_jobs=manager,
+        )
+        message = SimpleNamespace(
+            content="",
+            channel=channel,
+            author=SimpleNamespace(id=111),
+            guild=SimpleNamespace(id="333"),
+        )
+        linked = manager.create(
+            guild_id="333", channel_id="222", user_id="111", goal="linked job"
+        )
+        manager.mark(linked.id, thread_id="thread-1")
+        threadless = manager.create(
+            guild_id="333", channel_id="222", user_id=222, goal="threadless job"
+        )
+        manager.mark(threadless.id, thread_error="Forbidden")
+        message.content = f"!job {linked.id}"
+        await MaxwellBot._handle_command(bot, message)
+        message.content = f"!job {threadless.id}"
+        await MaxwellBot._handle_command(bot, message)
+        return channel
+
+    channel = asyncio.run(scenario())
+    assert "https://discord.com/channels/333/thread-1" in channel.sent[0]
+    assert "no progress thread: Forbidden" in channel.sent[1]
 

@@ -9,7 +9,11 @@ The live turn ends immediately with a one-line ack naming the job id, and
 the real work runs detached in :func:`run_background_job` with EXTENDED
 budgets (more thinking, more output, longer timeout than a live turn).
 When the job finishes it mentions the requester in the origin channel with
-the result data. Progress lands in a ``build: <goal>`` thread.
+the result data. Progress lands in a ``build: <goal>`` thread — in the origin
+thread's parent channel when the job was started from inside a thread, since
+Discord cannot nest them. A progress thread that cannot be created or written
+to is reported in the origin channel and recorded on the job; it is never
+implied by a "done" message.
 
 Additive by design: this module never monkey-patches the bot. It reuses the
 bot's own seams (``_generate_response``, ``_build_openai_tools``,
@@ -126,6 +130,7 @@ class BackgroundJob:
     progress: str = ""
     result: str = ""
     thread_id: str = ""
+    thread_error: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
     provider: JobProvider = JobProvider.MAIN
@@ -202,6 +207,7 @@ class BackgroundJobManager:
                     progress=str(data.get("progress") or "")[:2000],
                     result=str(data.get("result") or "")[:8000],
                     thread_id=str(data.get("thread_id") or ""),
+                    thread_error=str(data.get("thread_error") or "")[:200],
                     created_at=float(data.get("created_at") or 0.0),
                     finished_at=float(data.get("finished_at") or 0.0),
                     provider=JobProvider(data.get("provider", "main")),
@@ -299,6 +305,18 @@ class BackgroundJobManager:
     def attach_runtime(self, job_id: str, **objects: Any) -> None:
         self._runtime[str(job_id)] = dict(objects)
 
+    def mark_in_job(self, job_id: str, message: Any) -> None:
+        """Record that a detached job turn now owns this origin message."""
+        entry = self._runtime.setdefault(str(job_id), {})
+        entry["in_job_message_id"] = str(getattr(message, "id", "") or "")
+
+    def is_in_job(self, message: Any) -> bool:
+        """Whether a detached job already owns this message (no nested jobs)."""
+        mid = str(getattr(message, "id", "") or "")
+        return bool(mid) and any(
+            rt.get("in_job_message_id") == mid for rt in self._runtime.values()
+        )
+
     def runtime(self, job_id: str) -> dict[str, Any]:
         return self._runtime.get(str(job_id), {})
 
@@ -361,10 +379,12 @@ class SpawnBackgroundTool(Tool):
         self, message: Any, goal: str | None = None, context: str | None = None,
         provider: str = "main", model: str | None = None, **kwargs: Any,
     ) -> str:
-        if getattr(message, "_bg_job", False):
-            return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
         bot = getattr(self, "bot", None)
         manager = getattr(bot, "bg_jobs", None) if bot is not None else None
+        if getattr(message, "_bg_job", False) or (
+            manager is not None and manager.is_in_job(message)
+        ):
+            return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
         if manager is None:
             return "ERROR: background jobs are not enabled on this bot. Do the work inline."
         raw_goal = str(goal or kwargs.get("text") or kwargs.get("prompt") or "").strip()
@@ -429,9 +449,10 @@ def _call_name(call: Any) -> str:
     return ""
 
 
-async def _post_thread(thread, text: str, *, context: dict[str, str] | None = None) -> None:
+async def _post_thread(thread, text: str, *, context: dict[str, str] | None = None) -> bool:
+    """Post one progress line and report whether it actually landed."""
     if thread is None or not text:
-        return
+        return False
     try:
         await thread.send(str(text)[:1900])
     except Exception as exc:
@@ -440,6 +461,8 @@ async def _post_thread(thread, text: str, *, context: dict[str, str] | None = No
             details="Unsent job message:\n" + text + "\n" + str(getattr(exc, "text", "") or ""), context=context,
         )
         logger.debug("background job thread post failed: %s", type(exc).__name__)
+        return False
+    return True
 
 
 def background_messages(
@@ -534,44 +557,63 @@ async def run_background_job(bot: Any, job_id: str) -> None:
 
     manager.mark(job.id, status="running", progress="starting")
 
-    # Progress thread: keeps the origin channel clean while work runs.
+    # Progress thread: keeps the origin channel clean while work runs. Discord
+    # cannot nest threads, so a job started inside one gets its progress thread
+    # in that thread's own parent channel instead of losing it.
     thread = None
     thread_err = ""
+    thread_name = f"build: {_short(job.goal, 40)}"
+    parent = getattr(channel, "parent", None)
+    nested_in_thread = parent is not None and not hasattr(channel, "create_thread")
     try:
-        if hasattr(orig_message, "create_thread"):
-            thread = await orig_message.create_thread(
-                name=f"build: {_short(job.goal, 40)}", auto_archive_duration=60
-            )
-        elif hasattr(channel, "create_thread"):
+        if nested_in_thread and hasattr(parent, "create_thread"):
             import discord  # local import: no hard dep at module load
 
-            thread = await channel.create_thread(
-                name=f"build: {_short(job.goal, 40)}",
-                auto_archive_duration=60,
-                type=discord.ChannelType.public_thread,
-                message=orig_message,
+            if getattr(parent, "type", None) is discord.ChannelType.forum:
+                thread_err = "the origin thread lives in a forum channel"
+            else:
+                thread = await parent.create_thread(
+                    name=thread_name,
+                    auto_archive_duration=60,
+                    type=discord.ChannelType.public_thread,
+                )
+        elif hasattr(orig_message, "create_thread"):
+            thread = await orig_message.create_thread(
+                name=thread_name, auto_archive_duration=60
             )
     except Exception as exc:
         capture_incident("jobs", "Background progress thread creation failed", exception=exc, context=job_context)
         thread_err = type(exc).__name__
     if thread is not None:
         manager.mark(job.id, thread_id=str(getattr(thread, "id", "") or ""))
-        await _post_thread(
+        if not await _post_thread(
             thread,
             f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
             f"{job.requested_route}. An explicit model override applies only to primary; configured fallback models may answer.\n"
             f"Budgets: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. Progress lands here.",
             context=job_context,
-        )
-    else:
+        ):
+            # A thread nobody can write to carries no progress: say so instead
+            # of linking an empty thread from a "done" job.
+            thread_err = "the progress thread exists but I cannot post in it"
+            manager.mark(job.id, thread_id="", thread_error=thread_err)
+            thread = None
+    if thread is None:
         logger.info("background job %s: no thread (%s)", job.id, thread_err or "DMs have no threads")
+        if thread_err and orig_message.guild is not None:
+            manager.mark(job.id, thread_error=thread_err)
+            await _post_thread(
+                channel,
+                f"job `{job.id}` is running, but I could not open a progress thread ({thread_err}). "
+                "No step progress; the result still lands here.",
+                context=job_context,
+            )
 
-    # Flag the origin message so a nested spawn_background refuses (recursion
-    # guard) and the job's own tools execute against the right message.
-    try:
-        orig_message._bg_job = True
-    except Exception:
-        pass
+    # Marking the SDK message with an attribute does NOT work: Message is
+    # slotted, so the write raises and a bare except would hide it. The job
+    # runtime carries the origin message instead, which is what the recursion
+    # guard in SpawnBackgroundTool reads.
+    manager.mark_in_job(job.id, orig_message)
 
     try:
         from tool_schemas import TURN_ENDING_TOOL_NAMES
