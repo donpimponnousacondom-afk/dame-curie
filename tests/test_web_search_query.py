@@ -70,6 +70,75 @@ def test_needs_up_to_date_stable_trivia_is_not_auto_search():
     assert MaxwellBot._needs_up_to_date_info("what is the capital of france") is False
 
 
+# The harness notice header mirrors smoke_protocol.compose_notice (the smoke
+# lane's module, not present in this worktree). Keep it in step with that
+# template; it deliberately carries no model/recency word of its own.
+SMOKE_HEADER = (
+    "\N{WARNING SIGN} HARNESS SMOKE TEST <@1504398705539944560>\n"
+    "No human typed this. Root authorized it while AFK.\n"
+    "Permission actor: root (1482143139828596916), separate from the author of this text.\n"
+    "Task follows.\n"
+)
+SMOKE_TASK = (
+    "THIS IS A SMOKE TEST from the operator harness. "
+    "Correction to my earlier status request: source exposes spawn_background plus the "
+    "human !job command, not a native job-status tool. "
+    "That was my imprecise request, not proof of a missing feature. "
+    "The earlier diagnostic turn timed out after real shell/search work; do not relabel "
+    "it successful. "
+    "For this separate rerun, use shell once to read /state/data/background_jobs.json and "
+    "print only id/status/channel_id/thread_id/thread_error/provider/model for jobs "
+    "c927c30f and 0df54176. "
+    "No Discord search, no other tools, no new jobs, no writes. "
+    "Then give a short observed status report and flag any anomaly; do not speculate "
+    "about unobserved provider internals."
+)
+
+
+def test_needs_up_to_date_ignores_the_wrapped_harness_status_request():
+    """The real notice text must not be read as a question about a new model.
+
+    Its only AI-topic hit is the "model" column the task asks to print, and its
+    only recency hit is "no new jobs"; they sit in different clauses.
+    """
+    assert MaxwellBot._needs_up_to_date_info(SMOKE_HEADER) is False
+    assert MaxwellBot._needs_up_to_date_info(SMOKE_HEADER + SMOKE_TASK) is False
+
+
+def test_needs_up_to_date_separates_model_and_recency_clauses():
+    assert (
+        MaxwellBot._needs_up_to_date_info(
+            "print the provider/model field for these jobs. there is nothing new here."
+        )
+        is False
+    )
+    assert (
+        MaxwellBot._needs_up_to_date_info(
+            "the model column is stale; no new jobs were queued"
+        )
+        is False
+    )
+
+
+def test_needs_up_to_date_same_sentence_ai_recency_still_fires():
+    assert MaxwellBot._needs_up_to_date_info("is there a new deepseek model out?") is True
+    assert MaxwellBot._needs_up_to_date_info("any recent mistral benchmarks?") is True
+
+
+def test_needs_up_to_date_keeps_lookup_and_current_event_positives():
+    for line in (
+        "look this up",
+        "search for ollama cloud pricing",
+        "google that",
+        "can you find out who that is",
+        "who won last night",
+        "what's the weather in nyc",
+        "what's the latest grok model",
+        "new model drop today",
+    ):
+        assert MaxwellBot._needs_up_to_date_info(line) is True, line
+
+
 def test_sanitize_web_query_truncates_unclosed_bracket():
     q = _sanitize_web_query(GLUED)
     assert "Latest message" not in q

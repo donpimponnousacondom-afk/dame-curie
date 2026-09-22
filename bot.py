@@ -14475,7 +14475,10 @@ class MaxwellBot(commands.Bot):
 
         Fires on explicit lookup intent and current-event / fresh-topic
         signals. Does not fire on banter like "lol" even if a glued reply
-        blob mentions a model drop. Not a prompt instruction — runtime logic.
+        blob mentions a model drop. A fresh-topic hit also needs its AI-topic
+        word in the same sentence, so a status request that happens to name a
+        "model" column and mention "no new jobs" is not read as asking about a
+        model release. Not a prompt instruction — runtime logic.
         """
         if not text:
             return False
@@ -14486,9 +14489,15 @@ class MaxwellBot(commands.Bot):
             return True
         if any(s in t for s in MaxwellBot._CURRENT_INFO_PHRASES):
             return True
-        has_ai = any(k in t for k in MaxwellBot._AI_TOPIC_WORDS)
-        has_recency = any(r in t for r in MaxwellBot._RECENCY_WORDS)
-        return bool(has_ai and has_recency)
+        # `_plain_user_text` already collapsed the whitespace, so punctuation is
+        # the only clause boundary left to split on. One sentence that mixes
+        # both signals still fires: this separates unrelated clauses, it is not
+        # an intent classifier.
+        return any(
+            any(k in sentence for k in MaxwellBot._AI_TOPIC_WORDS)
+            and any(r in sentence for r in MaxwellBot._RECENCY_WORDS)
+            for sentence in re.split(r"[.!?;]+\s+", t)
+        )
 
     @staticmethod
     def _plain_user_text(text: str) -> str:
