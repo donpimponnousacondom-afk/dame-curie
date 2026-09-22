@@ -128,7 +128,7 @@ The live publisher watched the worker-authored site at `/state/sites/dirac-smoke
 - `probe.cgi`: HTTP200 text/plain, exactly `DIRAC-CGI-72cda` plus newline (16 bytes), not Perl source.
 - `probe.pl`: HTTP200 text/plain, exactly `DIRAC-PERL-72cda` plus newline (17 bytes), not Perl source.
 
-Both Perl probes were executable locally. **PHP, CGI and Perl execution genuinely passed at this destination.** No per-site `.htaccess`, global server change, interpreter installation or local web server was needed. Publication used the operator-managed SSH service. The page's interactive click behavior has not yet been browser-tested.
+Both Perl probes were executable locally. **PHP, CGI and Perl execution genuinely passed at this destination.** No per-site `.htaccess`, global server change, interpreter installation or local web server was needed. Publication used the operator-managed SSH service. The page's interactive click behavior has not yet been browser-tested. Later exact source inspection confirmed the three executable probes contain only constant print/echo statements, with no input or environment/filesystem access. That source inspection followed the first HTTP probe; future executable probes must be inspected before fetching them.
 
 #### Memory and viewer observations
 
@@ -137,3 +137,11 @@ Read-only metadata from Dirac's own `dame-curie-rag.db` showed 20 bot_output, 7 
 A fresh disposable GNU Screen logger was opened, sent `q`, and verified gone while Dirac remained running with the same container. Persistent viewer **`dirac-v2`** was then launched and its window verified. Attach as codexy with `screen -r dirac-v2`; `q` exits that viewer, not the bot. The earlier attached `dame_curie` and every unrelated Screen session were left untouched.
 
 Still to verify before final acceptance: explain the status rerun's automatic-web/taint refusal without disabling the safeguard; selected media/game handling; memory recall/REM details; graceful restart and persistence/no-replay; final live inventory and Screen handoff. The publisher's out-of-band deletion recovery caveat remains distinct from the passing initial publication scenario.
+
+### Automatic-search correction ready — not deployed yet
+
+Independent Flash source tracing identified the status refusal's trigger: `_needs_up_to_date_info()` combined `model` in the requested JSON field list with `new` in a different sentence saying **no new jobs**. The automatic pre-generation search marks the current message tainted before its search completes. RAG recall is not a taint writer; neither is taint inherited from the earlier timed-out message. The shell gate correctly refused a tainted turn without a real one-shot confirmation.
+
+Patch `c0ea9d8` changes only the broad AI-topic/recency branch to require the two signals in the same punctuation-delimited sentence. Explicit search intent and current-event phrases are unchanged. Neither taint protection, its configuration switch nor confirmation behavior was changed. A single sentence mixing unrelated signals can still produce a false positive; this is a narrow correction, not a semantic intent classifier. Parent follow-up `9a3fa43` tests the actual `compose_notice()` output instead of a copied header.
+
+`bash-27` passed **351 tests plus 28 subtests** in 35.53s on the fully integrated tree, including the web-search regressions, existing taint-gate checks and root/logging re-exec cases. Selected Ruff F checks passed. `bash-28` built **`dame-curie-app:9a3fa43`**, ID **`sha256:077db691648c0e98af7a4d0c54cd3b4c240d11018b140da3666ff04b1ad2147c`**. This image has not yet replaced the running `1984a26` container. Next: use a controlled stop/replacement to verify durable state and no replay, then submit the identical status task as a new request. Keep both previous unsuccessful scenario receipts intact.
