@@ -648,13 +648,15 @@ class ThreadScopedJobBot(RunnerStubBot):
         }
 
 
-def test_runner_never_creates_a_progress_thread_in_a_blocked_parent(tmp_path, monkeypatch):
+@pytest.mark.parametrize("allowed", [[], ["555"], ["555", "666"], ["555", 666]])
+@pytest.mark.parametrize("blocked", [["666"], [666]])
+def test_runner_never_creates_a_progress_thread_in_a_blocked_parent(tmp_path, monkeypatch, allowed, blocked):
     """The allowed thread is usable; the refused parent gets nothing at all."""
     monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
-        bot = ThreadScopedJobBot(manager, allowed=["555"], blocked=["666"])
+        bot = ThreadScopedJobBot(manager, allowed=allowed, blocked=blocked)
         parent = FakeParentChannel("666")
         channel = FakeThreadChannel(parent)
         message = FakeRefusingMessage(channel=channel)

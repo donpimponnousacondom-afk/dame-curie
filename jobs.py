@@ -572,11 +572,12 @@ async def run_background_job(bot: Any, job_id: str) -> None:
 
         if isinstance(channel, discord.Thread):
             allowed = {str(value) for value in (bot._control.get("allowed_channels", []) or [])}
+            blocked = {str(value) for value in (bot._control.get("blocked_channels", []) or [])}
             if parent is None:
                 thread_err = "the origin thread's parent channel is unknown"
             elif getattr(parent, "type", None) is discord.ChannelType.forum:
                 thread_err = "the origin thread lives in a forum channel"
-            elif not bot._channel_allowed(parent, allowed):
+            elif str(parent.id) in blocked or not bot._channel_allowed(parent, allowed):
                 thread_err = "the origin thread's parent channel is not allowed for this bot"
             else:
                 thread = await parent.create_thread(
