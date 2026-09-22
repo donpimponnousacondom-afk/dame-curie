@@ -10,6 +10,7 @@
 !config.py
 !context_budget.py
 !control_defaults.py
+!dirac_runtime.py
 !discord_vc_compat.py
 !docker_runtime.py
 !doctor.py
@@ -32,6 +33,7 @@
 !rem_defaults.json
 !response_guard.py
 !response_observability.py
+!smoke_protocol.py
 !tool_progress.py
 !tool_prompts.py
 !tool_registry.py

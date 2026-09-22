@@ -14,10 +14,10 @@ RUN python -m pip install --no-cache-dir --no-deps -r /opt/dame-curie/requiremen
 WORKDIR /app
 COPY autonomy.py autonomy_social.py bot.py bot_tools.py captcha_solver.py \
     channel_watch.py chess_game.py concurrency_safety.py config.py context_budget.py \
-    control_defaults.py discord_vc_compat.py docker_runtime.py doctor.py \
+    control_defaults.py dirac_runtime.py discord_vc_compat.py docker_runtime.py doctor.py \
     error_reporting.py guild_onboarding.py image_media.py inbox.py job_routing.py jobs.py knowledge_graph.py \
     message_pipeline.py operator_commands.py plugin_manager.py prompt_storage.py providers.py provider_telemetry.py \
-    rag_memory.py rag_maintenance.py rem.py rem_defaults.json response_guard.py response_observability.py \
+    rag_memory.py rag_maintenance.py rem.py rem_defaults.json response_guard.py response_observability.py smoke_protocol.py \
     tool_progress.py tool_prompts.py tool_registry.py tool_schemas.py \
     tools.py utils.py voice_live.py watch_policy.py ./
 COPY plugins/checkers/__init__.py plugins/checkers/checkers_game.py plugins/checkers/plugin.json plugins/checkers/tools.py ./plugins/checkers/
