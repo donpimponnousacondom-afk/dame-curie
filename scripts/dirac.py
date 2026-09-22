@@ -27,6 +27,7 @@ if __package__:
     from scripts.instance import Instance, require_private, service_account
     from scripts.log_filter import follow_logs
 else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I/-P drop the script directory
     from instance import Instance, require_private, service_account
     from log_filter import follow_logs
 
@@ -52,21 +53,19 @@ ENVIRONMENT = (
     ("DAME_CURIE_ENV_FILE", "/config/bot.env"),
     ("DAME_CURIE_CONTAINER_MODE", "true"),
     ("DAME_CURIE_INSTANCE_ID", INSTANCE_ID),
+    ("DAME_CURIE_EMBED_MODE", "external"),
 )
 SMOKE_MOUNTS = {
-    "smoke_root": ("/dirac-smoke", "DAME_CURIE_DIRAC_SMOKE_CONFIG", "/dirac-smoke/config.json"),
-    "smoke_status": ("/dirac-smoke-status", None, None),
+    "smoke_root": ("/smoke", "DAME_CURIE_DIRAC_SMOKE_CONFIG", "/smoke/config.json"),
+    "smoke_status": ("/smoke-status", None, None),
 }
+SMOKE_READ_ONLY = frozenset({"smoke_root"})
 REQUIRED_ROOTS = {
     "DATA_DIR": "/state/data",
     "DAME_CURIE_SITE_DIR": "/state/sites",
     "DAME_CURIE_PROMPTS_DIR": "/config/prompts",
 }
-PINNED_VALUES = {
-    "DAME_CURIE_CONTAINER_MODE": "true",
-    "DAME_CURIE_INSTANCE_ID": INSTANCE_ID,
-    "DAME_CURIE_SHELL_DIR": "/state/shell",
-}
+PINNED_VALUES = {"DAME_CURIE_CONTAINER_MODE": "true", "DAME_CURIE_INSTANCE_ID": INSTANCE_ID}
 DISABLED = {"0", "false", "no", "off"}
 STATE_FIELDS = ("status", "exit_code", "oom_killed", "finished_at", "image_id", "image_ref")
 STATE_FORMAT = "{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.State.FinishedAt}}|{{.Image}}|{{.Config.Image}}"
@@ -89,10 +88,24 @@ def parse_args() -> argparse.Namespace:
         parser.error("--image, --replace, --smoke-root and --smoke-status are only available for start")
     if args.action != "logs" and args.no_keys:
         parser.error("--no-keys is only available for logs")
-    for option in (args.smoke_root, args.smoke_status):
-        if option is not None and not option.is_absolute():
-            parser.error("smoke paths must be absolute host paths")
     return args
+
+
+def smoke_sources(root: Path, uid: int, args: argparse.Namespace) -> dict[str, Path]:
+    """Accept only private smoke directories inside the Dirac root; canonical state is never mountable."""
+    sources: dict[str, Path] = {}
+    for option in SMOKE_MOUNTS:
+        source = getattr(args, option)
+        if source is None:
+            continue
+        flag = option.replace("_", "-")
+        if not source.is_absolute() or not source.resolve().is_relative_to(root):
+            raise ValueError(f"--{flag} must live inside {root}")
+        if source.is_symlink() or not source.is_dir():
+            raise ValueError(f"--{flag} must be a real directory: {source}")
+        require_private(source, uid)
+        sources[option] = source
+    return sources
 
 
 def state_root(instance: Instance, uid: int) -> Path:
@@ -196,7 +209,7 @@ def create_arguments(root: Path, image: str, bridge: str, smoke: dict[str, Path]
         "create", "--name", NAME, "--label", CONTAINER_LABEL, "--init",
         "--user", "0:0", "--restart", "no", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges:true", "--pids-limit", "256", "--memory", "4g",
-        "--network", bridge,
+        "--cpus", "4", "--stop-timeout", STOP_TIMEOUT, "--network", bridge,
         "--log-driver", "local", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
         "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
         "--tmpfs", "/app/temp:rw,nosuid,nodev,size=256m,mode=1777",
@@ -210,7 +223,8 @@ def create_arguments(root: Path, image: str, bridge: str, smoke: dict[str, Path]
         source = smoke.get(option)
         if source is None:
             continue
-        arguments += ["--mount", f"type=bind,src={source},dst={target}"]
+        suffix = ",readonly" if option in SMOKE_READ_ONLY else ""
+        arguments += ["--mount", f"type=bind,src={source},dst={target}{suffix}"]
         if variable is not None:
             arguments += ["--env", f"{variable}={value}"]
     return [*arguments, "--entrypoint", "/bin/sh", image, "-ec", ENTRY_SCRIPT, "--", *COMMAND]
@@ -239,7 +253,7 @@ def wait_ready(instance: Instance, container: str, enabled: bool, timeout: float
         if state in {"exited", "dead"}:
             return f"{readiness}; container is {state}"
         if time.monotonic() >= deadline:
-            return f"{readiness}; timed out after {timeout:g}s"
+            return f"{readiness}; gave up after {timeout:g}s"
         time.sleep(READY_INTERVAL)
 
 
@@ -261,6 +275,7 @@ def endpoint(gateway: str) -> str:
 def start(instance: Instance, uid: int, args: argparse.Namespace) -> dict[str, object]:
     """Create and start Dirac, keeping failure evidence instead of deleting the old container."""
     root, enabled, bridge, gateway = prepared(instance, uid)
+    smoke = smoke_sources(root, uid, args)
     image = pinned_image(instance, root, uid, args.image)
     existing = owned_container(instance)
     if existing is not None:
@@ -274,7 +289,6 @@ def start(instance: Instance, uid: int, args: argparse.Namespace) -> dict[str, o
                 "follow logs, then rerun start --replace"
             )
         instance.docker("rm", existing)
-    smoke = {option: getattr(args, option) for option in SMOKE_MOUNTS if getattr(args, option) is not None}
     container = instance.docker(*create_arguments(root, image, bridge, smoke)).strip()
     instance.docker("start", container)
     return {"action": "start", "container": NAME, "id": container, "image": image, "bridge": bridge,

@@ -1,14 +1,14 @@
 """Isolated unit checks for the Dirac operator.
 
-These import only repository scripts and the standard library: no engine, no
-container, no private configuration and no application module is touched.
+These import only repository scripts, the standard library and pytest: no
+engine, no container, no private configuration and no application module.
 """
 
 import importlib.util
 import os
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -84,8 +84,10 @@ def test_create_arguments_pin_the_reviewed_runtime(dirac, tmp_path):
     assert arguments[arguments.index("--name") + 1] == "dirac-v2"
     assert arguments[arguments.index("--label") + 1] == "dame-curie.dirac=dirac-v2"
     assert arguments[arguments.index("--memory") + 1] == "4g"
+    assert arguments[arguments.index("--cpus") + 1] == "4"
     assert arguments[arguments.index("--pids-limit") + 1] == "256"
     assert arguments[arguments.index("--restart") + 1] == "no"
+    assert arguments[arguments.index("--stop-timeout") + 1] == "45"
     assert arguments[arguments.index("--cap-drop") + 1] == "ALL"
     assert "no-new-privileges:true" in arguments
     assert arguments[arguments.index("--network") + 1] == "dame-curie_outbound"
@@ -98,13 +100,14 @@ def test_create_arguments_pin_the_reviewed_runtime(dirac, tmp_path):
     assert f"type=bind,src={root}/data,dst=/state/data" in mounts
     assert f"type=bind,src={root}/sites,dst=/state/sites" in mounts
     assert f"type=bind,src={root}/shell,dst=/state/shell" in mounts
-    assert "type=bind,src=/srv/dame-curie/dirac/smoke,dst=/dirac-smoke" in mounts
-    assert "type=bind,src=/srv/dame-curie/dirac/smoke-status,dst=/dirac-smoke-status" in mounts
+    assert "type=bind,src=/srv/dame-curie/dirac/smoke,dst=/smoke,readonly" in mounts
+    assert "type=bind,src=/srv/dame-curie/dirac/smoke-status,dst=/smoke-status" in mounts
     environment = [arguments[index + 1] for index, value in enumerate(arguments) if value == "--env"]
     assert "DAME_CURIE_ENV_FILE=/config/bot.env" in environment
     assert "DAME_CURIE_CONTAINER_MODE=true" in environment
     assert "DAME_CURIE_INSTANCE_ID=dame-curie-dirac" in environment
-    assert "DAME_CURIE_DIRAC_SMOKE_CONFIG=/dirac-smoke/config.json" in environment
+    assert "DAME_CURIE_EMBED_MODE=external" in environment
+    assert "DAME_CURIE_DIRAC_SMOKE_CONFIG=/smoke/config.json" in environment
     assert arguments[-5:] == ["-ec", dirac.ENTRY_SCRIPT, "--", "python", "bot.py"]
 
 
@@ -112,8 +115,27 @@ def test_create_arguments_without_smoke_opt_in(dirac, tmp_path):
     root = private_tree(tmp_path / "dirac")
     arguments = dirac.create_arguments(root, "sha256:" + "a" * 64, "dame-curie_outbound", {})
     mounts = [arguments[index + 1] for index, value in enumerate(arguments) if value == "--mount"]
-    assert not [mount for mount in mounts if "/dirac-smoke" in mount]
+    assert not [mount for mount in mounts if "/smoke" in mount]
     assert not [value for value in arguments if "SMOKE" in value]
+
+
+def test_smoke_paths_must_live_inside_the_state_root(dirac, tmp_path):
+    root = private_tree(tmp_path / "dirac")
+    smoke = root / "smoke"
+    smoke.mkdir(mode=0o700)
+    smoke.chmod(0o700)
+    sources = dirac.smoke_sources(root, os.getuid(), SimpleNamespace(smoke_root=smoke, smoke_status=None))
+    assert sources == {"smoke_root": smoke}
+    canonical = tmp_path / "canonical"
+    canonical.mkdir(mode=0o700)
+    canonical.chmod(0o700)
+    with pytest.raises(ValueError, match="must live inside"):
+        dirac.smoke_sources(root, os.getuid(), SimpleNamespace(smoke_root=canonical, smoke_status=None))
+    with pytest.raises(ValueError, match="must live inside"):
+        dirac.smoke_sources(root, os.getuid(), SimpleNamespace(smoke_root=root / ".." / "canonical", smoke_status=None))
+    smoke.chmod(0o755)
+    with pytest.raises(ValueError, match="private"):
+        dirac.smoke_sources(root, os.getuid(), SimpleNamespace(smoke_root=smoke, smoke_status=None))
 
 
 def test_derived_config_requires_the_bridge_endpoint(dirac, tmp_path):
@@ -142,9 +164,9 @@ def test_derived_config_requires_container_roots(dirac, tmp_path):
     assert enabled is False
     assert "DATA_DIR=/state/data" in problem
     write_derived(root, "http://172.23.0.1:11434")
-    config.write_text(config.read_text().replace("DAME_CURIE_SHELL_DIR=/state/shell", "DAME_CURIE_SHELL_DIR=/tmp"))
+    config.write_text(config.read_text().replace("DAME_CURIE_SITE_DIR=/state/sites", "DAME_CURIE_SITE_DIR=/tmp"))
     config.chmod(0o600)
-    assert "DAME_CURIE_SHELL_DIR=/state/shell" in dirac.derived_config(root, os.getuid(), "172.23.0.1")[1]
+    assert "DAME_CURIE_SITE_DIR=/state/sites" in dirac.derived_config(root, os.getuid(), "172.23.0.1")[1]
 
 
 def test_owned_container_requires_the_reserved_label_and_name(dirac):

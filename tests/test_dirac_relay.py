@@ -41,43 +41,52 @@ def test_forward_argv_is_fixed(relay):
     ]
 
 
-def test_target_pid_requires_running_v1_ollama(relay, monkeypatch):
-    def query() -> int | None:
+def test_target_pid_requires_a_running_v1_ollama_owned_by_v1(relay, monkeypatch):
+    def query(uid: int) -> int | None:
         return relay.target_pid("unix:///run/user/1003/docker.sock", "maxwell-curie-ollama-1",
-                                "maxwell-curie", "ollama")
+                                "maxwell-curie", "ollama", uid)
 
-    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, "3689769|true|maxwell-curie|ollama\n"))
-    assert query() == 3689769
-    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, "3689769|false|maxwell-curie|ollama\n"))
-    assert query() is None
-    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, "3689769|true|other|ollama\n"))
-    assert query() is None
-    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, "3689769|true|maxwell-curie|web\n"))
-    assert query() is None
+    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, f"{os.getpid()}|true|maxwell-curie|ollama\n"))
+    assert query(os.getuid()) == os.getpid()
+    assert query(os.getuid() + 1) is None  # not owned by the V1 service account
+    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, f"{os.getpid()}|false|maxwell-curie|ollama\n"))
+    assert query(os.getuid()) is None
+    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, f"{os.getpid()}|true|other|ollama\n"))
+    assert query(os.getuid()) is None
+    monkeypatch.setattr(relay.subprocess, "run", fake_run(0, f"{os.getpid()}|true|maxwell-curie|web\n"))
+    assert query(os.getuid()) is None
     monkeypatch.setattr(relay.subprocess, "run", fake_run(0, "not-a-pid|true|maxwell-curie|ollama\n"))
-    assert query() is None
+    assert query(os.getuid()) is None
     monkeypatch.setattr(relay.subprocess, "run", fake_run(1, ""))
-    assert query() is None
+    assert query(os.getuid()) is None
 
 
-def test_bridge_gateway_requires_a_private_address(relay, monkeypatch):
-    monkeypatch.setattr(relay, "docker_query", lambda *args, **kwargs: "172.23.0.1\n")
-    assert relay.bridge_gateway("unix:///run/user/1005/docker.sock", "dame-curie_outbound") == "172.23.0.1"
-    monkeypatch.setattr(relay, "docker_query", lambda *args, **kwargs: "8.8.8.8\n")
+def test_bridge_gateway_requires_this_project_and_a_private_address(relay, monkeypatch):
+    monkeypatch.setattr(relay, "docker_query", lambda *args, **kwargs: "dame-curie|outbound|172.23.0.1\n")
+    assert relay.bridge_gateway("unix:///run/user/1005/docker.sock", "dame-curie_outbound", "dame-curie") == "172.23.0.1"
+    monkeypatch.setattr(relay, "docker_query", lambda *args, **kwargs: "other|outbound|172.23.0.1\n")
+    with pytest.raises(ValueError, match="outbound bridge"):
+        relay.bridge_gateway("unix:///run/user/1005/docker.sock", "dame-curie_outbound", "dame-curie")
+    monkeypatch.setattr(relay, "docker_query", lambda *args, **kwargs: "dame-curie|outbound|8.8.8.8\n")
     with pytest.raises(ValueError, match="non-private"):
-        relay.bridge_gateway("unix:///run/user/1005/docker.sock", "dame-curie_outbound")
+        relay.bridge_gateway("unix:///run/user/1005/docker.sock", "dame-curie_outbound", "dame-curie")
 
 
-def test_engine_netns_refuses_the_callers_namespace(relay):
-    with pytest.raises(ValueError, match="caller's own"):
-        relay.engine_netns(None, "/proc/self/ns/net", os.getuid())
-
-
-def test_engine_pid_file_requires_a_pid(relay, tmp_path):
+def test_engine_netns_requires_a_parent_verified_pid(relay, tmp_path):
+    expected_uid = os.getuid() + 1
+    with pytest.raises(ValueError, match="explicit /proc"):
+        relay.engine_netns(None, "/proc/self/ns/net", expected_uid)
+    with pytest.raises(ValueError, match="explicit /proc"):
+        relay.engine_netns(None, "/run/user/1005/docker.pid", expected_uid)
     pid_file = tmp_path / "docker.pid"
     pid_file.write_text("dockerd\n")
     with pytest.raises(ValueError, match="engine PID"):
-        relay.engine_netns(pid_file, None, os.getuid())
+        relay.engine_netns(pid_file, None, expected_uid)
+    pid_file.write_text("1\n")
+    with pytest.raises(ValueError, match="not owned"):
+        relay.engine_netns(pid_file, None, expected_uid)
+    with pytest.raises(ValueError, match="not owned"):
+        relay.engine_netns(None, "/proc/1/ns/net", expected_uid)
 
 
 def test_engine_socket_uses_the_resolved_uid(relay, monkeypatch):
