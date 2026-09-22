@@ -50,11 +50,19 @@ def test_root_dispatch_reexecs_the_calling_script(instance_script, monkeypatch):
     monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setenv("NO_COLOR", "1")
     executed: list[list[str]] = []
-    monkeypatch.setattr(instance_script.os, "execv", lambda path, argv: executed.append(argv))
+
+    def capture_exec(path, argv):
+        executed.append(argv)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(instance_script.os, "execv", capture_exec)
     delegated = Path("/opt/dame-curie/scripts/dirac.py")
-    instance_script.service_account("dame-curie")
-    instance_script.service_account("dame-curie", entrypoint=delegated)
-    instance_script.service_account("dame-curie", for_logs=True, entrypoint=delegated)
+    with pytest.raises(SystemExit):
+        instance_script.service_account("dame-curie")
+    with pytest.raises(SystemExit):
+        instance_script.service_account("dame-curie", entrypoint=delegated)
+    with pytest.raises(SystemExit):
+        instance_script.service_account("dame-curie", for_logs=True, entrypoint=delegated)
     default, explicit, logs = executed
     for argv in executed:
         assert argv[:6] == ["runuser", "-u", "dame-curie", "--", "/usr/bin/env", "-i"]
