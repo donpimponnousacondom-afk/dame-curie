@@ -188,7 +188,7 @@ def test_derived_config_requires_container_roots(dirac, tmp_path):
     config.write_text("DATA_DIR=/data\n")
     config.chmod(0o600)
     enabled, problem = dirac.derived_config(root, os.getuid(), "172.23.0.1")
-    assert enabled is False
+    assert enabled is True  # a mismatch still reports the RAG switch that was read
     assert "DATA_DIR=/state/data" in problem
     write_derived(root, "http://172.23.0.1:11434")
     config.write_text(config.read_text().replace("DAME_CURIE_SITE_DIR=/state/sites", "DAME_CURIE_SITE_DIR=/tmp"))
@@ -244,7 +244,8 @@ def test_start_replace_reports_the_previous_state_before_removing(dirac, tmp_pat
         ("start",): "dirac-v2\n",
     })
     engine.path = root.parent
-    monkeypatch.setattr(dirac, "print", lambda *values, **kwargs: engine.calls.append(("print", str(values[0]))))
+    monkeypatch.setattr(dirac, "print", lambda *values, **kwargs: engine.calls.append(("print", str(values[0]))),
+                        raising=False)
     monkeypatch.setattr(dirac.subprocess, "run",
                         lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""))
     args = SimpleNamespace(action="start", image="dame-curie-app:test", replace=True,

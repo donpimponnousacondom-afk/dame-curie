@@ -156,7 +156,12 @@ def outbound_bridge(instance: Instance) -> tuple[str, str]:
 
 
 def derived_config(root: Path, uid: int, gateway: str) -> tuple[bool, str]:
-    """Validate Dirac's private derived bot.env; return (rag_enabled, problem) without reporting credentials."""
+    """Validate Dirac's private derived bot.env; return (rag_enabled, problem) without reporting credentials.
+
+    A missing or unreadable file reports no known value; a mismatch reports the
+    RAG switch that was read, so a caller can still tell whether the endpoint
+    rule applies.
+    """
     path = root / "config" / "bot.env"
     if path.is_symlink() or not path.is_file():
         return False, f"missing private derived config: {path}"
@@ -170,17 +175,17 @@ def derived_config(root: Path, uid: int, gateway: str) -> tuple[bool, str]:
         return False, "derived config is unreadable or not private"
     for key, expected in REQUIRED_ROOTS.items():
         if values.get(key) != expected:
-            return False, f"derived bot.env must set {key}={expected}"
+            return enabled, f"derived bot.env must set {key}={expected}"
     for key, expected in PINNED_VALUES.items():
         if key in values and values[key] != expected:
-            return False, f"derived bot.env must not override {key}={expected}"
+            return enabled, f"derived bot.env must not override {key}={expected}"
     if enabled and (
         endpoint.scheme != "http"
         or port != EMBED_PORT
         or endpoint.path not in {"", "/"}
         or endpoint.hostname != gateway
     ):
-        return False, f"derived DAME_CURIE_EMBED_BASE_URL must be http://{gateway}:{EMBED_PORT} while RAG is enabled"
+        return enabled, f"derived DAME_CURIE_EMBED_BASE_URL must be http://{gateway}:{EMBED_PORT} while RAG is enabled"
     return enabled, ""
 
 

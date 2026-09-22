@@ -9,10 +9,12 @@ network namespace of the selected protected V1 Ollama container's loopback. The
 target PID is resolved read-only per connection, so a V1 recreate is followed.
 
 Every Docker call runs as the mapped service account against that account's own
-validated socket; only the relay process itself keeps host root, and only for
-`setns` and `nsenter`. There is no proxy command, no user-supplied target, no V1
-mutation and no published host port. Run it as host root under its own unit; see
-`phase-II_v2/DIRAC_RUNTIME_OPS.md`.
+validated socket and is read-only (`info`/`inspect`); only the relay process
+itself keeps host root, and only for `setns` and `nsenter`. There is no proxy
+command, no user-supplied target, no V1 mutation and no published host port, but
+the forwarded bytes are neither inspected nor filtered: whatever can reach the
+bound gateway can use Ollama's local API. Run it as host root under its own unit;
+see `phase-II_v2/DIRAC_RUNTIME_OPS.md`.
 """
 
 import argparse

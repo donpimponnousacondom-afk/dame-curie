@@ -7,8 +7,10 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 # Root is required: the relay enters the V2 daemon's network namespace and binds
-# the private outbound-bridge gateway. It never runs as, or acts for, the service
-# user, and it never contacts V1 with anything but a read-only inspect.
+# the private outbound-bridge gateway. Its Docker access is read-only (info and
+# inspect) and runs as each mapped service account, not as root. The forwarding
+# path itself is a raw TCP relay into V1's Ollama loopback and does not inspect
+# or filter the Ollama requests it carries.
 ExecStart=/bin/sh -ec 'exec /opt/dame-curie/.venv/bin/python -B /opt/dame-curie/scripts/dirac_relay.py --network dame-curie_outbound --engine-pid-file /run/user/$(id -u dame-curie)/docker.pid --v1-container maxwell-curie-ollama-1'
 Restart=always
 RestartSec=10
