@@ -1,5 +1,15 @@
 # Phase II session ledger
 
+## 2026-09-23 — narrow review-fix implementation
+
+Root approved R3 → R2 → R9/R4, asked to exercise the new Luna/Sol routes and preserve the reviewer exchange in ignored `audit/`. Both advertised `openai-codex/gpt-6-luna` and `gpt-6-sol` routes executed real bounded source tasks; no independent backend-alias claim is made. Subagents remained source-only. The coordinator took final R4 test integration after review found concurrent-stop, partial-start and cancellation-suppressed admission edges.
+
+Commits: `dfc6141` owns final Discord delivery inside the foreground turn; `acf5da9` preserves the synthetic permission actor on prompt refresh; `5b6be67` corrects evidence/history and ignores the audit folder; `162b39c` completes timeout attribution, fatal-poller lifecycle, advisory health and paired documentation. The exact final tree `6e9d2d7ff7bce485970dde60244e2692b160453f` passed **675 focused isolated tests, 2 deselected**, selected Ruff F checks, Python 3.14.4, no private mounts/external network. The live-provider test was prohibited; the README retry assertion was already reproduced on baseline. Counts are selection-specific, not a replacement for earlier 825/341 receipts.
+
+Seven actor/final-delivery regressions failed on unchanged application source; three early upstream timeouts were likewise mislabeled `timeout` by the old runtime. Two initial R2/R3 fixture problems were corrected and rerun, not hidden. Final review found no blocker within the assigned runtime-owned SDK-admission scope; it does not certify arbitrary Gateway admission or physical cancellation of already-sent network requests.
+
+This round ended at committed source, isolated acceptance and reviewer handoff. No app build/rollout, private profile change, live fault injection, publisher/V1/canonical mutation or Git push was performed. Last verified deployment remains the separate `d43e4bf` receipt, not this revision. The diagnosed `?prompt` chunking defect is still outside this slice.
+
 ## 2026-09-22 — bounded hardening closure
 
 Root asked to stop broader V1/control/REM investigation and close the obvious exposed surfaces. The closure notes claimed an earlier authorized check found V1 at 10 MiB; a subsequent review could not substantiate it from a dated grant/key receipt in the ledger. Root's explicit 20 MiB override stayed in place independently of that claim. Archive classification was not changed. Synthetic context was not purged, and no general controls or REM migration was performed.

@@ -1,12 +1,20 @@
 # dame-curie status
 
-## Current runtime — provider reload, 2026-09-23
+## Source review fixes — implemented, not deployed
+
+- **`162b39c` is the completed R3/R2/R9/R4 source slice**, following `dfc6141` (owned final delivery), `acf5da9` (actor-preserving refresh) and `5b6be67` (evidence/ignore corrections).
+- Its exact tree `6e9d2d7ff7bce485970dde60244e2692b160453f` passed **675 focused isolated tests, 2 explicitly deselected**, Python 3.14.4, no network/private mounts, selected Ruff F821/F822/F823 checks. Exclusions: the prohibited live-provider tool-progress test and the previously baseline-reproduced stale README retry assertion. This selection is not the earlier 825-test suite or whole-repository acceptance.
+- Negative controls reproduce all seven actor/final-delivery regressions and all three early upstream-timeout misclassifications on unchanged relevant source. Independent review closed the scoped lifecycle findings before acceptance. Fatal polling now initiates bounded owned cleanup; advisory health never claims current liveness, and unconfirmed shutdown gates new runtime-owned input admission after the tested SDK-await boundaries. A notice whose send already began may still finish.
+- **No application build, rollout, private configuration change or live fault injection was performed in this review round.** Deployment evidence below is historical, not acceptance of this source revision. Publisher, V1 and canonical boundaries remain untouched; `?prompt` chunking remains a separate unfixed follow-up.
+- Root-requested local reviewer exchange lives in ignored `audit/`; the packet includes the original report, verified dispositions, author/reviewer responses, failed attempts and exact QA receipts.
+
+## Last verified runtime — provider reload, 2026-09-23
 
 **Dirac is running `d43e4bf` with idle-boundary provider reload, assigned-role wake-ups, immutable image provenance and the `?` command prefix.**
 
 - Source `d43e4bf3f963655e4f9ac7b1d690549256c9fb53`; container `030fb63b9c54e9f00eb6c4ccd2db900149cb94141a6adc5fa24b835b0ef0340d`; image `sha256:102805e039ec4d32f689308e5a086b837f321559ff89117787de5183fa22ff0a`. Embedding readiness and intended temporary identity Discord READY were confirmed after replacement; restart=no. No V1/canonical/publisher mutation or Git push.
 - **825 focused isolated tests passed** on the exact tree committed as this release, with expanded Ruff F821/F822/F823 checks. One stale README-row assertion was explicitly deselected after reproducing it on pre-reload `dba8359`; no full-suite claim. Independent review found no remaining P0/P1 reload blocker; an actual-image, credential-free probe also verified source blobs, manifest, module packaging and invalid-port rejection.
-- `bot.env` provider edits stage until complete rounds and outstanding calls are idle. Bad edits retain active clients; no values are emitted in reload logs. `?debug` reports generation/status. Supported settings, precedence, restart-only exclusions and limits: `PROVIDER_RELOAD.md`.
+- `bot.env` provider edits stage until tracked work and outstanding calls are idle. The later R3 review found that `d43e4bf`'s detached final Discord edit could outlive that boundary; the source fix above awaits it. Bad edits retain active clients; no values are emitted in reload logs. `?debug` reports generation/status. Supported settings, precedence, restart-only exclusions and limits: `PROVIDER_RELOAD.md`.
 - Prefix `?`, 20 MiB and the newly enabled room were rechecked. Private rollback copies: `/var/backups/dirac-v2/20260923T153711Z-d43e4bf` and `/opt/dame-curie-pre-provider-reload-d43e4bf`. Configuration/data mounts were retained, not restored from stale snapshots.
 - **Live reload proof passed:** labeled receipt `74d4aa30ddc0463c8162207491c46a80` in the existing test thread. A one-second cooldown edit waited through 14.9 seconds of observed tool work, then applied at generation 2. The original environment was restored byte-for-byte and applied as generation 3. Endpoints/models/credentials were not changed by the probe.
 - **Prompt diagnosis confirmed:** both reported errors explicitly reject content over Discord's 2,000-character limit. The view and update-acknowledgement branches send the full prompt without chunking; route them through the existing bounded command sender. This was read-only diagnosis, not a prompt-handler fix. Exact UTC evidence and source references are in `../phase-II_v2/DIRAC_HANDOFF.md`.

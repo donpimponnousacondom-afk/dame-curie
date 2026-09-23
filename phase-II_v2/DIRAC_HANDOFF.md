@@ -1,6 +1,12 @@
 # Temporary Dirac V2 — provider reload and role wake-up handoff
 
-Updated 2026-09-23. **Temporary Dirac is live on `d43e4bf`; this rollout did not activate canonical Dame or mutate V1.** This is bounded operational acceptance, not whole-application or security certification.
+Last runtime verification: 2026-09-23, **temporary Dirac on `d43e4bf`**. That rollout did not activate canonical Dame or mutate V1. The subsequent review-fix source below was not deployed in this round; no fresh runtime inventory or whole-application/security certification is implied.
+
+## Review fixes ready in source
+
+`162b39c` includes R3 awaited final edit/fallback settlement, R2 actor-preserving prompt refresh, R9 owned-deadline attribution and R4 fatal-poller cleanup/advisory health. Its exact tree `6e9d2d7ff7bce485970dde60244e2692b160453f` passed **675 focused isolated tests, 2 explicitly deselected**, plus selected Ruff F checks under Python 3.14.4. The unsafe direct-dotenv/live-provider test was never run; the other exclusion is the previously baseline-reproduced README retry-row assertion. Independent source review closed the scoped findings; deterministic negative controls reproduced the old actor, final-delivery and upstream-timeout failures.
+
+No build/replacement, private setting edit, live failure injection, publisher/V1/canonical operation or Git push accompanied this source acceptance. The ignored `audit/` exchange preserves the supplied report, our questions/pushback, author/reviewer answers and exact validation attempts. Source behavior is documented in `DIRAC_SMOKE_PROTOCOL.md` and `../docs/PROVIDER_RELOAD.md`; a later rollout needs its own image/READY/live receipts rather than reusing those below.
 
 ## Use it
 
