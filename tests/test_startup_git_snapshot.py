@@ -81,7 +81,7 @@ def test_actual_version_dispatch_only_uses_frozen_boot_snapshot(monkeypatch, tmp
     monkeypatch.setattr(observability, "read_startup_git_snapshot", Mock(side_effect=AssertionError("queried after boot")))
     asyncio.run(MaxwellBot._handle_command(bot, message))
     assert len(connections) == 1
-    assert sent[0].startswith("```\nCheckout at boot:")
+    assert sent[0].startswith("```\nProvenance: checkout at boot")
     assert sent[0].endswith("\n```")
     assert SNAPSHOT["commit"] in sent[0] and SNAPSHOT["branch"] in sent[0]
 
@@ -112,6 +112,30 @@ def test_configured_socket_failure_never_falls_back_to_image_or_other_checkout(m
     monkeypatch.setattr(observability.subprocess, "run", Mock(side_effect=AssertionError("fell back to another checkout")))
     with pytest.raises(FileNotFoundError):
         observability.capture_running_build(tmp_path)
+
+
+def test_image_manifest_wins_over_the_configured_startup_socket(monkeypatch, tmp_path):
+    (tmp_path / observability.MANIFEST_FILENAME).write_text(
+        json.dumps(
+            {
+                "commit": "d" * 40,
+                "branch": "image-branch",
+                "date": "2026-09-11T06:00:00+02:00",
+                "subject": "image subject",
+                "dirty": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "DAME_CURIE_STARTUP_GIT_SOCKET", "/synthetic/never-contacted.sock"
+    )
+    snapshot = observability.capture_running_build(tmp_path)
+    assert snapshot.provenance == observability.PROVENANCE_IMAGE
+    assert snapshot.commit == "d" * 40
+    report = snapshot.format()
+    assert "Provenance: image" in report
+    assert SNAPSHOT["commit"] not in report and SNAPSHOT["branch"] not in report
 
 
 def test_socket_read_uses_total_deadline(monkeypatch):

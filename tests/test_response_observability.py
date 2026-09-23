@@ -10,6 +10,7 @@ from provider_telemetry import CallMetrics
 from response_observability import (
     DEFAULT_FOOTER_FORMAT,
     FOOTER_MARKER,
+    PROVENANCE_UNKNOWN,
     TURN_INPUT,
     DeliveryMeasurements,
     RunningBuild,
@@ -552,7 +553,7 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
         assert "must be in this channel" in message.channel.sent[-1].content
         message.content = "!version"
         await MaxwellBot._handle_command(bot, message)
-        assert "Checkout at boot:" in message.channel.sent[-1].content
+        assert "Provenance: checkout at boot" in message.channel.sent[-1].content
         assert all(
             sent.content.startswith("```\n") and sent.content.endswith("\n```")
             and FOOTER_MARKER not in sent.content
@@ -720,6 +721,7 @@ def test_version_is_frozen_after_source_head_changes(
 ):
     import response_observability as observability
 
+    monkeypatch.delenv("DAME_CURIE_STARTUP_GIT_SOCKET", raising=False)
     (tmp_path / ".git").mkdir()
     calls = []
     outputs = iter(
@@ -744,7 +746,8 @@ def test_version_is_frozen_after_source_head_changes(
         lambda *args, **kwargs: pytest.fail("version queried git after startup"),
     )
     assert snapshot.format() == first
-    assert "dirty at startup: yes" in first
+    assert "dirty: yes" in first
+    assert "Provenance: checkout at boot" in first
     assert len(calls) == 3
     assert snapshot.commit == "a" * 40
     assert snapshot.date == utc_date
@@ -988,8 +991,13 @@ def test_self_memory_and_reply_quote_strip_footer_before_persistence(metrics):
     assert FOOTER_MARKER in MaxwellBot._message_memory_content(bot, message)
 
 
-def test_version_without_git_is_honest_unknown(tmp_path):
+def test_version_without_git_is_honest_unknown(monkeypatch, tmp_path):
+    import response_observability as observability
+
+    monkeypatch.delenv("DAME_CURIE_STARTUP_GIT_SOCKET", raising=False)
+    monkeypatch.setattr(observability.shutil, "which", lambda name: None)
     snapshot = capture_running_build(tmp_path)
     assert snapshot.commit == snapshot.branch == "unknown"
     assert snapshot.dirty is None
+    assert snapshot.provenance == PROVENANCE_UNKNOWN
     assert snapshot.python.startswith("3.14")

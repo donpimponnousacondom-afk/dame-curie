@@ -169,8 +169,17 @@ def test_image_contains_readiness_gate_and_explicit_build_provenance():
         in (ROOT / "docker/app.Dockerfile.dockerignore").read_text().splitlines()
     )
     for field in ("COMMIT", "BRANCH", "DATE", "SUBJECT", "DIRTY"):
-        key = f"DAME_CURIE_BUILD_{field}"
-        assert f"ARG {key}=unknown" in dockerfile
-        assert f"{key}=${{{key}}}" in dockerfile
+        assert f"ARG DAME_CURIE_BUILD_{field}=unknown" in dockerfile
+    assert 'Path("/app/build_provenance.json").write_text(json.dumps(manifest)' in dockerfile
+    assert "Full build commit required" in dockerfile
+    assert "ENV DAME_CURIE_BUILD_" not in dockerfile
     assert "org.opencontainers.image.revision=${DAME_CURIE_BUILD_COMMIT}" in dockerfile
     assert ".git" not in (ROOT / "docker/app.Dockerfile.dockerignore").read_text()
+
+
+def test_builder_pins_archive_and_manifest_to_same_commit():
+    script = (ROOT / "scripts/build_for_human.sh").read_text()
+    assert 'git archive "$rev"' in script
+    assert '--build-arg DAME_CURIE_BUILD_COMMIT="$rev"' in script
+    assert 'git show -s --format=%s "$rev"' in script
+    assert '--build-arg DAME_CURIE_BUILD_DIRTY=false' in script

@@ -32,11 +32,14 @@ ARG DAME_CURIE_BUILD_BRANCH=unknown
 ARG DAME_CURIE_BUILD_DATE=unknown
 ARG DAME_CURIE_BUILD_SUBJECT=unknown
 ARG DAME_CURIE_BUILD_DIRTY=unknown
-ENV DAME_CURIE_BUILD_COMMIT=${DAME_CURIE_BUILD_COMMIT} \
-    DAME_CURIE_BUILD_BRANCH=${DAME_CURIE_BUILD_BRANCH} \
-    DAME_CURIE_BUILD_DATE=${DAME_CURIE_BUILD_DATE} \
-    DAME_CURIE_BUILD_SUBJECT=${DAME_CURIE_BUILD_SUBJECT} \
-    DAME_CURIE_BUILD_DIRTY=${DAME_CURIE_BUILD_DIRTY}
+RUN python -c 'import json, os, re; from datetime import datetime; from pathlib import Path; \
+    fields = ("commit", "branch", "date", "subject"); \
+    manifest = {name: os.environ["DAME_CURIE_BUILD_" + name.upper()] for name in fields}; \
+    assert re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest["commit"]), "Full build commit required"; \
+    assert all(manifest[name].strip() for name in fields), "Complete build metadata required"; \
+    assert datetime.fromisoformat(manifest["date"]).tzinfo is not None, "Timezone-aware commit date required"; \
+    manifest["dirty"] = {"true": True, "false": False}[os.environ["DAME_CURIE_BUILD_DIRTY"]]; \
+    Path("/app/build_provenance.json").write_text(json.dumps(manifest), encoding="utf-8")'
 LABEL org.opencontainers.image.revision=${DAME_CURIE_BUILD_COMMIT}
 
 USER 0:0

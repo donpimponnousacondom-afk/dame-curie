@@ -390,7 +390,7 @@ def test_multichar_prefix_commands_and_help_fit_discord(command):
         )
         text = "\n".join(sent.content for sent in message.channel.sent)
         assert {
-            "version": "Checkout at boot:",
+            "version": "Provenance: checkout at boot",
             "footer status": "Footer: on",
             "help": "!!footer",
         }[command] in text

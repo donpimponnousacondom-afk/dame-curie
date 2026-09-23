@@ -3,6 +3,10 @@ set -euo pipefail
 
 rev=$(git rev-parse HEAD)
 image="dame-curie-app:${rev:0:7}"
+branch=$(git branch --show-current)
+if [ -z "$branch" ]; then
+  branch="detached-${rev:0:12}"
+fi
 uid=$(id -u dame-curie)
 socket="/run/user/$uid/docker.sock"
 home=$(getent passwd dame-curie | cut -d: -f6)
@@ -22,7 +26,7 @@ esac
 git archive "$rev" |
   "${engine[@]}" build --target app -f docker/app.Dockerfile \
     --build-arg DAME_CURIE_BUILD_COMMIT="$rev" \
-    --build-arg DAME_CURIE_BUILD_BRANCH="$(git branch --show-current)" \
+    --build-arg DAME_CURIE_BUILD_BRANCH="$branch" \
     --build-arg DAME_CURIE_BUILD_DATE="$(git show -s --format=%cI "$rev")" \
     --build-arg DAME_CURIE_BUILD_SUBJECT="$(git show -s --format=%s "$rev")" \
     --build-arg DAME_CURIE_BUILD_DIRTY=false \
