@@ -5535,7 +5535,7 @@ class MaxwellBot(commands.Bot):
         state["active_media"] = list(active_media)
         state["seen_version"] = state.get("version", 0)
         messages = await self._build_messages(
-            latest,
+            message,
             content,
             has_media=bool(active_media),
             media_summary=media_summary,

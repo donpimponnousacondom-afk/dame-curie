@@ -12,6 +12,7 @@ import pytest
 
 from bot import MaxwellBot
 from bot_tools import SendFileTool, SendMessageTool
+from dirac_runtime import _NoticeInput
 from provider_telemetry import CallMetrics
 from providers import ProviderResult
 from response_observability import DeliveryMeasurements, FOOTER_MARKER, RunningBuild
@@ -177,6 +178,67 @@ def raw_update_foreground(foreground_bot):
 
     bot._build_messages = AsyncMock(side_effect=build_messages)
     return bot, message
+
+
+@pytest.mark.parametrize("cached_proxy", [False, True])
+def test_notice_update_builds_with_actor_and_refreshed_poster_snapshot(
+    raw_update_foreground, measured_call, cached_proxy
+):
+    """An in-flight rebuild must not substitute the notice poster for its actor."""
+    bot, notice = raw_update_foreground
+    operator = notice.author
+    poster = SimpleNamespace(id=bot.user.id, bot=True, display_name="Dame")
+    notice.author = poster
+    injected = _NoticeInput(notice, operator)
+    bot._is_admin = lambda user_id: user_id == operator.id
+    bot.config.ENABLE_IMAGE_INPUT = True
+    image_url = "https://synthetic.example/updated.png"
+    image = {"is_image": True, "b64": "c3ludGhldGlj", "mime_type": "image/png"}
+    bot._extract_context_media = AsyncMock(return_value=[image])
+    bot._format_media_summary = Mock(return_value="refreshed visual")
+    bot._current_binary_media = lambda media: []
+
+    async def build_messages(current, content, *, has_media, media_summary):
+        """Inspect the real refresh boundary without booting unrelated RAG machinery."""
+        assert current.author is operator
+        assert current.notice_author is poster
+        assert bot._is_admin(current.author.id)
+        if bot._build_messages.await_count == 1:
+            await bot.on_raw_message_edit(SimpleNamespace(
+                cached_message=injected if cached_proxy else notice,
+                message_id=notice.id, channel_id=notice.channel.id,
+                data={
+                    "content": "edited notice",
+                    "embeds": [{"title": "late preview", "image": {"url": image_url}}],
+                },
+            ))
+        else:
+            assert content == current.content == "edited notice"
+            assert current.embeds[0].title == "late preview"
+            assert has_media is True
+            assert media_summary == "refreshed visual"
+            assert bot._format_media_summary.call_args.args == ([image], [image])
+        return [{"role": "user", "content": f"actor={current.author.id}: {content}"}]
+
+    bot._build_messages = AsyncMock(side_effect=build_messages)
+    bot._generate_response = AsyncMock(return_value=ProviderResult("Answer", metrics=measured_call))
+    bot._dispatch_tool_calls = AsyncMock(return_value=("Answer", [], []))
+    asyncio.run(bot._handle_message(injected))
+
+    assert bot._build_messages.await_count == 2
+    bot._extract_context_media.assert_awaited_once()
+    assert bot._extract_context_media.call_args.args[0].embeds[0].image.url == image_url
+    bot._generate_response.assert_awaited_once()
+    prompt = bot._generate_response.call_args.args[0]
+    assert prompt == [{"role": "user", "content": f"actor={operator.id}: edited notice"}]
+    assert bot._generate_response.call_args.kwargs["media"] == [image]
+    assert bot._dispatch_tool_calls.call_args.args[0].author is operator
+    refreshed = bot._message_snapshots[str(notice.id)]
+    assert refreshed.author is operator
+    assert refreshed.notice_author is poster
+    assert refreshed.content == "edited notice"
+    assert notice.content == "hello" and notice.embeds == []
+    assert len(notice.channel.sent) == 1
 
 
 def configure_dispatch(bot):
