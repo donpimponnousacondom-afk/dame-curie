@@ -3603,7 +3603,7 @@ class MaxwellBot(commands.Bot):
         )
         if active_user != str(getattr(message.author, "id", "") or ""):
             return False
-        return self._directly_addressed(message)
+        return self._directly_addressed(message, include_roles=False)
 
     def _mem_kwargs(self, message) -> dict:
         """Build the standard kwargs for add_to_channel_memory from a
@@ -3631,23 +3631,29 @@ class MaxwellBot(commands.Bot):
             return True
         return self._soft_addressed(message)
 
-    def _directly_addressed(self, message) -> bool:
-        """Hard ping: DM, @Maxwell, or a Discord reply to Maxwell."""
+    def _directly_addressed(self, message, *, include_roles: bool = True) -> bool:
+        """Explicit wake-up; group role pings do not count as personal interruptions."""
         if self.user is None:
             return False
-        if isinstance(getattr(message, "channel", None), discord.DMChannel):
+        direct = (
+            isinstance(getattr(message, "channel", None), discord.DMChannel)
+            or self.user in (getattr(message, "mentions", None) or [])
+            or bool(re.search(rf"<@!?{self.user.id}>", getattr(message, "content", "") or ""))
+        )
+        guild = getattr(message, "guild", None)
+        roles = getattr(message, "role_mentions", None) or []
+        if include_roles and guild is not None and roles and not getattr(message.author, "bot", False):
+            member = guild.me or guild.get_member(self.user.id)
+            own_roles = {role.id for role in member.roles} if member is not None else set()
+            direct = direct or any(role.id != guild.id and role.id in own_roles for role in roles)
+        if direct:
             return True
-        if self.user in (getattr(message, "mentions", None) or []) or re.search(
-            rf"<@!?{self.user.id}>", getattr(message, "content", "") or ""
-        ):
-            return True
-        if message_reference_is_forward(message):
-            return False
         ref = getattr(message, "reference", None)
         resolved = getattr(ref, "resolved", None) if ref else None
-        if resolved is not None and hasattr(resolved, "author"):
-            return getattr(resolved.author, "id", None) == self.user.id
-        return False
+        return (
+            not message_reference_is_forward(message)
+            and getattr(getattr(resolved, "author", None), "id", None) == self.user.id
+        )
 
     def _content_without_self_mention(self, content: str | None) -> str:
         text = str(content or "")
@@ -3674,18 +3680,8 @@ class MaxwellBot(commands.Bot):
         return True
 
     def _soft_addressed(self, message) -> bool:
-        """@everyone / @here / a role Maxwell has — not a personal ping."""
-        if getattr(message, "mention_everyone", False):
-            return True
-        guild = getattr(message, "guild", None)
-        if not guild:
-            return False
-        me = guild.me or (guild.get_member(self.user.id) if self.user else None)
-        if not me:
-            return False
-        bot_roles = set(getattr(me, "roles", []) or [])
-        msg_roles = set(getattr(message, "role_mentions", []) or [])
-        return bool(bot_roles & msg_roles)
+        """Keep server-wide broadcasts separate from explicit user and role pings."""
+        return bool(getattr(message, "mention_everyone", False))
 
     def _addressing_someone_else(self, message) -> bool:
         """@ someone other than Maxwell, and not also @ Maxwell."""
