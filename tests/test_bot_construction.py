@@ -67,6 +67,7 @@ async def construct():
     assert instance.rem_store.data_dir == data
     assert instance.autonomy_engine.store.data_dir == data
     assert instance.user is None
+    assert instance.command_prefix == os.environ['COMMAND_PREFIX']
     assert instance.ai_provider._session is None
     assert not instance.ai_provider.available
     assert not instance.memory._embed_tasks
@@ -84,8 +85,9 @@ asyncio.run(construct())
 
 
 @pytest.mark.parametrize("external_prompts", [False, True])
+@pytest.mark.parametrize("command_prefix", ["!", "?"])
 def test_actual_bot_constructor_keeps_state_outside_read_only_source(
-    tmp_path, external_prompts
+    tmp_path, external_prompts, command_prefix
 ):
     app = tmp_path / "app"
     app.mkdir()
@@ -115,6 +117,7 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
         "DAME_CURIE_SITE_DIR": str(state / "sites"),
         "DAME_CURIE_PROMPTS_DIR": str(state / "prompts") if external_prompts else "",
         "DISCORD_TOKEN": "synthetic-constructor-token-never-used",
+        "COMMAND_PREFIX": command_prefix,
         "DAME_CURIE_ADMIN_PASSWORD": "synthetic-constructor-password-never-used",
         "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
         "OPENAI_MODEL": "synthetic-no-network-model",

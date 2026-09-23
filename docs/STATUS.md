@@ -1,6 +1,19 @@
 # dame-curie status
 
-## Current assignment — 2026-09-22
+## Current runtime — 2026-09-23
+
+**Dirac is running `2f159e9`, with assigned-role wake-ups and immutable image provenance.** Root's “throne-v2” is an internal nickname for this same project, not another deployment.
+
+- Running source: `2f159e987b10edea13fb53df7d8a68f57157839a`; container `b82c1df86f1d`; image `sha256:b27f5acce6dc0bb3b8cb7eb3595ea5b9f2f229417e7cff2f502be91aa764cf22`. Documentation/test-only commits after this do not change that image.
+- **V2 commands now use `?`** (`?help`, `?version`, `?prompt`), configured only in Dirac's private `COMMAND_PREFIX`. The project default and V1's commands remain unchanged. Other effective environment settings were compared and retained; a private pre-edit backup exists.
+- Human mentions of a role the bot actually holds now wake it even with conversation watch disabled. Membership comes from the current guild member cache, not role names or raw text. Channel/blacklist/activation gates remain; `@everyone`/`@here` stay soft; bot-authored role pings do not wake; role-only pings do not cancel the same user's running turn; explicit personal mentions/replies retain their existing interruption behavior. Assign the queen to the shared role in Discord, then ping it in an allowed channel.
+- `?version` captures `/app/build_provenance.json` once at startup. The builder pins metadata to the committed Git archive and JSON-encodes it inside the image; runtime environment/checkout edits cannot change the reported image. A malformed existing manifest fails startup instead of reporting checkout data as image identity.
+- **298 focused tests passed** on `2f159e9`, in frozen Python 3.14.4 QA with no network/private mounts; selected Ruff F821/F822/F823 checks passed. Independent role/source review found no blocker. A separate actual-image probe verified the committed bot blob, baked provenance, resistance to runtime metadata overrides, and exclusion of the unfinished provider-reload draft. This is not a full-suite or human Discord role-ping receipt.
+- Initial replacement startup was blocked by HTTP 503 from the shared embedding relay: the already-shared V1 Ollama target was stopped, exit 0. The coordinator did not restart or alter V1. After root restored it externally, Dirac restart passed embedding readiness and its intended temporary identity reached Discord READY. No readiness bypass or RAG disable was applied.
+- Current 20 MiB incoming limit and newly enabled room were rechecked after restart. Configuration/data mounts were retained; no stale settings snapshot was restored. Private source/state rollback copies are retained. An image rollback must preserve the newer `?` prefix rather than restore the pre-prefix environment backup.
+- **Provider warm reload remains unfinished and is not in the running image.** Its draft is uncommitted. Remaining work includes idle/retirement review findings, isolated QA and a separate deployment; the reported `!prompt` HTTP400/50035 failures remain queued for diagnosis (now invoked as `?prompt` on V2).
+
+## Previous runtime — 2026-09-22
 
 **Temporary Dirac is live and ready for scoped battle testing. Canonical Dame remains held.** Operational handoff: `../phase-II_v2/DIRAC_HANDOFF.md`.
 
