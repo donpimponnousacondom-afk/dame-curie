@@ -39,10 +39,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# asyncio keeps only a weak reference to a running task. A detached
-# create_task() whose handle nobody holds can be collected mid-flight, which
-# here means a progress message that never gets edited to its final content or
-# never gets deleted. Hold a strong ref until the task completes.
+# Cosmetic progress tasks remain detached and need a strong reference until
+# they finish. Final reply delivery is awaited by its originating turn.
 from response_observability import notice_send  # noqa: E402
 from utils import _spawn_background as _fire_and_forget  # noqa: E402
 
@@ -596,16 +594,9 @@ class ToolProgress:
         the existing progress message in place instead of deleting
         + reposting. Avoids the delete-then-fresh-post flicker.
 
-        2026-07-21: was ``await self._posted.edit()`` which made the
-        caller wait on a Discord round-trip before posting the reply.
-        Now fire-and-forget so the reply is not blocked on Discord
-        latency. Returns synchronously based on whether we have a
-        posted message to edit; the actual edit happens in the
-        background. If the bot is also racing a stop() (e.g. the
-        tool's finally block already scheduled a delete), we still
-        return True here and the background task will either land
-        the edit or fall through to delete — either way the user
-        sees one message.
+        The caller skips its first reply chunk when this returns True, so
+        the edit or fallback send must settle before the turn can finish.
+        Cancellation schedules cosmetic progress deletion and propagates.
         """
         if self._stopped or not self._posted:
             return False
@@ -619,25 +610,14 @@ class ToolProgress:
             self._deferred_task.cancel()
             self._deferred_task = None
         try:
-            _fire_and_forget(self._background_transition(posted, content, on_delivered=on_delivered))
-        except RuntimeError:
-            with contextlib.suppress(Exception):
-                await posted.edit(content=content)
-                if on_delivered is not None:
-                    on_delivered(posted)
+            await self._deliver_final(posted, content, on_delivered=on_delivered)
+        except asyncio.CancelledError:
+            _fire_and_forget(self._bg_delete(posted))
+            raise
         return True
 
-    async def _background_transition(self, posted: Any, content: str, *, on_delivered=None) -> None:
-        """Edit the message in place to the final reply. Fire-and-forget.
-
-        The caller treats a True return from ``transition_to_final`` as "the
-        reply has been delivered" and skips sending the first chunk itself.
-        So if this edit fails — the progress message was deleted by a racing
-        stop(), a moderator removed it, the edit 404s — the user's answer is
-        gone with only a debug line to show for it. Fall back to posting the
-        content as a fresh message so a failed edit costs a cosmetic flicker
-        instead of the whole reply.
-        """
+    async def _deliver_final(self, posted: Any, content: str, *, on_delivered=None) -> None:
+        """Edit the posted reply, falling back to a send if the edit fails."""
         try:
             await posted.edit(content=content)
         except Exception as e:  # noqa: BLE001

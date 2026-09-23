@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 # Make sure the repo root is on the path so the test can import
 # `tool_progress` without an installed package.
 ROOT = Path(__file__).resolve().parent.parent
@@ -879,10 +881,8 @@ def test_streaming_tick_inserts_space_between_glued_deltas():
 def test_transition_to_final_falls_back_to_a_fresh_post_when_the_edit_fails():
     """A failed in-place edit must not eat the reply.
 
-    The caller reads True from transition_to_final as "delivered" and skips
-    sending the first chunk itself. The edit runs detached, so if it fails
-    (message deleted underneath us, edit 404s) the user's answer used to
-    vanish with only a debug log line. Post it as a new message instead.
+    The caller skips its first chunk only after the failed edit's fallback
+    send has settled inside transition_to_final.
     """
 
     async def run():
@@ -898,9 +898,6 @@ def test_transition_to_final_falls_back_to_a_fresh_post_when_the_edit_fails():
 
         ok = await prog.transition_to_final("Disk has 50GB free.")
         assert ok is True
-        # Let the detached transition task run.
-        for _ in range(5):
-            await asyncio.sleep(0)
         return msg
 
     msg = asyncio.run(run())
@@ -914,10 +911,131 @@ def test_transition_to_final_does_not_double_post_when_the_edit_works():
         await prog.start()
         ok = await prog.transition_to_final("Disk has 50GB free.")
         assert ok is True
-        for _ in range(5):
-            await asyncio.sleep(0)
         return msg
 
     msg = asyncio.run(run())
     assert len(msg.channel.sent) == 1
     assert msg.channel.sent[0].content == "Disk has 50GB free."
+
+
+def test_final_edit_keeps_transition_pending_until_delivery() -> None:
+    async def run() -> None:
+        msg = FakeMessage()
+        prog = tool_progress.ToolProgress(msg)
+        posted = await msg.channel.send("working on it…")
+        prog._posted = posted
+        started = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+        original_edit = posted.edit
+
+        async def blocked_edit(content=None, **kwargs):
+            started.set()
+            await release.wait()
+            await original_edit(content=content, **kwargs)
+
+        posted.edit = blocked_edit
+        transition = asyncio.create_task(
+            prog.transition_to_final("Answer.", on_delivered=delivered.append)
+        )
+        await started.wait()
+        assert not transition.done()
+        assert posted.content == "working on it…"
+        assert delivered == []
+        assert msg.channel.sent == [posted]
+        await prog.stop()
+        assert not transition.done()
+        release.set()
+        assert await transition is True
+        assert delivered == [posted]
+        assert posted.content == "Answer."
+        assert msg.channel.sent == [posted]
+        assert msg.channel.deleted == []
+
+    asyncio.run(run())
+
+
+def test_final_fallback_keeps_transition_pending_until_send() -> None:
+    async def run() -> None:
+        msg = FakeMessage()
+        prog = tool_progress.ToolProgress(msg)
+        posted = await msg.channel.send("working on it…")
+        prog._posted = posted
+        started = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+        original_send = msg.channel.send
+
+        async def failed_edit(content=None, **kwargs):
+            raise RuntimeError("progress was deleted")
+
+        async def blocked_send(content=None, **kwargs):
+            started.set()
+            await release.wait()
+            return await original_send(content=content, **kwargs)
+
+        posted.edit = failed_edit
+        msg.channel.send = blocked_send
+        transition = asyncio.create_task(
+            prog.transition_to_final("Answer.", on_delivered=delivered.append)
+        )
+        await started.wait()
+        assert not transition.done()
+        assert delivered == []
+        assert msg.channel.sent == [posted]
+        release.set()
+        assert await transition is True
+        assert len(msg.channel.sent) == 2
+        assert msg.channel.sent[1].content == "Answer."
+        assert delivered == [msg.channel.sent[1]]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("blocked_step", ["edit", "fallback"])
+def test_cancelled_final_delivery_cleans_progress_without_sending(blocked_step: str) -> None:
+    async def run() -> None:
+        msg = FakeMessage()
+        prog = tool_progress.ToolProgress(msg)
+        posted = await msg.channel.send("working on it…")
+        prog._posted = posted
+        started = asyncio.Event()
+        deleted = asyncio.Event()
+        delivered = []
+        original_delete = posted.delete
+
+        async def tracked_delete():
+            await original_delete()
+            deleted.set()
+
+        async def blocked_edit(content=None, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def failed_edit(content=None, **kwargs):
+            raise RuntimeError("progress was deleted")
+
+        async def blocked_send(content=None, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        posted.delete = tracked_delete
+        posted.edit = blocked_edit if blocked_step == "edit" else failed_edit
+        if blocked_step == "fallback":
+            msg.channel.send = blocked_send
+        transition = asyncio.create_task(
+            prog.transition_to_final("Answer.", on_delivered=delivered.append)
+        )
+        await started.wait()
+        assert not transition.done()
+        transition.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await transition
+        await asyncio.wait_for(deleted.wait(), timeout=1)
+        assert delivered == []
+        assert msg.channel.sent == [posted]
+        assert msg.channel.deleted == [posted]
+        await prog.stop()
+        assert msg.channel.deleted == [posted]
+
+    asyncio.run(run())

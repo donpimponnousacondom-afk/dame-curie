@@ -458,13 +458,12 @@ def test_progress_registers_only_actual_success(metrics, edit_fails, send_fails)
             done.set()
 
         assert await progress.transition_to_final("answer", on_delivered=delivered)
-        assert bot._delivery_measurements.lookup("100") is None
         if send_fails:
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            assert bot._delivery_measurements.lookup("100") is None
+            assert not done.is_set()
             assert callbacks == []
         else:
-            await asyncio.wait_for(done.wait(), timeout=1)
+            assert done.is_set()
             expected = 1000 if edit_fails else 33
             assert callbacks == [expected]
             assert bot._delivery_measurements.lookup("100")[0] == str(expected)
