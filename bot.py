@@ -312,7 +312,11 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     close_shared_session,
 )
 from captcha_solver import build_solver  # noqa: E402
-from config import Config  # noqa: E402
+from config import Config, ENV_FILE, INHERITED_ENVIRONMENT  # noqa: E402
+from provider_reload import (
+    ProviderReload, apply_provider_reload, close_retired_providers, provider_round, retire_provider,
+)
+from provider_settings import PROVIDER_FIELDS
 from image_media import image_mime  # noqa: E402
 from error_reporting import (  # noqa: E402
     PUBLIC_ERROR_TEXT,
@@ -2644,6 +2648,12 @@ class MaxwellBot(commands.Bot):
         self.channel_queues: ChannelWorkQueues = ChannelWorkQueues()
         self.tool_concurrency: ToolConcurrency = ToolConcurrency()
         self._setup_ai()
+        self._retired_providers: list[OpenAICompatibleProvider] = []
+        self._provider_rounds_active = 0
+        self._provider_reload = ProviderReload(
+            ENV_FILE, INHERITED_ENVIRONMENT,
+            {name: getattr(self.config, name) for name in PROVIDER_FIELDS},
+        )
         self._setup_memory()
         self._setup_tools()
         self.autonomy_engine = AutonomyEngine(self)
@@ -2843,31 +2853,34 @@ class MaxwellBot(commands.Bot):
         self._tasks = [t for t in self._tasks if not t.done()]
 
     def _setup_ai(self):
-        self.ai_provider = OpenAICompatibleProvider(
-            base_url=self.config.OPENAI_BASE_URL,
-            model=self.config.OPENAI_MODEL,
-            max_tokens=self.config.OPENAI_MAX_TOKENS,
-            temperature=self.config.OPENAI_TEMPERATURE,
-            top_p=self.config.OPENAI_TOP_P,
-            top_k=self.config.OPENAI_TOP_K,
-            api_key=self.config.OPENAI_API_KEY,
-            extra_headers=self.config.OPENAI_EXTRA_HEADERS,
-            extra_body=self.config.OPENAI_EXTRA_BODY,
+        self.ai_provider = self._create_main_provider(self.config)
+
+    def _create_main_provider(self, config: Config) -> OpenAICompatibleProvider:
+        """Construct a complete replacement before changing the active provider configuration."""
+        return OpenAICompatibleProvider(
+            base_url=config.OPENAI_BASE_URL,
+            model=config.OPENAI_MODEL,
+            max_tokens=config.OPENAI_MAX_TOKENS,
+            temperature=config.OPENAI_TEMPERATURE,
+            top_p=config.OPENAI_TOP_P,
+            top_k=config.OPENAI_TOP_K,
+            api_key=config.OPENAI_API_KEY,
+            extra_headers=config.OPENAI_EXTRA_HEADERS,
+            extra_body=config.OPENAI_EXTRA_BODY,
             reasoning_control=lambda: self._control.get("deepseek_reasoning", ""),
-            disable_reasoning=self.config.OPENAI_DISABLE_REASONING,
-            fallback_base_url=self.config.OPENAI_FALLBACK_BASE_URL,
-            fallback_model=self.config.OPENAI_FALLBACK_MODEL,
-            fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
-            fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
-            retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
-            empty_response_retries=getattr(
-                self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
-            ),
+            disable_reasoning=config.OPENAI_DISABLE_REASONING,
+            fallback_base_url=config.OPENAI_FALLBACK_BASE_URL,
+            fallback_model=config.OPENAI_FALLBACK_MODEL,
+            fallback_api_key=config.OPENAI_FALLBACK_API_KEY,
+            fallback_disable_reasoning=config.OPENAI_FALLBACK_DISABLE_REASONING,
+            retry_attempts=config.OPENAI_RETRY_ATTEMPTS,
+            empty_response_retries=getattr(config, "OPENAI_EMPTY_RESPONSE_RETRIES", None),
+            endpoint_cooldown_seconds=getattr(config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
             enable_audio_input=_owner_audio_input_enabled(self),
-            vision_base_url=self.config.OPENAI_VISION_BASE_URL,
-            vision_model=self.config.OPENAI_VISION_MODEL,
-            vision_api_key=self.config.OPENAI_VISION_API_KEY,
-            vision_disable_reasoning=self.config.OPENAI_VISION_DISABLE_REASONING,
+            vision_base_url=config.OPENAI_VISION_BASE_URL,
+            vision_model=config.OPENAI_VISION_MODEL,
+            vision_api_key=config.OPENAI_VISION_API_KEY,
+            vision_disable_reasoning=config.OPENAI_VISION_DISABLE_REASONING,
         )
 
     def _is_in_night_fallback_window(self) -> bool:
@@ -2965,19 +2978,9 @@ class MaxwellBot(commands.Bot):
             # base_url) we reuse the main provider instance and pass model= per
             # request at call time.
             if not base_url:
-                # base_url cleared since last tick: close the cached dedicated
-                # provider (it owns an aiohttp ClientSession) so config churn
-                # doesn't leak sessions, then fall through to the main provider.
                 old = self.autonomy_provider
-                if old is not None and hasattr(old, "close"):
-                    try:
-                        # Track the close task so shutdown can await/cancel it (prevents session leaks on churn).
-                        task = asyncio.create_task(old.close())
-                        self._track_task(task)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to schedule old autonomy provider close: {e}"
-                        )
+                if old is not None:
+                    retire_provider(self, old)
                 self.autonomy_provider = None
                 self._autonomy_provider_sig = ""
                 return self.ai_provider
@@ -2993,20 +2996,7 @@ class MaxwellBot(commands.Bot):
             autonomy_max_tokens = min(
                 _safe_int(self.config.OPENAI_MAX_TOKENS or 200000, 200000), 8192
             )
-            # Signature changed: close the previously cached provider (it owns an
-            # aiohttp ClientSession) before replacing it, so config churn doesn't
-            # leak sessions. close() is async; schedule it fire-and-forget.
             if cached is None:
-                old = self.autonomy_provider
-                if old is not None and hasattr(old, "close"):
-                    try:
-                        # Track the close task so shutdown can await/cancel it (prevents session leaks on churn).
-                        task = asyncio.create_task(old.close())
-                        self._track_task(task)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to schedule old autonomy provider close: {e}"
-                        )
                 provider = OpenAICompatibleProvider(
                     base_url=base_url,
                     model=model or self.config.OPENAI_MODEL,
@@ -3024,6 +3014,7 @@ class MaxwellBot(commands.Bot):
                     fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
                     fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
                     retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
+                    endpoint_cooldown_seconds=getattr(self.config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
                     empty_response_retries=getattr(
                         self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
                     ),
@@ -3031,14 +3022,16 @@ class MaxwellBot(commands.Bot):
                 )
             else:
                 provider = cached
-            # Await init so the first tick after a build (or after a transient)
-            # failure) doesn't race the /models probe. Guarded so it never raises.
+            old = self.autonomy_provider
+            if old is not None and old is not provider:
+                retire_provider(self, old)
+            self.autonomy_provider = provider
+            self._autonomy_provider_sig = sig
+            # Publish before awaiting init so concurrent callers share one tracked client.
             try:
                 await provider.initialize()
             except Exception as e:
                 logger.warning(f"Autonomy provider initialize() failed: {e}")
-            self.autonomy_provider = provider
-            self._autonomy_provider_sig = sig
             # If the dedicated provider couldn't initialize (primary + fallback
             # both down), fall back to the main ai_provider for this tick so
             # autonomy keeps running instead of soft-skipping forever. The cached
@@ -3097,14 +3090,8 @@ class MaxwellBot(commands.Bot):
             # call time below.
             if not base_url:
                 old = self.aux_provider
-                if old is not None and hasattr(old, "close"):
-                    try:
-                        task = asyncio.create_task(old.close())
-                        self._track_task(task)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to schedule old aux provider close: {e}"
-                        )
+                if old is not None:
+                    retire_provider(self, old)
                 self.aux_provider = None
                 self._aux_provider_sig = ""
                 # Fall through to autonomy so the model/base_url cascade is
@@ -3120,15 +3107,6 @@ class MaxwellBot(commands.Bot):
                 _safe_int(self.config.OPENAI_MAX_TOKENS or 200000, 200000), 8192
             )
             if cached is None:
-                old = self.aux_provider
-                if old is not None and hasattr(old, "close"):
-                    try:
-                        task = asyncio.create_task(old.close())
-                        self._track_task(task)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to schedule old aux provider close: {e}"
-                        )
                 provider = OpenAICompatibleProvider(
                     base_url=base_url,
                     model=model or self.config.OPENAI_MODEL,
@@ -3143,6 +3121,7 @@ class MaxwellBot(commands.Bot):
                     fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
                     fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
                     retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
+                    endpoint_cooldown_seconds=getattr(self.config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
                     empty_response_retries=getattr(
                         self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
                     ),
@@ -3150,12 +3129,15 @@ class MaxwellBot(commands.Bot):
                 )
             else:
                 provider = cached
+            old = self.aux_provider
+            if old is not None and old is not provider:
+                retire_provider(self, old)
+            self.aux_provider = provider
+            self._aux_provider_sig = sig
             try:
                 await provider.initialize()
             except Exception as e:
                 logger.warning(f"Aux provider initialize() failed: {e}")
-            self.aux_provider = provider
-            self._aux_provider_sig = sig
             if not getattr(provider, "available", False):
                 logger.warning(
                     "Aux provider unavailable, falling back to main ai_provider for this tick"
@@ -5791,6 +5773,7 @@ class MaxwellBot(commands.Bot):
                 )
 
     async def _on_message_impl(self, message):
+        apply_provider_reload(self)
         if is_private_error_report(message, getattr(getattr(self, "user", None), "id", None)):
             return
         try:
@@ -6690,7 +6673,8 @@ class MaxwellBot(commands.Bot):
                     with contextlib.suppress(ValueError):
                         hours = max(1, min(168, int(args.strip())))
                 await message.channel.send(f"⏳ summarizing last {hours}h of messages…")
-                added = await self.memory.summarize_recent_to_ltm(hours=hours)
+                async with provider_round(self):
+                    added = await self.memory.summarize_recent_to_ltm(hours=hours)
                 await message.channel.send(
                     f"✓ wrote {added} new LTM facts from the last {hours}h."
                     if added
@@ -6931,6 +6915,9 @@ class MaxwellBot(commands.Bot):
                     registry = getattr(self, "_delivery_measurements", None) or DeliveryMeasurements()
                     text = format_debug(registry, channel_id, target_id)
                 text = format_runtime_provider(getattr(self, "ai_provider", None)) + "\n\n" + text
+                reload = getattr(self, "_provider_reload", None)
+                if reload is not None:
+                    text = reload.describe() + "\n" + text
                 await send_command_response(
                     self, message.channel, text,
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -9461,6 +9448,8 @@ class MaxwellBot(commands.Bot):
                 self._load_blacklist(quiet=True)
                 self._load_sites(quiet=True)
                 self._load_control()
+                apply_provider_reload(self)
+                await close_retired_providers(self)
                 await self._load_rem_control()
             except asyncio.CancelledError as _exc:
                 raise
@@ -10017,13 +10006,14 @@ class MaxwellBot(commands.Bot):
         async def _boot_summarize():
             try:
                 await asyncio.sleep(300)
-                n = await self.memory.summarize_recent_to_ltm(hours=24)
+                async with provider_round(self):
+                    n = await self.memory.summarize_recent_to_ltm(hours=24)
                 if n:
                     logger.info(f"Boot summarizer wrote {n} LTM facts")
             except Exception as e:
                 logger.warning(f"Boot summarizer failed: {e}")
 
-        _spawn_background(_boot_summarize())
+        self._track_task(_spawn_background(_boot_summarize()))
 
         # Daily LTM summarizer at 04:00 local. Computes seconds-until-
         # next-04:00 on each loop start; if the start-of-day window is
@@ -10037,14 +10027,15 @@ class MaxwellBot(commands.Bot):
                         target = target + timedelta(days=1)
                     wait_s = (target - now).total_seconds()
                     await asyncio.sleep(wait_s)
-                    n = await self.memory.summarize_recent_to_ltm(hours=24)
+                    async with provider_round(self):
+                        n = await self.memory.summarize_recent_to_ltm(hours=24)
                     if n:
                         logger.info(f"Daily LTM summarizer wrote {n} facts")
                 except Exception as e:
                     logger.error(f"Daily summarizer error: {e}")
                     await asyncio.sleep(3600)  # backoff on failure
 
-        _spawn_background(_daily_summarizer_loop())
+        self._track_task(_spawn_background(_daily_summarizer_loop()))
 
         # Active cleanup of stale channel rows on a 10-minute cadence.
         while True:
@@ -12210,6 +12201,7 @@ class MaxwellBot(commands.Bot):
         return False
 
     async def _handle_message(self, message, content: str | None = None):
+        apply_provider_reload(self, excluding=asyncio.current_task())
         content = content or message.content
         channel_id = str(message.channel.id)
         # Sleep gate: when the bot is in a sleep window, abort the
@@ -15873,6 +15865,7 @@ async def main():
                 logger.exception("Dirac smoke runtime failed to stop")
         with contextlib.suppress(Exception):
             await bot._reply_queue.close()
+        await bot.bg_jobs.close()
         with contextlib.suppress(Exception):
             pm = getattr(bot, "plugin_manager", None)
             if pm is not None:
@@ -15925,6 +15918,7 @@ async def main():
             await bot.rem_log.flush()
         except Exception as e:
             logger.error(f"Failed to flush REM events on shutdown: {e}")
+        await close_retired_providers(bot, shutdown=True)
         try:
             await bot.ai_provider.close()
         except Exception as e:

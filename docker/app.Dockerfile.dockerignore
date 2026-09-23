@@ -27,6 +27,8 @@
 !prompt_storage.py
 !providers.py
 !provider_telemetry.py
+!provider_settings.py
+!provider_reload.py
 !rag_memory.py
 !rag_maintenance.py
 !rem.py

@@ -17,6 +17,7 @@ COPY autonomy.py autonomy_social.py bot.py bot_tools.py captcha_solver.py \
     control_defaults.py dirac_runtime.py discord_vc_compat.py docker_runtime.py doctor.py \
     error_reporting.py guild_onboarding.py image_media.py inbox.py job_routing.py jobs.py knowledge_graph.py \
     message_pipeline.py operator_commands.py plugin_manager.py prompt_storage.py providers.py provider_telemetry.py \
+    provider_settings.py provider_reload.py \
     rag_memory.py rag_maintenance.py rem.py rem_defaults.json response_guard.py response_observability.py smoke_protocol.py \
     tool_progress.py tool_prompts.py tool_registry.py tool_schemas.py \
     tools.py utils.py voice_live.py watch_policy.py ./

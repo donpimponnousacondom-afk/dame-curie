@@ -170,9 +170,9 @@ class ReplyQueue:
         state = self._channels.get(str(channel_id or ""))
         return bool(state and state.running is not None and not state.running.done())
 
-    def any_active(self) -> bool:
+    def any_active(self, *, excluding: asyncio.Task | None = None) -> bool:
         return any(
-            s.running is not None and not s.running.done()
+            s.running is not None and s.running is not excluding and not s.running.done()
             for s in self._channels.values()
         )
 

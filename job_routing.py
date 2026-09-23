@@ -105,6 +105,7 @@ def create_job_provider(
         fallback_disable_reasoning=config.OPENAI_FALLBACK_DISABLE_REASONING,
         retry_attempts=config.OPENAI_RETRY_ATTEMPTS,
         empty_response_retries=config.OPENAI_EMPTY_RESPONSE_RETRIES,
+        endpoint_cooldown_seconds=getattr(config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
         enable_audio_input=enable_audio_input,
         vision_base_url=config.OPENAI_VISION_BASE_URL if main else "",
         vision_model=config.OPENAI_VISION_MODEL if main else "",

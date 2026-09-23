@@ -32,6 +32,7 @@ from dotenv.main import load_dotenv
 
 APP_ROOT = Path(__file__).resolve().parent
 ENV_FILE = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
+INHERITED_ENVIRONMENT = dict(os.environ)
 # Runtime configuration overrides the inherited process environment.
 load_dotenv(ENV_FILE, override=True)
 
@@ -221,6 +222,7 @@ class Config:
     OPENAI_EMPTY_RESPONSE_RETRIES = _int_env(
         "OPENAI_EMPTY_RESPONSE_RETRIES", 2, min_value=0, max_value=5
     )
+    OPENAI_ENDPOINT_COOLDOWN_SECONDS = _float_env("OPENAI_ENDPOINT_COOLDOWN_SECONDS", 60.0)
 
     # Toggle for "omni" (audio+vision capable) model input. On by default:
     # Gemini behind the current proxy transcribes wav/mp3; endpoints that

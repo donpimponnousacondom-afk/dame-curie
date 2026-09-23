@@ -10,8 +10,10 @@ import re
 import sys
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import wraps
+from typing import Concatenate
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -1635,6 +1637,21 @@ def _deepseek_reasoning_transport(base_url: str, model: str) -> str:
     return ""
 
 
+def track_provider_activity[**P, R](
+    operation: Callable[Concatenate[OpenAICompatibleProvider, P], Awaitable[R]],
+) -> Callable[Concatenate[OpenAICompatibleProvider, P], Awaitable[R]]:
+    """Keep idle reload from closing transports used outside the bot's AI semaphore."""
+    @wraps(operation)
+    async def tracked(provider: OpenAICompatibleProvider, *args: P.args, **kwargs: P.kwargs) -> R:
+        provider.active_requests += 1
+        try:
+            return await operation(provider, *args, **kwargs)
+        finally:
+            provider.active_requests -= 1
+
+    return tracked
+
+
 class OpenAICompatibleProvider:
     """OpenAI-compatible LLM Provider with multimodal support using /v1/chat/completions"""
 
@@ -1662,8 +1679,10 @@ class OpenAICompatibleProvider:
         extra_headers: dict[str, str] | None = None,
         extra_body: dict[str, object] | None = None,
         reasoning_control: Callable[[], str | int] | None = None,
+        endpoint_cooldown_seconds: float | None = None,
     ):
         local_encoding()
+        self.active_requests = 0
         self.reasoning_control = reasoning_control
         self.extra_headers = dict(extra_headers or {})
         self.extra_body = copy.deepcopy(extra_body or {})
@@ -1753,6 +1772,8 @@ class OpenAICompatibleProvider:
             )
         except (TypeError, ValueError):
             self._cooldown_seconds = DEFAULT_ENDPOINT_COOLDOWN_SECONDS
+        if endpoint_cooldown_seconds is not None:
+            self._cooldown_seconds = endpoint_cooldown_seconds
 
     def _headers(self, endpoint: ProviderEndpoint = None) -> dict[str, str]:
         api_key = self.api_key if endpoint is None else endpoint.api_key
@@ -2053,6 +2074,7 @@ class OpenAICompatibleProvider:
         if self._session and not self._session.closed:
             await self._session.close()
 
+    @track_provider_activity
     async def initialize(self):
         session = await self._get_session()
         initialized = False
@@ -2093,6 +2115,7 @@ class OpenAICompatibleProvider:
         self.available = initialized
         return initialized
 
+    @track_provider_activity
     async def generate_response(
         self,
         messages: list[dict],
@@ -2159,6 +2182,7 @@ class OpenAICompatibleProvider:
             metrics=getattr(message, "metrics", None),
         )
 
+    @track_provider_activity
     async def generate_chat_completion(
         self,
         messages: list[dict],

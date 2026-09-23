@@ -88,13 +88,14 @@ def _make_bot(monkeypatch, *, control=None, aux_env=None, auto_env=None):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.available = True
+            self.closed = False
             built.append(self)
 
         async def initialize(self):
             self.inited = True
 
         async def close(self):
-            pass
+            self.closed = True
 
     monkeypatch.setattr(bot_mod, "OpenAICompatibleProvider", _FakeOpenAICompatible)
     inst._built = built
@@ -194,7 +195,7 @@ def test_get_aux_provider_caches(monkeypatch):
     assert len(bot._built) == 1
 
 
-def test_get_aux_provider_closes_prior_on_config_churn(monkeypatch):
+def test_get_aux_provider_retires_prior_on_config_churn(monkeypatch):
     bot = _make_bot(
         monkeypatch,
         control={"aux_base_url": "https://aux.example", "aux_model": "aux-m"},
@@ -202,14 +203,13 @@ def test_get_aux_provider_closes_prior_on_config_churn(monkeypatch):
     asyncio.run(bot._get_aux_provider())
     first = bot.aux_provider
     assert first is not None
-    # Change the model -> signature changes -> old provider scheduled for close.
+    # A changed signature retires the old client; whole-round idle owns closing it.
     bot._control = {"aux_base_url": "https://aux.example", "aux_model": "aux-m2"}
     asyncio.run(bot._get_aux_provider())
     assert len(bot._built) == 2
-    # The tracked close tasks should include the first provider's close.
-    assert any(
-        getattr(t, "_coro", None) is not None for t in bot._tracked
-    )
+    assert bot._retired_providers == [first]
+    assert first.closed is False
+    assert bot._tracked == []
 
 
 def test_get_aux_provider_falls_back_to_main_when_unavailable(monkeypatch):

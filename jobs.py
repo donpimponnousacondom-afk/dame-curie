@@ -310,7 +310,6 @@ class BackgroundJobManager:
     def cleanup_runtime(self, job_id: str) -> None:
         jid = str(job_id)
         self._runtime.pop(jid, None)
-        self._tasks.pop(jid, None)
 
     def attach_runtime(self, job_id: str, **objects: Any) -> None:
         self._runtime[str(job_id)] = dict(objects)
@@ -319,7 +318,17 @@ class BackgroundJobManager:
         return self._runtime.get(str(job_id), {})
 
     def track_task(self, job_id: str, task: asyncio.Task) -> None:
-        self._tasks[str(job_id)] = task
+        """Keep final delivery and cancellation cleanup visible until the worker actually exits."""
+        jid = str(job_id)
+        self._tasks[jid] = task
+
+        def finished(completed: asyncio.Task) -> None:
+            """Release only this worker's registration after its last awaited operation."""
+            if self._tasks.get(jid) is completed:
+                self._tasks.pop(jid, None)
+                self._runtime.pop(jid, None)
+
+        task.add_done_callback(finished)
 
     def mark(self, job_id: str, **fields: Any) -> BackgroundJob | None:
         job = self.get(job_id)
@@ -347,6 +356,18 @@ class BackgroundJobManager:
             task.cancel()
         self.mark(job.id, status="cancelled", progress="cancelled on request")
         return True, f"job `{job.id}` cancelled."
+
+    async def close(self) -> None:
+        """Drain cancelled workers before shutdown closes their shared provider transports."""
+        tasks = tuple(self._tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for job in self._jobs.values():
+            if job.status in {"queued", "running"}:
+                self.mark(job.id, status="cancelled", progress="bot shutting down")
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
 
     def stats(self) -> dict[str, Any]:
         return {
