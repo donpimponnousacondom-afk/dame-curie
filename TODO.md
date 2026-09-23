@@ -8,7 +8,7 @@ This checklist was created at the start of the integration, when no earlier TODO
 
 ## Bounded hardening — completed at `65fe79e`
 
-- [x] Challenge feedback rather than assume it: actual earlier V1 cap was 10 MiB; retain root's explicit 20 MiB override. Stop broader controls/REM work.
+- [x] Retain root's explicit 20 MiB override and stop broader controls/REM work. The earlier V1 10 MiB counterclaim lacks a dated grant/key receipt in the reviewed ledger; do not treat it as independently verified parity.
 - [x] Restrict the relay to framed embedding requests; isolate its interpreter, contain lookup errors and detect stale daemon namespaces.
 - [x] Require usable model output plus non-notice delivery; preserve real poster versus permission actor through late/partial refreshes; contain request deletion races.
 - [x] Refuse writable smoke-mount overlap; mask publisher direct access to bot roots and canonical publisher configuration.

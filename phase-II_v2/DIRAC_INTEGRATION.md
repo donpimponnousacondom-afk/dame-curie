@@ -50,7 +50,7 @@ The first deployment preflight correctly stopped before mutations because the co
 - Final installed ownership check under UID1005: all 11 checked entrypoint/import/interpreter paths root-owned and not service-user writable; no writable ancestor. The old viewer had exited when its container stopped; only named `dirac-v2` was recreated for the replacement. Final Screen query: `1089102.dirac-v2`, detached, window `0 env`.
 - Final preservation check compared bot.env and publisher TOML byte-for-byte against the private pre-hardening snapshot without exposing values, lengths or fingerprints; both matched. Every control value also matched that snapshot semantically after restoration. Active jobs and pending smoke requests were both zero. Canonical bot/Ollama/pull were still Created; relay/publisher remained active and disabled for boot; final app remained running with restart=no.
 
-The report's asserted higher V1 attachment cap was false: the separately authorized earlier key-level read found **V1 10 MiB**. Root's **20 MiB** is an explicit retained override, not inferred parity. No further control/REM inventory or archive feature was undertaken.
+Earlier notes countered the report's higher V1 attachment-cap claim with **V1 10 MiB**, attributed to an authorized key-level read. The reviewed ledger does not contain its timestamp/grant/key receipt, so neither comparison is independently established here. Root's **20 MiB** is an explicit retained override, not inferred parity. No further control/REM inventory or archive feature was undertaken.
 
 ## Earlier integration authority and goal
 

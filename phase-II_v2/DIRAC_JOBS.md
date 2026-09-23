@@ -1,8 +1,11 @@
 # Discord sub-agent jobs and progress threads
 
-Lane `work/dirac-discord-jobs`, worktree `dirac-discord-jobs`, base `7b4398c`. Source-only: no
-runtime, private configuration, credential, Docker, log or network access was used. Parent owns
-final integration and the live exercise.
+## Current contract and historical lane notes
+
+The original lane-only provenance below is historical, not a claim that the integrated runtime is still unexecuted. Tested/deployed revisions and live receipts are in `DIRAC_INTEGRATION.md` and `DIRAC_HANDOFF.md`. Thread-origin jobs create a sibling progress thread only when their parent exists, is supported and passes the real allow/block gates; otherwise output remains in the allowed origin thread. Repository examples use the default `!` prefix; temporary Dirac uses `?`.
+
+Original lane `work/dirac-discord-jobs`, worktree `dirac-discord-jobs`, base `7b4398c`: no
+runtime, private configuration, credential, Docker, log or network access was used by that lane. The parent subsequently integrated, validated and deployed the work.
 
 Owned paths: `jobs.py`, `job_routing.py`, `bot.py` job/thread sections, `bot_tools.py`,
 `tool_schemas.py`, `tool_prompts.py`, `response_observability.py` (added for the observer hook),
@@ -35,8 +38,9 @@ No parallel job framework was added.
    a job started inside a thread called `POST /channels/{thread}/threads` and the old
    `elif hasattr(channel, "create_thread")` rescue could never run. The origin channel is now
    classified explicitly with `isinstance(channel, discord.Thread)` — the SDK's own idiom — and such
-   a job creates a standalone public thread in the origin thread's own parent channel. A thread whose
-   parent cannot be resolved is reported, not guessed at. The origin-message path runs exactly as
+   a job may create a standalone public thread in the origin thread's own parent channel only when
+   that parent is supported, allowed and not explicitly blocked. Otherwise the reason is recorded
+   and output stays in the origin thread; an unresolved parent is reported, not guessed at. The origin-message path runs exactly as
    before for every channel that is not a thread. Test fakes bind this by monkeypatching
    `discord.Thread`, not by duck-typing their way past the discriminator.
 2. **Honest thread failure (`jobs.py`).** Creation failure was only `logger.info`; a created-but-
@@ -147,10 +151,11 @@ Still not a source fact, and relied on only as behaviour:
   itself is now source-verified), allowlist inheritance with a non-empty `allowed_channels`, the
   `!job` link format, and the honest-failure notice path against a real API error.
 
-## Cross-lane interface (implemented; smoke module still cf3's)
+## Cross-lane interface (historical agreement; subsequently integrated)
 
-The coordinator and the smoke lane agreed this contract; it is source-only and inert unless an
-operator opts in. `dirac_runtime.py` does not exist in this repository and was not created here.
+The coordinator and the smoke lane agreed this opt-in contract. At the original lane checkpoint,
+`dirac_runtime.py` was still owned by the separate smoke lane; it now exists in the integrated
+repository. Current implementation and acceptance supersede these historical interface notes.
 
 Correlation is a `ContextVar`, not a channel/time window and not task identity, because the turn's
 tool work runs in child tasks:

@@ -16,10 +16,11 @@ Implementation: `scripts/dirac.py`, `scripts/dirac_relay.py` and
 `docker/dirac-relay.service`. The Dirac publisher has its own unit. Canonical
 lifecycle and Compose configuration are not changed by this hardening.
 
-## Parent-created layout (the CLI validates, never creates)
+## Operator installation and parent-created runtime layout
 
 | Path | Mode | Role |
 | --- | --- | --- |
+| `/opt/dame-curie`, including `.venv` | root-owned; not service-user writable | Operator code/interpreter installation; deployment invariant, not a `require_private` runtime-root check |
 | `/srv/dame-curie/dirac` | 0700 | Dirac state root |
 | `/srv/dame-curie/dirac/config` | 0700 | bind source for `/config` (read-only) |
 | `/srv/dame-curie/dirac/config/prompts` | 0700 | bind source for `/config/prompts` (writable) |
@@ -27,6 +28,8 @@ lifecycle and Compose configuration are not changed by this hardening.
 | `/srv/dame-curie/dirac/data`, `sites`, `shell` | 0700 | bind sources for `/state/*` |
 | `/srv/dame-curie/dirac/image` | 0600 | optional one-line image selector |
 | `/srv/dame-curie/dirac/smoke`, `smoke-status` | 0700 | optional smoke root and status |
+
+The operator installation invariant includes writable ancestors, `pyvenv.cfg` and the resolved `bin/python` target; Python 3.14's `-S` does not remove that trust. The September 22 ownership receipt is in `DIRAC_INTEGRATION.md`; this layout entry is not a fresh runtime observation. The CLI validates the parent-created runtime roots below rather than creating them.
 
 `require_private` from `scripts/instance.py` enforces owner and mode: no group
 or other bits beyond execute on directories, so 0750 fails. Credentials are
@@ -141,6 +144,8 @@ configuration or smoke-request tree in either direction. Comparisons resolve
 both sides, so `..` spelling does not bypass the boundary; symlinked paths are
 refused by the private-path checks.
 
+These checks are not a dedicated-directory allowlist: existing writable `data`, `sites` or `shell` sources can still be selected when they do not overlap a read-only source. The read-only `--smoke-root` does not run the writable-root rejection loop. Operators must use the dedicated pair shown above, not a broad Dirac root or unrelated state directory; this records the current limitation, not a newly tightened mount policy.
+
 ## Shared RAG relay (root, separate process)
 
 V2 and V1 are separate rootless engines: neither the host loopback nor the
@@ -253,6 +258,6 @@ uses synthetic lifecycle checks, not a live V1/V2 daemon restart.
 
 Three extra, unchanged test files produced 19 failures which reproduced on
 baseline `eca42e0` (incomplete mention/instance doubles and an old backup identity
-assertion). They remain outside the 333-pass claim. No whole-repository green
+assertion). They remain outside the 341-pass claim. No whole-repository green
 claim is made. Deployment, real embedding replies and identity receipts belong
 in `DIRAC_HANDOFF.md` / `DIRAC_INTEGRATION.md`.

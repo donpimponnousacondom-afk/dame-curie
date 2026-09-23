@@ -2,7 +2,7 @@
 
 ## 2026-09-22 — bounded hardening closure
 
-Root asked to stop broader V1/control/REM investigation and close the obvious exposed surfaces. The earlier authorized cap check found V1 at 10 MiB, contrary to feedback; root's explicit 20 MiB override stayed in place. Archive classification was not changed. Synthetic context was not purged, and no general controls or REM migration was performed.
+Root asked to stop broader V1/control/REM investigation and close the obvious exposed surfaces. The closure notes claimed an earlier authorized check found V1 at 10 MiB; a subsequent review could not substantiate it from a dated grant/key receipt in the ledger. Root's explicit 20 MiB override stayed in place independently of that claim. Archive classification was not changed. Synthetic context was not purged, and no general controls or REM migration was performed.
 
 Reviewed source fixes cover the relay HTTP/lifecycle boundary, smoke model-output classification and bot-poster attribution, actor preservation through late/partial updates, deleted requests, operator mount overlap, publisher direct-path masks and thread-origin routing. Coordinator review rejected unsupported agent claims and corrected real SDK assumptions, parser/framing defects, a missing stop event and premature upstream TCP half-close. Unauthorized agent test counts were withdrawn. Isolated QA also exposed fixture/controller errors and 19 baseline-reproducing failures; exact outcomes remain in `DIRAC_INTEGRATION.md`.
 
