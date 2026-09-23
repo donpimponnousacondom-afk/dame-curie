@@ -28,6 +28,8 @@ NOTICE_HEADER_LIMIT = 250
 # Replies the record self-reports, fetched by exact delivered id.
 REPLY_FETCH_LIMIT = 5
 
+RUNTIME_STATE_FILENAME = "runtime-state"
+
 DEFAULT_POLL_SECONDS = 5.0
 DEFAULT_DEADLINE_SECONDS = 300.0
 
@@ -316,7 +318,7 @@ def read_json_object(path: Path, what: str) -> dict:
     with open(path, encoding="utf-8") as handle:
         raw = json.load(handle)
     if not isinstance(raw, dict):
-        raise SmokeProtocolError(f"{what} {path} is not a JSON object")
+        raise SmokeProtocolError(f"{what} is not a JSON object")
     return raw
 
 
@@ -363,6 +365,15 @@ def status_path(settings: SmokeSettings, request_id: str) -> Path:
     request file is never rewritten to carry state.
     """
     return settings.status_dir / f"{request_id}.json"
+
+
+def runtime_state_path(settings: SmokeSettings) -> Path:
+    """Where the advisory last-observed runtime state lives.
+
+    This deliberately has no JSON-record suffix: stale-record recovery scans
+    ``*.json`` and must not treat worker health as a request result.
+    """
+    return settings.status_dir / RUNTIME_STATE_FILENAME
 
 
 def request_files(settings: SmokeSettings) -> list[Path]:

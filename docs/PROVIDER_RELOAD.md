@@ -1,6 +1,6 @@
 # Provider settings: idle-boundary reload
 
-Implemented in `d43e4bf`. Dirac uses `?` commands; the repository's default prefix remains `!`.
+Provider-file reload was implemented in `d43e4bf`; `dfc6141` subsequently fixed foreground final-delivery ownership. Deployed revision and dated receipts are separate in `STATUS.md`. Dirac uses `?` commands; the repository's default prefix remains `!`.
 
 ## What to edit
 
@@ -42,7 +42,8 @@ This is not process-wide dotenv reload. It does not rewrite `os.environ`, restar
 ## Evidence and limits
 
 - The exact tree committed as `d43e4bf` passed **825 focused isolated tests**, Python 3.14.4, without network, credentials or private mounts. Expanded Ruff F821/F822/F823 checks passed. One stale README-row assertion in `test_provider_resilience.py` was explicitly deselected after reproducing the same failure on pre-reload `dba8359`; this is not a full-suite-green claim.
-- Independent source review found no remaining P0/P1 hot-reload blocker. The actual built image separately verified its committed source blobs, baked provenance, module imports, staged edit and rejected invalid port in a credential-free/no-network probe.
+- The initial review reported no remaining P0/P1 blocker, but a later scheduling review found a gap: a foreground final progress edit could outlive its turn's idle markers. `dfc6141` makes that edit/fallback settlement awaited by the turn. The issue was delivery/receipt timing, not evidence of interrupted model calls or closure of Discord's separate transport.
+- The original `d43e4bf` image separately verified its committed source blobs, baked provenance, module imports, staged edit and rejected invalid port in a credential-free/no-network probe; that probe did not exercise the delayed-final-edit schedule.
 - Boot/daily summary loops and tracked job workers are drained before transport teardown. General Gateway-command admission during shutdown remains a preexisting limitation; this change is not a wholesale shutdown redesign.
-- Live Dirac receipt `74d4aa30ddc0463c8162207491c46a80` held a temporary cooldown edit through 14.9 seconds of actual tool work, then applied it as generation 2. Removing the owned override restored the original environment bytes exactly and applied generation 3. No endpoint, model or credential was changed. This validates the live deferral/restoration path, not every supported profile combination.
+- Live Dirac receipt `74d4aa30ddc0463c8162207491c46a80` held a temporary cooldown edit through 14.9 seconds of actual tool work, then applied it as generation 2. Removing the owned override restored the original environment bytes exactly and applied generation 3. No endpoint, model or credential was changed. This validates that observed deferral/restoration schedule, not every supported profile combination or the previously detached final-edit tail. The R3 integrated regression instead holds a single final Discord edit and verifies both the observer and `providers_idle` remain busy until delivery settles.
 - Deployment and live receipts are recorded in `STATUS.md` and `../phase-II_v2/DIRAC_HANDOFF.md`, separately from isolated acceptance.

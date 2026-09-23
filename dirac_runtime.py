@@ -44,6 +44,7 @@ from smoke_protocol import (
     parse_request,
     read_json_object,
     request_files,
+    runtime_state_path,
     status_path,
     write_json_atomic,
 )
@@ -249,8 +250,15 @@ class DiracSmokeRuntime:
         self._stuck: asyncio.Task | None = None
         self._http = None
         self._http_send = None
+        self._send_wrapper = None
         self._generate_wrapper = None
         self._generate_original = None
+        self._observer_original = None
+        self._cleanup_lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
+        self._started = False
+        self._stop_requested = False
+        self._poll_failure: str | None = None
 
     async def start(self) -> None:
         """Validate the mounts, then arm observation. A bad setup raises here.
@@ -265,21 +273,29 @@ class DiracSmokeRuntime:
         if not self.settings.enabled:
             logger.info("Dirac smoke runtime disabled in %s", self.settings.config_path)
             return
+        self._stop_requested = False
         for name, directory in (
             ("requests", self.settings.requests_dir),
             ("status", self.settings.status_dir),
         ):
             if not directory.is_dir():
-                raise SmokeProtocolError(f"{name} directory is missing: {directory}")
+                raise SmokeProtocolError(f"{name} directory is missing")
         probe = self.settings.status_dir / f".write-probe-{id(self)}"
         write_json_atomic(probe, {"probe": iso_now()})
         probe.unlink()
         self._interrupt_stale()
-        self._observe_sends()
-        self._observe_generation()
+        try:
+            self._observe_sends()
+            self._observe_generation()
+        except Exception:
+            self._unhook()
+            raise
+        self._observer_original = getattr(self.bot, "_turn_observer", None)
         self.bot._turn_observer = self._observer
         self._poll = asyncio.create_task(self._poll_loop(), name="dirac-smoke-poll")
         self._poll.add_done_callback(self._poll_stopped)
+        self._started = True
+        self._record_runtime_state("running")
         logger.info(
             "Dirac smoke runtime armed: requests %s, status %s, channel %s",
             self.settings.requests_dir,
@@ -288,27 +304,49 @@ class DiracSmokeRuntime:
         )
 
     async def stop(self) -> None:
-        """Stop polling, cancel only what this runtime owns, then unhook.
+        """Stop polling, settle owned inputs, then restore installed hooks."""
+        async with self._stop_lock:
+            if not self.settings.enabled or not self._started:
+                return
+            self._stop_requested = True
+            poll = self._poll
+            poll_settled = True
+            if poll is asyncio.current_task():
+                poll_settled = False
+            elif poll is not None:
+                if not poll.done() and not poll.cancelling():
+                    poll.cancel()
+                if not poll.done():
+                    poll_settled = await self._wait_for_settle(poll)
+                if poll_settled and self._poll is poll:
+                    self._poll = None
+            await self._cleanup_owned_inputs()
+            if poll_settled:
+                self._started = False
+                if self._poll_failure is None:
+                    self._record_runtime_state("stopped")
+            elif self._poll_failure is None:
+                self._record_runtime_state("stop_unconfirmed")
 
-        Inputs are cancelled before the observer is cleared, and each owned turn is
-        awaited, briefly and boundedly, so its ``finally`` resets the ContextVar
-        before the bot goes away. A turn that will not stop is reported as
-        unconfirmed rather than claimed as stopped.
-        """
-        if not self.settings.enabled:
-            return
-        poll, self._poll = self._poll, None
-        if poll is not None and not poll.done():
-            poll.cancel()
-            await self._wait_for_settle(poll)
-        for turn in self._observer.outstanding():
-            self._cancel_input(turn.channel_id, turn.input_id)
-            await self._wait_for_settle(turn.task)
-            self._observer.discard(turn.input_id)
+    async def _cleanup_owned_inputs(self) -> None:
+        """Cancel this runtime's observed inputs and restore its hooks once."""
+        async with self._cleanup_lock:
+            try:
+                for turn in self._observer.outstanding():
+                    self._cancel_input(turn.channel_id, turn.input_id)
+                    await self._wait_for_settle(turn.task)
+                    self._observer.discard(turn.input_id)
+            finally:
+                self._unhook()
+
+    def _unhook(self) -> None:
+        """Restore only the hooks still owned by this runtime."""
         if self._http is not None and self._http_send is not None:
-            self._http.send_message = self._http_send
+            if self._http.send_message is self._send_wrapper:
+                self._http.send_message = self._http_send
         self._http = None
         self._http_send = None
+        self._send_wrapper = None
         if self._generate_wrapper is not None:
             if self.bot.__dict__.get("_generate_response") is self._generate_wrapper:
                 if self._generate_original is None:
@@ -317,7 +355,9 @@ class DiracSmokeRuntime:
                     self.bot._generate_response = self._generate_original
             self._generate_wrapper = None
             self._generate_original = None
-        self.bot._turn_observer = None
+        if self.bot.__dict__.get("_turn_observer") is self._observer:
+            self.bot._turn_observer = self._observer_original
+        self._observer_original = None
 
     # ---- setup ------------------------------------------------------------
 
@@ -371,6 +411,7 @@ class DiracSmokeRuntime:
         http.send_message = observed_send
         self._http = http
         self._http_send = original
+        self._send_wrapper = observed_send
 
     def _observe_generation(self) -> None:
         """Report whether this turn's model call produced anything.
@@ -405,29 +446,65 @@ class DiracSmokeRuntime:
         self.bot._generate_response = observed_generate
         self._generate_wrapper = observed_generate
 
+    def _record_runtime_state(self, status: str, failure_type: str = "") -> None:
+        """Publish advisory health without claiming worker liveness."""
+        payload = {"status": status, "observed_at": iso_now()}
+        if failure_type:
+            payload["failure_type"] = failure_type
+        try:
+            write_json_atomic(runtime_state_path(self.settings), payload)
+        except OSError as exc:
+            logger.error(
+                "Dirac smoke runtime health unavailable (%s)", type(exc).__name__
+            )
+
     def _poll_stopped(self, task: asyncio.Task) -> None:
-        """Report a stopped poll loop. Status IO never becomes a retry loop."""
+        """Report only an exception that escaped fatal cleanup."""
         if not task.cancelled():
-            logger.error("Dirac smoke poll loop stopped: %s", task.exception())
+            failure = task.exception()
+            if failure is not None:
+                logger.error(
+                    "Dirac smoke poll cleanup escaped (%s)", type(failure).__name__
+                )
+
+    async def _poll_failed(self, exc: Exception) -> None:
+        """Fail closed after a fatal poll error, then remove runtime hooks."""
+        self._poll_failure = type(exc).__name__
+        if self._poll is asyncio.current_task():
+            self._poll = None
+        logger.error("Dirac smoke poll failed (%s); runtime unavailable", self._poll_failure)
+        self._record_runtime_state("failed", self._poll_failure)
+        await self._cleanup_owned_inputs()
+        self._stop_requested = True
+        self._started = False
 
     # ---- polling ----------------------------------------------------------
 
     async def _poll_loop(self) -> None:
-        """One request per interval, oldest clock first, until stopped."""
+        """Poll one request per interval; fatal errors fail-stop the runtime."""
         TURN_INPUT.set("")  # this task is nobody's turn; its posts are not replies
-        while True:
-            await asyncio.sleep(self.settings.poll_seconds)
-            if self._stuck is not None:
-                if not self._stuck.done():
-                    # An old turn that ignored its cancel is still running in a
-                    # room. Starting another request now would overlap them.
+        try:
+            while True:
+                await asyncio.sleep(self.settings.poll_seconds)
+                if self._stop_requested:
+                    return
+                if self._stuck is not None:
+                    if not self._stuck.done():
+                        continue
+                    self._stuck = None
+                path = self._next_request()
+                if path is None:
                     continue
-                self._stuck = None
-            path = self._next_request()
-            if path is None:
-                continue
-            await self.bot.wait_until_ready()
-            await self._handle(path)
+                await self.bot.wait_until_ready()
+                if self._stop_requested:
+                    return
+                await self._handle(path)
+                if self._stop_requested:
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._poll_failed(exc)
 
     def _next_request(self) -> Path | None:
         """The oldest request with no record yet, or None.
@@ -438,9 +515,7 @@ class DiracSmokeRuntime:
         is refused rather than read as "nothing is done".
         """
         if not self.settings.status_dir.is_dir():
-            raise SmokeProtocolError(
-                f"status directory disappeared: {self.settings.status_dir}"
-            )
+            raise SmokeProtocolError("status directory disappeared")
         for path in request_files(self.settings):
             if not status_path(self.settings, path.stem).exists():
                 return path
@@ -451,7 +526,8 @@ class DiracSmokeRuntime:
 
         A request the operator deleted before it could be read was withdrawn: no
         record, and the poll loop carries on. Everything else a request can fail at
-        stays inside the try below, so a failure is always a terminal record.
+        is recorded below while status storage is writable; a failed record write
+        escapes to the poller's fatal-cleanup boundary.
         """
         request_id = path.stem
         record_path = status_path(self.settings, request_id)
@@ -459,6 +535,7 @@ class DiracSmokeRuntime:
             request_id=request_id, status="accepted", created_at=iso_now()
         )
         turn: _Turn | None = None
+        deadline = None
         settled = False
         try:
             try:
@@ -477,9 +554,14 @@ class DiracSmokeRuntime:
             # One deadline for the whole request. Resolving the target, fetching
             # the operator and posting the notice can stall too, and a deadline
             # that only started at the turn would leave those unbounded.
-            async with asyncio.timeout(request.deadline_seconds):
+            deadline = asyncio.timeout(request.deadline_seconds)
+            async with deadline:
                 channel = await self._target_channel(request)
+                if self._stop_requested:
+                    raise asyncio.CancelledError
                 operator = await self._operator()
+                if self._stop_requested:
+                    raise asyncio.CancelledError
                 operator_name = self.settings.operator_name or str(
                     getattr(operator, "display_name", "") or ""
                 )
@@ -495,11 +577,15 @@ class DiracSmokeRuntime:
                 record.notice_id = input_id
                 record.status = "running"
                 record.write(record_path)
+                if self._stop_requested:
+                    raise asyncio.CancelledError
                 turn = self._observer.open(input_id, str(channel.id))
                 await self.bot._on_message_impl(_NoticeInput(notice, operator))
+                if self._stop_requested:
+                    raise asyncio.CancelledError
                 await turn.done.wait()
-            # The block above only completes with the turn closed; the deadline is
-            # the only way out of it without one.
+            # Normal exit means the observed turn closed; errors and cancellation
+            # take their separate recording paths below.
             record.returned = turn.returned
             record.delivered_ids = list(turn.delivered)
             if not turn.returned:
@@ -545,10 +631,30 @@ class DiracSmokeRuntime:
                 record.reply_verified = False
                 record.write(record_path)
         except TimeoutError:
-            # The deadline is a recorded outcome, not an error: what is known is
-            # persisted, including any delivery that did happen before it.
-            if turn is not None:
-                record.delivered_ids = list(turn.delivered)
+            if settled:
+                logger.error(
+                    "Dirac smoke request %s was recorded before a readback timeout",
+                    request_id,
+                )
+                return
+            if deadline is None or not deadline.expired():
+                cleanup_confirmed = True
+                if turn is not None:
+                    self._cancel_input(turn.channel_id, turn.input_id)
+                    cleanup_confirmed = await self._wait_for_settle(turn.task)
+                    record.returned = turn.returned
+                    record.delivered_ids = list(turn.delivered)
+                    self._observer.discard(turn.input_id)
+                record.status = "failed"
+                record.failure = "an upstream operation timed out"
+                if not cleanup_confirmed:
+                    record.failure += "; owned turn cleanup is unconfirmed"
+                record.write(record_path)
+                logger.error(
+                    "Dirac smoke request %s failed during an upstream timeout",
+                    request_id,
+                )
+                return
             if turn is None:
                 record.status = "timeout"
                 record.failure = (
@@ -558,6 +664,8 @@ class DiracSmokeRuntime:
             else:
                 queued = self._cancel_input(turn.channel_id, turn.input_id)
                 settled = await self._wait_for_settle(turn.task)
+                record.returned = turn.returned
+                record.delivered_ids = list(turn.delivered)
                 record.status = "timeout"
                 if turn.task is not None:
                     record.failure = (
@@ -603,18 +711,18 @@ class DiracSmokeRuntime:
             if settled:
                 # Same reason as cancellation: the outcome is already on disk.
                 logger.error(
-                    "Dirac smoke request %s was recorded and then failed: %s",
+                    "Dirac smoke request %s was recorded before a readback error (%s)",
                     request_id,
-                    exc,
+                    type(exc).__name__,
                 )
                 return
-            # The type and its message, never a traceback: this record is read by
-            # an operator and may be copied around.
             record.status = "failed"
-            record.failure = f"{type(exc).__name__}: {exc}"[:300]
+            record.failure = f"{type(exc).__name__}: request processing failed"
             record.write(record_path)
             logger.error(
-                "Dirac smoke request %s failed: %s", request_id, record.failure
+                "Dirac smoke request %s failed (%s)",
+                request_id,
+                type(exc).__name__,
             )
 
     # ---- one request ------------------------------------------------------
@@ -631,9 +739,7 @@ class DiracSmokeRuntime:
         if user is None:
             user = await self.bot.fetch_user(self.settings.operator_id)
         if user is None or not isinstance(getattr(user, "id", None), int):
-            raise SmokeProtocolError(
-                f"operator {self.settings.operator_id} is not a real user id"
-            )
+            raise SmokeProtocolError("the configured operator is not a real user id")
         if int(user.id) == int(self.bot.user.id):
             raise SmokeProtocolError(
                 "the configured operator is the bot itself; the bot never "
@@ -655,7 +761,7 @@ class DiracSmokeRuntime:
             channel = await self.bot.fetch_channel(channel_id)
         if request.thread_id:
             if not isinstance(channel, discord.Thread):
-                raise SmokeProtocolError(f"{request.thread_id} is not a thread")
+                raise SmokeProtocolError("the requested target is not a thread")
             if str(channel.parent_id) != str(self.settings.channel_id):
                 raise SmokeProtocolError(
                     "the thread is not inside the approved smoke channel"
@@ -689,9 +795,8 @@ class DiracSmokeRuntime:
             return True
         self._stuck = task
         logger.warning(
-            "Dirac smoke: a cancelled task had not stopped after %gs: %r",
+            "Dirac smoke: a cancelled task had not stopped after %gs",
             CLEANUP_SECONDS,
-            task,
         )
         return False
 

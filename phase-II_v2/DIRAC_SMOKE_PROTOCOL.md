@@ -6,7 +6,7 @@ older receipts are not retroactively reclassified by this hardening.
 ## Files
 
 `smoke_protocol.py` (settings, immutable request, the one record, atomic and exclusive writes), `dirac_runtime.py` (the
-live poll, observer, injection, deadline, result), `scripts/dirac_smoke.py` (`submit`, `result <id>`, `pending`),
+live poll, observer, injection, deadline, result), `scripts/dirac_smoke.py` (`submit`, `result <id>`, `pending`, `health`),
 `tests/test_dirac_smoke.py` with queue/update/observability regressions. `bot.py` supplies turn boundaries and
 provenance-preserving refreshes; `response_observability.py` and `tool_progress.py` mark non-answer deliveries.
 `message_pipeline.py` supplies `running_message_id` and `cancel_message`.
@@ -45,7 +45,7 @@ polls every `poll_seconds`, takes the oldest request by file clock, and writes o
    refused when it is not an integer or is the bot. Injection is `bot._on_message_impl`, so the bot's own
    gates (`bot_enabled`, blacklist, allowlist, sleep) decide as always; `on_message` stays bypassed because
    the notice's own gateway event already consumed its dedup slot. `notice_author` pins the real poster across
-   late fetches and partial updates. Memory attribution uses that poster, including self-account IDs whose
+   late fetches and partial updates. In-flight prompt rebuilds receive that rebound proxy, not the raw bot-authored update snapshot. Memory attribution uses that poster, including self-account IDs whose
    Discord `bot` flag is false; the operator remains the permission actor. Synthetic instructions are not
    extracted as human facts. No memory purge or broader REM change is part of this fix.
 4. One terminal status: `completed`, `failed`, `rejected`, `timeout` or `interrupted`.
@@ -66,24 +66,27 @@ answer delivered before a later provider failure still counts. None of this prov
 The terminal outcome is written before optional readback. On ordinary turn settlement, records with delivered IDs,
 including failed notice-only turns, get readback (at most 5 IDs, 5s total). Deadline/interruption receipts retain known
 IDs but do not promise readback. `reply_verified` stays false; unreadable IDs are listed in `reply_readback`.
-A stall, failure or shutdown during readback cannot downgrade a completed record. A final edit
-that only lands after the turn closes is conservatively not counted; its answer may appear in readback without
-changing the failed outcome.
+A stall, failure or shutdown during readback cannot downgrade a completed record. Final progress-to-answer edits and their fallback sends are awaited by the originating turn before its observer closes or its provider-reload busy markers clear. A successful callback—not the transition's boolean alone—is delivery evidence. Other genuinely late deliveries after closure remain excluded; a later readback cannot turn a failed outcome into success.
 
 ## Deadline, queue and restart
 
 At the deadline the runtime cancels that input only — the queued entry if it never started, the task if it did — and
 says which of the three happened. Every cancelled task then gets 5s to stop; if it has not, the record says cleanup
 is unconfirmed and the runtime starts no further request until that task is really gone. Deliveries found before a
-deadline or an interruption are written to the record.
+deadline or an interruption are written to the record. The timeout context must actually expire to classify a request as `timeout`; an earlier escaping upstream fetch/send timeout is `failed`, with the same owned-input cleanup and known delivery evidence.
 
 Eligibility to run is "no record exists", so the record directory is the ledger: no finished request can run again,
 however many are queued, and a restart rewrites a non-terminal record to `interrupted` rather than re-running it.
 Wiping that directory makes the requests still in it runnable again; nothing here prevents that. A status mount that
-disappeared is refused rather than read as "nothing is done". A failure inside the request boundary always lands as a
-terminal record, and when even that write fails the poll loop stops with an error instead of retrying. A request
+disappeared is refused rather than read as "nothing is done". Ordinary request failures are recorded while status storage remains writable; a terminal record cannot be guaranteed on broken storage. Fatal poll/discovery/write errors fail-stop the worker and initiate bounded cleanup of its owned inputs/hooks instead of retrying. A request
 unlinked before reading is withdrawn without a receipt; a vanished/unstatable entry is skipped during listing,
-so it does not kill polling. Malformed or unreadable request contents still produce a failed record.
+so it does not kill polling. Malformed or unreadable request contents still produce a failed record when storage permits.
+
+## Advisory health, not proof of liveness
+
+`health` reads `smoke-status/runtime-state`, a JSON snapshot without the request-record `.json` suffix. It is excluded from stale-request recovery. Runtime arm, failure and stop update last-observed state when writable; fatal causes are retained through subsequent cleanup. Concurrent stop callers serialize around the same poll task. If its bounded settlement cannot be confirmed, the snapshot says `stop_unconfirmed`, not `stopped`, and the runtime admits no further request. Diagnostics contain an error type or a trusted fixed protocol reason, not raw SDK/request text.
+
+The command always reports `worker_liveness: "unknown"`: an old snapshot cannot prove the current worker is alive. Missing/unreadable health is unavailable evidence, not a healthy default. `result` retains the compatible `status: "pending"` when no receipt exists; it and `pending` rows explicitly qualify acceptance as `no_record` and liveness as unknown. Absence of a record does not prove the request never executed if the ledger was lost or deleted. No heartbeat, automatic replay, second status store or daemon API is introduced.
 
 ## Evidence boundary
 

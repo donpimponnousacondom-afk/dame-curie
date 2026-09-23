@@ -46,6 +46,7 @@ from smoke_protocol import (
     read_json_object,
     request_files,
     request_path,
+    runtime_state_path,
     status_path,
 )
 
@@ -513,6 +514,7 @@ def test_stop_restores_the_original_generation_method(tmp_path, instance_overrid
         await runtime.start()
         assert bot._generate_response is not original
         await runtime.stop()
+        await runtime.stop()
         assert bot._generate_response == original
         assert ("_generate_response" in bot.__dict__) is instance_override
         await bot._reply_queue.close()
@@ -970,6 +972,27 @@ def test_start_fails_when_the_status_mount_cannot_be_a_directory(tmp_path):
     asyncio.run(scenario())
 
 
+def test_start_unhooks_http_after_generation_observation_fails(tmp_path):
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        original_send = bot.http.send_message
+        bot._generate_response = None
+        runtime = DiracSmokeRuntime(bot, settings)
+
+        with pytest.raises(SmokeProtocolError):
+            await runtime.start()
+
+        assert bot.http.send_message.__self__ is original_send.__self__
+        assert bot.http.send_message.__func__ is original_send.__func__
+        assert bot._turn_observer is None
+        assert runtime._poll is None
+        assert runtime._started is False
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
 def test_a_disabled_config_does_nothing_at_all(tmp_path):
     async def scenario():
         settings = _settings(tmp_path, enabled=False)
@@ -1115,6 +1138,31 @@ def test_a_vanished_request_does_not_stop_the_poll_loop(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_a_malformed_request_is_recorded_and_does_not_stop_polling(tmp_path):
+    async def scenario():
+        settings = _settings(tmp_path)
+        malformed_id = "e" * 32
+        malformed_path = request_path(settings, malformed_id)
+        malformed_path.write_text("{not json", encoding="utf-8")
+        valid = _submit(settings, task="still process the next request")
+        stamp = time.time()
+        os.utime(malformed_path, (stamp - 10, stamp - 10))
+        os.utime(request_path(settings, valid.request_id), (stamp, stamp))
+        bot = _FakeBot(settings)
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+
+        malformed = await _wait_for_record(settings, malformed_id)
+        completed = await _wait_for_record(settings, valid.request_id)
+        assert malformed.status == "failed"
+        assert completed.status == "completed"
+        assert runtime._poll is not None and not runtime._poll.done()
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
 def test_a_request_deleted_between_the_scan_and_the_stamp_is_skipped(
     tmp_path, monkeypatch
 ):
@@ -1215,6 +1263,145 @@ def test_an_input_the_bot_never_dispatches_is_recorded_as_no_turn(tmp_path):
     asyncio.run(scenario())
 
 
+def test_concurrent_stops_wait_for_the_same_poll_without_recancelling(tmp_path):
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        poll_started = asyncio.Event()
+        cancellation_seen = asyncio.Event()
+        release = asyncio.Event()
+        cancellations = 0
+
+        async def slow_poll():
+            nonlocal cancellations
+            poll_started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellations += 1
+                cancellation_seen.set()
+                await release.wait()
+
+        runtime = DiracSmokeRuntime(bot, settings)
+        runtime._poll_loop = slow_poll
+        await runtime.start()
+        await poll_started.wait()
+        first_stop = asyncio.create_task(runtime.stop())
+        await cancellation_seen.wait()
+        second_stop = asyncio.create_task(runtime.stop())
+        await asyncio.sleep(0)
+        assert not first_stop.done()
+        assert not second_stop.done()
+
+        release.set()
+        await asyncio.gather(first_stop, second_stop)
+        assert cancellations == 1
+        assert runtime._poll is None
+        assert bot._turn_observer is None
+        assert read_json_object(runtime_state_path(settings), "runtime state")["status"] == "stopped"
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_unconfirmed_poll_stop_is_not_reported_as_stopped(tmp_path, monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.01)
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        cancellation_seen = asyncio.Event()
+        poll_started = asyncio.Event()
+        release = asyncio.Event()
+        cancellations = 0
+
+        async def slow_poll():
+            nonlocal cancellations
+            poll_started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellations += 1
+                cancellation_seen.set()
+                await release.wait()
+
+        runtime = DiracSmokeRuntime(bot, settings)
+        runtime._poll_loop = slow_poll
+        await runtime.start()
+        poll = runtime._poll
+        assert poll is not None
+        await poll_started.wait()
+        await runtime.stop()
+        await cancellation_seen.wait()
+        assert runtime._poll is poll
+        assert not poll.done()
+        state = read_json_object(runtime_state_path(settings), "runtime state")
+        assert state["status"] == "stop_unconfirmed"
+        assert bot._turn_observer is None
+
+        await runtime.stop()
+        assert cancellations == 1
+        assert read_json_object(runtime_state_path(settings), "runtime state")["status"] == "stop_unconfirmed"
+        release.set()
+        await poll
+        await runtime.stop()
+        assert runtime._poll is None
+        assert read_json_object(runtime_state_path(settings), "runtime state")["status"] == "stopped"
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["target", "operator", "notice"])
+def test_unconfirmed_stop_cannot_resume_into_notice_or_injection(
+    tmp_path, monkeypatch, stage
+):
+    async def scenario():
+        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.01)
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        runtime = DiracSmokeRuntime(bot, settings)
+        entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        owner = bot.channels[int(settings.channel_id)] if stage == "notice" else runtime
+        method = {"target": "_target_channel", "operator": "_operator", "notice": "send"}[stage]
+        original = getattr(owner, method)
+
+        async def delayed_operation(*args, **kwargs):
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release.wait()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(owner, method, delayed_operation)
+        await runtime.start()
+        poll = runtime._poll
+        request = _submit(settings, deadline_seconds=30.0)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        await runtime.stop()
+        assert cancelled.is_set()
+        assert not poll.done()
+        assert bot._turn_observer is None
+        state = read_json_object(runtime_state_path(settings), "runtime state")
+        assert state["status"] == "stop_unconfirmed"
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(poll, timeout=1)
+        record = _record_of(settings, request.request_id)
+        assert record.status == "interrupted"
+        assert bool(record.notice_id) == (stage == "notice")
+        assert bot.injected == []
+        assert runtime._observer.outstanding() == []
+        await runtime.stop()
+        assert runtime._poll is None
+        assert read_json_object(runtime_state_path(settings), "runtime state")["status"] == "stopped"
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
 def test_stop_interrupts_the_request_in_flight(tmp_path):
     async def scenario():
         settings = _settings(tmp_path)
@@ -1270,6 +1457,146 @@ def test_the_deadline_covers_the_notice_not_only_the_turn(tmp_path):
         assert record.notice_id == ""
         assert bot.injected == []
         await runtime.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["target_fetch", "operator_fetch", "notice_send"])
+def test_an_upstream_timeout_is_not_the_request_deadline(tmp_path, stage):
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        failure_text = "synthetic private request and config contents"
+        if stage == "target_fetch":
+            bot.channels.clear()
+
+            async def fail_fetch(_channel_id):
+                raise TimeoutError(failure_text)
+
+            bot.fetch_channel = fail_fetch
+        elif stage == "operator_fetch":
+            bot.users.clear()
+
+            async def fail_fetch(_user_id):
+                raise TimeoutError(failure_text)
+
+            bot.fetch_user = fail_fetch
+        else:
+            channel = bot.channels[int(settings.channel_id)]
+
+            async def fail_send(_content, **_kwargs):
+                raise TimeoutError(failure_text)
+
+            channel.send = fail_send
+
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        request = _submit(settings, deadline_seconds=30.0)
+        record = await _wait_for_record(settings, request.request_id)
+
+        assert record.status == "failed"
+        assert record.failure == "an upstream operation timed out"
+        assert failure_text not in record.failure
+        assert record.notice_id == ""
+        assert bot.injected == []
+        await runtime.stop()
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure_site", ["discovery", "record_write"])
+def test_fatal_poll_io_cleans_only_owned_inputs_and_restores_hooks(
+    tmp_path, monkeypatch, caplog, failure_site
+):
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        original_send = bot.http.send_message
+        original_generate = bot._generate_response
+
+        async def blocking_turn(_message, _content):
+            await bot.release.wait()
+
+        bot.turn = blocking_turn
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        channel_id = str(settings.channel_id)
+        turn = runtime._observer.open("777", channel_id)
+        message = _FakeMessage(
+            {"id": "777", "content": "synthetic request payload"},
+            bot.channels[int(channel_id)],
+            author=bot.user,
+        )
+        token = TURN_INPUT.set("777")
+        await bot._on_message_impl(message)
+        TURN_INPUT.reset(token)
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if turn.task is not None and bot._reply_queue.active(channel_id):
+                break
+        assert turn.task is not None
+
+        unrelated = asyncio.create_task(bot.release.wait())
+
+        def fail_storage(*_args):
+            raise OSError("synthetic private path and request payload")
+
+        if failure_site == "discovery":
+            monkeypatch.setattr(runtime, "_next_request", fail_storage)
+        else:
+            monkeypatch.setattr(SmokeRecord, "write", fail_storage)
+            _submit(settings)
+        poll = runtime._poll
+        assert poll is not None
+        await poll
+
+        assert turn.task.cancelled()
+        assert not unrelated.done()
+        assert runtime._poll is None
+        assert bot._turn_observer is None
+        assert bot.http.send_message.__self__ is original_send.__self__
+        assert bot.http.send_message.__func__ is original_send.__func__
+        assert bot._generate_response == original_generate
+        state = read_json_object(runtime_state_path(settings), "runtime state")
+        assert state["status"] == "failed"
+        assert state["failure_type"] == "OSError"
+        assert "synthetic private" not in caplog.text
+
+        await runtime.stop()
+        await runtime.stop()
+        assert read_json_object(runtime_state_path(settings), "runtime state")["status"] == "failed"
+        unrelated.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await unrelated
+        await bot._reply_queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_fatal_poll_with_missing_status_storage_reports_unavailable(
+    tmp_path, caplog
+):
+    async def scenario():
+        settings = _settings(tmp_path)
+        bot = _FakeBot(settings)
+        runtime = DiracSmokeRuntime(bot, settings)
+        await runtime.start()
+        runtime_state_path(settings).unlink()
+        settings.status_dir.rmdir()
+        request = _submit(settings, task="synthetic unaccepted request")
+        poll = runtime._poll
+        assert poll is not None
+        await poll
+
+        assert runtime._poll is None
+        assert bot._turn_observer is None
+        assert bot.http.send_message.__func__ is _FakeHTTP.send_message
+        assert not status_path(settings, request.request_id).exists()
+        assert "runtime health unavailable (FileNotFoundError)" in caplog.text
+        assert "synthetic unaccepted request" not in caplog.text
+        await runtime.stop()
+        await bot._reply_queue.close()
 
     asyncio.run(scenario())
 
