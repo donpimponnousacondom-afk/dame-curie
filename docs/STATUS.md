@@ -1,8 +1,20 @@
 # dame-curie status
 
-## Current temporary Dirac release — incomplete-output handling, 2026-09-24
+## Current temporary Dirac release — bounded tool logging, 2026-09-24
 
-**Dirac is running `74d827d`, with the testing output cap retained at 12,345 tokens.** JSON/SSE `finish_reason=length` now stops before tool recovery; readable reasoning-only output is not promoted into an answer or executable text. Both failures are terminal rather than triggering another paid retry/fallback. Healthy text and tool responses remain supported.
+**Dirac is running `6859025`: tool completion logs contain only name/character count, and the operator viewer supports `logs --fresh`.** A 100,311-byte shell-result log line had exceeded the viewer's 64 KiB framing limit and permanently tripped its redaction-continuity safeguard. The fix removes that unbounded producer dump, not the safeguard or the full tool result delivered to the model.
+
+- Source `685902588f8c9e4d3aacd340b4d8b15f10e5af19`; tested tree `1c85c6d19efc7e85c894a63dd0c2d2bb10e61b28`; image `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`; container `0b1ba5fd43d75319d4908ba01cf32dce6cf87c5df5b5a145c0540c1175cb4ef6`.
+- Isolated Python 3.14.4 QA: **368 passed / 5 baseline-reproduced failures / 1 excluded**; selected Ruff F821/F822/F823 passed. The five failures reproduced on untouched `4db86ad`: four legacy console-render/input expectations and one stale private-URL refusal fixture. Existing dispatcher tests now cover oversized shell/image results, credential non-disclosure and unchanged model-facing results. No new test functions or files; no whole-suite-green claim.
+- Built as a network-disabled overlay on the previously verified `74d827d` image, preserving dependencies. An isolated artifact check verified exact changed bot bytes, unchanged provider/tool-schema/prompt bytes, Python 3.14.4 and baked provenance. The initial clean-base build lacked cached dependency layers; a first overlay failed its metadata-permission check. Neither failed artifact was deployed.
+- Root-authorized temporary-only replacement began at **19:04:46 UTC**; old container exited 0 without OOM. Configuration/embedding readiness passed; intended identity `1504398705539944560` logged in at **19:04:50.804 UTC**. Private profile bytes compared unchanged, and state/smoke mounts were retained. No coordinator inference probe or live oversized-output injection.
+- **Reasoning `low`, output cap 12,345, REM off.** The reasoning override was independently hot-reloaded at 18:34:29.612 UTC and both controls survived replacement. This is configuration acceptance, not proof that low effort cures excessive reasoning.
+- Screen **`830408.dirac-v2`** still owns the same interactive Bash **`830410`**. Viewer exit/container replacement returns to Bash instead of killing Screen. The restored renderer showed live records, `source=following`, `paused=False`, 29 received and 0 omitted. `logs --fresh` skips retained lines when recovering from an old poison record; ordinary logs still tail 100.
+- Private rollback/source profile/bounded incident evidence: `/var/backups/dame-curie-dirac/console-fix-20260924T190446Z/`. V1/canonical, publisher/site content and remotes untouched. Detailed ignored reports: `audit/dirac-console-freeze.md`, `audit/dirac-reasoning-audit.md`.
+
+## Previous same-day runtime — incomplete-output handling
+
+**Dirac ran `74d827d`, with the testing output cap retained at 12,345 tokens.** JSON/SSE `finish_reason=length` now stops before tool recovery; readable reasoning-only output is not promoted into an answer or executable text. Both failures are terminal rather than triggering another paid retry/fallback. Healthy text and tool responses remain supported.
 
 - Source `74d827d2d86e23ad1fec17c4488bea2fa50c388f`; tested tree `516c90e0001769043248dd0189aa3e5373e5a94f`; image `sha256:c86ae9181d907e8e0c5da8083c4080190eb655b86e5f6c86aac502645e8c72bb`; container `122dc2dc5d0061401bdc9228761014fd8d456d8818f18d2162a68642282b6f4d`.
 - Exact-tree isolated Python 3.14.4 QA: **1,321 passed, 4 baseline-reproduced failures, 2 deselected**; selected Ruff F821/F822/F823 passed. The same four assertions failed on untouched `33aae2d` (410 passed / 4 failed): two stale model-recognition expectations, a background notice-count expectation, and synthetic-platform rejection. No whole-suite-green claim. Independent review found no blocker; an isolated built-image check verified exact provider bytes and provenance without inference.

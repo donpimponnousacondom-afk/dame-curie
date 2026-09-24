@@ -1,6 +1,19 @@
 # Temporary Dirac V2 — current release handoff
 
-Last runtime verification: **2026-09-24, temporary Dirac on `74d827d`**, with terminal truncated/reasoning-only response handling and **12,345 output tokens** retained for testing. No final reasoning-to-answer promotion; no retry/fallback of those incomplete responses; no dispatch of tools recovered from length-truncated output. Earlier taint removal, unified images, review fixes and `longprompt` remain included; legacy `prompt` is unchanged.
+Last runtime verification: **2026-09-24 19:04 UTC, temporary Dirac on `6859025`**, with bounded tool completion logs and `logs --fresh` recovery.
+
+- Image: `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`; container: `0b1ba5fd43d75319d4908ba01cf32dce6cf87c5df5b5a145c0540c1175cb4ef6`.
+- Configuration/embedding readiness passed; intended Discord identity logged in at 19:04:50.804 UTC. Private profile bytes unchanged; state, smoke mounts, prefix and image settings retained. No inference probe or live oversized-output injection.
+- Current containment: **12,345 output tokens, DeepSeek reasoning `low`, REM off**. Reasoning override hot reload was observed at 18:34:29.612 UTC, before this replacement. Neither the audit nor that reload proves the underlying over-deliberation cause.
+- Screen `830408.dirac-v2` owns interactive Bash `830410`, not the logger. It survived replacement unchanged; the restarted viewer showed live records, following source, no pause and zero omissions. Always run the logger as a foreground command inside Bash, never Screen's sole direct process.
+- Exact-tree isolated QA: **368 passed / 5 baseline-reproduced failures / 1 excluded**, plus selected Ruff checks. Immutable artifact source/provenance verified without network/private mounts. No whole-suite-green claim.
+- A 100,311-byte shell-result line triggered the viewer's 64 KiB safety limit. Tool completion logging is now metadata-only; actual tool results and the redactor are unchanged. `logs --fresh` avoids replaying old poison records; ordinary logs still tail 100.
+- Root-only rollback and bounded incident evidence: `/var/backups/dame-curie-dirac/console-fix-20260924T190446Z/`. Restore an image, not old controls: preserve low reasoning, REM-off and the testing cap. V1/canonical/publisher/site content unchanged; no push.
+- Independent reasoning audit and viewer receipt: ignored `audit/dirac-reasoning-audit.md`, `audit/dirac-console-freeze.md`; current milestone in `../docs/STATUS.md`.
+
+## Previous same-day release — incomplete-output handling
+
+Previous runtime verification: **2026-09-24, temporary Dirac on `74d827d`**, with terminal truncated/reasoning-only response handling and **12,345 output tokens** retained for testing. No final reasoning-to-answer promotion; no retry/fallback of those incomplete responses; no dispatch of tools recovered from length-truncated output. Earlier taint removal, unified images, review fixes and `longprompt` remain included; legacy `prompt` is unchanged.
 
 - Image: `sha256:c86ae9181d907e8e0c5da8083c4080190eb655b86e5f6c86aac502645e8c72bb`; container: `122dc2dc5d0061401bdc9228761014fd8d456d8818f18d2162a68642282b6f4d`.
 - Explicitly approved temporary-only replacement began at 15:43:18 UTC. Old container exited cleanly; new configuration/embedding readiness passed; Discord login confirmed identity `1504398705539944560` at 15:43:23.188 UTC. Ordinary post-start traffic confirmed the 12,345 cap. No coordinator inference probe was submitted.
@@ -26,7 +39,7 @@ No build/replacement, private setting edit, live failure injection, publisher/V1
 - Root's newly enabled room `1548588998983946290` remains allowlisted.
 - Approved smoke parent: `1550960386939817984`, including its bot-owned test threads.
 - Root's group DM: `1545158306404892753`; group replies remain enabled, ordinary private-DM replies disabled.
-- Viewer: **`screen -r dirac-v2`** as codexy. `q` quits the viewer, not the bot; `Ctrl-a d` detaches.
+- Viewer: **`screen -r dirac-v2`** as codexy. Screen runs interactive Bash; `q`/Ctrl-C stop only the foreground viewer and return to that shell. `Ctrl-a d` detaches. Rerun `sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac.py logs`; add `--fresh` to skip old retained records after a redaction-continuity failure.
 - Published test: [Dirac's Relay Station](https://redroom.zombiedawn.net/dirac/sites/dirac-smoke/index.html).
 
 ```bash
