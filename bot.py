@@ -6435,6 +6435,7 @@ class MaxwellBot(commands.Bot):
             return
         admin_commands = {
             "prompt",
+            "longprompt",
             "clearprompt",
             "clearmem",
             "context",
@@ -6580,6 +6581,60 @@ class MaxwellBot(commands.Bot):
                     await message.channel.send(
                         f"Prompt updated for {message.guild.name if message.guild else 'DMs'}:\n```\n{args}\n```"
                     )
+            elif cmd == "longprompt":
+                attachments = message.attachments
+                mentions = discord.AllowedMentions.none()
+                usage = (
+                    f"Use `{self.command_prefix}longprompt` alone to download the prompt, "
+                    "or attach one UTF-8 .txt file with no inline text "
+                    f"(maximum {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB)."
+                )
+                size_error = (
+                    f"Prompt exceeds the {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB limit; "
+                    "nothing was changed or truncated."
+                )
+                if args is not None or len(attachments) > 1:
+                    await message.channel.send(usage, allowed_mentions=mentions)
+                    return
+                if not attachments:
+                    current = self.memory.get_server_prompt(server_id)
+                    if not current:
+                        await message.channel.send("No custom prompt set. " + usage, allowed_mentions=mentions)
+                    elif len(payload := current.encode("utf-8")) > TEXT_ATTACHMENT_MAX_BYTES:
+                        await message.channel.send(size_error, allowed_mentions=mentions)
+                    else:
+                        with io.BytesIO(payload) as buffer, contextlib.closing(
+                            discord.File(buffer, filename="prompt.txt")
+                        ) as prompt_file:
+                            await message.channel.send(
+                                "Current server prompt attached.", file=prompt_file, allowed_mentions=mentions
+                            )
+                    return
+                attachment = attachments[0]
+                if not attachment.filename.lower().endswith(".txt") or attachment.size > TEXT_ATTACHMENT_MAX_BYTES:
+                    await message.channel.send(
+                        size_error if attachment.size > TEXT_ATTACHMENT_MAX_BYTES else usage,
+                        allowed_mentions=mentions,
+                    )
+                    return
+                payload = await attachment.read()
+                if len(payload) > TEXT_ATTACHMENT_MAX_BYTES:
+                    await message.channel.send(size_error, allowed_mentions=mentions)
+                elif not payload:
+                    await message.channel.send(
+                        f"Empty prompt file; nothing was changed. Use `{self.command_prefix}clearprompt` to clear it.",
+                        allowed_mentions=mentions,
+                    )
+                else:
+                    try:
+                        current = payload.decode("utf-8")
+                    except UnicodeDecodeError:
+                        await message.channel.send(
+                            "Prompt file must be valid UTF-8; nothing was changed.", allowed_mentions=mentions
+                        )
+                    else:
+                        self.memory.set_server_prompt(server_id, current)
+                        await message.channel.send("Server prompt updated from attachment.", allowed_mentions=mentions)
             elif cmd == "clearprompt":
                 self.memory.clear_server_prompt(server_id)
                 await message.channel.send("Server prompt cleared.")
@@ -6940,6 +6995,7 @@ class MaxwellBot(commands.Bot):
                     f"`{self.command_prefix}version` - frozen running build\n"
                     f"`{self.command_prefix}stop` - stop active response in this channel\n"
                     f"`{self.command_prefix}prompt [text]` - view/set server prompt (admin)\n"
+                    f"`{self.command_prefix}longprompt` - download prompt; attach one UTF-8 .txt to replace it (admin, {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB max)\n"
                     f"`{self.command_prefix}clearprompt` - clear server prompt (admin)\n"
                     f"`{self.command_prefix}clearmem` - clear channel memory (admin)\n"
                     f"`{self.command_prefix}context ...` - manage memory/context (admin)\n"
