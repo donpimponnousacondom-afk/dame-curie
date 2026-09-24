@@ -83,11 +83,23 @@ def test_main_passes_its_own_entrypoint_to_root_dispatch(dirac, monkeypatch):
         raise SystemExit(0)
 
     monkeypatch.setattr(dirac, "service_account", capture)
-    monkeypatch.setattr(dirac.sys, "argv", ["dirac.py", "status"])
-    with pytest.raises(SystemExit):
-        dirac.main()
-    assert recorded == {"instance": "dame-curie", "for_logs": False,
-                        "entrypoint": Path(dirac.__file__).resolve()}
+    cases = (
+        (["dirac.py", "status"], 0, False),
+        (["dirac.py", "logs"], 0, True),
+        (["dirac.py", "logs", "--fresh"], 0, True),
+        (["dirac.py", "status", "--fresh"], 2, None),
+    )
+    for argv, code, for_logs in cases:
+        recorded.clear()
+        monkeypatch.setattr(dirac.sys, "argv", list(argv))
+        with pytest.raises(SystemExit) as exited:
+            dirac.main()
+        assert exited.value.code == code, argv
+        if for_logs is None:
+            assert recorded == {}, argv
+        else:
+            assert recorded == {"instance": "dame-curie", "for_logs": for_logs,
+                                "entrypoint": Path(dirac.__file__).resolve()}, argv
 
 
 class FakeEngine:
@@ -253,13 +265,20 @@ def test_derived_config_requires_container_roots(dirac, tmp_path):
     assert "DAME_CURIE_SITE_DIR=/state/sites" in dirac.derived_config(root, os.getuid(), "172.23.0.1")[1]
 
 
-def test_owned_container_requires_the_reserved_label_and_name(dirac):
+def test_owned_container_requires_the_reserved_label_and_name(dirac, monkeypatch):
     engine = FakeEngine({("ps", "-aq"): "abc123\n", ("inspect",): "/other\n"})
     with pytest.raises(ValueError, match="held by"):
         dirac.owned_container(engine)
     engine = FakeEngine({("ps", "-aq"): "abc123\n", ("inspect",): "/dirac-v2\n"})
     assert dirac.owned_container(engine) == "abc123"
     assert engine.calls[0] == ("ps", "-aq", "--filter", "label=dame-curie.dirac=dirac-v2")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(dirac, "follow_logs",
+                        lambda command, env, **kwargs: commands.append(command))
+    for kwargs, tail in (({}, "100"), ({"fresh": False}, "100"), ({"fresh": True}, "0")):
+        dirac.logs(engine, False, **kwargs)
+        assert commands[-1] == ["docker", "logs", "--follow", "--tail", tail, "abc123"]
+    assert len(commands) == 3
     engine = FakeEngine({("ps", "-aq"): "\n"})
     assert dirac.owned_container(engine) is None
 

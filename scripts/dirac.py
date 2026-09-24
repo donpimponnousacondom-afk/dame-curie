@@ -79,6 +79,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--replace", action="store_true",
                         help="start only: remove a stopped owned container after reporting why it stopped")
     parser.add_argument("--no-keys", action="store_true", help="logs only: disable screen keyboard controls")
+    parser.add_argument("--fresh", action="store_true",
+                        help="logs only: follow new output only, without replaying the retained tail")
     parser.add_argument("--smoke-root", type=Path, metavar="HOST",
                         help="start only: smoke root holding config.json and requests/, mounted read-only")
     parser.add_argument("--smoke-status", type=Path, metavar="HOST",
@@ -86,8 +88,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.action != "start" and (args.image or args.replace or args.smoke_root or args.smoke_status):
         parser.error("--image, --replace, --smoke-root and --smoke-status are only available for start")
-    if args.action != "logs" and args.no_keys:
-        parser.error("--no-keys is only available for logs")
+    if args.action != "logs" and (args.no_keys or args.fresh):
+        parser.error("--no-keys and --fresh are only available for logs")
     return args
 
 
@@ -361,12 +363,12 @@ def status(instance: Instance, uid: int) -> tuple[dict[str, object], int]:
     return report, 1 if str(report["embedding_readiness"]).startswith("failed") else 0
 
 
-def logs(instance: Instance, no_keys: bool) -> None:
+def logs(instance: Instance, no_keys: bool, *, fresh: bool = False) -> None:
     """Follow the Dirac container through the existing screen log viewer."""
     container = owned_container(instance)
     if container is None:
         raise ValueError(f"{NAME} does not exist; nothing to follow")
-    follow_logs(["docker", "logs", "--follow", "--tail", "100", container], instance.env,
+    follow_logs(["docker", "logs", "--follow", "--tail", "0" if fresh else "100", container], instance.env,
                 output_format="screen", no_keys=no_keys)
 
 
@@ -379,7 +381,7 @@ def main() -> None:
                               entrypoint=Path(__file__).resolve())
     instance = Instance(ACCOUNT, account)
     if args.action == "logs":
-        logs(instance, args.no_keys)
+        logs(instance, args.no_keys, fresh=args.fresh)
         return
     if args.action == "status":
         report, code = status(instance, account.pw_uid)

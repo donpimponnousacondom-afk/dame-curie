@@ -323,7 +323,6 @@ from error_reporting import (  # noqa: E402
     capture_incident,
     configure_incident_store,
     incident_context,
-    redact_sensitive_text,
 )
 from operator_commands import (  # noqa: E402
     handle_error_command,
@@ -13460,12 +13459,7 @@ class MaxwellBot(commands.Bot):
                     else:
                         raw = await tool.execute(message, **params)
                 result_text = str(raw) if raw else "executed successfully"
-                logger.info(
-                    "Tool %s finished: %s",
-                    name,
-                    (redact_sensitive_text(result_text) if name == "image_generator"
-                     else result_text).replace("\n", " "),
-                )
+                logger.info("Tool %s finished: %d chars", name, len(result_text))
                 if result_text.startswith(("Error", "Error:")):
                     self._tool_breaker.record_failure(name)
                 else:

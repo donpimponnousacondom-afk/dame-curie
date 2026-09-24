@@ -301,7 +301,8 @@ def test_cancellation_logs_completion_and_propagates_without_incident(image_requ
 
 
 @pytest.mark.parametrize("encoded", [False, True], ids=["raw", "percent-encoded"])
-def test_dispatcher_redacts_image_result_without_changing_model_result(encoded, monkeypatch, caplog):
+@pytest.mark.parametrize("tool_name", ["image_generator", "shell"])
+def test_dispatcher_redacts_image_result_without_changing_model_result(encoded, tool_name, monkeypatch, caplog):
     import bot as bot_module
 
     monkeypatch.setattr(error_reporting, "_store", None)
@@ -309,34 +310,35 @@ def test_dispatcher_redacts_image_result_without_changing_model_result(encoded, 
     secret = "s/雪+synthetic-boundary-credential"
     error_reporting.register_secrets([secret])
     rendered_secret = quote(secret, safe="") if encoded else secret
-    leading = "Generated image: "
-    leading += "x" * (190 - len(leading))
+    leading = "Synthetic tool result: " + "x" * 100_000
     raw_result = leading + rendered_secret + "\nVerbatim model-facing tail 火"
     tool = SimpleNamespace(execute=AsyncMock(return_value=raw_result))
     breaker = SimpleNamespace(
         is_open=lambda tool_name: False, record_success=MagicMock(), record_failure=MagicMock(),
     )
-    bot = SimpleNamespace(tools={"image_generator": tool}, _tool_breaker=breaker)
+    bot = SimpleNamespace(tools={tool_name: tool}, _tool_breaker=breaker)
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=42))
     trace = AsyncMock()
     monkeypatch.setattr(bot_module, "record_reasoning", trace)
     caplog.set_level(logging.INFO, logger="bot")
 
+    params = {"prompt": "synthetic dispatcher prompt"} if tool_name == "image_generator" else {"command": "synthetic"}
     result = asyncio.run(bot_module.MaxwellBot._execute_tool_by_name(
-        bot, message, "image_generator", {"prompt": "synthetic dispatcher prompt"},
-        disabled=set(), compatible={"image_generator"},
+        bot, message, tool_name, params,
+        disabled=set(), compatible={tool_name},
     ))
 
-    prefix = "Tool image_generator finished: "
+    prefix = f"Tool {tool_name} finished: "
     records = [record for record in caplog.records if record.name == "bot" and record.getMessage().startswith(prefix)]
     assert len(records) == 1 and records[0].levelno == logging.INFO
-    assert records[0].getMessage() == prefix + leading + "[REDACTED] Verbatim model-facing tail 火"
+    assert records[0].getMessage() == f"{prefix}{len(raw_result)} chars"
+    assert len(records[0].getMessage().encode()) < 256
     messages = "\n".join(record.getMessage() for record in caplog.records)
     assert rendered_secret[:10] not in messages
     assert secret not in messages and quote(secret, safe="") not in messages
-    assert result == f"Tool image_generator: {raw_result}"
+    assert result == f"Tool {tool_name}: {raw_result}"
     trace.assert_awaited_once()
     assert trace.await_args.kwargs["result"] == raw_result
-    tool.execute.assert_awaited_once_with(message, prompt="synthetic dispatcher prompt")
-    breaker.record_success.assert_called_once_with("image_generator")
+    tool.execute.assert_awaited_once_with(message, **params)
+    breaker.record_success.assert_called_once_with(tool_name)
     breaker.record_failure.assert_not_called()
