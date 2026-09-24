@@ -17,7 +17,7 @@ from provider_telemetry import (
     request_text,
     token_count,
 )
-from providers import OpenAICompatibleProvider, ProviderRequestError, ProviderResult
+from providers import OpenAICompatibleProvider, ProviderIncompleteResponseError, ProviderRequestError, ProviderResult
 from test_provider_resilience import DONE, StreamResponse
 from test_providers import (
     FakeEmptyResponse,
@@ -445,15 +445,21 @@ def test_unicode_tools_stream_and_json_counts_match():
     assert results[0].metrics.output_bytes == results[1].metrics.output_bytes
 
 
-def test_promoted_reasoning_and_custom_json_are_counted_once():
+def test_reasoning_only_is_terminal_and_custom_json_is_counted_once():
     custom = '{"name": "lookup", "arguments": {"reasoning": "test", "text": "世界"}}'
     provider = provider_for(
-        [json_response({"content": None, "reasoning_content": "answer"})]
+        [json_response({"content": None, "reasoning_content": custom}), json_response()],
+        retry_attempts=5, empty_response_retries=3,
+        fallback_base_url="https://fallback.example.test/v1", fallback_model="fallback-model",
     )
-    provider._reasoning_content_is_answer = lambda *args: True
-    promoted = asyncio.run(provider.generate_response([]))
-    assert promoted == "answer"
-    assert promoted.metrics.output_tokens == count_tokens("answer")
+    with pytest.raises(ProviderIncompleteResponseError):
+        asyncio.run(provider.generate_response([], custom_tool_calls=True))
+    assert len(provider._session.payloads) == len(provider._session.responses) == 1
+    provider._session = FakeSession(json_response({"content": "answer", "reasoning_content": "thought"}))
+    answered = asyncio.run(provider.generate_response([]))
+    assert answered == "answer"
+    assert answered.metrics.output_tokens == count_tokens("answerthought")
+    assert answered.metrics.output_bytes == len("answerthought".encode())
     provider._session = FakeSession(
         StreamResponse([sse_frame({"content": custom}), DONE])
     )

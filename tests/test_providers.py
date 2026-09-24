@@ -7,6 +7,7 @@ import pytest
 
 from providers import (
     OpenAICompatibleProvider,
+    ProviderIncompleteResponseError,
     ProviderUsageExhaustedError,
     USAGE_EXHAUSTED_MESSAGE,
     _is_content_policy_block,
@@ -868,48 +869,47 @@ def test_image_unsupported_skips_text_only_primary():
     assert session.payloads[1]["model"] == "fallback-model"
 
 
-def test_reasoning_only_response_is_not_treated_as_empty():
-    provider = OpenAICompatibleProvider("http://example.test", "deepseek-v4-flash", 10, 0.5)
-    provider.available = True
-    session = FakeSession(FakeReasoningOnlyResponse())
-    provider._session = session
-
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "pong"
-
-    asyncio.run(run())
-    assert len(session.payloads) == 1
-
-
-def test_reasoning_only_not_promoted_for_non_deepseek_models():
-    # Regression: commit 010b0db promoted reasoning_content->content for ALL
-    # models when content was null. For a cut-off/interrupted reasoning model
-    # (grok, ollama-native, minimax-m3) that sent the chain-of-thought to
-    # Discord as the user-visible reply. Non-deepseek models must NOT have
-    # reasoning promoted — it falls through to the empty-response path instead
-    # (leaking the scratchpad beats no answer at all, never sending it).
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek/deepseek-v4.1-flash:nitro", "grok-4.6"])
+def test_reasoning_only_response_is_terminal(model):
     provider = OpenAICompatibleProvider(
-        "http://example.test",
-        "grok-4.6",
-        10,
-        0.5,
-        empty_response_retries=0,
+        "http://primary.test/v1", model, 10, 0.5,
+        fallback_base_url="http://fallback.test/v1", fallback_model="fallback-model",
+        retry_attempts=5, empty_response_retries=3,
     )
     provider.available = True
-    session = FakeSession(FakeReasoningOnlyResponse())
+    session = FakeSequenceSession([FakeReasoningOnlyResponse(), FakeResponse()])
     provider._session = session
-    provider.retry_attempts = 1  # no retries: assert the single-shot behavior
 
-    async def run():
-        # Non-deepseek reasoning-only with no tool_calls must NOT be promoted
-        # to content. It falls through to the empty-response path and raises.
-        with pytest.raises(RuntimeError):
-            await provider.generate_chat_completion([{"role": "user", "content": "hi"}])
+    with pytest.raises(ProviderIncompleteResponseError):
+        asyncio.run(provider.generate_chat_completion([{"role": "user", "content": "hi"}]))
 
-    asyncio.run(run())
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
+    assert len(session.payloads) == len(session.responses) == 1
+
+
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "grok-4.6"])
+@pytest.mark.parametrize("answer", [
+    {"content": "answer"},
+    {"content": None, "tool_calls": [{
+        "id": "call_1", "type": "function",
+        "function": {"name": "lookup", "arguments": '{"query":"synthetic"}'},
+    }]},
+])
+def test_reasoning_with_answer_or_native_tool_calls_is_preserved(model, answer):
+    provider = OpenAICompatibleProvider("http://example.test", model, 10, 0.5)
+    provider.available = True
+    response = FakeReasoningOnlyResponse()
+    response.content = _FakeAsyncStream(_sse_chunks_for({"choices": [{"message": {
+        "role": "assistant", "reasoning_content": "private scratchpad", **answer,
+    }}]}))
+    session = FakeSession(response)
+    provider._session = session
+
+    message = asyncio.run(provider.generate_chat_completion([{"role": "user", "content": "hi"}]))
+
+    assert (message.get("content") or "") == (answer.get("content") or "")
+    assert message.get("tool_calls") == answer.get("tool_calls")
+    assert message["reasoning_content"] == "private scratchpad"
     assert len(session.payloads) == 1
 
 

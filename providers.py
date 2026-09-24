@@ -1078,6 +1078,8 @@ async def _read_sse_response(
                                             await cb(*args)
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
+                    if finish_reason == "length":
+                        raise ProviderIncompleteResponseError("Provider response reached the output token limit")
             # Some providers stream usage in the final frame (Anthropic-style
             # models on OpenRouter do this; OpenAI does it when
             # stream_options.include_usage=true).
@@ -1241,6 +1243,10 @@ class ProviderRequestError(RuntimeError):
 
 class ProviderResponseError(RuntimeError):
     """A malformed HTTP 200 response, not a native-tool rejection."""
+
+
+class ProviderIncompleteResponseError(ProviderResponseError):
+    pass
 
 
 class ProviderUpstreamError(ProviderResponseError):
@@ -1791,28 +1797,6 @@ class OpenAICompatibleProvider:
             if ep.name == name:
                 return ep
         return None
-
-    def _reasoning_content_is_answer(
-        self,
-        endpoint: ProviderEndpoint | None,
-        message: dict,
-    ) -> bool:
-        """Return True only when this provider's reasoning_content holds a real
-        user-facing answer rather than internal chain-of-thought.
-
-        A null `content` + non-empty `reasoning_content` is ambiguous: some
-        models (DeepSeek-family) put the actual answer in reasoning_content;
-        an interrupted/cut-off reasoning model (grok, ollama-native,
-        minimax-m3) leaves only scratchpad there with no answer at all.
-        Promoting scratchpad to content is what leaked the bot's reasoning to
-        Discord. We only trust reasoning_content as an answer for the models
-        that are known to ship text that way; for everything else we let the
-        empty-response retry/fallback take over.
-        """
-        model = (endpoint.model if endpoint is not None else self.model) or ""
-        m = model.lower()
-        # DeepSeek-family convention: answer may ride in reasoning_content.
-        return any(tok in m for tok in ("deepseek", "deep_seek", "deepseek-r1"))
 
     def _media_endpoint_order(self) -> list[ProviderEndpoint]:
         """Vision first, then the rest. Text-only primaries 400 on image_url."""
@@ -2847,6 +2831,8 @@ class OpenAICompatibleProvider:
                     if not choices:
                         raise ProviderResponseError("Provider JSON response produced no choices")
 
+                    if choices[0].get("finish_reason") == "length":
+                        raise ProviderIncompleteResponseError("Provider response reached the output token limit")
                     message = choices[0].get("message", {})
                     if response_format == "json":
                         for index, choice in enumerate(choices):
@@ -2862,39 +2848,17 @@ class OpenAICompatibleProvider:
                             else (p if isinstance(p, str) else "")
                             for p in content
                         )
-                    # Reasoning-to-content promotion.
-                    #
-                    # Some reasoning models (notably DeepSeek) have a quirk
-                    # where the *answer* genuinely rides in `reasoning_content`
-                    # with `content` left null. Commit 010b0db promoted
-                    # reasoning -> content unconditionally to fix that, but it
-                    # was too blunt: for an interrupted/cut-off reasoning model
-                    # (grok, ollama-native, minimax-m3) a null-content + only
-                    # reasoning reply is usually chain-of-thought with NO
-                    # answer produced — promoting it sends the scratchpad to
-                    # the channel as the user-visible reply (logged leak: the
-                    # bot posted "The user is making a sexual joke about
-                    # 'Bobby Fisher'… I should decline" to Discord).
-                    #
-                    # Rule: NEVER promote when there are tool_calls (reasoning
-                    # accompanying a tool call is unambiguously internal), and
-                    # NEVER promote on providers whose answers always arrive
-                    # in `content`. Only promote for the known DeepSeek-family
-                    # case where an empty-content answer legitimately lives in
-                    # reasoning_content. Everything else drops through to the
-                    # empty-response retry/fallback below instead of leaking.
                     if (
-                        not content
+                        not content.strip()
                         and not message.get("tool_calls")
-                        and self._reasoning_content_is_answer(endpoint, message)
-                    ):
-                        content = (
+                        and (
                             message.get("reasoning_content")
                             or message.get("reasoning")
-                            or ""
+                            or message.get("reasoning_details")
+                            or any(observation.reasoning.get(0, ()))
                         )
-                        if content:
-                            message["content"] = content
+                    ):
+                        raise ProviderIncompleteResponseError("Provider returned reasoning without an answer or tool call")
                     # A blocked prompt comes back as a normal 200 whose content
                     # IS Google's notice. Never let that reach the channel: drop
                     # it, cool the endpoint and hand the turn to the fallback
@@ -3045,6 +3009,9 @@ class OpenAICompatibleProvider:
             except RuntimeError as e:
                 incident.failure("Provider response failure", e)
                 last_error = e
+                if isinstance(e, ProviderIncompleteResponseError):
+                    incident.capture("Provider response incomplete", e)
+                    raise
                 if isinstance(e, ProviderResponseError):
                     logger.warning(
                         "Provider response failure endpoint=%s status=%s format=%s content_type=%s reason=%s",

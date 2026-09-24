@@ -12,6 +12,7 @@ import providers
 from providers import (
     OpenAICompatibleProvider,
     ProviderEmptyResponseError,
+    ProviderIncompleteResponseError,
     ProviderRequestError,
     ProviderResponseError,
     ProviderUpstreamError,
@@ -291,26 +292,60 @@ def test_quota_body_not_echoed_and_no_retry_added(captured, caplog, retry_sleep)
 
 
 @pytest.mark.parametrize("response_format", ["json", "sse"])
-def test_http200_error_preserves_full_body_and_same_error(captured, caplog, response_format):
-    explanation = "invalid tool input " + "x" * 405 + " complete private suffix"
+@pytest.mark.parametrize("kind", [
+    "upstream", "length-text", "length-custom", "length-native", "length-reasoning",
+    "reasoning-only", "reasoning-only-alias", "reasoning-only-details",
+])
+def test_http200_error_preserves_full_body_and_same_error(captured, caplog, retry_sleep, response_format, kind):
+    explanation = "private completion detail " + "x" * 405 + " complete private suffix"
+    messages = {
+        "length-text": {"content": '{"name":"wait","arguments":{"seconds":10}} ' + explanation},
+        "length-custom": {"content": json.dumps({"name": "wait", "arguments": {"seconds": 10, "reasoning": explanation}})},
+        "length-native": {"tool_calls": [{
+            "index": 0, "id": "call_1", "type": "function",
+            "function": {"name": "send_message", "arguments": '{"content":"' + explanation},
+        }]},
+        "length-reasoning": {"reasoning_content": explanation},
+        "reasoning-only": {"content": "  ", "reasoning_content": explanation},
+        "reasoning-only-alias": {"content": None, "reasoning": explanation},
+        "reasoning-only-details": {"content": "", "reasoning_details": [{"type": "reasoning.text", "text": explanation}]},
+    }
     payload = {"error": {"code": 400, "message": explanation, "metadata": {"raw": "useful upstream detail"}}}
-    raw_json = json.dumps(payload, indent=2).encode()
+    if kind != "upstream":
+        payload = {"choices": [{
+            "message" if response_format == "json" else "delta": messages[kind],
+            "finish_reason": "length" if kind.startswith("length-") else "stop",
+        }]}
     if response_format == "json":
-        body = b" \n" + raw_json + b"\n "
+        body = b" \n" + json.dumps(payload, indent=2).encode() + b"\n "
         response = Response(body)
     else:
-        prefix = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
-        body = prefix + b"event: error\ndata: " + json.dumps(payload).encode() + b"\n\n"
+        prefix = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\nevent: error\n' if kind == "upstream" else b""
+        if kind == "length-custom":
+            prefix = b"data: " + json.dumps({"choices": [{"delta": messages[kind]}]}).encode() + b"\n\n"
+            payload = {"choices": [{"finish_reason": "length"}]}
+        body = prefix + b"data: " + json.dumps(payload).encode() + b"\n\n"
+        if kind.startswith("reasoning-only"):
+            body += b"data: [DONE]\n\n"
         response = Response(chunks=[body, b"unread trailing transport data"], headers={"Content-Type": "text/event-stream"})
-    provider = provider_for([response], retry_attempts=1)
-    with pytest.raises(ProviderUpstreamError) as caught:
-        asyncio.run(provider.generate_response(MESSAGES))
-    assert len(captured) == len(provider._session.requests) == 1
+    provider = provider_for(
+        [response, success()], retry_attempts=1 if kind == "upstream" else 5, empty_response_retries=3,
+        fallback_base_url="https://fallback.example.test/v1", fallback_model="fallback-model",
+    )
+    expected_error = ProviderUpstreamError if kind == "upstream" else ProviderIncompleteResponseError
+    with pytest.raises(expected_error) as caught:
+        asyncio.run(provider.generate_response(MESSAGES, custom_tool_calls=kind == "length-custom"))
+    assert len(captured) == len(provider._session.requests) == len(provider._session.responses) == 1
+    assert provider._session.requests[0][0] == "https://primary.example.test/v1/chat/completions"
     assert body.decode() in caught.value.incident_details
     assert explanation not in str(caught.value) + repr(caught.value) + caplog.text
-    assert "useful upstream detail" in captured[0]["details"]
     assert captured[0]["exception"] is caught.value
     assert "unread trailing transport data" not in captured[0]["details"]
+    retry_sleep.assert_not_awaited()
+    if kind == "upstream":
+        assert "useful upstream detail" in captured[0]["details"]
+    else:
+        assert isinstance(caught.value, ProviderResponseError)
     if response_format == "sse":
         assert response.read_chunks == 1
     else:
@@ -416,7 +451,7 @@ def test_timeout_then_network_recovery_keeps_all_traces_and_backoff(captured, re
 
 
 def test_empty_response_recovery_keeps_original_shape_and_nonstream_switch(captured, retry_sleep):
-    body = b'{"choices":[{"message":{"content":"","reasoning_content":"private scratchpad"}}]}'
+    body = b'{"choices":[{"message":{"content":"","reasoning_content":""}}]}'
     provider = provider_for([Response(body), success()], retry_attempts=2, empty_response_retries=1)
     assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
     assert len(captured) == 1

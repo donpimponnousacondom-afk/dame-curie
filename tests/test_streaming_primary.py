@@ -1,8 +1,8 @@
 """Test SSE streaming against the explicitly configured PRIMARY remote
 OpenAI-compatible endpoint and model.
 
-Catches: reasoning deltas, content=empty but reasoning=present (the ollama
-cloud variant does this), usage, tool calls, error frames.
+Catches: terminal reasoning-only responses, reasoning with actual answers,
+usage, tool calls, error frames.
 """
 
 import asyncio
@@ -71,10 +71,8 @@ async def main() -> int:
     print(f"  reasoning: {reasoning!r}")
     print(f"  tool_calls: {tool_calls!r}")
 
-    if not content and not reasoning:
-        print(
-            "FAIL: both content and reasoning are empty — model produced nothing mergeable"
-        )
+    if not content and not tool_calls:
+        print("FAIL: no answer or native tool call — reasoning alone is not a reply")
         return 1
     if not p._last_usage or p._last_usage.get("total_tokens", 0) <= 0:
         print("WARN: usage not populated (some providers omit it on free tier)")
