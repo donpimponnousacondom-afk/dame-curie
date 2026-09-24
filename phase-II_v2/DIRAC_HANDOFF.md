@@ -1,14 +1,16 @@
 # Temporary Dirac V2 — current release handoff
 
-Last runtime verification: **2026-09-24, temporary Dirac on `4e4027a`**, with taint/confirm removed and one native generation/edit `image_generator`. This release includes the prior source-only review fixes and `longprompt`; legacy `prompt` is unchanged.
+Last runtime verification: **2026-09-24, temporary Dirac on `74d827d`**, with terminal truncated/reasoning-only response handling and **12,345 output tokens** retained for testing. No final reasoning-to-answer promotion; no retry/fallback of those incomplete responses; no dispatch of tools recovered from length-truncated output. Earlier taint removal, unified images, review fixes and `longprompt` remain included; legacy `prompt` is unchanged.
 
-- Image: `sha256:9bb5c660f35a82772ad2561858dfb8b28aa85aa24bacfc0a304c0e368e281179`; container: `04fc2d8f9d3e42e10df9e62049611889e358c75e7b7316e39f0d45b942bebef0`.
-- Explicitly approved temporary-only replacement at10:04:02Z: old container exited cleanly, new configuration/embedding readiness passed, bounded startup evidence confirmed Discord READY identity1504398705539944560. Prefix`?`, 20MiB override, state and both smoke mounts retained. Installed lifecycle code matched the source; no operator checkout replacement was needed.
-- Target image profile is consolidated to seven `IMAGE_GEN_*` fields, including a five-model exact-ID description map; default `astra6.unthawed/gpt-image-2.5-flare`, quality high, timeout600. Shared endpoint/key retained, obsolete split-profile fields removed, unrelated settings compared unchanged. Durable selector pins the new image. Private environment/selector backups: `/var/backups/dame-curie-dirac/unified-images-20260924T100134Z/`.
-- Final exact-tree isolated QA:1219 passed /24 baseline-reproduced failures /2 excluded; not a whole-suite green claim. Actual-image synthetic configuration/schema/edit probe also passed. **No real image-generation/edit probe or new smoke business-flow request was submitted.** Root can now test generation, HD quality and editing through the single tool.
-- V1/canonical/publisher/site content unchanged by this operation; no Git push. Details and exact acceptance tree: `../docs/STATUS.md`, `../docs/IMAGE_GENERATION.md`, ignored `audit/image-unification-validation.md`.
+- Image: `sha256:c86ae9181d907e8e0c5da8083c4080190eb655b86e5f6c86aac502645e8c72bb`; container: `122dc2dc5d0061401bdc9228761014fd8d456d8818f18d2162a68642282b6f4d`.
+- Explicitly approved temporary-only replacement began at 15:43:18 UTC. Old container exited cleanly; new configuration/embedding readiness passed; Discord login confirmed identity `1504398705539944560` at 15:43:23.188 UTC. Ordinary post-start traffic confirmed the 12,345 cap. No coordinator inference probe was submitted.
+- Private profile bytes unchanged by this deployment; prefix `?`, 20 MiB override, persistent state and both smoke mounts retained. Installed lifecycle scripts matched source. Durable selector pins the new image; `screen -r dirac-v2` opens the restored viewer.
+- Unified image profile still offers five exact model IDs/descriptions; default `astra6.unthawed/gpt-image-2.5-flare`, quality high, timeout 600. No image configuration changed in this patch.
+- Exact-tree isolated QA: **1,321 passed / 4 baseline-reproduced failures / 2 excluded**; not a whole-suite-green claim. Built artifact matches tested provider source. Early SSE stop can omit trailing usage metadata; existing streaming previews and opaque-only SSE reasoning behavior are unchanged.
+- Root-only rollback/profile copy and bounded incident log: `/var/backups/dame-curie-dirac/incomplete-response-20260924T154318Z/`. Earlier unified-image receipt/backups remain historical evidence. Never restore the old 115,200 cap as part of an image rollback.
+- V1/canonical/publisher/site content unchanged; no Git push. Details: `../docs/STATUS.md`, `../docs/IMAGE_GENERATION.md`, ignored `audit/provider-incomplete-validation.md` and `audit/image-unification-validation.md`.
 
-The sections below preserve September23 and pre-rollout source evidence; their earlier build IDs and not-deployed statements are historical, not the current running release.
+The sections below preserve September 23 and pre-rollout source evidence; their earlier build IDs and not-deployed statements are historical, not the current running release.
 
 ## Review fixes ready in source
 

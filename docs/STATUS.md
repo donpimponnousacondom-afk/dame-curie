@@ -1,8 +1,18 @@
 # dame-curie status
 
-## Current temporary Dirac release — 2026-09-24
+## Current temporary Dirac release — incomplete-output handling, 2026-09-24
 
-**Dirac is running `4e4027a`: taint/confirm removed, one configurable native `image_generator` for generation and edits.** The release also includes the previously source-only `longprompt` and R3/R2/R9/R4 fixes below; `prompt` remains unchanged. Older milestone sections retain their original test/acceptance limits, not a current deployment hold.
+**Dirac is running `74d827d`, with the testing output cap retained at 12,345 tokens.** JSON/SSE `finish_reason=length` now stops before tool recovery; readable reasoning-only output is not promoted into an answer or executable text. Both failures are terminal rather than triggering another paid retry/fallback. Healthy text and tool responses remain supported.
+
+- Source `74d827d2d86e23ad1fec17c4488bea2fa50c388f`; tested tree `516c90e0001769043248dd0189aa3e5373e5a94f`; image `sha256:c86ae9181d907e8e0c5da8083c4080190eb655b86e5f6c86aac502645e8c72bb`; container `122dc2dc5d0061401bdc9228761014fd8d456d8818f18d2162a68642282b6f4d`.
+- Exact-tree isolated Python 3.14.4 QA: **1,321 passed, 4 baseline-reproduced failures, 2 deselected**; selected Ruff F821/F822/F823 passed. The same four assertions failed on untouched `33aae2d` (410 passed / 4 failed): two stale model-recognition expectations, a background notice-count expectation, and synthetic-platform rejection. No whole-suite-green claim. Independent review found no blocker; an isolated built-image check verified exact provider bytes and provenance without inference.
+- Root explicitly authorized the patch and immediate temporary-only rollout. Replacement began at 15:43:18 UTC; the old container exited 0, no OOM. Configuration/embedding readiness passed; the temporary identity `1504398705539944560` logged in at 15:43:23.188 UTC. Subsequent ordinary traffic logged `max_tokens=12345`; no coordinator-generated inference probe was submitted.
+- Private profile bytes remained unchanged during deployment. Prefix `?`, 20 MiB incoming override, image choices, state and smoke mounts remain. Durable image pin and Screen viewer were updated. Root-only rollback and bounded incident logs: `/var/backups/dame-curie-dirac/incomplete-response-20260924T154318Z/`. V1/canonical Dame, publisher/site content and Git remotes were untouched.
+- The original runaway request used 115,200 output tokens and finished `length`, then text recovery executed `wait` → `wait` → `no_response`. Its original reasoning/content split was not retained; reasoning promotion is a proven code defect, not a verified account of yesterday's leak. Early SSE termination may omit trailing usage metadata; existing progress previews and opaque-only SSE metadata handling are unchanged. Details: ignored `audit/provider-incomplete-validation.md`.
+
+## Previous same-day runtime — unified images
+
+**Dirac ran `4e4027a`: taint/confirm removed, one configurable native `image_generator` for generation and edits.** The release also includes the previously source-only `longprompt` and R3/R2/R9/R4 fixes below; `prompt` remains unchanged. Older milestone sections retain their original test/acceptance limits, not a current deployment hold.
 
 - Source `4e4027a193d080d5a19cf5d5d3df1cd160fdd779`; tested tree `cdc6eed21f77b53e7c51740bb33f5370d36fc934`; image `sha256:9bb5c660f35a82772ad2561858dfb8b28aa85aa24bacfc0a304c0e368e281179`; container `04fc2d8f9d3e42e10df9e62049611889e358c75e7b7316e39f0d45b942bebef0`.
 - Final expanded isolated Python3.14.4 QA: **1219 passed, 24 baseline-reproduced failures, 2 explicitly deselected**; selected Ruff F821/F822/F823 passed. The 23 failures detailed below plus one stale private-URL incident expectation reproduced independently on unchanged baseline source. No whole-suite green claim. The actual built image separately passed credential-free configuration/schema/synthetic-edit checks with no provider request.
