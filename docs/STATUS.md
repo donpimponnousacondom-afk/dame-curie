@@ -1,6 +1,17 @@
 # dame-curie status
 
-## Taint-gate retirement — implemented, not deployed
+## Current temporary Dirac release — 2026-09-24
+
+**Dirac is running `4e4027a`: taint/confirm removed, one configurable native `image_generator` for generation and edits.** The release also includes the previously source-only `longprompt` and R3/R2/R9/R4 fixes below; `prompt` remains unchanged. Older milestone sections retain their original test/acceptance limits, not a current deployment hold.
+
+- Source `4e4027a193d080d5a19cf5d5d3df1cd160fdd779`; tested tree `cdc6eed21f77b53e7c51740bb33f5370d36fc934`; image `sha256:9bb5c660f35a82772ad2561858dfb8b28aa85aa24bacfc0a304c0e368e281179`; container `04fc2d8f9d3e42e10df9e62049611889e358c75e7b7316e39f0d45b942bebef0`.
+- Final expanded isolated Python3.14.4 QA: **1219 passed, 24 baseline-reproduced failures, 2 explicitly deselected**; selected Ruff F821/F822/F823 passed. The 23 failures detailed below plus one stale private-URL incident expectation reproduced independently on unchanged baseline source. No whole-suite green claim. The actual built image separately passed credential-free configuration/schema/synthetic-edit checks with no provider request.
+- Root-authorized temporary-only replacement began at10:04:02Z; previous container stopped cleanly. New container/configuration/embedding checks passed, and bounded startup evidence confirmed Discord READY as **1504398705539944560**. Installed lifecycle code matched reviewed source and was not service-user writable; no operator checkout update was needed.
+- Target image settings now use a strict model-description JSON object with five catalog-verified exact IDs; default `astra6.unthawed/gpt-image-2.5-flare`, shared quality high and timeout600. HD preference remains available through the configured sunburst choice and optional quality=max. Retired split-profile keys were removed; endpoint/key retained, unrelated settings compared unchanged. Private environment and prior image-selector backups are under `/var/backups/dame-curie-dirac/unified-images-20260924T100134Z/`.
+- `?`, the temporary identity, the20MiB incoming override, persistent state and optional smoke mounts are retained. The durable Dirac image selector pins the new immutable image. V1, canonical Dame, publisher, site content and remote administration were not changed by this release; no Git push.
+- **No live image generation/edit or new business-flow smoke request was submitted.** Catalog HTTP200, synthetic QA and Discord readiness are not generation acceptance. Site-authoring guidance remains deferred. Configuration/use: [IMAGE_GENERATION.md](IMAGE_GENERATION.md). Detailed exact-tree evidence, corrections and rollout receipt: ignored `audit/image-unification-validation.md`.
+
+## Taint-gate retirement — source acceptance, included in release above
 
 Root explicitly retired the web-read taint/confirmation subsystem in **`085c95b`**, accepting model-directed shell risk. Marking/state/checks, the `confirm` command/help, `DISABLE_TAINT_GATE`, related destructive-tool metadata and obsolete test/harness cases are removed. Existing independent authorization code, resource budgets and autonomy controls remain unchanged; source review does not turn the inherited shell whitelist or model prompt guidance into enforced authorization.
 
@@ -8,13 +19,13 @@ Exact tree `81896cf423a2a974df5bb370b387364bbc8fcce8`: **864 passed, 23 failed, 
 
 No runtime or private settings changed in this slice. Root separately approved temporary Dirac image-profile consolidation and deployment after the next source/QA slice; V1, canonical Dame and publisher stay untouched. Detailed source review, retained-control limitations and exact QA selection are in ignored `audit/taint-removal-authorization-review.md` and `audit/taint-removal-validation.md`.
 
-## Attachment-based longprompt — implemented, not deployed
+## Attachment-based longprompt — source acceptance, included in release above
 
 Root chose a separate command instead of changing the battle-tested `prompt` handler. **`723e7d8`** adds `longprompt`: download the current server prompt as UTF-8 `prompt.txt`, or upload one `.txt` to replace that same stored prompt. It retains bot-admin/disabled-command gates and guild/DM scoping, preserves exact text, rejects invalid/empty/oversized input, and uses the existing 512 KiB text-file ceiling. A short acknowledgement replaces a full-body echo. `prompt` and `clearprompt` are unchanged. Usage and limits: [LONGPROMPT.md](LONGPROMPT.md).
 
 Exact committed tree `3cdecffb37498ff507d401d123bb3eeda280110d` passed **731 focused isolated tests, 2 explicitly deselected**, Python 3.14.4 with no network/private mounts and selected Ruff F821/F822/F823 checks. The same unsafe live-provider test and previously baseline-reproduced README retry assertion remain excluded. Parent reviewed Luna's tests, Sol independently reviewed source/tests, and parent executed QA. No application build, deployment, private setting change or live Discord attachment roundtrip was performed.
 
-## Source review fixes — implemented, not deployed
+## Source review fixes — source acceptance, included in release above
 
 - **`162b39c` is the completed R3/R2/R9/R4 source slice**, following `dfc6141` (owned final delivery), `acf5da9` (actor-preserving refresh) and `5b6be67` (evidence/ignore corrections).
 - Its exact tree `6e9d2d7ff7bce485970dde60244e2692b160453f` passed **675 focused isolated tests, 2 explicitly deselected**, Python 3.14.4, no network/private mounts, selected Ruff F821/F822/F823 checks. Exclusions: the prohibited live-provider tool-progress test and the previously baseline-reproduced stale README retry assertion. This selection is not the earlier 825-test suite or whole-repository acceptance.
@@ -22,9 +33,9 @@ Exact committed tree `3cdecffb37498ff507d401d123bb3eeda280110d` passed **731 foc
 - **No application build, rollout, private configuration change or live fault injection was performed in this review round.** Deployment evidence below is historical, not acceptance of this source revision. Publisher, V1 and canonical boundaries remain untouched; root subsequently chose the separate `longprompt` command above rather than changing `prompt`.
 - Root-requested local reviewer exchange lives in ignored `audit/`; the packet includes the original report, verified dispositions, author/reviewer responses, failed attempts and exact QA receipts.
 
-## Last verified runtime — provider reload, 2026-09-23
+## Previous runtime — provider reload, 2026-09-23
 
-**Dirac is running `d43e4bf` with idle-boundary provider reload, assigned-role wake-ups, immutable image provenance and the `?` command prefix.**
+**At this milestone, Dirac ran `d43e4bf` with idle-boundary provider reload, assigned-role wake-ups, immutable image provenance and the `?` command prefix.**
 
 - Source `d43e4bf3f963655e4f9ac7b1d690549256c9fb53`; container `030fb63b9c54e9f00eb6c4ccd2db900149cb94141a6adc5fa24b835b0ef0340d`; image `sha256:102805e039ec4d32f689308e5a086b837f321559ff89117787de5183fa22ff0a`. Embedding readiness and intended temporary identity Discord READY were confirmed after replacement; restart=no. No V1/canonical/publisher mutation or Git push.
 - **825 focused isolated tests passed** on the exact tree committed as this release, with expanded Ruff F821/F822/F823 checks. One stale README-row assertion was explicitly deselected after reproducing it on pre-reload `dba8359`; no full-suite claim. Independent review found no remaining P0/P1 reload blocker; an actual-image, credential-free probe also verified source blobs, manifest, module packaging and invalid-port rejection.

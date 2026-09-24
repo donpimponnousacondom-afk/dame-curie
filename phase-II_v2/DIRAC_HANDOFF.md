@@ -1,6 +1,14 @@
-# Temporary Dirac V2 — provider reload and role wake-up handoff
+# Temporary Dirac V2 — current release handoff
 
-Last runtime verification: 2026-09-23, **temporary Dirac on `d43e4bf`**. That rollout did not activate canonical Dame or mutate V1. The subsequent review-fix source below was not deployed in this round; no fresh runtime inventory or whole-application/security certification is implied.
+Last runtime verification: **2026-09-24, temporary Dirac on `4e4027a`**, with taint/confirm removed and one native generation/edit `image_generator`. This release includes the prior source-only review fixes and `longprompt`; legacy `prompt` is unchanged.
+
+- Image: `sha256:9bb5c660f35a82772ad2561858dfb8b28aa85aa24bacfc0a304c0e368e281179`; container: `04fc2d8f9d3e42e10df9e62049611889e358c75e7b7316e39f0d45b942bebef0`.
+- Explicitly approved temporary-only replacement at10:04:02Z: old container exited cleanly, new configuration/embedding readiness passed, bounded startup evidence confirmed Discord READY identity1504398705539944560. Prefix`?`, 20MiB override, state and both smoke mounts retained. Installed lifecycle code matched the source; no operator checkout replacement was needed.
+- Target image profile is consolidated to seven `IMAGE_GEN_*` fields, including a five-model exact-ID description map; default `astra6.unthawed/gpt-image-2.5-flare`, quality high, timeout600. Shared endpoint/key retained, obsolete split-profile fields removed, unrelated settings compared unchanged. Durable selector pins the new image. Private environment/selector backups: `/var/backups/dame-curie-dirac/unified-images-20260924T100134Z/`.
+- Final exact-tree isolated QA:1219 passed /24 baseline-reproduced failures /2 excluded; not a whole-suite green claim. Actual-image synthetic configuration/schema/edit probe also passed. **No real image-generation/edit probe or new smoke business-flow request was submitted.** Root can now test generation, HD quality and editing through the single tool.
+- V1/canonical/publisher/site content unchanged by this operation; no Git push. Details and exact acceptance tree: `../docs/STATUS.md`, `../docs/IMAGE_GENERATION.md`, ignored `audit/image-unification-validation.md`.
+
+The sections below preserve September23 and pre-rollout source evidence; their earlier build IDs and not-deployed statements are historical, not the current running release.
 
 ## Review fixes ready in source
 
@@ -27,7 +35,7 @@ sudo -n /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac.py 
 
 `restart` retains the container/image. Replacement requires a stop, digest-selector update and explicit `start --replace`; building or committing is not deployment. Do not manage temporary Dirac with canonical `instance.py up`.
 
-## What is running
+## Prior running build — 2026-09-23
 
 | Item | Verified state |
 | --- | --- |
