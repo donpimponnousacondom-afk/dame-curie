@@ -185,9 +185,8 @@ DEFAULT_CONTROL = {
     # native tool_calls (or the endpoint rejects tools=).
     "native_tool_calls": True,
     "tools_enabled": True,
-    # Unused: the full tool catalog is attached on every turn. Gating hid
-    # hd_image behind more_tools and made photo requests look like a
-    # from-scratch generate. Kept so existing control.json files still load.
+    # Unused: the full tool catalog is attached on every turn. Kept so existing
+    # control.json files still load.
     "lean_chat_tools": False,
     # When a new support/ticket-style channel is created in a server Maxwell is
     # in, post a short opening line so he is present in the room and it enters
@@ -349,7 +348,6 @@ DEAD_CONTROL_KEYS = frozenset(
 # Keep in sync with bot._setup_tools(). Only LLM-facing tools; no command-queue types.
 KNOWN_TOOLS = [
     "image_generator",
-    "hd_image",
     "change_presence",
     "set_activity",
     "react",

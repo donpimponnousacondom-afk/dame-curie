@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import bot_tools
-from bot_tools import HDImageGeneratorTool, ImageGeneratorTool
+from bot_tools import ImageGeneratorTool
 
 
 LOCAL = "http://127.0.0.1:8081"
@@ -32,9 +32,10 @@ def site_case(request, tmp_path, monkeypatch):
     data.mkdir()
     config = SimpleNamespace(
         DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_PUBLIC_BASE_URL=LOCAL + "///",
-        DATA_DIR=str(data), IMAGE_GEN_PROTOCOL="images", GEMINI_IMAGE_PROTOCOL="images",
+        DATA_DIR=str(data), IMAGE_GEN_PROTOCOL="images",
         IMAGE_GEN_BASE_URL="https://images.example.invalid/v1",
-        GEMINI_IMAGE_BASE_URL="https://images.example.invalid/v1",
+        IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
+        IMAGE_GEN_MODEL="synthetic-image-a", IMAGE_GEN_QUALITY="low", IMAGE_GEN_TIMEOUT=300,
     )
     if override is not None:
         config.DAME_CURIE_SITE_PUBLIC_BASE_URL = override
@@ -54,13 +55,12 @@ def site_case(request, tmp_path, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("tool_class", [ImageGeneratorTool, HDImageGeneratorTool], ids=["normal", "hd"])
 @pytest.mark.parametrize("auto_send", [False, True], ids=["saved", "sent"])
-def test_website_override_leaves_image_delivery_urls_and_bytes_unchanged(site_case, monkeypatch, tool_class, auto_send):
+def test_website_override_leaves_image_delivery_urls_and_bytes_unchanged(site_case, monkeypatch, auto_send):
     case = site_case
     request = AsyncMock(return_value=(PNG, "png", ""))
     monkeypatch.setattr(bot_tools, "_native_image_request", request)
-    result = asyncio.run(tool_class(case.bot).execute(case.message, prompt="synthetic image", auto_send=auto_send))
+    result = asyncio.run(ImageGeneratorTool(case.bot).execute(case.message, prompt="synthetic image", auto_send=auto_send))
     request.assert_awaited_once()
     files = list((case.root / "_images").glob("*.png"))
     assert len(files) == 1

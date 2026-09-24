@@ -120,7 +120,7 @@ def test_image_failures_capture_full_response_body(incidents, monkeypatch, statu
     if decode_failure:
         monkeypatch.setattr(bot_tools, "_decode_image_response", Mock(side_effect=ValueError("bad image bytes")))
     blob, ext, result = asyncio.run(bot_tools._image_generation_request(
-        "https://images.invalid/generate", "synthetic-image-key", {"model": "synthetic"}, timeout_s=1, native=True,
+        "https://images.invalid/generate", "synthetic-image-key", {"model": "synthetic", "prompt": "synthetic prompt"}, timeout_s=1,
     ))
     assert (blob, ext) == (b"", "png")
     assert isinstance(result, ToolFailure)
@@ -140,26 +140,30 @@ def test_image_credentials_redacted_in_result_and_private_record(incidents, monk
     secret = "synthetic-image-key"
     image_session(monkeypatch, Response(503, "raw key " + secret + " BODY-END"))
     _, _, result = asyncio.run(bot_tools._image_generation_request(
-        "https://images.invalid/generate", secret, {"model": "synthetic"}, timeout_s=1, native=True,
+        "https://images.invalid/generate", secret, {"model": "synthetic", "prompt": "synthetic prompt"}, timeout_s=1,
     ))
-    assert result.startswith("Error: image API returned status 503")
+    assert result.startswith("Error: Image API returned status 503")
     assert secret not in result
     assert "raw key [REDACTED] BODY-END" in result
     assert secret not in incidents.get(0).format_report()
     assert "raw key [REDACTED] BODY-END" in incidents.get(0).details
 
 
-def test_pollinations_error_logging_does_not_duplicate_capture(incidents, monkeypatch):
+def test_native_image_error_logging_does_not_duplicate_capture(incidents, monkeypatch):
     body = "private HTTP body\n" * 1000 + "BODY-END"
     image_session(monkeypatch, Response(502, body))
-    tool = bot_tools.ImageGeneratorTool(SimpleNamespace(config=SimpleNamespace(POLLINATIONS_MODEL="synthetic")))
+    tool = bot_tools.ImageGeneratorTool(SimpleNamespace(config=SimpleNamespace(
+        IMAGE_GEN_PROTOCOL="images", IMAGE_GEN_BASE_URL="https://images.invalid/v1",
+        IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
+        IMAGE_GEN_MODEL="synthetic-image-a", IMAGE_GEN_QUALITY="low", IMAGE_GEN_TIMEOUT=300,
+    )))
     handler = IncidentLoggingHandler()
     bot_tools.logger.addHandler(handler)
     try:
-        result = asyncio.run(tool._pollinations_generate(message_in(), "synthetic image"))
+        result = asyncio.run(tool.execute(message_in(), "synthetic image"))
     finally:
         bot_tools.logger.removeHandler(handler)
-    assert result == "Error generating image: Pollinations returned 502."
+    assert result.startswith("Error:")
     assert isinstance(result, ToolFailure)
     assert body in incidents.get(0).details
     assert incidents.get(1) is None

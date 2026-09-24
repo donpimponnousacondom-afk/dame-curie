@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar, cast
-from urllib.parse import parse_qs, quote, urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import aiohttp
 import asyncio
@@ -1101,198 +1101,6 @@ class ImageRequestLog:
         })
 
 
-class ImageGeneratorTool(Tool):
-    """Image generation using the configured fast image provider."""
-
-    def get_description(self):
-        return (
-            "Generate an AI image using the configured normal profile — the DEFAULT image tool, text-to-image only. "
-            "It CANNOT take an input image: to edit/modify/restyle an existing image, use hd_image. "
-            "Params: prompt (required), auto_send (optional bool, default false). "
-            "By default generates and saves a local/public image WITHOUT posting it. "
-            "Present it using send_file(path=..., caption=...) or a normal image-preview link. "
-            "Set auto_send=true only to post the image immediately; __IMAGE_SENT__ means it is already sent, "
-            "so do not resend its URL or add commentary unless another task needs a response."
-        )
-
-    async def execute(
-        self, message: Message, prompt: str | None = None, auto_send: bool = False, **kwargs
-    ) -> str:
-        if not prompt:
-            return "Error: prompt parameter is required"
-        protocol = getattr(self.bot.config, "IMAGE_GEN_PROTOCOL", "pollinations")
-        if protocol == "images":
-            result = await self._native_generate(message, prompt, auto_send=auto_send)
-        elif protocol == "pollinations":
-            result = await self._pollinations_generate(message, prompt, auto_send=auto_send)
-        else:
-            result = "Error: unsupported IMAGE_GEN_PROTOCOL; use pollinations or images"
-        return result
-
-    async def _native_generate(
-        self, message: Message, prompt: str, auto_send: bool = False,
-    ) -> str:
-        cfg = self.bot.config
-        base = (getattr(cfg, "IMAGE_GEN_BASE_URL", "") or "").strip().rstrip("/")
-        if not base:
-            return (
-                "Error: image generation is not configured "
-                "(set IMAGE_GEN_BASE_URL explicitly; chat settings are not used)"
-            )
-        image_bytes, ext, error = await _native_image_request(
-            base,
-            getattr(cfg, "IMAGE_GEN_API_KEY", "") or "",
-            getattr(cfg, "IMAGE_GEN_MODEL", "") or "gpt-image-2",
-            prompt,
-            quality=getattr(cfg, "IMAGE_GEN_QUALITY", "low"),
-            timeout_s=int(getattr(cfg, "IMAGE_GEN_TIMEOUT", 300)),
-            tool_name="image_generator", auto_send=auto_send,
-        )
-        if error:
-            return error
-        return await self._deliver_generated_image(
-            message, prompt, image_bytes, prefix="image", submitted_prompt=prompt,
-            ext=ext, auto_send=auto_send,
-        )
-
-    async def _deliver_generated_image(
-        self, message: Message, prompt: str, image_bytes: bytes, *, prefix: str, submitted_prompt: str,
-        ext: str = "png", auto_send: bool = False,
-    ) -> str:
-        local_path, perm_url = _persist_public_image(
-            self.bot, image_bytes, prefix=prefix, ext=f".{ext}", submitted_prompt=submitted_prompt,
-        )
-        if not auto_send and not local_path:
-            return (
-                "Error: image generated, but saving the local/public copy failed. NOT sent. "
-                "Generation was not retried; do not automatically repeat image generation."
-            )
-        sent_msg = None
-        if auto_send:
-            file = File(BytesIO(image_bytes), filename=f"generated_image.{ext}")
-            self._signal_streaming(message)
-            try:
-                sent_msg = await message.channel.send(file=file)
-            except discord.Forbidden:
-                logger.warning(
-                    f"Cannot send image in {message.channel.id} — missing permissions"
-                )
-                return "Error: Cannot send image — missing permissions"
-        cdn_url = None
-        if sent_msg and sent_msg.attachments:
-            cdn_url = sent_msg.attachments[0].url
-        await self.bot.memory.add_to_channel_memory(
-            str(message.channel.id),
-            {
-                "author": "Tool",
-                "content": f"Generated image: {prompt[:200]}",
-                "is_tool": True,
-            },
-        )
-        result = (
-            f"__IMAGE_SENT__ Image sent to chat: {prompt[:100]}"
-            if auto_send else f"Image generated, NOT sent: {prompt[:100]}"
-        )
-        if cdn_url:
-            result += f"\nImage URL: {cdn_url}"
-        if perm_url:
-            result += (
-                f"\nPermanent URL: {perm_url} "
-                "(never expires — use this in websites, <img> tags, or curl)"
-            )
-        if local_path:
-            result += (
-                f"\nLocal path: {local_path} "
-                "(use shell to copy it into locally authored files)"
-            )
-        result += (
-            "\nAlready sent; do not resend the image or its URL. No commentary needed unless another task requires it."
-            if auto_send else
-            f'\nPresent using send_file(path="{local_path}", caption="...") or a normal image-preview link. '
-            "A saved path is not delivery. Use the local/public image reference for sites or other tools."
-        )
-        return result
-
-    async def _pollinations_generate(
-        self, message: Message, prompt: str, auto_send: bool = False,
-    ) -> str:
-        # Model comes solely from config — which reads POLLINATIONS_MODEL from
-        # .env (config default applies only when unset). No hardcoded fallback
-        # here so we never silently shift models across code edits.
-        model = str(getattr(self.bot.config, "POLLINATIONS_MODEL", "") or "").strip()
-        seed = random.randint(0, 999999)
-        url = (
-            "https://image.pollinations.ai/prompt/"
-            f"{quote(prompt[:1500], safe='')}"
-            f"?width=1024&height=1024&nologo=true&model={quote(model, safe='')}"
-            f"&seed={seed}"
-        )
-        observation = ImageRequestLog(
-            tool="image_generator", protocol="pollinations", operation="generations",
-            endpoint="https://image.pollinations.ai/prompt/", model=model,
-            prompt=prompt[:1500], input_images=0, auto_send=auto_send, timeout_s=90,
-            width=1024, height=1024, seed=seed,
-            **({"requested_prompt": prompt} if len(prompt) > 1500 else {}),
-        )
-        context = {"endpoint": observation.context["endpoint"], "model": model,
-                   "image_request_id": observation.context["request_id"]}
-        status, outcome, error_type = None, "error", None
-        raw, error = b"", ""
-        try:
-            session = await _get_shared_session()
-            async with session.get(
-                url,
-                headers={"User-Agent": _IMAGE_FETCH_UA, "Accept": "image/*"},
-                timeout=aiohttp.ClientTimeout(total=90),
-                allow_redirects=True,
-            ) as response:
-                status = response.status
-                context["status"] = str(status)
-                if response.status != 200:
-                    outcome = "http_error"
-                    body = await response.text()
-                    error = tool_failure(
-                        "tool.image_generator", f"Error generating image: Pollinations returned {response.status}.",
-                        details=body, context=context,
-                    )
-                else:
-                    ctype = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-                    raw = await _read_response_limited(response, 12 * 1024 * 1024)
-            if not error:
-                looks_like_image = bool(raw and (
-                    raw.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF")) or ctype.startswith("image/")
-                ))
-                if looks_like_image:
-                    outcome = "success"
-                else:
-                    outcome = "decode_error"
-                    error = tool_failure(
-                        "tool.image_generator", "Error: Pollinations did not return an image.",
-                        details=repr(raw), context=context | {"content_type": ctype},
-                    )
-        except asyncio.TimeoutError as exc:
-            outcome, error_type = "timeout", type(exc).__name__
-            error = tool_failure("tool.image_generator", "Error: Pollinations image generation timed out.", exception=exc, context=context)
-        except Exception as exc:
-            outcome = "connection_error" if isinstance(exc, aiohttp.ClientConnectionError) else "error"
-            error_type = type(exc).__name__
-            error = tool_failure("tool.image_generator", f"Error generating image: {exc}", exception=exc, context=context)
-        finally:
-            if isinstance(sys.exception(), asyncio.CancelledError):
-                outcome, error_type = "cancelled", "CancelledError"
-            observation.finish(
-                status=status, outcome=outcome, error_type=error_type,
-                image_bytes=len(raw) if outcome == "success" else 0,
-                format=_sniff_image_mime(raw).removeprefix("image/") if outcome == "success" else None,
-                incident_id=getattr(error, "incident_id", None),
-            )
-        if error:
-            return error
-        return await self._deliver_generated_image(
-            message, prompt, raw, prefix="pollinations", submitted_prompt=prompt[:1500], auto_send=auto_send,
-        )
-
-
 def _sniff_image_mime(raw: bytes) -> str:
     """Best-effort image MIME from magic bytes, defaulting to PNG."""
     if raw.startswith(b"\xff\xd8\xff"):
@@ -1316,57 +1124,37 @@ _IMAGE_DATA_URI_RE = re.compile(
 )
 
 
-def _decode_image_response(data: dict, *, native: bool) -> tuple[bytes, str]:
-    if native:
-        image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
-        ext = _sniff_image_mime(image_bytes).removeprefix("image/")
-    else:
-        msg = data["choices"][0].get("message") or {}
-        content = msg.get("content")
-        image_parts = msg.get("images") or []
-        if isinstance(content, list):
-            image_parts = [*image_parts, *content]
-            content = " ".join(
-                p.get("text", "") if isinstance(p, dict) else str(p)
-                for p in content
-            )
-        found = _IMAGE_DATA_URI_RE.findall(content or "")
-        for part in image_parts:
-            if isinstance(part, dict) and part.get("type") == "image_url":
-                found.extend(_IMAGE_DATA_URI_RE.findall(part["image_url"]["url"]))
-        ext, b64 = found[0]
-        image_bytes = base64.b64decode(b64)
-        ext = "jpg" if ext.lower() in ("jpeg", "jpg") else "png"
+def _decode_image_response(data: dict) -> tuple[bytes, str]:
+    """Decode a native Images response and infer its file extension."""
+    image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
     if not image_bytes:
         raise ValueError("empty image data")
+    ext = _sniff_image_mime(image_bytes).removeprefix("image/")
     return image_bytes, "jpg" if ext == "jpeg" else ext
 
 
 async def _image_generation_request(
-    api_url: str, api_key: str, payload: dict, *, timeout_s: int, native: bool,
-    tool_name: str = "hd_image", auto_send: bool = False,
+    api_url: str, api_key: str, payload: dict, *, timeout_s: int,
+    auto_send: bool = False,
 ) -> tuple[bytes, str, str]:
+    """Post one native Images request and record its paired outcome."""
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     no_retry = (
-        " It was not retried; "
-        "do not automatically repeat image generation."
+        " This image request was not retried; do not automatically repeat "
+        "generation or editing."
     )
-    label = "image" if native else "HD image"
     image_bytes, ext, error = b"", "png", ""
     body = ""
     context = {"endpoint": api_url, "model": str(payload.get("model", ""))}
     register_secrets([api_key])
-    parts = [] if native else payload["messages"][0]["content"]
-    input_images = len(payload.get("images", [])) if native else sum(part.get("type") == "image_url" for part in parts)
+    input_images = len(payload.get("images", []))
     observation = ImageRequestLog(
-        tool=tool_name, protocol="images" if native else "chat_completions",
+        tool="image_generator", protocol="images",
         operation="edits" if input_images else "generations", endpoint=api_url,
-        model=context["model"], prompt=payload.get("prompt", "") if native else "".join(
-            part["text"] for part in parts if part.get("type") == "text"
-        ), quality=payload.get("quality"), input_images=input_images,
-        auto_send=auto_send, timeout_s=timeout_s,
+        model=context["model"], prompt=payload["prompt"], quality=payload.get("quality"),
+        input_images=input_images, auto_send=auto_send, timeout_s=timeout_s,
     )
     context["image_request_id"] = observation.context["request_id"]
     status, outcome, error_type, stage = None, "error", None, "request"
@@ -1384,7 +1172,10 @@ async def _image_generation_request(
             body = await response.text()
             if response.status != 200:
                 outcome = "http_error"
-                error = f"Error: {label} API returned status {response.status}: {redact_sensitive_text(body)}"
+                error = (
+                    f"Error: Image API returned status {response.status}: "
+                    f"{redact_sensitive_text(body)}"
+                )
                 error = tool_failure(
                     "tool.image_request", error + no_retry, details=body, context=context,
                 )
@@ -1394,17 +1185,19 @@ async def _image_generation_request(
             except json.JSONDecodeError as exc:
                 outcome, error_type = "non_json", type(exc).__name__
                 error = tool_failure(
-                    "tool.image_request", f"Error: {label} endpoint returned a non-JSON response" + no_retry,
+                    "tool.image_request",
+                    "Error: Image endpoint returned a non-JSON response" + no_retry,
                     exception=exc, details=body, context=context,
                 )
                 return b"", ext, error
         stage = "decode"
-        image_bytes, ext = _decode_image_response(data, native=native)
+        image_bytes, ext = _decode_image_response(data)
         outcome = "success"
     except asyncio.TimeoutError as exc:
         outcome, error_type = "timeout", type(exc).__name__
         error = tool_failure(
-            "tool.image_request", f"Error: {label} generation timed out after {timeout_s}s" + no_retry,
+            "tool.image_request",
+            f"Error: Image request timed out after {timeout_s}s" + no_retry,
             exception=exc, details=body, context=context,
         )
     except Exception as exc:
@@ -1413,7 +1206,8 @@ async def _image_generation_request(
         )
         error_type = type(exc).__name__
         error = tool_failure(
-            "tool.image_request", f"Error: {label} request failed or returned unsupported image data." + no_retry,
+            "tool.image_request",
+            "Error: Image request failed or returned unsupported image data." + no_retry,
             exception=exc, details=body, context=context,
         )
     finally:
@@ -1430,8 +1224,9 @@ async def _image_generation_request(
 async def _native_image_request(
     base: str, api_key: str, model: str, prompt: str, *, quality: str,
     timeout_s: int, images: tuple[str, ...] | list[str] = (),
-    tool_name: str = "image_generator", auto_send: bool = False,
+    auto_send: bool = False,
 ) -> tuple[bytes, str, str]:
+    """Select the generation/edit action and build its native payload."""
     base = base.removesuffix("/images/generations").removesuffix("/images/edits")
     action = "edits" if images else "generations"
     payload = {
@@ -1441,74 +1236,45 @@ async def _native_image_request(
     if images:
         payload["images"] = [{"image_url": image} for image in images]
     return await _image_generation_request(
-        f"{base}/images/{action}", api_key, payload, timeout_s=timeout_s, native=True,
-        tool_name=tool_name, auto_send=auto_send,
+        f"{base}/images/{action}", api_key, payload,
+        timeout_s=timeout_s, auto_send=auto_send,
     )
 
 
-class HDImageGeneratorTool(Tool):
-    """HD generation and editing through dedicated image provider settings."""
+class ImageGeneratorTool(Tool):
+    """Generate or edit images through one configured native Images endpoint."""
 
-    # Discord's own limit is 25MB; inputs get downscaled well below it.
+    # HTTP responses and local image files are limited to 20 MiB.
     MAX_INPUT_BYTES = 20 * 1024 * 1024
     _DATA_URI_RE = _IMAGE_DATA_URI_RE
     _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
-    def get_description(self):
-        return (
-            "Generate OR edit an AI image using the configured HD/edit profile. "
-            "Actual quality and dimensions depend on the provider. Use for high quality/HD/HQ "
-            "requests, and for ANY edit of an existing image ('make the car red', 'add a hat', "
-            "'remove the background', 'combine these'). "
-            "Params: prompt (required — for an edit, describe the change, not the whole scene); "
-            "image (optional — an http(s) URL, a local path, or a list of up to 4 of them, to edit "
-            "or use as reference). If image is omitted and the user attached images to the message, "
-            "those are used automatically. auto_send (optional bool, default false) saves a local/public image "
-            "WITHOUT posting it; present using send_file(path=..., caption=...) or a normal image-preview link. "
-            "Set auto_send=true only to post immediately; __IMAGE_SENT__ means already sent, "
-            "so do not resend its URL or add commentary unless another task needs a response."
+    def get_description(self) -> str:
+        """Describe image actions and live model choices for text catalogs."""
+        cfg = getattr(getattr(self, "bot", None), "config", None)
+        model_map = getattr(cfg, "IMAGE_GEN_MODELS", {}) or {}
+        default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
+        model_catalog = (
+            "Configured exact model IDs and operator descriptions; default is "
+            f"{default_model}:\n"
+            + "\n".join(
+                f"- {model_id}: {description}"
+                for model_id, description in model_map.items()
+            )
+            if isinstance(model_map, dict) and model_map else
+            "No image models are configured; set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL."
         )
-
-    def _endpoint(self) -> tuple[str, str, str]:
-        """(image_endpoint_url, api_key, model) from dedicated image settings."""
-        cfg = self.bot.config
-        base = (getattr(cfg, "GEMINI_IMAGE_BASE_URL", "") or "").strip().rstrip("/")
-        key = getattr(cfg, "GEMINI_IMAGE_API_KEY", "") or ""
-        native = getattr(cfg, "GEMINI_IMAGE_PROTOCOL", "chat_completions") == "images"
-        default_model = "gpt-image-2" if native else "gemini-3.1-flash-image"
-        model = getattr(cfg, "GEMINI_IMAGE_MODEL", "") or default_model
-        url = base
-        if not native and not base.endswith("/chat/completions"):
-            url = f"{base}/chat/completions"
-        return url, key, model
-
-    def _shrink(self, raw: bytes) -> tuple[bytes, str]:
-        """Downscale an input image so the upload does not dominate latency.
-
-        Best effort: without Pillow the original bytes go up untouched, which
-        still works, just slower.
-        """
-        max_edge = int(getattr(self.bot.config, "GEMINI_IMAGE_MAX_INPUT_EDGE", 1024))
-        try:
-            from PIL import Image as _PILImage
-
-            im = _PILImage.open(BytesIO(raw))
-            im = im.convert("RGB")
-            if max(im.size) > max_edge:
-                ratio = max_edge / float(max(im.size))
-                im = im.resize(
-                    (max(1, int(im.width * ratio)), max(1, int(im.height * ratio))),
-                    _PILImage.LANCZOS,
-                )
-            buf = BytesIO()
-            im.save(buf, format="JPEG", quality=88)
-            return buf.getvalue(), "image/jpeg"
-        except Exception as e:
-            # No Pillow (or an image it cannot open): send the bytes through
-            # untouched, but label them from their magic number rather than
-            # guessing — a JPEG announced as image/png gets rejected upstream.
-            logger.debug(f"hd_image input downscale skipped: {e}")
-            return raw, _sniff_image_mime(raw)
+        return (
+            "Generate an AI image or edit/use supplied images as references. "
+            "For an edit, describe the changes to make; provide an image URL or allowed local path, "
+            "or up to four references. If omitted, images attached to the user's message are used. "
+            "The optional model parameter selects an exact configured ID. Optional quality overrides "
+            "IMAGE_GEN_QUALITY. By default, generate/edit and save a local/public image WITHOUT posting it. "
+            "Present it using send_file(path=..., caption=...) or an image-preview link. Set auto_send=true "
+            "only to post immediately; __IMAGE_SENT__ means already sent, so do not resend its URL or add "
+            "commentary unless another task needs a response.\n"
+            + model_catalog
+        )
 
     async def _load_one(self, ref: str) -> tuple[bytes | None, str]:
         """Resolve a single image reference to bytes. Returns (bytes, error)."""
@@ -1526,13 +1292,12 @@ class HDImageGeneratorTool(Tool):
 
         if ref.startswith(("http://", "https://")):
             if not _is_safe_url(ref):
-                return None, f"refusing to fetch private/internal URL {ref[:80]}"
+                return None, f"refusing to fetch invalid HTTP(S) image URL {ref[:80]}"
             try:
                 session = await _get_shared_session()
-                # A redirect is not re-checked by _is_safe_url, so a public URL
-                # could otherwise bounce us to link-local metadata. Refuse to
-                # follow, same as SendMediaTool. Many image hosts (Wikimedia,
-                # Reddit) also 403 a default aiohttp UA, hence the browser one.
+                # Refuse redirects rather than fetching a second URL supplied
+                # by an image host. Many image hosts (Wikimedia, Reddit) also
+                # 403 a default aiohttp UA, hence the browser one.
                 async with session.get(
                     ref,
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -1587,26 +1352,12 @@ class HDImageGeneratorTool(Tool):
                     urls.append(url)
         return urls
 
-    async def execute(
+    async def _resolve_image_references(
         self,
         message: Message,
-        prompt: str | None = None,
-        image: str | list | None = None,
-        auto_send: bool = False,
-        **kwargs,
-    ) -> str:
-        if not prompt:
-            return "Error: prompt parameter is required"
-
-        protocol = getattr(self.bot.config, "GEMINI_IMAGE_PROTOCOL", "chat_completions")
-        if protocol not in ("chat_completions", "images"):
-            return "Error: unsupported GEMINI_IMAGE_PROTOCOL; use chat_completions or images"
-        api_url, api_key, model = self._endpoint()
-        if not api_url or api_url == "/chat/completions":
-            return "Error: HD image generation is not configured (set GEMINI_IMAGE_BASE_URL explicitly; chat settings are not used)"
-
-        # Normalize the image param: a single ref, a list, or a
-        # comma/newline-separated string all mean the same thing.
+        image: str | list[str] | tuple[str, ...] | None,
+    ) -> tuple[list[str], str]:
+        """Resolve up to four explicit or attached images to native data URIs."""
         refs: list[str] = []
         if isinstance(image, (list, tuple)):
             refs = [str(x) for x in image if str(x).strip()]
@@ -1615,16 +1366,12 @@ class HDImageGeneratorTool(Tool):
             if self._DATA_URI_RE.search(text):
                 refs = [text]
             elif text.startswith("["):
-                # The schema advertises a JSON list for multiple images.
                 try:
                     parsed = json.loads(text)
                     refs = [str(x).strip() for x in parsed if str(x).strip()]
-                except Exception:
+                except (TypeError, ValueError):
                     refs = [text]
             else:
-                # Split on newlines, and on a comma only where the next ref
-                # plainly begins — a bare comma split would corrupt any single
-                # URL that carries one in its query string.
                 refs = [
                     part.strip()
                     for line in re.split(r"\n+", text)
@@ -1633,90 +1380,138 @@ class HDImageGeneratorTool(Tool):
                 ]
         if not refs:
             refs = self._attached_images(message)
-        refs = refs[:4]  # keep the payload (and the latency) sane
 
-        parts: list[dict] = [{"type": "text", "text": prompt}]
-        loaded = 0
-        for ref in refs:
-            raw, err = await self._load_one(ref)
+        images = []
+        for ref in refs[:4]:
+            raw, error = await self._load_one(ref)
             if raw is None:
-                logger.warning("hd_image input rejected: %s", redact_sensitive_text(err))
-                return f"Error: {err}"
-            shrunk, mime = (
-                (raw, _sniff_image_mime(raw))
-                if protocol == "images" else self._shrink(raw)
+                logger.warning(
+                    "image_generator input rejected: %s", redact_sensitive_text(error)
+                )
+                return [], error
+            mime = _sniff_image_mime(raw)
+            images.append(
+                f"data:{mime};base64,{base64.b64encode(raw).decode()}"
             )
-            parts.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime};base64,{base64.b64encode(shrunk).decode()}"
-                    },
-                }
-            )
-            loaded += 1
+        return images, ""
 
-        timeout_s = int(getattr(self.bot.config, "GEMINI_IMAGE_TIMEOUT", 300))
-        if protocol == "images":
-            image_bytes, ext, error = await _native_image_request(
-                api_url, api_key, model, prompt,
-                quality=getattr(self.bot.config, "GEMINI_IMAGE_QUALITY", "high"),
-                timeout_s=timeout_s,
-                images=[part["image_url"]["url"] for part in parts[1:]],
-                tool_name="hd_image", auto_send=auto_send,
+    def _select_image_model(self, requested_model: str | None) -> tuple[str, str]:
+        """Resolve a request to an exact configured image model ID."""
+        cfg = self.bot.config
+        models = getattr(cfg, "IMAGE_GEN_MODELS", {})
+        default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
+        if not isinstance(models, dict) or not models:
+            return "", (
+                "Error: image generation is not configured "
+                "(set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL)"
             )
+        if not isinstance(default_model, str) or default_model not in models:
+            return "", (
+                "Error: IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
+            )
+        selected_model = default_model if requested_model is None else requested_model
+        model_id = selected_model if isinstance(selected_model, str) else ""
+        model_error = (
+            ""
+            if model_id and model_id in models
+            else "Error: model must be an exact ID from IMAGE_GEN_MODELS"
+        )
+        return (model_id if not model_error else ""), model_error
+
+    async def execute(
+        self,
+        message: Message,
+        prompt: str | None = None,
+        image: str | list[str] | tuple[str, ...] | None = None,
+        model: str | None = None,
+        quality: str | None = None,
+        auto_send: bool = False,
+        **kwargs: object,
+    ) -> str:
+        """Generate or edit one image through the configured native endpoint."""
+        if not prompt:
+            return "Error: prompt parameter is required"
+        cfg = self.bot.config
+        if getattr(cfg, "IMAGE_GEN_PROTOCOL", "images") != "images":
+            selected_model, error = "", "Error: unsupported IMAGE_GEN_PROTOCOL; only images is supported"
         else:
-            payload = {"model": model, "messages": [{"role": "user", "content": parts}]}
-            image_bytes, ext, error = await _image_generation_request(
-                api_url, api_key, payload, timeout_s=timeout_s, native=False,
-                tool_name="hd_image", auto_send=auto_send,
-            )
+            selected_model, error = self._select_image_model(model)
+        base = (getattr(cfg, "IMAGE_GEN_BASE_URL", "") or "").strip().rstrip("/")
+        if not error and not base:
+            error = "Error: image generation is not configured (set IMAGE_GEN_BASE_URL explicitly)"
+        if not error:
+            images, input_error = await self._resolve_image_references(message, image)
+            if input_error:
+                error = f"Error: {input_error}"
         if error:
             return error
-        return await self._deliver_generated_image(
-            message, prompt, image_bytes, ext, loaded, auto_send=auto_send,
+
+        image_bytes, ext, error = await _native_image_request(
+            base,
+            getattr(cfg, "IMAGE_GEN_API_KEY", "") or "",
+            selected_model,
+            prompt,
+            quality=(
+                getattr(cfg, "IMAGE_GEN_QUALITY", "low")
+                if quality is None else quality
+            ),
+            timeout_s=int(getattr(cfg, "IMAGE_GEN_TIMEOUT", 300)),
+            images=images,
+            auto_send=auto_send,
         )
+        result = error
+        if not error:
+            result = await self._deliver_generated_image(
+                message, prompt, image_bytes, ext, len(images), auto_send=auto_send,
+            )
+        return result
 
     async def _deliver_generated_image(
         self, message: Message, prompt: str, image_bytes: bytes, ext: str, loaded: int,
         auto_send: bool = False,
     ) -> str:
+        """Persist the result and deliver at most one Discord attachment."""
         local_path, perm_url = _persist_public_image(
-            self.bot, image_bytes, ext=f".{ext}", prefix="hd", submitted_prompt=prompt,
+            self.bot,
+            image_bytes,
+            ext=f".{ext}",
+            prefix="image",
+            submitted_prompt=prompt,
         )
+        operation = "edited" if loaded else "generated"
         if not auto_send and not local_path:
             return (
-                "Error: HD image generated, but saving the local/public copy failed. NOT sent. "
-                "Generation was not retried; do not automatically repeat image generation."
+                f"Error: image {operation}, but saving the local/public copy failed. NOT sent. "
+                "The request was not retried; do not automatically repeat "
+                "image generation or editing."
             )
         sent_msg = None
         if auto_send:
-            file = File(BytesIO(image_bytes), filename=f"hd_generated_image.{ext}")
+            file = File(BytesIO(image_bytes), filename=f"generated_image.{ext}")
             self._signal_streaming(message)
             try:
                 sent_msg = await message.channel.send(file=file)
             except discord.Forbidden:
                 logger.warning(
-                    f"Cannot send HD image in {message.channel.id} — missing permissions"
+                    f"Cannot send image in {message.channel.id} — missing permissions"
                 )
-                return "Error: Cannot send HD image — missing permissions"
+                return "Error: Cannot send image — missing permissions"
 
         cdn_url = None
         if sent_msg and sent_msg.attachments:
             cdn_url = sent_msg.attachments[0].url
 
-        verb = "Edited" if loaded else "Generated"
         await self.bot.memory.add_to_channel_memory(
             str(message.channel.id),
             {
                 "author": "Tool",
-                "content": f"{verb} HD image: {prompt[:200]}",
+                "content": f"{operation.capitalize()} image: {prompt[:200]}",
                 "is_tool": True,
             },
         )
         result = (
-            f"__IMAGE_SENT__ HD image {verb.lower()} successfully, sent to chat: {prompt[:100]}"
-            if auto_send else f"HD image generated, NOT sent: {prompt[:100]}"
+            f"__IMAGE_SENT__ Image {operation} successfully, sent to chat: {prompt[:100]}"
+            if auto_send else f"Image {operation}, NOT sent: {prompt[:100]}"
         )
         if loaded:
             result += f" (from {loaded} input image{'s' if loaded > 1 else ''})"
@@ -5009,9 +4804,8 @@ class MoreToolsTool(Tool):
     """No-op leftover. The full catalog is attached on every turn.
 
     Older prompts told the model to call this to unlock tools mid-turn.
-    That hid tools like hd_image behind a hop, so a photo request that
-    started without the verb "generate" got the from-scratch generator
-    instead. Kept registered so a stale call does not error.
+    Keeping the full catalog visible avoids a discovery hop before image edits
+    and other tool calls. Kept registered so a stale call does not error.
     """
 
     def get_description(self):

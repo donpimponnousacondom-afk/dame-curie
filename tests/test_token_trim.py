@@ -1,7 +1,7 @@
 """Same-function token cuts: live tool packs, short turns, emoji grid, embeds.
 
 The full tool catalog ships on every turn. lean/gated catalogs hid tools
-(like hd_image) behind more_tools and made photo requests look like a
+behind more_tools and made photo requests look like a
 different generator.
 """
 
@@ -43,7 +43,6 @@ def _live_bot(extra_tools=None):
             "lookup_user",
             "tts",
             "image_generator",
-            "hd_image",
             "join_vc",
             "more_tools",
         )
@@ -110,7 +109,6 @@ def test_every_turn_offers_every_registered_tool():
         assert names == set(bot.tools) - {"more_tools"}, content
         assert "more_tools" not in names
         assert "shell" in names
-        assert "hd_image" in names
         assert "image_generator" in names
 
 
@@ -129,17 +127,18 @@ def test_tool_prompt_lists_full_catalog_on_chat_turn():
     full = MaxwellBot._tool_system_prompt(bot, "discord")
     assert "youtube" in chat
     assert "shell" in chat
-    assert "hd_image" in chat
+    assert "image_generator" in chat
     assert chat == full
 
 
 def test_disabled_tools_still_hidden():
     bot = _live_bot()
-    bot._control["disabled_tools"] = ["shell", "youtube"]
+    bot._control["disabled_tools"] = ["shell", "youtube", "image_generator"]
     content = "run a shell command"
     names = _tool_names(bot, _msg(content), content)
     assert "shell" not in names
     assert "youtube" not in names
+    assert "image_generator" not in names
     assert "send_message" in names
     prompt = MaxwellBot._tool_system_prompt(
         bot, "discord", message=_msg(content), content=content
@@ -147,6 +146,7 @@ def test_disabled_tools_still_hidden():
     catalog = prompt.split("## Tool contract")[0]
     assert "shell" not in catalog
     assert "youtube" not in catalog
+    assert "image_generator" not in catalog
 
 
 def test_short_live_turn_for_watch_followup_not_hard_ping():

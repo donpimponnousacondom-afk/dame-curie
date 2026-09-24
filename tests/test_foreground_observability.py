@@ -463,8 +463,7 @@ def test_multichar_prefix_commands_and_help_fit_discord(command):
 
 @pytest.mark.parametrize("tool_name,prefix", [
     ("image_generator", "Image generated, NOT sent:"),
-    ("hd_image", "HD image generated, NOT sent:"),
-    ("hd_image", "HD image edited, NOT sent:"),
+    ("image_generator", "Image edited, NOT sent:"),
 ])
 def test_foreground_deferred_image_has_one_preview_reply_and_preserves_metrics(
     foreground_bot, measured_call, tool_name, prefix
@@ -584,7 +583,6 @@ def test_foreground_image_link_progress_edit_preserves_preview(
 
 @pytest.mark.parametrize("name,result,caption", [
     ("image_generator", "__IMAGE_SENT__ Image sent", ""),
-    ("hd_image", "__IMAGE_SENT__ HD image sent", ""),
     ("send_media", "__MEDIA_SENT__ image.png\n__CAPTION_SENT__", "My caption"),
     ("send_file", "__FILE_SENT__ image.png\n__CAPTION_SENT__", "My caption"),
 ])

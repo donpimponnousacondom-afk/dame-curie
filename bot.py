@@ -243,7 +243,6 @@ from bot_tools import (  # noqa: E402 - voice_recv monkey patch must run before 
     EditMessageTool,
     FetchUrlTool,
     ForwardMessageTool,
-    HDImageGeneratorTool,
     ImageGeneratorTool,
     InboxActTool,
     InboxListTool,
@@ -2096,10 +2095,7 @@ def _plugin_result_needs_followup(result: str) -> bool:
 
 
 def image_or_caption_delivered(result: str) -> bool:
-    return result.startswith((
-        "Tool image_generator: __IMAGE_SENT__",
-        "Tool hd_image: __IMAGE_SENT__",
-    )) or (
+    return result.startswith("Tool image_generator: __IMAGE_SENT__") or (
         result.startswith(("Tool send_file: __FILE_SENT__", "Tool send_media: __MEDIA_SENT__"))
         and "\n__CAPTION_SENT__" in result
     )
@@ -2352,7 +2348,6 @@ class MaxwellBot(commands.Bot):
             "OPENAI_API_KEY", "OPENAI_COMPAT_API_KEY", "OPENAI_FALLBACK_API_KEY",
             "OPENAI_VISION_API_KEY", "EMBED_API_KEY", "AUTONOMY_API_KEY", "AUX_API_KEY",
             "CAPTCHA_SOLVER_API_KEY", "IMAGE_GEN_API_KEY", "NVIDIA_API_KEY",
-            "GPT_IMAGE_API_KEY", "GEMINI_IMAGE_API_KEY",
         )
         credentials = [getattr(self.config, name, "") or "" for name in credential_names]
         credentials.extend(os.getenv(name, "") for name in (
@@ -3217,7 +3212,6 @@ class MaxwellBot(commands.Bot):
         # tool, so adding a new toggle is one line in config.py.
         if self.config.ENABLE_IMAGE_GEN:
             self.tools["image_generator"] = ImageGeneratorTool(self)
-            self.tools["hd_image"] = HDImageGeneratorTool(self)
         self.tools["change_presence"] = ChangePresenceTool(self)
         self.tools["set_activity"] = SetActivityTool(self)
         self.tools["sleep"] = SleepTool(self)
@@ -13469,7 +13463,7 @@ class MaxwellBot(commands.Bot):
                 logger.info(
                     "Tool %s finished: %s",
                     name,
-                    (redact_sensitive_text(result_text) if name in {"image_generator", "hd_image"}
+                    (redact_sensitive_text(result_text) if name == "image_generator"
                      else result_text).replace("\n", " "),
                 )
                 if result_text.startswith(("Error", "Error:")):
@@ -13637,11 +13631,6 @@ class MaxwellBot(commands.Bot):
                 "send_message": "body",
                 "edit_message": "content",
                 "image_generator": "prompt",
-                # The registered tool name is "hd_image"; the old
-                # "hd_image_generator" key never matched, so the preview fell
-                # through to "first string param" — which now risks showing the
-                # image URL (or a data URI) instead of the prompt.
-                "hd_image": "prompt",
                 "web_search": "query",
                 "tts": "text",
             }
@@ -14159,9 +14148,9 @@ class MaxwellBot(commands.Bot):
     def _lean_chat_turn(self, message, content: str | None = None) -> bool:
         """Gated catalogs are gone: every turn sees every registered tool.
 
-        `hd_image` used to hide behind more_tools on ordinary chat, so a
-        photo request that started lean got the from-scratch generator
-        instead. The control flag is ignored on purpose.
+        The unified image tool is visible on ordinary chat as well as direct
+        requests, so reference edits do not depend on a discovery hop. The
+        control flag is ignored on purpose.
         """
         return False
 

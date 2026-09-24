@@ -27,17 +27,17 @@ def test_visible_reply_keeps_image_previews_and_removes_protocol_markers(text, e
     assert _sanitize_visible_reply(text) == expected
 
 
-@pytest.mark.parametrize("name", ["image_generator", "hd_image"])
-def test_image_delivery_mode_controls_followup_and_duplicate_plaintext(name):
-    deferred = f"Tool {name}: Image generated, NOT sent\nPermanent URL: {CDN}"
-    sent = f"Tool {name}: __IMAGE_SENT__\nImage sent\nImage URL: {CDN}"
+@pytest.mark.parametrize("action", ["generated", "edited"])
+def test_image_delivery_mode_controls_followup_and_duplicate_plaintext(action):
+    deferred = f"Tool image_generator: Image {action}, NOT sent\nPermanent URL: {CDN}"
+    sent = f"Tool image_generator: __IMAGE_SENT__\nImage sent\nImage URL: {CDN}"
     assert _tool_results_need_followup([deferred])
     assert not _should_skip_plaintext_after_send([deferred], [deferred], False, "Comment")
     assert not _tool_results_need_followup([sent])
     assert _should_skip_plaintext_after_send([sent], [sent], False, "Duplicate")
     assert _tool_results_need_followup([sent, "Tool web_search: useful result"])
     assert _tool_results_need_followup([sent, "Error: another tool failed"])
-    assert _tool_results_need_followup([f"Tool {name}: Error: could not upload"])
+    assert _tool_results_need_followup(["Tool image_generator: Error: could not upload"])
     assert not _should_skip_plaintext_after_send([], [sent], True, "Actual subsequent result")
 
 

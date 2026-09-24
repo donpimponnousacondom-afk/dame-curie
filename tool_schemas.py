@@ -49,38 +49,24 @@ def _num(desc: str = "") -> dict[str, Any]:
 TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "image_generator": _obj(
         {
-            "prompt": _str("Image generation prompt"),
-            "auto_send": {
-                "type": "boolean",
-                "default": False,
-                "description": (
-                    "Default false: generate and save only; present with send_file(path=..., caption=...) "
-                    "or a normal image-preview link. True: upload once immediately; __IMAGE_SENT__ "
-                    "means already sent, do not resend its URL or add commentary."
-                ),
-            },
-        },
-        ["prompt"],
-    ),
-    "hd_image": _obj(
-        {
             "prompt": _str(
-                "What to generate, or — when an input image is supplied — the "
-                "change to make to it (e.g. 'make the jacket red')"
+                "What to generate, or — with input images — the change to make"
             ),
             "image": _str(
-                "Optional image to edit or use as reference: an http(s) URL "
-                "(Discord CDN, a permanent URL from a previous image, any public "
-                "link) or a local path Dame Curie wrote. For several, pass a JSON "
-                "list or a comma-separated string (max 4). Omit to generate from "
-                "scratch; images attached to the user's message are used "
-                "automatically."
+                "Optional image URL, data URI, or local path Dame Curie wrote; for several, pass a "
+                "JSON list or comma-separated refs (max 4). Omit to use message attachments."
+            ),
+            "model": _str(
+                "Optional exact configured model ID; defaults to IMAGE_GEN_MODEL."
+            ),
+            "quality": _str(
+                "Optional quality override; defaults to IMAGE_GEN_QUALITY."
             ),
             "auto_send": {
                 "type": "boolean",
                 "default": False,
                 "description": (
-                    "Default false: generate and save only; present with send_file(path=..., caption=...) "
+                    "Default false: generate/edit and save only; present with send_file(path=..., caption=...) "
                     "or a normal image-preview link. True: upload once immediately; __IMAGE_SENT__ "
                     "means already sent, do not resend its URL or add commentary."
                 ),
@@ -622,7 +608,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
 RESULT_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "image_generator",
-        "hd_image",
         "lookup_user",
         "manage_plugin",
         "search_messages",
@@ -712,7 +697,6 @@ CHAT_CORE_TOOL_NAMES: frozenset[str] = frozenset(
         "send_media",
         "send_meme",
         "image_generator",
-        "hd_image",
         "more_tools",
         "chess_start",
         "chess_move",
@@ -763,7 +747,7 @@ def result_contract(name: str) -> str:
     if returns_result(name):
         return (
             " [returns saved image by default; auto_send=true + __IMAGE_SENT__ means already delivered, no repeat]"
-            if name in {"image_generator", "hd_image"} else _CONTRACT_RESULT
+            if name == "image_generator" else _CONTRACT_RESULT
         )
     if name in TURN_ENDING_TOOL_NAMES:
         return _CONTRACT_ENDING
@@ -792,6 +776,37 @@ REASONING_PARAM: dict[str, Any] = {
         "Why this call, one sentence, first argument. Plain text only."
     ),
 }
+
+
+def _image_generator_properties(
+    tool: object, properties: dict[str, dict[str, object]]
+) -> dict[str, dict[str, object]]:
+    """Copy the image model and quality fields with live configuration values."""
+    cfg = getattr(getattr(tool, "bot", None), "config", None)
+    model_map = getattr(cfg, "IMAGE_GEN_MODELS", {}) or {}
+    default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
+    model_property = dict(properties["model"])
+    if isinstance(model_map, dict) and model_map:
+        model_property["enum"] = list(model_map)
+        model_property["description"] = (
+            "Select an exact configured model ID. Omit to use IMAGE_GEN_MODEL. "
+            "Configured models and operator descriptions:\n"
+            + "\n".join(
+                f"- {model_id}: {description}"
+                for model_id, description in model_map.items()
+            )
+        )
+        if default_model in model_map:
+            model_property["default"] = default_model
+    else:
+        model_property["description"] = (
+            "No image models are configured; set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL."
+        )
+    properties["model"] = model_property
+    quality_property = dict(properties["quality"])
+    quality_property["default"] = getattr(cfg, "IMAGE_GEN_QUALITY", "low")
+    properties["quality"] = quality_property
+    return properties
 
 
 def build_openai_tools(
@@ -849,9 +864,11 @@ def build_openai_tools(
                 "additionalProperties": True,
             }
         params = dict(declared)
-        # Inject reasoning onto a COPY so we never mutate TOOL_PARAMETERS.
+        # Extend a per-call copy so dynamic model choices never mutate TOOL_PARAMETERS.
         raw_props = params.get("properties")
         props = dict(raw_props) if isinstance(raw_props, dict) else {}
+        if name == "image_generator":
+            props = _image_generator_properties(tool, props)
         props.setdefault("reasoning", REASONING_PARAM)
         params["properties"] = props
         # reasoning is ALWAYS required — no exceptions, no "terse on a trivial

@@ -244,8 +244,7 @@ class Config:
     ENABLE_FETCH_URL = _feature_env("ENABLE_FETCH_URL")
     ENABLE_AVATAR = _feature_env("ENABLE_AVATAR")
     ENABLE_AUTONOMY = _feature_env("ENABLE_AUTONOMY")
-    # image_generator uses Pollinations (free, keyless); hd_image requires a
-    # dedicated GEMINI_IMAGE_BASE_URL and returns a clear error when unset.
+    # One configured native Images endpoint handles generation and edits.
     ENABLE_IMAGE_GEN = _feature_env("ENABLE_IMAGE_GEN")
 
     # Needs a system binary or Python package.
@@ -372,52 +371,23 @@ class Config:
         "CAPTCHA_SOLVER_TIMEOUT", 180, min_value=10, max_value=600
     )
 
-    POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "MarcosFRG/sdxl-lightning")
-    IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "pollinations").strip().lower()
+    IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "images").strip().lower()
     IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "").strip()
     IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "").strip()
-    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "gpt-image-2").strip()
+    IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
+    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "").strip()
     IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY", "low").strip()
     IMAGE_GEN_TIMEOUT = _int_env(
         "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
     )
 
     NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
-    NVIDIA_IMAGE_URL = os.getenv(
-        "NVIDIA_IMAGE_URL",
-        "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev",
-    )
     # NVIDIA Riva ASR (Parakeet) for live VC transcription. Whisper is too
     # slow for this path; VC utterances go through Riva then the text model.
     ASR_RIVA_FUNCTION_ID = os.getenv(
         "ASR_RIVA_FUNCTION_ID", "1598d209-5e27-4d3c-8079-4751568b1081"
     ).strip()
     ASR_RIVA_LANGUAGE = os.getenv("ASR_RIVA_LANGUAGE", "en-US").strip() or "en-US"
-
-    # Legacy ChatGPT2API image endpoint. Kept only so an existing .env does
-    # not error on load — hd_image no longer uses it (that host dropped every
-    # image model and now 404s on /v1/images/generations).
-    GPT_IMAGE_URL = os.getenv("GPT_IMAGE_URL", "")
-    GPT_IMAGE_API_KEY = os.getenv("GPT_IMAGE_API_KEY", "")
-
-    GEMINI_IMAGE_PROTOCOL = os.getenv(
-        "GEMINI_IMAGE_PROTOCOL", "chat_completions"
-    ).strip().lower()
-    GEMINI_IMAGE_QUALITY = os.getenv("GEMINI_IMAGE_QUALITY", "high").strip()
-    GEMINI_IMAGE_BASE_URL = os.getenv("GEMINI_IMAGE_BASE_URL", "").strip()
-    GEMINI_IMAGE_API_KEY = os.getenv("GEMINI_IMAGE_API_KEY", "").strip()
-    GEMINI_IMAGE_MODEL = (
-        os.getenv("GEMINI_IMAGE_MODEL", "").strip() or "gemini-3.1-flash-image"
-    )
-    # Input images are downscaled to this longest edge before upload. Payload
-    # size dominates latency on this endpoint: a 629KB input took 89s where
-    # the same edit with a 64KB input took 20s.
-    GEMINI_IMAGE_MAX_INPUT_EDGE = _int_env(
-        "GEMINI_IMAGE_MAX_INPUT_EDGE", 1024, min_value=256, max_value=4096
-    )
-    GEMINI_IMAGE_TIMEOUT = _int_env(
-        "GEMINI_IMAGE_TIMEOUT", 300, min_value=30, max_value=900
-    )
 
     MEMORY_MESSAGE_LIMIT = _int_env(
         "MEMORY_MESSAGE_LIMIT", 2000, min_value=1, max_value=10000
@@ -509,6 +479,27 @@ class Config:
             )
         if cls.OPENAI_MAX_TOKENS < 1:
             raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
+        if cls.IMAGE_GEN_PROTOCOL != "images":
+            raise ValueError(
+                "IMAGE_GEN_PROTOCOL must be 'images'; other image protocols are unsupported"
+            )
+        if any(
+            not isinstance(model_id, str)
+            or not model_id.strip()
+            or model_id != model_id.strip()
+            or not isinstance(description, str)
+            or not description.strip()
+            for model_id, description in cls.IMAGE_GEN_MODELS.items()
+        ):
+            raise ValueError(
+                "IMAGE_GEN_MODELS must map exact non-empty model IDs to non-empty descriptions"
+            )
+        if cls.IMAGE_GEN_MODELS and not cls.IMAGE_GEN_MODEL:
+            raise ValueError(
+                "IMAGE_GEN_MODEL is required when IMAGE_GEN_MODELS is configured"
+            )
+        if cls.IMAGE_GEN_MODEL and cls.IMAGE_GEN_MODEL not in cls.IMAGE_GEN_MODELS:
+            raise ValueError("IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS")
 
         # Soft warnings — these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is

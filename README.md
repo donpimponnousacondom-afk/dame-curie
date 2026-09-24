@@ -21,6 +21,7 @@ With `DAME_CURIE_STAGING` omitted or `true`, wrapper `up`/`start`/`restart` vali
 - [Operations](docs/OPERATIONS.md): V1/V2 accounts, rootless engines and safe read-only investigation.
 - [Development](docs/DEVELOPMENT.md): Python 3.14 and isolated venv/uv use; configuration is not an interpreter environment.
 - [Architecture](docs/ARCHITECTURE.md): component map and isolation intent, not unearned acceptance claims.
+- [Image generation](docs/IMAGE_GENERATION.md): one native generation/edit tool with operator-configured model choices.
 - [Agent contract](AGENTS.md): current permissions, naming and collaboration rules.
 - [Security](SECURITY.md): private-state and disclosure boundaries.
 
