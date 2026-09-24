@@ -1,11 +1,17 @@
 # dame-curie status
 
+## Attachment-based longprompt — implemented, not deployed
+
+Root chose a separate command instead of changing the battle-tested `prompt` handler. **`723e7d8`** adds `longprompt`: download the current server prompt as UTF-8 `prompt.txt`, or upload one `.txt` to replace that same stored prompt. It retains bot-admin/disabled-command gates and guild/DM scoping, preserves exact text, rejects invalid/empty/oversized input, and uses the existing 512 KiB text-file ceiling. A short acknowledgement replaces a full-body echo. `prompt` and `clearprompt` are unchanged. Usage and limits: [LONGPROMPT.md](LONGPROMPT.md).
+
+Exact committed tree `3cdecffb37498ff507d401d123bb3eeda280110d` passed **731 focused isolated tests, 2 explicitly deselected**, Python 3.14.4 with no network/private mounts and selected Ruff F821/F822/F823 checks. The same unsafe live-provider test and previously baseline-reproduced README retry assertion remain excluded. Parent reviewed Luna's tests, Sol independently reviewed source/tests, and parent executed QA. No application build, deployment, private setting change or live Discord attachment roundtrip was performed.
+
 ## Source review fixes — implemented, not deployed
 
 - **`162b39c` is the completed R3/R2/R9/R4 source slice**, following `dfc6141` (owned final delivery), `acf5da9` (actor-preserving refresh) and `5b6be67` (evidence/ignore corrections).
 - Its exact tree `6e9d2d7ff7bce485970dde60244e2692b160453f` passed **675 focused isolated tests, 2 explicitly deselected**, Python 3.14.4, no network/private mounts, selected Ruff F821/F822/F823 checks. Exclusions: the prohibited live-provider tool-progress test and the previously baseline-reproduced stale README retry assertion. This selection is not the earlier 825-test suite or whole-repository acceptance.
 - Negative controls reproduce all seven actor/final-delivery regressions and all three early upstream-timeout misclassifications on unchanged relevant source. Independent review closed the scoped lifecycle findings before acceptance. Fatal polling now initiates bounded owned cleanup; advisory health never claims current liveness, and unconfirmed shutdown gates new runtime-owned input admission after the tested SDK-await boundaries. A notice whose send already began may still finish.
-- **No application build, rollout, private configuration change or live fault injection was performed in this review round.** Deployment evidence below is historical, not acceptance of this source revision. Publisher, V1 and canonical boundaries remain untouched; `?prompt` chunking remains a separate unfixed follow-up.
+- **No application build, rollout, private configuration change or live fault injection was performed in this review round.** Deployment evidence below is historical, not acceptance of this source revision. Publisher, V1 and canonical boundaries remain untouched; root subsequently chose the separate `longprompt` command above rather than changing `prompt`.
 - Root-requested local reviewer exchange lives in ignored `audit/`; the packet includes the original report, verified dispositions, author/reviewer responses, failed attempts and exact QA receipts.
 
 ## Last verified runtime — provider reload, 2026-09-23
@@ -17,7 +23,7 @@
 - `bot.env` provider edits stage until tracked work and outstanding calls are idle. The later R3 review found that `d43e4bf`'s detached final Discord edit could outlive that boundary; the source fix above awaits it. Bad edits retain active clients; no values are emitted in reload logs. `?debug` reports generation/status. Supported settings, precedence, restart-only exclusions and limits: `PROVIDER_RELOAD.md`.
 - Prefix `?`, 20 MiB and the newly enabled room were rechecked. Private rollback copies: `/var/backups/dirac-v2/20260923T153711Z-d43e4bf` and `/opt/dame-curie-pre-provider-reload-d43e4bf`. Configuration/data mounts were retained, not restored from stale snapshots.
 - **Live reload proof passed:** labeled receipt `74d4aa30ddc0463c8162207491c46a80` in the existing test thread. A one-second cooldown edit waited through 14.9 seconds of observed tool work, then applied at generation 2. The original environment was restored byte-for-byte and applied as generation 3. Endpoints/models/credentials were not changed by the probe.
-- **Prompt diagnosis confirmed:** both reported errors explicitly reject content over Discord's 2,000-character limit. The view and update-acknowledgement branches send the full prompt without chunking; route them through the existing bounded command sender. This was read-only diagnosis, not a prompt-handler fix. Exact UTC evidence and source references are in `../phase-II_v2/DIRAC_HANDOFF.md`.
+- **Prompt diagnosis confirmed:** both reported errors explicitly reject content over Discord's 2,000-character limit. The view and update-acknowledgement branches send the full prompt without chunking. That was read-only diagnosis; root subsequently chose to preserve this handler and add the attachment-based `longprompt` command above. Exact UTC evidence and source references are in `../phase-II_v2/DIRAC_HANDOFF.md`.
 - General Gateway-command admission during shutdown remains a preexisting limitation, not a hot-reload acceptance claim. Human role-ping and exhaustive live profile validation are not claimed.
 
 ## Previous same-day runtime — role wake-up
