@@ -1,5 +1,13 @@
 # dame-curie status
 
+## Taint-gate retirement — implemented, not deployed
+
+Root explicitly retired the web-read taint/confirmation subsystem in **`085c95b`**, accepting model-directed shell risk. Marking/state/checks, the `confirm` command/help, `DISABLE_TAINT_GATE`, related destructive-tool metadata and obsolete test/harness cases are removed. Existing independent authorization code, resource budgets and autonomy controls remain unchanged; source review does not turn the inherited shell whitelist or model prompt guidance into enforced authorization.
+
+Exact tree `81896cf423a2a974df5bb370b387364bbc8fcce8`: **864 passed, 23 failed, 2 explicitly deselected** in expanded credential-free isolated Python3.14.4 QA; selected Ruff F821/F822/F823 passed. **All 23 failures reproduced with matching assertions on untouched baseline `b507a9b`** (48 passed / 23 failed across the four affected files): stale private-URL expectations, synthetic-platform behavior, incomplete mention fixtures and legacy base-personality persistence expectations. No whole-suite green claim. The replacement real-dispatch fetch→shell regression passed with fake network/process adapters. The existing forbidden provider test and baseline README assertion stayed deselected.
+
+No runtime or private settings changed in this slice. Root separately approved temporary Dirac image-profile consolidation and deployment after the next source/QA slice; V1, canonical Dame and publisher stay untouched. Detailed source review, retained-control limitations and exact QA selection are in ignored `audit/taint-removal-authorization-review.md` and `audit/taint-removal-validation.md`.
+
 ## Attachment-based longprompt — implemented, not deployed
 
 Root chose a separate command instead of changing the battle-tested `prompt` handler. **`723e7d8`** adds `longprompt`: download the current server prompt as UTF-8 `prompt.txt`, or upload one `.txt` to replace that same stored prompt. It retains bot-admin/disabled-command gates and guild/DM scoping, preserves exact text, rejects invalid/empty/oversized input, and uses the existing 512 KiB text-file ceiling. A short acknowledgement replaces a full-body echo. `prompt` and `clearprompt` are unchanged. Usage and limits: [LONGPROMPT.md](LONGPROMPT.md).
