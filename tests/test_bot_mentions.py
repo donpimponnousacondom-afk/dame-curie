@@ -23,7 +23,6 @@ def mention_bot():
         _active_request_user={},
         command_prefix=",",
         _load_control=Mock(),
-        clear_message_taint=Mock(),
         _is_admin=lambda _uid: False,
         _update_recent_users=Mock(),
         _get_channel_lock=lambda _cid: asyncio.Lock(),

@@ -192,7 +192,6 @@ def _build_test_bot(tools_dict):
     bot._progress_enabled = lambda *a, **k: False
     bot._current_progress_by_channel = {}
     bot._remember_tool_call = lambda *a, **k: asyncio.sleep(0)
-    bot._tainted_messages = set()
     bot._trace_lock = asyncio.Lock()
     bot._record_llm_trace = lambda *a, **k: asyncio.sleep(0)
     bot._native_calls_from = lambda r: []
@@ -240,16 +239,16 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
     bot = _build_test_bot(
         {
             "send_message": SimpleNamespace(
-                execute=fake_send, is_destructive=False, streams_output=False,
+                execute=fake_send, streams_output=False,
                 name="send_message",
             ),
             "wait": SimpleNamespace(
-                execute=fake_wait, is_destructive=False, streams_output=False,
+                execute=fake_wait, streams_output=False,
                 name="wait",
             ),
             "no_response": SimpleNamespace(
                 execute=lambda *a, **k: asyncio.sleep(0, result="__NO_RESPONSE__"),
-                is_destructive=False, streams_output=False, name="no_response",
+                streams_output=False, name="no_response",
             ),
         }
     )
@@ -321,16 +320,17 @@ def test_no_response_blocks_later_send_message():
     bot = _build_test_bot(
         {
             "send_message": SimpleNamespace(
-                execute=fake_send, is_destructive=False, streams_output=False,
+                execute=fake_send, streams_output=False,
                 name="send_message",
             ),
             "no_response": SimpleNamespace(
-                execute=fake_no_response, is_destructive=False,
-                streams_output=False, name="no_response",
+                execute=fake_no_response,
+                streams_output=False,
+                name="no_response",
             ),
             "wait": SimpleNamespace(
                 execute=lambda *a, **k: asyncio.sleep(0, result="Waited 0s"),
-                is_destructive=False, streams_output=False, name="wait",
+                streams_output=False, name="wait",
             ),
         }
     )
@@ -385,16 +385,16 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
     bot = _build_test_bot(
         {
             "send_message": SimpleNamespace(
-                execute=fake_send, is_destructive=False, streams_output=False,
+                execute=fake_send, streams_output=False,
                 name="send_message",
             ),
             "wait": SimpleNamespace(
                 execute=lambda *a, **k: asyncio.sleep(0, result="Waited 0s"),
-                is_destructive=False, streams_output=False, name="wait",
+                streams_output=False, name="wait",
             ),
             "no_response": SimpleNamespace(
                 execute=lambda *a, **k: asyncio.sleep(0, result="__NO_RESPONSE__"),
-                is_destructive=False, streams_output=False, name="no_response",
+                streams_output=False, name="no_response",
             ),
         }
     )

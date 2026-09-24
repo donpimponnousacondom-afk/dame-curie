@@ -210,7 +210,6 @@ def test_normalize_web_hit_accepts_url_and_excerpt():
 
 def _search_bot():
     return SimpleNamespace(
-        mark_message_tainted=lambda *_a, **_k: None,
         config=SimpleNamespace(RAG_WEB_STORE_ENABLED=False),
         memory=None,
     )
@@ -254,22 +253,3 @@ def test_web_search_empty_ddgs_exception_is_not_an_error(monkeypatch):
     result = asyncio.run(tool.execute(SimpleNamespace(guild=None), query="xyzzy"))
     assert result.startswith("No results found")
     assert not result.lower().startswith("error")
-
-
-def test_web_search_taints_the_turn(monkeypatch):
-    tainted = {}
-
-    class FakeDDGS:
-        def __init__(self, *a, **k):
-            pass
-
-        def text(self, query, **k):
-            return [{"title": "T", "href": "https://ex.com", "body": "b"}]
-
-    monkeypatch.setattr("bot_tools._DDGS", FakeDDGS)
-    monkeypatch.setattr("bot_tools._DDGS_AVAILABLE", True)
-    bot = _search_bot()
-    bot.mark_message_tainted = lambda msg: tainted.setdefault("ok", True)
-    msg = SimpleNamespace(id=9, guild=None)
-    asyncio.run(WebSearchTool(bot).execute(msg, query="hi"))
-    assert tainted.get("ok") is True

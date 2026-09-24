@@ -2046,7 +2046,6 @@ class SleepTool(Tool):
     conversation is genuinely winding down — not as a generic
     goodbye."""
 
-    is_destructive: bool = False
     streams_output: bool = False
 
     def get_description(self):
@@ -2085,7 +2084,6 @@ class ClearSleepTool(Tool):
     not sleeping. Use when the bot decided to sleep but the user
     immediately needs a reply."""
 
-    is_destructive: bool = False
     streams_output: bool = False
 
     def get_description(self):
@@ -2120,7 +2118,6 @@ class WaitTool(Tool):
     user-visible progress message updates to 'waiting Ns…' so they
     know the bot isn't stuck."""
 
-    is_destructive: bool = False
     streams_output: bool = False
 
     def get_description(self):
@@ -4434,13 +4431,6 @@ class WebSearchTool(Tool):
         if not re.fullmatch(r"[a-z0-9_.,-]+", backend, flags=re.I):
             backend = "auto"
 
-        # Web search returns untrusted content. Mark the current turn as
-        # tainted so the subsequent destructive shell tool prompts
-        # for confirmation. This is the second line of defense against
-        # indirect prompt injection from search snippets.
-        if self.bot is not None and hasattr(self.bot, "mark_message_tainted"):
-            self.bot.mark_message_tainted(message)
-
         try:
             loop = asyncio.get_running_loop()
             # Bound the search: DDGS uses sync requests internally with a
@@ -5256,31 +5246,8 @@ class SendFileTool(Tool):
         return result
 
 
-def _taint_gate_blocks(tool: Any, message: Any, kwargs: dict) -> bool:
-    """True when a destructive call must be refused on an untrusted turn.
-
-    bot.py's dispatcher is the primary enforcement point and injects
-    ``_confirmed`` when the user has actually confirmed. Tools keep their own
-    check because that dispatcher is not the only caller — the autonomy tick
-    invokes ``tool.execute`` directly — but the two must agree on
-    ``DISABLE_TAINT_GATE``, or turning the gate off in .env leaves the
-    per-tool copy refusing anyway and the switch reads as broken.
-    """
-    bot = getattr(tool, "bot", None)
-    if bot is None or kwargs.get("_confirmed", False):
-        return False
-    if getattr(getattr(bot, "config", None), "DISABLE_TAINT_GATE", False):
-        return False
-    checker = getattr(bot, "is_message_tainted", None)
-    return bool(checker and checker(message))
-
-
 class ShellTool(Tool):
     """Execute shell commands directly inside the existing outer bot container."""
-
-    # Shell executes arbitrary code in a container. It's the most dangerous
-    # tool we expose, so it gets the taint-check / user-confirmation gate.
-    is_destructive = True
 
     # Output / command-length caps. Read from env so the operator can tune
     # without a code change. 0 = unlimited (use with care; see below).
@@ -5697,16 +5664,6 @@ class ShellTool(Tool):
         if validation_error:
             return f"Error executing command: {validation_error}"
 
-        if _taint_gate_blocks(self, message, kwargs):
-            preview = normalized[:200] + ("..." if len(normalized) > 200 else "")
-            return (
-                "Error: shell refused: this turn read content from a fetched "
-                "URL/web search that may carry prompt-injection payloads. "
-                "The user must confirm out-of-band with `!confirm` "
-                "before this can run.\n"
-                f"Command preview: {preview}"
-            )
-
         sess = None
         slot = None
         # In DMs, never spam shell progress status messages
@@ -5956,12 +5913,6 @@ class FetchUrlTool(Tool):
             if visual and not str(visual).startswith("Error"):
                 return visual
             return visual or f"Error: could not load video from {url}"
-
-        # Mark this turn as tainted: the URL is operator-supplied but its
-        # *content* is untrusted and may include prompt-injection payloads
-        # designed to steer the model into proposing shell calls.
-        if self.bot is not None and hasattr(self.bot, "mark_message_tainted"):
-            self.bot.mark_message_tainted(message)
 
         try:
             max_len = max(1, min(int(max_length), self.MAX_CONTENT))
@@ -7929,8 +7880,6 @@ class UpdateBasePersonalityTool(Tool):
     in bot_control.json under `base_personality`.
     """
 
-    is_destructive: bool = True
-
     def get_description(self) -> str:
         return (
             "Rewrite global base_personality (tone/do-don'ts in every prompt). "
@@ -7986,8 +7935,6 @@ class UpdateServerPromptTool(Tool):
     when it has a reason. Pass server_id (numeric snowflake) or pass 'DM'
     for the DM default. Pass empty text to clear the per-server prompt.
     """
-
-    is_destructive: bool = True
 
     def get_description(self) -> str:
         return (

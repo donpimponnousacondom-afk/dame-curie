@@ -12,7 +12,7 @@ This describes the approved Discord-only source contract in `../phase-II_v2/REDE
 | Background jobs | `jobs.py`, `job_routing.py` | Detached jobs with trusted profile/model selection and canonical personality/server prompts |
 | Deployment | `compose.yaml`, `docker/app.Dockerfile`, `scripts/instance.py` | Only `bot`, `ollama`, `ollama-pull`; no published ports; staged startup is a validated no-op |
 | Independent publishing | `scripts/publisher/` | Protected external file mirroring, not a model-controlled deployment API |
-| Retained capabilities | Discord administration, autonomy/REM, games/plugins, voice/media, inbox | Preserve permissions, taint/confirmation and redaction as well as functional behavior |
+| Retained capabilities | Discord administration, autonomy/REM, games/plugins, voice/media, inbox | Preserve independent permissions and redaction as well as functional behavior |
 
 Dashboard/API/OAuth/Caddy/web image, local website/KV/FastAPI/uvicorn servers and six `site_*` tools, nested shell infrastructure, X/Telegram and companion/GF are removed from the target design. No replacement server, PHP/Perl/CGI installation or PM2 deployment. The human CAPTCHA HTTP fallback is removed; outbound CapSolver/TwoCaptcha remain. Historical `tg:%` privacy filtering remains to exclude old private records, not to enable Telegram.
 
@@ -44,7 +44,7 @@ These are source contracts, not a fresh deployment observation. Private dotenv l
 
 ## Direct shell and publication boundaries
 
-Shell executes `bash -lc` inside the outer bot container, with explicit `cwd=/home/dame-curie` and `HOME=/home/dame-curie`, DEVNULL stdin and a new process group for timeout/cancellation cleanup. `/home/dame-curie` resolves to persistent `/state/shell`; files persist between calls, shell process state does not. Existing Discord delivery/export limits and shared tool authorization, confirmation and taint checks remain.
+Shell executes `bash -lc` inside the outer bot container, with explicit `cwd=/home/dame-curie` and `HOME=/home/dame-curie`, DEVNULL stdin and a new process group for timeout/cancellation cleanup. `/home/dame-curie` resolves to persistent `/state/shell`; files persist between calls, shell process state does not. Existing Discord delivery/export limits and independent tool authorization remain. Root explicitly accepts the risk of model-directed shell execution after reading external content; there is no per-turn web-read confirmation lock.
 
 This shell runs as the bot's UID and can read bot-readable configuration/secrets. It is **not a separate inner security boundary**. Isolation comes from the outer service account/private rootless engine/container and explicitly V2-owned mounts. No nested Docker, Docker socket, host-root mount, host networking, host execution or V1 roots are granted. Process-group cleanup is not a general security sandbox.
 

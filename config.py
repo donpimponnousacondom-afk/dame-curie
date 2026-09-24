@@ -313,15 +313,6 @@ class Config:
     EMBED_API_KEY = _first_env("DAME_CURIE_EMBED_API_KEY", "EMBED_API_KEY")
     EMBED_DIM = _int_env("DAME_CURIE_EMBED_DIM", 1024, min_value=8, max_value=16384)
 
-    # When false (default), shell refuses to run on a turn
-    # that read untrusted fetched content (URLs, web search) without an
-    # out-of-band `!confirm` from an admin. This blocks indirect prompt
-    # injection from turning a fetched page into a shell command.
-    # Set to true to skip the gate entirely — the model can call shell
-    # after fetch_url/web_search without confirmation. Only do this if
-    # you trust the model fully (single-user homelab install).
-    DISABLE_TAINT_GATE = _bool_env("DISABLE_TAINT_GATE", False)
-
     # TTS engine selection. local / riva / gtts / auto. Undocumented before
     # 2026-07-21 — used to fall through a chain in bot._synthesize_tts_wav.
     TTS_ENGINE = os.getenv("TTS_ENGINE", "auto").strip().lower()

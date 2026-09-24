@@ -145,9 +145,6 @@ class AllowlistBot:
     def _load_control(self):
         return None
 
-    def clear_message_taint(self, message):
-        return None
-
     def _dispatch_reply(self, message, content, *, directed):
         self.dispatched.append((str(getattr(message, "id", "")), bool(directed)))
         return "started"

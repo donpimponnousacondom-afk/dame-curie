@@ -126,38 +126,9 @@ def test_fetch_url_returns_page_text_after_redirect(monkeypatch):
         return session
 
     monkeypatch.setattr("bot_tools._get_shared_session", _session)
-    bot = SimpleNamespace(mark_message_tainted=lambda *_a, **_k: None)
+    bot = SimpleNamespace()
     tool = FetchUrlTool(bot)
     msg = SimpleNamespace(id=1, channel=SimpleNamespace(id=2), guild=None)
     result = _run(tool.execute(msg, url="https://ex.com/a"))
     assert "readable article" in result
     assert not result.startswith("Error")
-
-
-def test_fetch_url_taints_on_untrusted_page(monkeypatch):
-    tainted = {}
-    session = FakeSession(
-        {
-            "https://ex.com/doc": FakeResp(
-                200,
-                headers={"Content-Type": "text/plain"},
-                body=b"untrusted",
-            ),
-        }
-    )
-
-    async def _session():
-        return session
-
-    monkeypatch.setattr("bot_tools._get_shared_session", _session)
-    bot = SimpleNamespace(
-        mark_message_tainted=lambda *_a, **_k: tainted.setdefault("ok", True)
-    )
-    result = _run(
-        FetchUrlTool(bot).execute(
-            SimpleNamespace(id=1, channel=SimpleNamespace(id=2)),
-            url="https://ex.com/doc",
-        )
-    )
-    assert result == "untrusted"
-    assert tainted.get("ok") is True

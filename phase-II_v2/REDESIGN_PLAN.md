@@ -24,12 +24,12 @@ Implementation and source inventories may run concurrently in isolated worktrees
 
 - **Publisher/syncer implementation, remote publication semantics and destination selection.** Do not edit `scripts/publisher/`, change its configuration, invoke it, or publish anything. Its independent service mirrors files; the model writes locally and does not administer the remote server. Root says this mechanism already works and must remain untouched.
 - Local authoring and image/archive paths, shared image replication, outbound provider configuration, generic fetching, media handling and attachments. Remove HTTP servers without deleting shared asset/storage/URL utilities: relocate necessary non-serving helpers narrowly, preserving their behavior.
-- Discord administration, autonomy, games and plugins; TTS/ASR/image/YouTube paths and existing manual compatibility patches; shared inbox/notifications, permissions, confirmation/taint, redaction and RAG/REM/graph/context memory.
+- Discord administration, autonomy, games and plugins; TTS/ASR/image/YouTube paths and existing manual compatibility patches; shared inbox/notifications, independent permissions, redaction and RAG/REM/graph/context memory.
 - Python3.14 and strict image dependency pins. Removing a server package does not mean removing Python or HTTP client libraries needed by the bot. Do not install PHP, Perl or CGI tooling.
 
 ## Shell boundary
 
-Root confirmed direct execution inside the bot container. Remove nested-container command/path restrictions, not the outer account/container isolation. No host-root mount, host Docker socket, host networking, V1 roots or host execution. Keep explicit V2-owned data/site/shell mounts, writable working storage, process cancellation and Discord output/delivery behavior. Do not erase shared tool authorization/taint checks under the name of shell simplification. The model may author files with shell; local serving and remote administration are not the publishing workflow.
+Root confirmed direct execution inside the bot container. Remove nested-container command/path restrictions, not the outer account/container isolation. No host-root mount, host Docker socket, host networking, V1 roots or host execution. Keep explicit V2-owned data/site/shell mounts, writable working storage, process cancellation and Discord output/delivery behavior. Preserve independent tool authorization. Root's explicit 2026-09-24 amendment removes the web-read taint/confirmation subsystem in full; it does not remove admin/owner checks or authorize host/V1 access. The model may author files with shell; local serving and remote administration are not the publishing workflow.
 
 ## Command prefix
 

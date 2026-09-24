@@ -13,7 +13,7 @@ Features tested:
   6. Autonomy Engine & Turn-Taking (4 stages, 8 room states, floor verdicts, blacklists, solo)
   7. Chess Engine & Board Mechanics (SAN/UCI, alpha-beta negamax, FEN, image rendering)
  10. Inbox System (Notices, requests)
- 11. Security Guardrails & Response Guard (Taint gates, repetition scrubbing, echo loops, code safety)
+ 11. Security Guardrails & Response Guard (repetition scrubbing, echo loops, code safety)
  12. Default Controls
  13. Concurrency Safety & Bot Commands (!stop, !prompt, !solo, !drug, !jailbreak, !context, !rem, !vc)
 """
@@ -600,39 +600,7 @@ class DeepTestHarness:
             assert "print('ha ha ha ha ha ha ha ha')" in preserved
             return "Repetition scrubber collapses stutters & preserves code blocks"
 
-        def test_taint_gating():
-            class FakeMessage:
-                def __init__(self, tainted=False):
-                    self.tainted = tainted
-                    self.author = type("Author", (), {"id": "123"})()
-
-            class FakeTool(bot_tools.Tool):
-                is_destructive = True
-                def __init__(self):
-                    super().__init__(bot=None)
-                def get_description(self):
-                    return "Fake destructive tool"
-                async def execute(self, message, **kwargs):
-                    return "executed"
-
-            fake_bot = SimpleNamespace(
-                config=SimpleNamespace(DISABLE_TAINT_GATE=False),
-                is_message_tainted=lambda msg: msg.tainted,
-            )
-
-            tool = FakeTool()
-            tool.bot = fake_bot
-            safe_msg = FakeMessage(tainted=False)
-            tainted_msg = FakeMessage(tainted=True)
-
-            assert bot_tools._taint_gate_blocks(tool, safe_msg, {}) is False
-            assert bot_tools._taint_gate_blocks(tool, tainted_msg, {}) is True
-            # With _confirmed flag
-            assert bot_tools._taint_gate_blocks(tool, tainted_msg, {"_confirmed": True}) is False
-            return "Taint gate blocks destructive tools on web-tainted turns without confirmation"
-
         self.run_sync_test("Repetition guard & echo loop breaker", test_repetition_scrubbing)
-        self.run_sync_test("Indirect prompt injection taint gate", test_taint_gating)
 
     # =========================================================================
     # SUITE 12: Default Controls

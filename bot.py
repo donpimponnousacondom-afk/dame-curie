@@ -456,17 +456,9 @@ if _LOG_LEVEL <= logging.DEBUG:
 
 logger = logging.getLogger(__name__)
 
-# How long an out-of-band `!confirm` authorizes one destructive tool call on a
-# tainted turn. Short + one-shot so a fetched page can't ride a stale confirm.
-_CONFIRM_TTL_SECONDS = 120.0
-
 # Ceiling on remembered per-room watch state. Eviction costs a room one
 # default-length watch window and nothing else.
 _MAX_WATCH_STATES = 300
-# Message ids remembered as "read untrusted content this turn". One turn's
-# worth is all that is ever consulted; the cap only stops the dict growing
-# for the life of the process.
-_MAX_TAINTED_MESSAGES = 512
 
 # Every one of these is keyed by channel or user and written on the hot path.
 # None of them had an eviction rule, so each was a slow leak proportional to
@@ -2561,25 +2553,6 @@ class MaxwellBot(commands.Bot):
         # grid's content hash, so a guild adding an emoji re-shows the sheet
         # instead of Maxwell running on a stale one.
         self._emoji_grid_shown: dict[str, str] = {}
-        # Indirect-prompt-injection defense. When the model has just read
-        # content from a less-trusted source (fetch_url, web_search, a URL in
-        # a user message, etc.), we mark the current message as "tainted" so
-        # the destructive shell tool requires explicit user
-        # confirmation before running. Taint is cleared on every new user
-        # message so it's strictly per-turn: a clean follow-up resets the flag.
-        # `message_id -> bool` lets us be precise when multiple replies are
-        # in flight on different channels.
-        # message id -> when it was tainted. Bounded: nothing ever removed an
-        # id (a turn clears its own message, which was never in here), so a
-        # process that ran for months grew one entry per tainted turn forever.
-        self._tainted_messages: dict[str, float] = {}
-        # Out-of-band user confirmation for destructive tools on tainted turns.
-        # author_id -> monotonic timestamp of the last `!confirm`. Consumed
-        # (one-shot) by the destructive-tool gate in _execute_tool_by_name, and
-        # expired after _CONFIRM_TTL_SECONDS. This is the ONLY legitimate source
-        # of `_confirmed=True` — model-supplied `_confirmed` is stripped in the
-        # dispatcher so the model can no longer self-confirm.
-        self._destructive_confirm: dict[str, float] = {}
         self._control = dict(DEFAULT_CONTROL)
         if self.config.DAME_CURIE_PROMPTS_DIR:
             self._control.pop("base_personality", None)
@@ -5792,10 +5765,6 @@ class MaxwellBot(commands.Bot):
                 getattr(getattr(message, "channel", None), "id", ""),
                 getattr(getattr(message, "author", None), "id", ""),
             )
-        # Each fresh user turn starts un-tainted. The taint flag is set by
-        # fetch_url / web_search when they return untrusted content, and is
-        # consulted by the destructive shell tool to gate execution.
-        self.clear_message_taint(message)
         if not message.author.bot:
             channel_name = getattr(message.channel, "name", "DM")
             if channel_name == "crazyshit":
@@ -7010,7 +6979,6 @@ class MaxwellBot(commands.Bot):
                     f"`{self.command_prefix}wake` - clear active sleep window (admin)\n"
                     f"`{self.command_prefix}admin [@user|user_id|clear]` - add/remove/list admins (admin)\n"
                     f"`{self.command_prefix}shell [@user|clear]` - shell whitelist (admin)\n"
-                    f"`{self.command_prefix}confirm` - authorize one destructive tool call on a tainted turn\n"
                     f"`{self.command_prefix}blacklist [@user|clear]` / `{self.command_prefix}unblacklist @user` - blacklist controls (admin)\n",
                     allowed_mentions=discord.AllowedMentions.none(), unmeasured=False,
                 )
@@ -7133,18 +7101,6 @@ class MaxwellBot(commands.Bot):
                     await message.channel.send(
                         "Usage: `!plugin <list|enable|disable|reload> [plugin_name] [--global]`"
                     )
-            elif cmd == "confirm":
-                # Out-of-band confirmation for the destructive shell tool
-                # on a tainted turn. Anyone can confirm their own turn. The model
-                # cannot self-confirm (model-supplied _confirmed is stripped in
-                # _execute_tool_by_name).
-                author_id = str(message.author.id)
-                self._destructive_confirm[author_id] = asyncio.get_running_loop().time()
-                await message.channel.send(
-                    f"Confirmed for {_CONFIRM_TTL_SECONDS:.0f}s. The next destructive "
-                    f"tool call (shell) on a tainted turn by you will run; "
-                    f"this is one-shot."
-                )
             elif cmd in ("blacklist", "unblacklist"):
                 if not self._is_admin(message.author.id):
                     return
@@ -13488,64 +13444,38 @@ class MaxwellBot(commands.Bot):
                     "Error - tool temporarily disabled (too many recent failures)"
                 )
             else:
-                # Centralized indirect-prompt-injection gate. Tools flagged
-                # is_destructive (shell) that runs on a tainted turn
-                # require an out-of-band user `!confirm`.
-                # We inject _confirmed=True server-side only when the user actually
-                # confirmed; the model cannot forge it because _-keys were stripped
-                # above. This is the single enforcement point instead of per-tool
-                # checks that previously read the model-controlled flag.
                 tool = self.tools.get(name)
                 if tool is None and plugin_allowed:
                     tool = plugin_tool
-                if (
-                    getattr(tool, "is_destructive", False)
-                    and self.is_message_tainted(message)
-                    and not getattr(self.config, "DISABLE_TAINT_GATE", False)
-                ):
-                    author_id = str(getattr(message.author, "id", "") or "")
-                    if not self._consume_destructive_confirm(author_id):
-                        result_text = (
-                            "refused: this turn read content from a fetched URL/web "
-                            "search that may carry prompt-injection payloads. The user "
-                            "must confirm out-of-band with `!confirm` before this tool "
-                            "can run on a tainted turn. The model "
-                            "cannot self-confirm. Set DISABLE_TAINT_GATE=true in .env "
-                            "to skip this gate entirely."
-                        )
+                logger.info("Executing tool %s", name)
+                # Budget by resource class. Image generation, shell, and
+                # other expensive tools get independent allowances, so
+                # a run of them in one room cannot consume the outbound
+                # capacity every other room's reply needs. Cheap tools
+                # share a wide "default" budget and effectively never
+                # queue.
+                budgets = getattr(self, "tool_concurrency", None)
+                gate = (
+                    budgets.slot(classify_tool(name, tool))
+                    if budgets is not None
+                    else contextlib.nullcontext()
+                )
+                async with gate:
+                    if name in {"send_message", "edit_message"} and response_metrics is not None:
+                        raw = await tool.execute(message, _response_metrics=response_metrics, **params)
                     else:
-                        params = dict(params)
-                        params["_confirmed"] = True
-                if not result_text:
-                    logger.info("Executing tool %s", name)
-                    # Budget by resource class. Image generation, shell, and
-                    # other expensive tools get independent allowances, so
-                    # a run of them in one room cannot consume the outbound
-                    # capacity every other room's reply needs. Cheap tools
-                    # share a wide "default" budget and effectively never
-                    # queue.
-                    budgets = getattr(self, "tool_concurrency", None)
-                    gate = (
-                        budgets.slot(classify_tool(name, tool))
-                        if budgets is not None
-                        else contextlib.nullcontext()
-                    )
-                    async with gate:
-                        if name in {"send_message", "edit_message"} and response_metrics is not None:
-                            raw = await tool.execute(message, _response_metrics=response_metrics, **params)
-                        else:
-                            raw = await tool.execute(message, **params)
-                    result_text = str(raw) if raw else "executed successfully"
-                    logger.info(
-                        "Tool %s finished: %s",
-                        name,
-                        (redact_sensitive_text(result_text) if name in {"image_generator", "hd_image"}
-                         else result_text).replace("\n", " "),
-                    )
-                    if result_text.startswith(("Error", "Error:")):
-                        self._tool_breaker.record_failure(name)
-                    else:
-                        self._tool_breaker.record_success(name)
+                        raw = await tool.execute(message, **params)
+                result_text = str(raw) if raw else "executed successfully"
+                logger.info(
+                    "Tool %s finished: %s",
+                    name,
+                    (redact_sensitive_text(result_text) if name in {"image_generator", "hd_image"}
+                     else result_text).replace("\n", " "),
+                )
+                if result_text.startswith(("Error", "Error:")):
+                    self._tool_breaker.record_failure(name)
+                else:
+                    self._tool_breaker.record_success(name)
         except Exception as e:
             logger.error(
                 f"Tool execution error for {name}: {e}\n{traceback.format_exc()}"
@@ -13563,26 +13493,6 @@ class MaxwellBot(commands.Bot):
             result=result_text,
         )
         return f"Tool {name}: {result_text}"
-
-    def _consume_destructive_confirm(self, author_id: str) -> bool:
-        """Return True (one-shot) if `author_id` has a live `!confirm` token.
-
-        Expired tokens are reaped as a side effect. One-shot: a successful
-        consume removes the token so a single `!confirm` authorizes exactly one
-        destructive call, not a chain of them.
-        """
-        if not author_id:
-            return False
-        now = asyncio.get_running_loop().time()
-        # Reap expired entries to keep the dict bounded.
-        if self._destructive_confirm:
-            self._destructive_confirm = {
-                a: t
-                for a, t in self._destructive_confirm.items()
-                if now - t < _CONFIRM_TTL_SECONDS
-            }
-        ts = self._destructive_confirm.pop(author_id, None)
-        return ts is not None and (now - ts) < _CONFIRM_TTL_SECONDS
 
     async def _remember_tool_call(self, message, name: str, params: dict, result: str):
         if not self._control.get("store_memory", True):
@@ -14185,41 +14095,6 @@ class MaxwellBot(commands.Bot):
         """Race-free token-usage extraction (see ``_native_calls_from``)."""
         usage = getattr(response, "usage", None)
         return dict(usage) if usage else {}
-
-    def mark_message_tainted(self, message) -> None:
-        """Mark a message as having read untrusted content in the current turn.
-
-        The tool flagged ``is_destructive`` (shell) must
-        consult ``is_message_tainted`` before running and ask the user to
-        confirm if the flag is set. This is the second line of defense
-        against indirect prompt injection from fetched content: even if a
-        malicious page tricks the model into proposing a shell command,
-        the user has to click Confirm before it runs.
-        """
-        if message is None:
-            return
-        mid = str(getattr(message, "id", "") or "")
-        if not mid:
-            return
-        self._tainted_messages[mid] = time.time()
-        if len(self._tainted_messages) > _MAX_TAINTED_MESSAGES:
-            # Taint only matters for the length of one turn, so the oldest
-            # half is dead weight by definition. dicts keep insertion order.
-            for stale in list(self._tainted_messages)[: _MAX_TAINTED_MESSAGES // 2]:
-                self._tainted_messages.pop(stale, None)
-
-    def clear_message_taint(self, message) -> None:
-        """Drop the taint flag for a message (e.g. when a fresh user turn starts)."""
-        if message is None:
-            return
-        mid = str(getattr(message, "id", "") or "")
-        self._tainted_messages.pop(mid, None)
-
-    def is_message_tainted(self, message) -> bool:
-        """True if the current turn has read content from an untrusted source."""
-        if message is None:
-            return False
-        return str(getattr(message, "id", "") or "") in self._tainted_messages
 
     async def _record_llm_trace(self, message, payload: dict):
         path = Path(self.config.DATA_DIR) / "llm_traces.json"

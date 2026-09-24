@@ -50,8 +50,7 @@ def _native_call(name, args, call_id="call_1"):
 def _native_bot(tools, **control):
     """A stub bot good enough to drive _dispatch_tool_calls (native path).
 
-    Wires everything the rewritten _execute_tool_by_name touches: reasoning
-    recording, the destructive-confirm gate, platform compat, the breaker.
+    Wires reasoning recording, platform compatibility, and the breaker.
     """
     control_defaults = {
         "tools_enabled": True,
@@ -76,13 +75,10 @@ def _native_bot(tools, **control):
         _control=control_defaults,
         tools=dict(tools),
         traces=[],
-        _tainted_messages=set(),
         memory=FakeMemory(),
     )
     bot._message_tool_platform = lambda _message: "discord"
     bot._compatible_tool_names = lambda _platform: set(tools)
-    bot.is_message_tainted = lambda _message: False
-    bot._consume_destructive_confirm = lambda _author_id: False
     bot._render_custom_emojis = lambda text, _guild: text
     # 2026-07-22: _dispatch_tool_calls now resolves progress per-server via
     # _progress_enabled; tests don't exercise the progress UI so always off.
