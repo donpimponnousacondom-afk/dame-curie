@@ -16,7 +16,9 @@
 
 All used Python 3.14.4 with no external network/private mounts; selected Ruff `F821,F822,F823` and independent source reviews passed. These are **separate focused selections**, not whole-repository or deployment acceptance. Exact commands, trees, failed attempts and corrections: [current validation ledger](../audit/20260924T210402Z-adversarial-audit/validation.md).
 
-Still open: core provider/turn-budget/discovery/history/prompt/delivery integration and cross-review; actual-byte and archive/MIME attachment handling; process/doc reconciliation; full safe-suite and artifact validation; bounded temporary acceptance; remaining commits and the complete per-finding auditor response. No remediation candidate has been built or deployed.
+Current checkpoints: `d198c37` commits integrated application/test remediation; `3754a8a` preserves docs and the complete dated audit bundle; `be28b85` fixes Docker allowlisting and constructor-probe import isolation. Full-safe QA60 passed **3984 tests plus28 subtests**; final fixture corrections passed201 and isolated copied-app construction passed4. Earlier failed runs remain retained. This closes the previously unexecuted core/full-safe-suite gate, not every operating combination.
+
+Candidate **`dame-curie-app:be28b85`**, image **`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`**, is built from the committed archive. All56 copied input blobs and baked/OCI provenance match `be28b8598215ff6a0c72d7c3160403f2425a61f0`; the existing guarded constructor probe passed inside the actual image without network/private mounts/login. **Not deployed.** Still open: installed-operator revalidation, bounded temporary acceptance, final per-finding/document reconciliation and auditor round two. Candidate validation is not a normal release.
 
 The authorized `legacy/` cleanup is committed separately: 24 obsolete files, 3,970 text lines. It did not change active publisher source or root's unrelated `reports/` and `.agents/skills/root-review-reports/` work. Historical source is evidence, not a restoration instruction.
 

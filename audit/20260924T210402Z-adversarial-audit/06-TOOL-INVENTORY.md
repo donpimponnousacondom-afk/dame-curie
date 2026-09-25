@@ -1,6 +1,46 @@
 # Current model-facing tool inventory
 
-Source: `aad36e6`, inspected 2026-09-25. Source-only: no application imports, tool execution, tests, private configuration or runtime access. This lists LLM tools, not Discord prefix commands or this coding harness's tools.
+Historical flat baseline: source `aad36e6`, inspected 2026-09-25. That earlier pass was source-only: no application imports, tool execution, tests, private configuration or runtime access. The current measured section below supersedes its exposure claims. This lists LLM tools, not Discord prefix commands or this coding harness's tools.
+
+## Scope note — current section versus historical baseline
+
+- **"CURRENT catalog — QA61 measurement"** below is the current evidence for the catalog produced by the committed source and is anchored to `validation.md` QA61.
+- The sections from **"Count and exposure"** onward are the **historical `aad36e6` baseline**: their flat counts, per-tool rows and their "no lean selection / every enabled tool on every turn" exposure statement are the state of that earlier committed source and are **not current claims**. They are preserved unedited as baseline, not rewritten or removed.
+- No new tests, test runs or privacy claims are introduced here. This pass measured nothing; it records the coordinator's QA61 measurement.
+
+## CURRENT catalog — QA61 measurement
+
+Measured in the credential-free, network-none isolated QA image, on frozen tree `25763dfee4483e4887479b2997ff64b0009d562c`, whose catalog source is committed `d198c37` and remains unchanged by packaging commit `be28b85`. Real `MaxwellBot._setup_tools`, `_turn_tool_names`, `_build_openai_tools` and `_tool_system_prompt` were executed against synthetic bot/actors, all `ENABLE_*` feature gates true, empty synthetic plugin state, and the actual checkers plugin. **No tools, provider or Discord calls were made.**
+
+Registered: **70 built-in tools + 4 checkers plugin tools**. Selected-row measurements (count / compact schema chars / schema UTF-8 bytes / native system-prompt chars / custom combined system-prompt chars):
+
+| Actor / group | Count | Schema chars | Schema bytes | Native system chars | Custom combined chars |
+|---|---|---|---|---|---|
+| admin, core | 15 | 14413 | 14436 | 8272 | 14845 |
+| admin, workflow | 24 | 21431 | 21460 | 8381 | 17930 |
+| admin, all_groups and debug_full | 74 | 54608 | 54649 | 9072 | 30085 |
+| ordinary, core | 14 | 12892 | 12915 | 8265 | 13955 |
+| ordinary, workflow | 21 | 18744 | 18773 | 8327 | 16560 |
+| ordinary, all_groups and debug_full | 70 | 51085 | 51122 | 9005 | 28328 |
+
+Conditions and limits of those numbers:
+
+- `custom combined` = the actual tool-system prompt plus `custom_tool_prompt(names)`; native and custom are alternative serializations, not additive.
+- These are **fixture-specific character/byte measurements** from compact serialized schemas. They are **not token counts, not billing, not the full prompt and not live exposure**.
+- Counts and char sizes are the result of `_turn_tool_names`/`_build_openai_tools` under exactly those gates; a different actor, gate set, plugin state or `disabled_tools` value yields different rows.
+
+**`more_tools` discovery is working and bounded** (`tool_schemas.py:51`, `58–99`, `468–475`; `bot.py:14730–14740`; `turn_budget.py:33–50`, `132`):
+
+- `CORE_TOOL_NAMES` is the always-offered core set; `TOOL_DISCOVERY_GROUPS` defines the named groups `messaging`, `media`, `identity`, `servers`, `moderation`, `voice`, `workflow`, `games`, `plugins`.
+- `more_tools` carries the group enum. Discovery adds a group to the task-local catalog scope, unioned with core names for the **following model round within the same foreground/job turn**. `current_tool_groups()` prefers the explicit groups context and otherwise uses `ForegroundTurn.expanded_tool_groups`; jobs get separate catalog sets even when a descendant shares foreground spend. This is not persistent cross-user discovery.
+- This supersedes the historical "hidden compatibility no-op `more_tools`" and "every enabled tool on every turn" framing **as current claims only**; that framing stays as written under the historical baseline above.
+
+**Actor and config gates are separate**, and both apply on top of the above:
+
+- Actor/context: admin-only visibility and per-tool authorization.
+- Config/feature: `tools_enabled`, `disabled_tools`, native versus custom protocol selection, and the individual `ENABLE_*` tool gates (`ENABLE_WEB_SEARCH`, `ENABLE_FETCH_URL`, `ENABLE_SHELL`, `ENABLE_IMAGE_GEN`, `ENABLE_YOUTUBE`, `ENABLE_TTS`, `ENABLE_AVATAR`), plus chess import availability and checkers plugin visibility (global/per-user state and successful plugin load).
+
+**Budget boundary:** `control_defaults.py` sets `prompt_context_budget` to **96000** characters (`control_defaults.py:175`), the schema-inclusive prompt budget bound to `_prompt_budget_chars` (`bot.py:15091–15110`). The **36 000-character figure is the bounded tool-history tail limit** (`tool_schemas.py:1806`, `TOOL_TAIL_MAX_CHARS`) enforced by `tool_schemas.py:1931`, **not** the prompt budget. The measured all-groups schema alone does not exceed the 96000 default. No token or billing inference follows from these character counts.
 
 ## Count and exposure
 
@@ -168,3 +208,10 @@ These 25 aliases do not add 25 definitions to the `tools` payload. They resolve 
 - Dispatcher aliases: `bot.py:13359–13385`.
 
 This inventory makes no removal, enable/disable, permission, prompt, runtime or deployment change. Catalog size in tokens was not measured or recalculated in this pass.
+
+## Measurement receipt (CURRENT section)
+
+- `validation.md`, section **"Full-safe green run and checkpoint — QA57–61"**, QA61 entry: frozen tree `25763dfee4483e4887479b2997ff64b0009d562c`, `201 passed` on the four selected existing test files, then the tool-registration and serialized-catalog measurement executed there; `validation.md` also records the 36k-bounded-history versus 96000-prompt-budget correction.
+- QA65 repeated the same-tree, same-envelope measurement without the long name inventories; the complete scalar output reconfirmed every table value. See `validation.md`, "Candidate artifact and compact measurement recheck — QA63–65".
+- Commits: catalog source `d198c37`; packaging commit `be28b85` does not change the catalog source.
+- These receipts validate only that named frozen tree/subset. They are not full-suite, artifact, live-Dirac or model-facing acceptance.
