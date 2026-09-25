@@ -1,51 +1,52 @@
 # dame-curie status — 2026-09-25
 
-## Authority and release state
+## Closure and release state
 
-Root delegated the **temporary Dirac** rollout decision to the current coordinator after checks/review. Canonical/V1 activation, publisher/shared-service lifecycle changes and remote operations remain held. [AGENTS](../AGENTS.md) records the authority and recovery reference for the verbatim prior grant; [Operations](OPERATIONS.md) defines the operating boundary. [TODO](../TODO.md) is the short remaining-work list.
+**Round-two corrections and documentation retirement are complete. Corrected source `89fb851` is live on temporary Dirac.** The coordinator exercised root's delegated temporary-only decision after source/QA/artifact checks and one bounded smoke case. Canonical/V1 activation, publisher/shared-service lifecycle changes and remote operations remain held. This is not standing permission for future agents to repeat runtime operations.
 
-**Source correction is complete; this candidate is not yet live.** The independent diff-focused closure recheck found no remaining source blocker. That is an internal assessment, not a new sign-off by the original external auditor. Documentation consolidation/retirement and actual-image verification are complete; bounded current-candidate acceptance and the final temporary live decision remain. See the [closure receipt](../audit/20260924T210402Z-audit/09-CLOSURE.md).
+Start with the [closure receipt](../audit/20260924T210402Z-audit/09-CLOSURE.md). [AGENTS](../AGENTS.md) preserves authority/boundaries; [Operations](OPERATIONS.md) covers recovery; [TODO](../TODO.md) distinguishes completed work from held decisions. Internal independent closure is not a replacement sign-off by the original external auditor; its conditional verdict and originals remain unchanged.
 
-## Current source and evidence
+## Source and QA
 
 | Checkpoint | Evidence |
 | --- | --- |
-| `eb188ac` | Original external round-two verdict and five follow-up reports preserved verbatim |
+| `eb188ac` | External round-two verdict/five follow-ups preserved verbatim |
 | `c2d6b0e` | Provider reservation/incident, autonomy actor/logging and taskless-smoke corrections; QA70:345 focused passes |
-| `89fb851` | Prompt/catalog/native-call/media/follow-up/readback corrections and existing-case adaptation; matches final QA source/test blobs |
-| QA75/76 tree `511a355fabe792cc6ae844d26004de7c55c104b4` | 92 focused passes, selected Ruff F821/F822/F823; **3993 passed +28 subtests** in the full safe suite |
+| `89fb851` | Prompt/catalog/native-call/media/follow-up/readback corrections and existing-case adaptation; final QA source/test blobs match |
+| QA75/76 tree`511a355fabe792cc6ae844d26004de7c55c104b4` |92focused passes and selected Ruff F821/F822/F823; **3993passed+28subtests** in the full safe suite |
+| `f815857` | Consolidated guides, root-confirmed audit rename,39phase and28internal-note retirements; only Python edits are two operator-docstring pointers |
 
-All QA above used Python3.14.4, synthetic configuration/state, network-none and no private mounts. The safe suite excludes `tests/test_streaming.py` and `tests/test_streaming_primary.py`; it is not unrestricted or live-provider testing. Counts overlap and must not be summed. The new catalog-loop case uses deliberately padded synthetic schemas and a fake dispatcher/initial message builder while exercising real group expansion, loop and budget enforcement. It is not production-schema-size or full transport acceptance.
+QA used Python3.14.4, synthetic configuration/state, network-none and no private mounts. The safe suite excludes `tests/test_streaming.py` and `tests/test_streaming_primary.py`; it is not unrestricted/live-provider testing. Counts overlap, do not sum. The catalog-loop case uses padded synthetic descriptions and fake dispatch/initial assembly while exercising real expansion/loop/budget logic, not production schema-size or full transport acceptance.
 
-Exact commands, failures/corrections, source reviews and immutable snapshot refs: [validation ledger](../audit/20260924T210402Z-audit/validation.md). Finding-level dispositions: [implementer response](../audit/20260924T210402Z-audit/05-IMPLEMENTER-RESPONSE.md). Original external verdict: [round two](../audit/20260924T210402Z-audit/08-ROUND2-REPORT.md).
+Exact commands, failures, corrections and immutable evidence refs: [validation](../audit/20260924T210402Z-audit/validation.md). Finding dispositions: [response](../audit/20260924T210402Z-audit/05-IMPLEMENTER-RESPONSE.md). Original conditional verdict: [round two](../audit/20260924T210402Z-audit/08-ROUND2-REPORT.md).
 
-## Candidate artifact — verified, not live-accepted or deployed
+## Verified and deployed artifact
 
-`dame-curie-app:89fb851`, image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc`**, carries source revision `89fb851144dbd9c0bd661a67c5937161d1b58b52`.
+Image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc`**, local tag`dame-curie-app:89fb851`, source revision`89fb851144dbd9c0bd661a67c5937161d1b58b52`.
 
-The locally tagged Python base was absent. Rather than pull/install dependencies, QA77 layered the committed application inputs onto the previously verified `be28b85` artifact `sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`, using network-none and pull=false. The dependency lock and normal Docker recipe are unchanged between those source revisions; dependency layers are inherited, **not freshly rebuilt**. The temporary overlay recipe recopies application inputs and regenerates provenance. QA78 matched all56declared copied inputs to the committed archive and checked baked commit/branch/dirty plus OCI revision. The existing guarded constructor passed inside the actual image with external prompts and `?`, no network/private mounts/login. Fresh identity and bounded live delivery are still pending; a constructor is not that acceptance.
+QA77 built an explicit offline source overlay onto previously verified `be28b85` image`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`, because the local Python-base tag was absent. No pull/install; normal recipe and dependency lock unchanged, dependency layers inherited, **not freshly rebuilt**. QA78 matched all56copied inputs to the committed archive and checked baked commit/branch/dirty plus OCI revision. The existing guarded constructor passed in the actual image without network/private state/login. Later documentation commits do not change its application inputs.
 
-## Last observed temporary runtime
+## Current temporary runtime — checked16:47:48Z
 
-The coordinator's latest metadata check still found **old source `6859025`**, not the corrected candidate:
+- Account`dame-curie`, UID1005; rootless engine`12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`, socket`/run/user/1005/docker.sock`.
+- Container **`ef618129341ed4b2b83dceebd2a92e3e0e3437585e53f96c488381a3ca23e2d5`**, running the immutable image above; started**16:46:31.285765518Z**. Durable image selector matches.
+- Fresh startup evidence verified Discord identity**1504398705539944560** at**16:46:35.602714316Z**. Embedding readiness passed; pending smoke list empty. Docker status alone was not used as identity proof.
+- Request**`857116de560f4054b261202d7272dcab`** completed in **7seconds**, one delivery, exact21-character marker body plus configured29-character footer, zero readback failures. It ran on the immediately prior smoke-scoped container using the **same immutable image**, not on the final recreated container. No second inference was submitted. This is happy-path acceptance, not a failure/feature matrix.
+- Original controls restored **byte-exact**, including all three allowed channels. Low reasoning/output12345/REMoff/autonomy-control-off/RAGon and image qualityhigh preserved; neither image alias disabled. Profile, REM, prompt and smoke-config fingerprints unchanged. One stored server prompt1939UTF-8 bytes, none over16KiB; external prompt mount verified, base personality uninspected.
+- Coordinator mistakenly requested `restart` after stopping the smoke candidate; the operator correctly refused, exit1. Evidence was preserved privately, then approved `start --replace` recreated it with original controls. This invocation error remains in the ledger; no source bypass or repeated smoke was used.
 
-- Account `dame-curie`, UID1005; rootless engine `12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`, socket `/run/user/1005/docker.sock`.
-- Container `495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, running image `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`, started2026-09-25T12:30:41Z.
-- Prior startup receipt verified temporary Discord identity1504398705539944560. The fresh Docker metadata check alone is **not** a new Discord identity proof.
-- Minimum round-two private precheck: low reasoning/output12345/REMoff/autonomyoff/RAGon, image qualityhigh, neither `hd_image` nor `image_generator` disabled; three allowed channels include the prepared smoke channel. One stored server prompt:1939UTF-8 bytes, none over16KiB. Base personality was not read. Recheck before rollout; do not restore these dated values over later human changes.
-
-Earlier QA67–69 ran `be28b85` only for one180s-deadline smoke request, completed in8s with an exact marker body plus the configured footer, then restored the old image and original control bytes. It did not accept the new `89fb851` candidate. The three temporary-specific operator files remain installed; **host viewer/Screen were not updated or exercised**. Recovery lives in Operations and the private rollback root there, not in copied stale profiles.
+Rollback: retained old image`sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f` (source6859025), root-only evidence`/var/backups/dame-curie-dirac/round2-release-20260925T163646Z/`. Future rollback is image-only under a compatible grant; do not overlay these dated controls on later human edits. Keep each smoke request with its terminal receipt. Host viewer/Screen were **not** updated/exercised; installed operators still match reviewed89fb851 logic, not later docstring edits.
 
 ## Retained decisions and limits
 
-- Reasoning-only results remain terminal; fallback and mandatory tool-reasoning policy changes await root. Shell remains admin-or-allowlisted with the documented same-UID writable-control risk.
-- Viewer oversized-record/redaction-continuity loss remains fail-closed until viewer restart, including affected canonical interactive paths. Current source is not host installation evidence.
-- C09 import-time dotenv redesign is an accepted deferral, not an open task. P08/I05 historical provenance is permanently unattributable; quarantine remains retained, with no cache cleanup.
-- Canonical native-image profile reconciliation remains held. No canonical private profile was inspected. Voice, exhaustive media/admin/plugin combinations, replicas, sustained load and remote-deletion recovery are not established by these tests or a happy-path READY/smoke receipt. Jobs do not resume workers after restart. Runtime footer markers are not cryptographic authentication.
-- All existing refs/worktrees remain retained. Historical inventory26worktrees/25branches/22checkpoint refs and86commits (54patch-equivalent/32non-equivalent across13families) is a dated mapping, not current counts or proof of physical cleanliness. Five new QA evidence refs preserve exact intermediate/final trees; no pruning occurred.
+Reasoning-only terminal/fallback and mandatory tool-reasoning policies remain unchanged pending root. Shell remains admin-or-allowlisted with same-UID writable-control trust explicit. Viewer oversized-record/redaction-continuity loss stays fail-closed until viewer restart, including affected canonical interactive paths; source is not host-installation evidence.
 
-## Documentation recovery
+C09 import-time dotenv redesign is an accepted deferral, not an open task. P08/I05 historical provenance is permanently unattributable and quarantined, with no cache cleanup. Canonical native-image reconciliation remains held; its private profile was not inspected. Voice, exhaustive media/admin/plugin/provider combinations, replicas, sustained load and publisher remote-deletion recovery remain unverified. Jobs do not resume workers after restart; runtime footer markers are not authentication. Ordinary shared embedding requests are permitted and occurred; no shared-service lifecycle/configuration change followed.
 
-Current contracts belong in the nine `docs/` guides indexed by README. Root renamed the retained audit directory to `20260924T210402Z-audit`; original report text and historical path spellings stay unchanged. The obsolete `legacy/` removal was separately authorized (24files/3970lines), not a publisher or runtime change. 39phase files and28accepted internal notes were physically retired after contracts/recovery migration; original reports, quarantine and failed-run evidence remain. The closure receipt records their destinations and immutable recovery.
+## Documentation and history
 
-`git show eb188ac:phase-II_v2/SESSION_LOG.md` recovers the verbatim prior human grant; the same immutable revision retains all phase plans, provisioning/inventory, operating receipts and Vulture inputs. Historical status is also recoverable at `ab64853:docs/STATUS.md`. These are recovery references, not instructions to restore old files or reuse old authority. Root's unrelated ignored audit material, `reports/` and skill work remain untouched.
+Current guidance is README/AGENTS/SECURITY/TODO plus the nine guides. `f815857` retired39unchanged phase files and28unchanged internal notes after migration/recovery preservation. All16external originals remain byte-identical to `eb188ac` in root's renamed audit directory; response/validation/closure, quarantine/process companion, QA recipe and failed-QA evidence remain.
+
+`git show eb188ac:phase-II_v2/SESSION_LOG.md` recovers the verbatim prior grant; that revision retains all phase files. Internal notes remain in`89fb851` under the original audit path; list its Git tree to recover them. These are historical evidence, not renewed operating instructions. Earlier status is recoverable at`ab64853:docs/STATUS.md`.
+
+All existing refs/worktrees/caches remain. Historical inventory26worktrees/25branches/22checkpoint refs and86commits (54equivalent/32non-equivalent across13families) is dated mapping, not current counts/cleanliness proof. Five new QA evidence refs preserve intermediate/final trees. Root's unrelated ignored audit material, `reports/` and skill work remain untouched.

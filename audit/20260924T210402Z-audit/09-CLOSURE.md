@@ -1,49 +1,40 @@
-# Round-two closure — documentation checkpoint
+# Round-two closure — 2026-09-25
 
-## Coordinator decision
+## Decision and current state
 
-**Proceed to one bounded temporary-Dirac acceptance case; promotion is conditional on fresh identity, delivery/readback and control-integrity checks. The corrected candidate is not live at this checkpoint.** Root delegated that temporary-only decision. Canonical/V1 activation, publisher/shared-service lifecycle changes and remote operations remain held. Source readiness does not authorize those operations.
+**Accepted internally; corrected source`89fb851` is live on temporary Dirac.** Root delegated the coordinator's temporary-only decision; source/QA/artifact checks and one bounded smoke passed before promotion. Canonical/V1 activation, publisher/shared-service lifecycle changes and remote operations remain held. This receipt creates no standing runtime grant and does not replace the original external auditor's conditional verdict.
 
-The correction slice is accepted internally: reviewed source, safe isolated QA, actual-image input/construction checks and corrected documentation. This is **not a replacement verdict from the original external auditor**; `08-ROUND2-REPORT.md` and its follow-ups remain verbatim.
+- Image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc`**; source revision`89fb851144dbd9c0bd661a67c5937161d1b58b52`.
+- Final container **`ef618129341ed4b2b83dceebd2a92e3e0e3437585e53f96c488381a3ca23e2d5`**, started**16:46:31.285765518Z**. Fresh startup identity**1504398705539944560** verified at**16:46:35.602714316Z**; running/embedding-ready, pending smoke listempty. Durable selector matches.
+- QA83 request**`857116de560f4054b261202d7272dcab`** completed in **7seconds**, one delivery, exact21-character marker body plus configured29-character footer, zero readback failures. This ran on the immediately prior smoke-scoped container with the **same immutable image**; no second inference after recreation. Protocol`reply_verified=false` was preserved; coordinator's exact-body assessment is separate.
+- QA86 at**16:47:48Z** confirmed original controls restored **byte-exact**, all three channels, low reasoning/output12345/REMoff/autonomy-control-off/RAGon/high image quality, neither image alias disabled. REM/profile/prompts/smoke config unchanged. One stored server prompt1939UTF-8 bytes, none over16KiB; base personality uninspected.
 
-## Source and artifact
+**Operator mistake retained:** coordinator stopped the smoke candidate, then incorrectly called running-only`restart`. The operator refused, exit1, preserving evidence. Logs were saved privately and approved`start --replace` recreated the same image with original controls; no source bypass or repeated smoke. The runbook now makes that command distinction explicit.
 
-- Source corrections: `c2d6b0e` and `89fb851`; all final application/test blobs match QA75/76 tree`511a355fabe792cc6ae844d26004de7c55c104b4`.
-- QA75:92focused passes and Ruff F821/F822/F823. QA76:**3993passed+28subtests**, safe selection, Python3.14.4/network-none/synthetic state/no private mounts. Excluded live-coupled modules and synthetic catalog-test limits are explicit in `validation.md`; no new test files/functions. Counts overlap, do not sum.
-- Fresh independent Sol`a6b627d2` diff-focused source closure: pass. Source-only review is not an independent test run.
-- Actual candidate **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc`**, source`89fb851144dbd9c0bd661a67c5937161d1b58b52`.
-- QA77 inherited previously verified `be28b85` dependency layers because the local Python-base tag was absent. No pull/install; normal recipe and pins unchanged. Explicit offline source overlay, **not a fresh dependency rebuild**.
-- QA78:56copied inputs matched the committed archive; baked commit/branch/dirty and OCI revision checked. Existing guarded actual-image constructor passed without network/private state/login. Not feature-complete live acceptance.
+Rollback: old image **`sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`** remains; opaque controls/selector/logs and fingerprints are in root-only **`/var/backups/dame-curie-dirac/round2-release-20260925T163646Z/`**. Future rollback is image-only under a compatible grant, not permission to restore stale controls. Keep requests and terminal receipts together. Host viewer/Screen were not updated or exercised.
 
-## Actual documentation retirement
+## Source, QA and artifact provenance
 
-**39phase files and28internal audit notes removed**, after their surviving contracts and immutable recovery references were consolidated. Root's audit rename is adopted. All16external originals were byte-verified against `eb188ac`; the28retired internal files were byte-verified against `89fb851` before deletion. No uncommitted changes were discarded.
+Corrections: **`c2d6b0e` +`89fb851`**. Final application/test blobs match QA75/76 tree`511a355fabe792cc6ae844d26004de7c55c104b4`. QA75:92focused passes and Ruff F821/F822/F823. QA76:**3993passed+28subtests**, Python3.14.4/network-none/synthetic state/no private mounts. Existing cases adapted, no new test files/functions. Counts overlap. Live-coupled exclusions, failed runs and deliberately synthetic catalog-test limits remain in`validation.md`.
 
-| Retired material | Durable destination / recovery |
-| --- | --- |
-| Phase design, cuts, jobs, source boundaries | `../../docs/ARCHITECTURE.md`, root README/AGENTS |
-| Runtime, relay, smoke, logging, provisioning/identity boundaries | `../../docs/OPERATIONS.md`, `../../docs/STATUS.md` |
-| Publishing layout and unexercised deletion-recovery limitation | `../../docs/PUBLISHING.md`; protected publisher source/template unchanged |
-| Development/Vulture/validation limits | `../../docs/DEVELOPMENT.md`, `../../docs/DEAD_CODE.md`, this retained validation ledger |
-| Prompt/image/provider contracts | LONGPROMPT/IMAGE_GENERATION/PROVIDER_RELOAD guides |
-| Intake/inventory/implementation/micro/review notes | Findings in05, commands/failures/measurements in validation, current contracts in the nine guides |
+Independent Sol`a6b627d2` diff-focused source closure passed; it did not run its own QA or act as the original external auditor. QA77 used an explicit offline source overlay on the previously verified `be28b85` artifact because the local Python-base tag was absent. No pull/install; normal recipe and pins unchanged, dependency layers inherited, **not freshly rebuilt**. QA78 matched all56copied inputs and checked baked commit/branch/dirty plus OCI revision; the existing actual-image guarded constructor passed without network/private state/login.
 
-Exact phase recovery, including the **verbatim prior human grant**: `git show eb188ac:phase-II_v2/SESSION_LOG.md`; all other phase files exist at that revision. Internal-note recovery: `git ls-tree -r --name-only 89fb851 -- audit/`, then `git show 89fb851:<listed-original-path>`. Historical citations in original reports were deliberately not rewritten.
+## Documentation checkpoint
 
-Retained: original00–04/A–E/08/R1–R5,05response,07historical process companion, quarantine, validation/this receipt, QA image recipe and failed-QA triage/gzip. Independent document reviewer Sol`6585cc5a` checked the small current guides, response/ledger and live links. Incorrect candidate/current-image wording, obsolete retirement gates and ledger-wide offline claims were corrected and narrowly rechecked; final temporal wording was corrected afterward. No independent runtime/byte-identity verification is attributed to that source-only reviewer.
+**`f8158571fe05a63e783193792f60010806e57e4d`** consolidated current contracts and physically retired **39phase files +28internal audit notes** (about6000net lines). Root's shorter audit directory is adopted. All16external originals were byte-verified against`eb188ac`; retired internal notes matched`89fb851`, and phase files had no uncommitted changes. Original blobs were rechecked after the commit.
 
-The only Python edits in this documentation slice are **two module-docstring pointers** in `scripts/dirac.py` and `scripts/dirac_relay.py`; executable operator logic and application-image inputs are unchanged. Installed operators still match reviewed source`89fb851`, not those new docstrings. Host viewer/Screen were not updated or exercised.
+Current contracts live in README/AGENTS/SECURITY/TODO and the nine guides: Architecture, Operations, Status, Development, Dead Code, Images, Longprompt, Provider Reload and Publishing. The only Python changes in this documentation slice are two operator module-docstring pointers; executable logic/application-image inputs are unchanged. Installed operators remain verified against reviewed`89fb851` logic, not those later docstrings.
 
-All existing refs/worktrees/caches and root's unrelated ignored audit material, `reports/` and skill work remain untouched. Five new immutable QA evidence refs preserve failed/intermediate/final snapshots; old inventory totals remain dated, not current physical-cleanliness claims.
+Retained evidence: originals00–04/A–E/08/R1–R5; response, validation and this receipt;07historical process companion/quarantine; QA recipe and failed-QA triage/gzip. Independent Sol`6585cc5a` reviewed current guides/links and response/ledger; stale image/retirement/offline-scope claims were corrected and narrowly rechecked. Original report text/historical citations were deliberately not rewritten.
 
-## Fresh temporary preflight — QA79
+Recovery: `git show eb188ac:phase-II_v2/SESSION_LOG.md` preserves the **verbatim prior human grant**; that revision retains every phase file. `git ls-tree -r --name-only 89fb851 -- audit/` locates retired internal notes under the old directory name; recover them with`git show 89fb851:<listed-path>`. Historical text is evidence, not renewed operating authority.
 
-AccountUID1005, designated socket/engine and installed trusted operator hashes reverified; interpreter symlink targets are root-owned and not service-writable. Old image`sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f` still runs in container`495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`; durable selector matches. Embedding readiness passed and pending smoke list is empty; status alone is not fresh Discord identity proof.
+All existing refs/worktrees/caches and root's unrelated ignored audit material, `reports/` and skill work remain untouched. Five new QA evidence refs preserve exact failed/intermediate/final trees; dated inventory counts are not current cleanliness claims.
 
-Minimum private check again found one1939-byte stored server prompt, none over16KiB; external prompt mount verified, base personality uninspected. Reasoninglow/output12345/REMoff, autonomy control off, RAGon, image qualityhigh and neither image alias disabled. Three allowed channels include the approved smoke channel. Profile, controls, prompts and smoke configuration fingerprints are unchanged; preserve human settings and recheck before restoring anything. Normal shared embedding requests are permitted, not an isolation failure.
+## Closed assignment, retained boundaries
 
-## Retained limits
+No assigned correction/document-retirement item remains open. **C09 dotenv deferral is accepted; P08/I05 historical provenance is permanently unattributable and quarantined**, not a new import-isolation/cache-cleanup task. Reasoning-only fallback and mandatory tool-reasoning policies remain unchanged pending root. Same-UID writable-control trust stays explicit; oversized viewer records latch evidence off until viewer restart, including affected canonical interactive paths.
 
-Reasoning-only fallback/mandatory tool-reasoning policies remain unchanged pending root. Same-UID writable-control trust remains explicit. C09 dotenv deferral is accepted; P08/I05 historical provenance is permanently unattributable and quarantined, not a cache-cleanup task. Viewer oversized-record continuity loss stays fail-closed until viewer restart, including affected canonical interactive paths. Jobs do not resume workers after restart; SDK buffering/TOCTOU and unverified voice/full-feature/multi-instance/load/remote-recovery limits remain disclosed.
+One smoke does not establish adverse cancellation/exhaustion, live image/voice/admin behavior, exhaustive providers/features, replicas, load or publisher remote-deletion recovery. Jobs do not resume workers after restart; SDK buffering/TOCTOU and packaging/voice limitations remain disclosed. Footer markers are not authentication. Ordinary configured embedding requests occurred; no shared-service configuration/lifecycle change followed.
 
-**Still to record:** bounded current-candidate runtime result, final live/no-live decision, exact rollback reference and final documentation/receipt commit. The earlier QA67–69 happy-path receipt belongs to `be28b85`, not this candidate.
+For future work, start with`../../docs/STATUS.md` and`../../AGENTS.md`; exact commands, failures, hashes and runtime chronology are in`validation.md`. This is the final coordinated receipt, not another per-child report.

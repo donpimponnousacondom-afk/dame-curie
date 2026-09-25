@@ -2,7 +2,7 @@
 
 Discord-only V2, Python **3.14**. Protected V1 remains separate.
 
-**Round-two source corrections are committed and passed isolated QA plus independent review.** That is not a deployment claim. [Status](docs/STATUS.md) records the exact source, artifact and running-instance evidence; [TODO](TODO.md) contains the remaining work. Canonical/V1 activation and publisher/remote changes remain held. Root delegated the temporary-Dirac release decision to the coordinator, not to every future agent.
+**Round two is closed internally; corrected source `89fb851` is live on temporary Dirac.** Isolated QA, independent review and one bounded smoke passed; original controls were restored. [Status](docs/STATUS.md) and the [closure receipt](audit/20260924T210402Z-audit/09-CLOSURE.md) separate source, artifact and runtime proof. [TODO](TODO.md) records completed work and held decisions. Canonical/V1 and publisher/remote changes remain held. The coordinator's exercised temporary-release delegation is not a standing grant for future agents.
 
 ## Current documentation
 

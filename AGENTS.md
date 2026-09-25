@@ -6,7 +6,7 @@ Root's current instructions override repository guidance. This is the Discord-on
 
 Read `docs/STATUS.md` for source/artifact/runtime facts, `TODO.md` for remaining work, `docs/OPERATIONS.md` for account/engine and recovery boundaries, and `docs/DEVELOPMENT.md` / `docs/ARCHITECTURE.md` for validation and source contracts. README is the small current documentation index. Never inspect another checkout or upstream project to fill gaps.
 
-## Current closure authority — 2026-09-25
+## Closed assignment and authority — 2026-09-25
 
 Root authorized complete local audit remediation, independent review, coherent local commits, credential-free isolated QA and bounded automated acceptance in the prepared **temporary Dirac** channel. The later assignment narrowed corrections to `audit/20260924T210402Z-audit/08-ROUND2-REPORT.md` section5 and requires actual documentation consolidation/retirement this round. Root renamed the audit directory; preserve original report contents rather than rewriting them to match the new path.
 
@@ -15,6 +15,8 @@ Root: “we defer the decision to you about doing this live or not, yet or not y
 This grants no canonical/V1 activation, publisher/shared-service lifecycle change, remote Git operation, general private inspection, general chat injection or unbounded inference. Ordinary configured embedding requests are permitted: shared compute with separate profile stores is not itself an isolation blocker. Reasoning-only terminal/fallback and mandatory tool-reasoning policies remain unchanged pending root.
 
 Source children have **no execution, runtime or private-read authority**. Coordinator-only exceptions above are not inherited by a new source task. Use existing response/validation ledgers; children return scoped chat findings, not a new report each. Preserve originals, failures, retractions, quarantine and unresolved evidence. Local commits and source review never independently authorize rollout.
+
+**Outcome:** correction source`c2d6b0e`/`89fb851`, documentation retirement`f815857` and temporary-only promotion are recorded in`audit/20260924T210402Z-audit/09-CLOSURE.md`. Original controls were restored, the accepted image pinned, and final identity/readiness verified. The assignment is closed; the dated grant above is **not recurring permission** for later runtime/private operations. Future source tasks retain the defaults below.
 
 ## Approved design and protected resources
 
