@@ -80,8 +80,9 @@ def sent_message_id(payload: object) -> str:
 class _Turn:
     """One injected input as the observer sees it.
 
-    ``delivered`` is everything the room received; ``output`` is the part of it
-    that is not a bot notice and was posted while a model completion stood.
+    ``delivered`` holds only acknowledged message IDs observed for the target
+    room; ``output`` is the subset not marked as notices and posted while a model
+    completion stood. A lost send response cannot supply an ID here.
     ``model_ok`` is the latest own call, ``model_answered`` any of them.
     """
 
@@ -248,6 +249,7 @@ class DiracSmokeRuntime:
         self._observer = _TurnObserver()
         self._poll: asyncio.Task | None = None
         self._stuck: asyncio.Task | None = None
+        self._stuck_receipt: tuple[asyncio.Task, _Turn, SmokeRecord, Path] | None = None
         self._http = None
         self._http_send = None
         self._send_wrapper = None
@@ -320,24 +322,54 @@ class DiracSmokeRuntime:
                     poll_settled = await self._wait_for_settle(poll)
                 if poll_settled and self._poll is poll:
                     self._poll = None
-            await self._cleanup_owned_inputs()
-            if poll_settled:
+            inputs_settled = await self._cleanup_owned_inputs(poll_settled=poll_settled)
+            if poll_settled and inputs_settled:
                 self._started = False
                 if self._poll_failure is None:
                     self._record_runtime_state("stopped")
             elif self._poll_failure is None:
                 self._record_runtime_state("stop_unconfirmed")
 
-    async def _cleanup_owned_inputs(self) -> None:
-        """Cancel this runtime's observed inputs and restore its hooks once."""
+    async def _cleanup_owned_inputs(self, *, poll_settled: bool = True) -> bool:
+        """Cancel exact owned inputs; retain hooks until their settlement is known."""
         async with self._cleanup_lock:
-            try:
-                for turn in self._observer.outstanding():
-                    self._cancel_input(turn.channel_id, turn.input_id)
-                    await self._wait_for_settle(turn.task)
-                    self._observer.discard(turn.input_id)
-            finally:
+            settled = True
+            for turn in self._observer.outstanding():
+                removed, registered = self._cancel_input(turn.channel_id, turn.input_id)
+                retained = self._stuck_receipt
+                task = turn.task or registered
+                if task is None and retained is not None and retained[1] is turn:
+                    task = retained[0]
+                if task is None:
+                    confirmed = removed or turn.done.is_set()
+                else:
+                    confirmed = await self._wait_for_settle(task)
+                if not poll_settled and turn.task is None:
+                    confirmed = False  # injection can still resume and submit
+                if confirmed:
+                    if retained is not None and retained[1] is turn:
+                        self._reconcile_settled_input(retained)
+                        if self._stuck is task:
+                            self._stuck = None
+                    else:
+                        self._observer.discard(turn.input_id)
+                else:
+                    settled = False
+            if settled:
                 self._unhook()
+            return settled
+
+    def _reconcile_settled_input(
+        self, receipt: tuple[asyncio.Task, _Turn, SmokeRecord, Path]
+    ) -> None:
+        """Refresh the retained receipt once its exact cancelled task is done."""
+        _, turn, record, record_path = receipt
+        record.returned = turn.returned
+        record.delivered_ids = list(turn.delivered)
+        record.failure = record.failure.removesuffix("; owned input settlement is unconfirmed")
+        record.write(record_path)
+        self._observer.discard(turn.input_id)
+        self._stuck_receipt = None
 
     def _unhook(self) -> None:
         """Restore only the hooks still owned by this runtime."""
@@ -474,9 +506,9 @@ class DiracSmokeRuntime:
             self._poll = None
         logger.error("Dirac smoke poll failed (%s); runtime unavailable", self._poll_failure)
         self._record_runtime_state("failed", self._poll_failure)
-        await self._cleanup_owned_inputs()
+        inputs_settled = await self._cleanup_owned_inputs()
         self._stop_requested = True
-        self._started = False
+        self._started = not inputs_settled
 
     # ---- polling ----------------------------------------------------------
 
@@ -491,6 +523,11 @@ class DiracSmokeRuntime:
                 if self._stuck is not None:
                     if not self._stuck.done():
                         continue
+                    receipt = self._stuck_receipt
+                    if receipt is not None:
+                        if not receipt[0].done():
+                            continue
+                        self._reconcile_settled_input(receipt)
                     self._stuck = None
                 path = self._next_request()
                 if path is None:
@@ -537,6 +574,8 @@ class DiracSmokeRuntime:
         turn: _Turn | None = None
         deadline = None
         settled = False
+        notice_started = False
+        injection_returned = False
         try:
             try:
                 raw = read_json_object(path, "request")
@@ -565,14 +604,14 @@ class DiracSmokeRuntime:
                 operator_name = self.settings.operator_name or str(
                     getattr(operator, "display_name", "") or ""
                 )
-                notice = await channel.send(
-                    compose_notice(
-                        request,
-                        operator_name=operator_name,
-                        operator_id=self.settings.operator_id,
-                        bot_id=int(self.bot.user.id),
-                    )
+                notice_text = compose_notice(
+                    request,
+                    operator_name=operator_name,
+                    operator_id=self.settings.operator_id,
+                    bot_id=int(self.bot.user.id),
                 )
+                notice_started = True
+                notice = await channel.send(notice_text)
                 input_id = str(notice.id)
                 record.notice_id = input_id
                 record.status = "running"
@@ -581,6 +620,7 @@ class DiracSmokeRuntime:
                     raise asyncio.CancelledError
                 turn = self._observer.open(input_id, str(channel.id))
                 await self.bot._on_message_impl(_NoticeInput(notice, operator))
+                injection_returned = True
                 if self._stop_requested:
                     raise asyncio.CancelledError
                 await turn.done.wait()
@@ -590,12 +630,16 @@ class DiracSmokeRuntime:
             record.delivered_ids = list(turn.delivered)
             if not turn.returned:
                 record.status = "failed"
-                record.failure = "the turn did not return; it raised or was cancelled"
+                record.failure = (
+                    "the turn did not return; it raised or was cancelled; IDs record "
+                    "confirmed messages only; unacknowledged sends, if any, may "
+                    "still have reached Discord"
+                )
             elif not record.delivered_ids:
                 record.status = "failed"
                 record.failure = (
-                    "the turn returned without delivering a visible message "
-                    "(no_response)"
+                    "the turn returned with no confirmed delivery ID for a visible reply; "
+                    "unacknowledged sends, if any, may still have reached Discord"
                 )
             elif turn.output:
                 record.status = "completed"
@@ -630,100 +674,91 @@ class DiracSmokeRuntime:
                 )
                 record.reply_verified = False
                 record.write(record_path)
-        except TimeoutError:
+        except (Exception, asyncio.CancelledError) as exc:
+            cancelled = isinstance(exc, asyncio.CancelledError)
             if settled:
-                logger.error(
-                    "Dirac smoke request %s was recorded before a readback timeout",
-                    request_id,
-                )
-                return
-            if deadline is None or not deadline.expired():
-                cleanup_confirmed = True
-                if turn is not None:
-                    self._cancel_input(turn.channel_id, turn.input_id)
-                    cleanup_confirmed = await self._wait_for_settle(turn.task)
-                    record.returned = turn.returned
-                    record.delivered_ids = list(turn.delivered)
-                    self._observer.discard(turn.input_id)
-                record.status = "failed"
-                record.failure = "an upstream operation timed out"
-                if not cleanup_confirmed:
-                    record.failure += "; owned turn cleanup is unconfirmed"
-                record.write(record_path)
-                logger.error(
-                    "Dirac smoke request %s failed during an upstream timeout",
-                    request_id,
-                )
-                return
-            if turn is None:
-                record.status = "timeout"
-                record.failure = (
-                    "the deadline expired before the notice was delivered; the "
-                    "request was never injected"
-                )
-            else:
-                queued = self._cancel_input(turn.channel_id, turn.input_id)
-                settled = await self._wait_for_settle(turn.task)
-                record.returned = turn.returned
-                record.delivered_ids = list(turn.delivered)
-                record.status = "timeout"
-                if turn.task is not None:
-                    record.failure = (
-                        "the turn exceeded its deadline; only this input was "
-                        "cancelled"
-                    )
-                elif queued:
-                    record.failure = (
-                        "the input was still waiting in the reply queue and was "
-                        "removed unexecuted"
-                    )
-                else:
-                    record.failure = (
-                        "no turn was dispatched for the notice within the deadline; "
-                        "the bot's own gates or the reply queue dropped it"
-                    )
-                if not settled:
-                    record.failure += (
-                        "; the cancelled turn had not stopped within "
-                        f"{CLEANUP_SECONDS:g}s, so cleanup is unconfirmed"
-                    )
-            record.write(record_path)
-            if turn is not None:
-                self._observer.discard(turn.input_id)
-        except SmokeProtocolError as refused:
-            record.status = "rejected"
-            record.failure = str(refused)
-            record.write(record_path)
-        except asyncio.CancelledError:
-            if settled:
-                # The request already has its terminal record; a stop during the
-                # optional readback must not rewrite it as interrupted.
-                raise
-            if turn is not None:
-                record.delivered_ids = list(turn.delivered)
-            record.status = "interrupted"
-            record.failure = (
-                "the smoke runtime stopped while this request was in flight"
-            )
-            record.write(record_path)
-            raise
-        except Exception as exc:
-            if settled:
-                # Same reason as cancellation: the outcome is already on disk.
+                # Optional readback cannot rewrite an already terminal outcome.
+                if cancelled:
+                    raise
                 logger.error(
                     "Dirac smoke request %s was recorded before a readback error (%s)",
-                    request_id,
-                    type(exc).__name__,
+                    request_id, type(exc).__name__,
                 )
                 return
-            record.status = "failed"
-            record.failure = f"{type(exc).__name__}: request processing failed"
-            record.write(record_path)
-            logger.error(
-                "Dirac smoke request %s failed (%s)",
-                request_id,
-                type(exc).__name__,
-            )
+            expired = isinstance(exc, TimeoutError) and deadline is not None and deadline.expired()
+            if cancelled:
+                record.status = "interrupted"
+                record.failure = "the smoke runtime stopped while this request was in flight"
+            elif expired:
+                record.status = "timeout"
+                record.failure = "the deadline expired before the bot's message handler was invoked"
+            elif isinstance(exc, TimeoutError):
+                record.status = "failed"
+                record.failure = "an upstream operation timed out"
+            elif isinstance(exc, SmokeProtocolError) and turn is None:
+                record.status = "rejected"
+                record.failure = str(exc)
+            else:
+                record.status = "failed"
+                record.failure = f"{type(exc).__name__}: request processing failed"
+            if turn is None:
+                if notice_started and not record.notice_id:
+                    record.failure += "; notice send started but delivery is unconfirmed"
+                record.write(record_path)
+            else:
+                removed, registered = self._cancel_input(turn.channel_id, turn.input_id)
+                task = turn.task or registered
+                if expired:
+                    if turn.task is not None:
+                        record.failure = (
+                            "the turn exceeded its deadline; only this input was cancelled; "
+                            "already-started sends cannot be retracted"
+                        )
+                    elif registered is not None:
+                        record.failure = "the registered reply task was cancelled before its turn started"
+                    elif removed:
+                        record.failure = "the input was still waiting in the reply queue and was removed unexecuted"
+                    elif injection_returned:
+                        record.failure = (
+                            "no turn was dispatched for the notice within the deadline; "
+                            "the bot's own gates or reply queue dropped it"
+                        )
+                    else:
+                        record.failure = "the notice's dispatch and owned input settlement are unconfirmed"
+                record.failure += (
+                    "; IDs record confirmed messages only; unacknowledged sends, if "
+                    "any, may still have reached Discord"
+                )
+                failure = record.failure
+                record.failure += "; owned input settlement is unconfirmed"
+                record.returned = turn.returned
+                record.delivered_ids = list(turn.delivered)
+                record.write(record_path)
+                if task is not None:
+                    self._stuck_receipt = (task, turn, record, record_path)
+                try:
+                    if task is None:
+                        confirmed = removed or turn.done.is_set() or injection_returned
+                    else:
+                        confirmed = await self._wait_for_settle(task)
+                finally:
+                    record.returned = turn.returned
+                    record.delivered_ids = list(turn.delivered)
+                    record.write(record_path)
+                if confirmed:
+                    record.failure = failure
+                elif task is None:
+                    self._stop_requested = True
+                record.write(record_path)
+                if confirmed:
+                    self._stuck_receipt = None
+                    self._observer.discard(turn.input_id)
+            if cancelled:
+                raise
+            if isinstance(exc, TimeoutError) and not expired:
+                logger.error("Dirac smoke request %s failed during an upstream timeout", request_id)
+            elif not isinstance(exc, SmokeProtocolError):
+                logger.error("Dirac smoke request %s failed (%s)", request_id, type(exc).__name__)
 
     # ---- one request ------------------------------------------------------
 
@@ -784,11 +819,12 @@ class DiracSmokeRuntime:
     async def _wait_for_settle(self, task: asyncio.Task | None) -> bool:
         """Wait up to ``CLEANUP_SECONDS`` for a cancelled task to actually stop.
 
-        A cancellation is a request, not a result. When the task has not stopped,
-        the runtime says so instead of claiming a stopped turn, and it starts no
-        further request until that task is really gone.
+        An unregistered task is not settlement evidence. A live task that does not
+        stop blocks new smoke requests until it is really gone.
         """
-        if task is None or task.done():
+        if task is None:
+            return False
+        if task.done():
             return True
         await asyncio.wait({task}, timeout=CLEANUP_SECONDS)
         if task.done():
@@ -830,10 +866,10 @@ class DiracSmokeRuntime:
             parts.append(str(getattr(message, "content", "") or ""))
         return "\n---\n".join(parts), unreadable
 
-    def _cancel_input(self, channel_id: str, input_id: str) -> bool:
-        """Cancel exactly this input: not the channel, not the queue behind it."""
+    def _cancel_input(self, channel_id: str, input_id: str) -> tuple[bool, asyncio.Task | None]:
+        """Cancel exactly this input and retain its registered task for settlement."""
         queue = getattr(self.bot, "_reply_queue", None)
         if queue is None:
-            return False
-        return bool(queue.cancel_message(channel_id, input_id))
+            return False, None
+        return queue.cancel_message_with_task(channel_id, input_id)
 

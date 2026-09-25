@@ -370,22 +370,32 @@ class ReplyQueue:
         before the turn's task exists, when removing the pending entry is the
         only way to stop an expired input from running later, unobserved.
         """
+        cancelled, _ = self.cancel_message_with_task(channel_id, message_id)
+        return cancelled
+
+    def cancel_message_with_task(
+        self, channel_id: str | int, message_id: str | int,
+    ) -> tuple[bool, asyncio.Task | None]:
+        """Return the exact running task so callers can verify cancellation settlement."""
         cid = str(channel_id or "")
         mid = str(message_id or "")
         state = self._channels.get(cid)
         if state is None or not mid:
-            return False
+            return False, None
+        running = None
+        cancelled = False
         if state.running_message_id == mid:
             running = state.running
             if running is not None and not running.done():
                 running.cancel()
-                return True
-            return False
-        for index, entry in enumerate(state.queue):
-            if entry.message_id == mid:
-                del state.queue[index]
-                return True
-        return False
+                cancelled = True
+        else:
+            for index, entry in enumerate(state.queue):
+                if entry.message_id == mid:
+                    del state.queue[index]
+                    cancelled = True
+                    break
+        return cancelled, running
 
     async def close(self) -> None:
         self._closing = True

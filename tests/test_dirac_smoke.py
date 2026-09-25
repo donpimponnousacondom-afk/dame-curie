@@ -61,16 +61,20 @@ class _FakeHTTP:
 
     ``send_message`` is awaited and answers with the message payload itself, which
     is what ``HTTPClient.request`` returns and what ``Messageable`` builds the
-    message from.
+    message from. With ``lose_response``, the fake accepts and assigns an ID before
+    losing the response; the caller cannot observe that ID.
     """
 
     def __init__(self) -> None:
         self.calls = []
         self.next_id = 700
+        self.lose_response = False
 
     async def send_message(self, channel_id, *, params=None):
         self.next_id += 1
         self.calls.append((str(channel_id), params))
+        if self.lose_response:
+            raise TimeoutError("send accepted, response lost")
         return {"id": str(self.next_id), "channel_id": str(channel_id)}
 
 
@@ -152,6 +156,7 @@ class _FakeBot:
         self._reply_queue.bind(self._run_queued_reply)
         self._turn_observer = None
         self.dispatch = True
+        self.dispatch_failure = ""
         self.injected = []
         self.turn = self._default_turn
         self.generate = self._default_generate
@@ -190,6 +195,17 @@ class _FakeBot:
             self._reply_queue.submit(
                 str(message.channel.id), message, message.content, directed=True
             )
+            if self.dispatch_failure in {"registered", "upstream_timeout"}:
+                await asyncio.sleep(0)  # pump registers a task before its first turn step
+                assert self._reply_queue.active(message.channel.id)
+                assert self._turn_observer._turns[str(message.id)].task is None
+            elif self.dispatch_failure == "after_partial":
+                while len(message.channel.sent) < 2:
+                    await asyncio.sleep(0)
+            if self.dispatch_failure == "upstream_timeout":
+                raise TimeoutError("synthetic private request and config contents")
+            if self.dispatch_failure:
+                raise RuntimeError("synthetic failure after smoke dispatch")
 
     async def _handle_message(self, message, content):
         await self.turn(message, content)
@@ -798,18 +814,32 @@ def test_an_answer_delivered_before_a_later_failure_still_counts(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_silent_turn_is_a_failure_not_a_pass(tmp_path):
-    """`completed` requires a visible delivery, whatever the turn intended."""
+@pytest.mark.parametrize("case", ["silent", "lost_response_caught", "lost_response_raised"])
+def test_a_silent_turn_is_a_failure_not_a_pass(tmp_path, case):
+    """Missing acknowledged IDs cannot prove Discord received no message."""
 
     async def silent(message, content):
+        if case != "silent":
+            message.channel._bot.http.lose_response = True
+            if case == "lost_response_caught":
+                try:
+                    await message.channel.send("uncertain reply")
+                except TimeoutError:
+                    pass
+            else:
+                await message.channel.send("uncertain reply")
         return None
 
     async def scenario():
         settings, bot, runtime, request, record = await _one(tmp_path, body=silent)
         assert record.status == "failed"
-        assert record.returned is True
+        assert record.returned is (case != "lost_response_raised")
         assert record.delivered_ids == []
-        assert "no_response" in record.failure
+        assert "no_response" not in record.failure
+        assert "unacknowledged sends, if any, may still have reached Discord" in record.failure
+        if case != "silent":
+            assert bot.http.calls[-1] == (str(settings.channel_id), {"content": "uncertain reply"})
+            assert bot.http.next_id == int(record.notice_id) + 1
         await runtime.stop()
         await bot._reply_queue.close()
 
@@ -1243,6 +1273,29 @@ def test_an_input_that_expires_while_queued_never_runs(tmp_path):
             if ran:
                 break
         assert ran == ["blocker"]  # the expired input never became a turn
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if not bot._reply_queue.active(channel):
+                break
+        bot.dispatch_failure = "registered"
+        failed = _submit(settings, task="fail after the queue registers a task")
+        failed_record = await _wait_for_record(settings, failed.request_id)
+        for _ in range(100):
+            if "settlement is unconfirmed" not in failed_record.failure:
+                break
+            await asyncio.sleep(0.01)
+            failed_record = _record_of(settings, failed.request_id)
+        assert failed_record.status == "failed"
+        assert "RuntimeError" in failed_record.failure
+        assert "unconfirmed" not in failed_record.failure
+        assert failed_record.returned is False
+        assert failed_record.delivered_ids == []
+        assert not any("fail after the queue" in item for item in ran)
+        bot.dispatch_failure = ""
+        bot.turn = bot._default_turn
+        next_request = _submit(settings, task="run after pre-start cancellation")
+        assert (await _wait_for_record(settings, next_request.request_id)).status == "completed"
+        assert ran == ["blocker"]
         await runtime.stop()
         await bot._reply_queue.close()
 
@@ -1258,6 +1311,10 @@ def test_an_input_the_bot_never_dispatches_is_recorded_as_no_turn(tmp_path):
         assert record.status == "timeout"
         assert "no turn was dispatched" in record.failure
         assert record.notice_id  # the notice was really posted
+        assert "unconfirmed" not in record.failure
+        bot.dispatch = True
+        following = _submit(settings, task="admit after an ordinary gate")
+        assert (await _wait_for_record(settings, following.request_id)).status == "completed"
         await runtime.stop()
 
     asyncio.run(scenario())
@@ -1351,7 +1408,7 @@ def test_unconfirmed_poll_stop_is_not_reported_as_stopped(tmp_path, monkeypatch)
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("stage", ["target", "operator", "notice"])
+@pytest.mark.parametrize("stage", ["target", "operator", "notice", "injection"])
 def test_unconfirmed_stop_cannot_resume_into_notice_or_injection(
     tmp_path, monkeypatch, stage
 ):
@@ -1361,8 +1418,8 @@ def test_unconfirmed_stop_cannot_resume_into_notice_or_injection(
         bot = _FakeBot(settings)
         runtime = DiracSmokeRuntime(bot, settings)
         entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        owner = bot.channels[int(settings.channel_id)] if stage == "notice" else runtime
-        method = {"target": "_target_channel", "operator": "_operator", "notice": "send"}[stage]
+        owner = bot.channels[int(settings.channel_id)] if stage == "notice" else bot if stage == "injection" else runtime
+        method = {"target": "_target_channel", "operator": "_operator", "notice": "send", "injection": "_on_message_impl"}[stage]
         original = getattr(owner, method)
 
         async def delayed_operation(*args, **kwargs):
@@ -1382,7 +1439,7 @@ def test_unconfirmed_stop_cannot_resume_into_notice_or_injection(
         await runtime.stop()
         assert cancelled.is_set()
         assert not poll.done()
-        assert bot._turn_observer is None
+        assert bot._turn_observer is (runtime._observer if stage == "injection" else None)
         state = read_json_object(runtime_state_path(settings), "runtime state")
         assert state["status"] == "stop_unconfirmed"
 
@@ -1391,10 +1448,14 @@ def test_unconfirmed_stop_cannot_resume_into_notice_or_injection(
             await asyncio.wait_for(poll, timeout=1)
         record = _record_of(settings, request.request_id)
         assert record.status == "interrupted"
-        assert bool(record.notice_id) == (stage == "notice")
-        assert bot.injected == []
+        assert bool(record.notice_id) == (stage in {"notice", "injection"})
+        assert len(bot.injected) == (1 if stage == "injection" else 0)
+        if stage == "injection":
+            assert bot._reply_queue.depth(str(settings.channel_id)) == 0
+            assert len(bot.channels[int(settings.channel_id)].sent) == 1
         assert runtime._observer.outstanding() == []
         await runtime.stop()
+        assert bot._turn_observer is None
         assert runtime._poll is None
         assert read_json_object(runtime_state_path(settings), "runtime state")["status"] == "stopped"
         await bot._reply_queue.close()
@@ -1412,21 +1473,25 @@ def test_stop_interrupts_the_request_in_flight(tmp_path):
         assert bot.http.send_message is not unwrapped  # the wrapper is installed
 
         async def blocking(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
+            await message.channel.send("partial before stop")
             await bot.release.wait()
 
         bot.turn = blocking
         request = _submit(settings)
+        channel = bot.channels[int(settings.channel_id)]
         for _ in range(200):
             await asyncio.sleep(0.05)
             path = status_path(settings, request.request_id)
-            if not path.exists():
-                continue
-            if _record_of(settings, request.request_id).status == "running":
+            if path.exists() and _record_of(settings, request.request_id).status == "running" and len(channel.sent) == 2:
                 break
+        assert len(channel.sent) == 2
         await runtime.stop()
         record = _record_of(settings, request.request_id)
         assert record.status == "interrupted"
         assert record.status in TERMINAL_STATUSES
+        assert record.delivered_ids == [str(channel.sent[1].id)]
+        assert record.returned is False
         assert bot._turn_observer is None
         assert bot.http.send_message.__self__ is unwrapped.__self__
         assert bot.http.send_message.__func__ is unwrapped.__func__
@@ -1435,33 +1500,42 @@ def test_stop_interrupts_the_request_in_flight(tmp_path):
     asyncio.run(scenario())
 
 
-def test_the_deadline_covers_the_notice_not_only_the_turn(tmp_path):
-    """Resolving and posting the notice can stall too, and that is bounded."""
+@pytest.mark.parametrize("stage", ["target_fetch", "notice_send"])
+def test_the_deadline_covers_the_notice_not_only_the_turn(tmp_path, stage):
+    """A started send is not proof of a confirmed notice or an injected turn."""
 
     async def scenario():
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
-        bot.channels.clear()  # nothing cached: the fetch is on the path
+        channel = bot.channels[int(settings.channel_id)]
         release = asyncio.Event()  # never set
 
-        async def stalled_fetch(channel_id):
+        async def stalled_fetch(*args, **kwargs):
+            if stage == "notice_send":
+                await bot.http.send_message(channel.id, params={"content": args[0]})
             await release.wait()
 
-        bot.fetch_channel = stalled_fetch
+        if stage == "target_fetch":
+            bot.channels.clear()  # nothing cached: the fetch is on the path
+            bot.fetch_channel = stalled_fetch
+        else:
+            channel.send = stalled_fetch
         runtime = DiracSmokeRuntime(bot, settings)
         await runtime.start()
         request = _submit(settings, deadline_seconds=1.0)
         record = await _wait_for_record(settings, request.request_id)
         assert record.status == "timeout"
-        assert "never injected" in record.failure
+        assert "before the bot's message handler was invoked" in record.failure
+        assert ("notice send started but delivery is unconfirmed" in record.failure) == (stage == "notice_send")
         assert record.notice_id == ""
+        assert len(bot.http.calls) == (1 if stage == "notice_send" else 0)
         assert bot.injected == []
         await runtime.stop()
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("stage", ["target_fetch", "operator_fetch", "notice_send"])
+@pytest.mark.parametrize("stage", ["target_fetch", "operator_fetch", "notice_send", "post_dispatch"])
 def test_an_upstream_timeout_is_not_the_request_deadline(tmp_path, stage):
     async def scenario():
         settings = _settings(tmp_path)
@@ -1481,24 +1555,36 @@ def test_an_upstream_timeout_is_not_the_request_deadline(tmp_path, stage):
                 raise TimeoutError(failure_text)
 
             bot.fetch_user = fail_fetch
-        else:
+        elif stage == "notice_send":
             channel = bot.channels[int(settings.channel_id)]
 
             async def fail_send(_content, **_kwargs):
                 raise TimeoutError(failure_text)
 
             channel.send = fail_send
+        else:
+            bot.dispatch_failure = "upstream_timeout"
 
         runtime = DiracSmokeRuntime(bot, settings)
         await runtime.start()
         request = _submit(settings, deadline_seconds=30.0)
         record = await _wait_for_record(settings, request.request_id)
+        if stage == "post_dispatch":
+            for _ in range(100):
+                if "settlement is unconfirmed" not in record.failure:
+                    break
+                await asyncio.sleep(0.01)
+                record = _record_of(settings, request.request_id)
 
         assert record.status == "failed"
-        assert record.failure == "an upstream operation timed out"
+        assert record.failure.startswith("an upstream operation timed out")
+        assert ("notice send started but delivery is unconfirmed" in record.failure) == (stage == "notice_send")
         assert failure_text not in record.failure
-        assert record.notice_id == ""
-        assert bot.injected == []
+        assert bool(record.notice_id) == (stage == "post_dispatch")
+        assert len(bot.injected) == (1 if stage == "post_dispatch" else 0)
+        if stage == "post_dispatch":
+            assert record.delivered_ids == []
+            assert record.returned is False
         await runtime.stop()
         await bot._reply_queue.close()
 
@@ -1601,29 +1687,49 @@ def test_fatal_poll_with_missing_status_storage_reports_unavailable(
     asyncio.run(scenario())
 
 
-def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch):
-    """A turn that ignores its cancel is reported, and nothing new starts."""
+@pytest.mark.parametrize("failure", ["deadline", "after_partial", "stop_during_cleanup"])
+def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch, failure):
+    """An unsettled turn cannot overlap a later smoke, even after partial delivery."""
 
     async def scenario():
-        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.05)
+        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.5 if failure == "stop_during_cleanup" else 0.05)
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
 
         async def stubborn(message, content):
+            await bot._generate_response([{"role": "user", "content": content}])
+            await message.channel.send("partial before cancellation")
             try:
                 await bot.release.wait()
             except asyncio.CancelledError:
                 await asyncio.sleep(1.0)  # swallows the cancel, for now
 
         bot.turn = stubborn
+        bot.dispatch_failure = "after_partial" if failure != "deadline" else ""
         runtime = DiracSmokeRuntime(bot, settings)
         await runtime.start()
-        first = _submit(settings, deadline_seconds=1.0)
+        first = _submit(settings, deadline_seconds=30.0 if failure != "deadline" else 1.0)
         record = await _wait_for_record(settings, first.request_id)
-        assert record.status == "timeout"
-        assert "cleanup is unconfirmed" in record.failure
+        assert record.status == ("timeout" if failure == "deadline" else "failed")
+        assert "settlement is unconfirmed" in record.failure
+        assert record.delivered_ids == [str(bot.http.next_id)]
+        assert record.returned is False
+        assert "unacknowledged sends, if any, may still have reached Discord" in record.failure
+        if failure == "stop_during_cleanup":
+            assert runtime._poll is not None and not runtime._poll.done()
+            await runtime.stop()
+            interrupted_cleanup = _record_of(settings, first.request_id)
+            assert interrupted_cleanup.status == "failed"
+            assert "settlement is unconfirmed" not in interrupted_cleanup.failure
+            assert interrupted_cleanup.delivered_ids == record.delivered_ids
+            assert interrupted_cleanup.returned is False
+            assert runtime._observer.outstanding() == []
+            assert bot._turn_observer is None
+            await bot._reply_queue.close()
+            return
         # The stuck coroutine is already running and keeps its own code; the room
         # gets an ordinary turn again for whatever comes next.
+        bot.dispatch_failure = ""
         bot.turn = bot._default_turn
         second = _submit(settings, task="second")
         await asyncio.sleep(0.5)
@@ -1631,6 +1737,13 @@ def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch):
         # Once the stuck task is really gone, the queue moves again.
         held = await _wait_for_record(settings, second.request_id)
         assert held.status == "completed"
+        settled_first = _record_of(settings, first.request_id)
+        assert settled_first.status == record.status
+        assert "settlement is unconfirmed" not in settled_first.failure
+        assert "unacknowledged sends, if any, may still have reached Discord" in settled_first.failure
+        assert settled_first.delivered_ids == record.delivered_ids
+        assert settled_first.returned is True
+        assert runtime._observer.outstanding() == []
         await runtime.stop()
         await bot._reply_queue.close()
 

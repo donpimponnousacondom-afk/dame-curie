@@ -322,11 +322,18 @@ def start(instance: Instance, uid: int, args: argparse.Namespace) -> dict[str, o
 
 
 def restart(instance: Instance, uid: int) -> dict[str, object]:
-    """Restart only the owned Dirac container; bind data is retained."""
-    _, enabled, bridge, gateway = prepared(instance, uid)
+    """Restart only a running owned container; preserve stopped failure evidence."""
     container = owned_container(instance)
     if container is None:
         raise ValueError(f"{NAME} does not exist; use start")
+    state = container_state(instance, container)
+    if state["status"] != "running":
+        raise ValueError(
+            f"{NAME} exists in state {state['status']} (exit {state['exit_code']}, "
+            f"finished {state['finished_at']}, image {state['image_ref']}, "
+            f"oom {state['oom_killed']}); follow logs, then use start --replace"
+        )
+    _, enabled, bridge, gateway = prepared(instance, uid)
     instance.docker("restart", "--time", STOP_TIMEOUT, container)
     return {"action": "restart", "container": NAME, "id": container, "bridge": bridge,
             "endpoint": endpoint(gateway),
@@ -347,20 +354,47 @@ def stop(instance: Instance) -> dict[str, object]:
 
 
 def status(instance: Instance, uid: int) -> tuple[dict[str, object], int]:
-    """Report container, bridge endpoint, derived config and embedding readiness without mutating anything."""
-    bridge, gateway = outbound_bridge(instance)
-    enabled, problem = derived_config(state_root(instance, uid), uid, gateway)
+    """Inspect Docker metadata and private config; exec the embedding check when eligible.
+
+    Docker inspection and the derived-config read do not change container state;
+    the embedding check runs inside a running container via ``docker exec``.
+    Container ownership or inspect failures still raise; independent bridge and
+    private-layout validation failures retain already verified state metadata.
+    """
     container = owned_container(instance)
-    report: dict[str, object] = {"action": "status", "container": NAME, "present": container is not None,
-                                 "bridge": bridge, "endpoint": endpoint(gateway),
-                                 "config": problem or "ok", "embedding_readiness": "not running"}
-    if container is None or problem:
+    report: dict[str, object] = {"action": "status", "container": NAME, "present": container is not None}
+    if container is not None:
+        report.update(container_state(instance, container))
+    if container is None:
+        skip = "no owned container"
+    elif report["status"] != "running":
+        skip = f"container is {report['status']}"
+    else:
+        skip = ""
+    try:
+        bridge, gateway = outbound_bridge(instance)
+    except ValueError:
+        report["config"] = "unavailable: outbound bridge validation failed"
+        report["embedding_readiness"] = f"skipped: {skip or 'outbound bridge validation failed'}"
         return report, 1
-    report.update(container_state(instance, container))
-    if report["status"] != "running":
+    report.update(bridge=bridge, endpoint=endpoint(gateway))
+    try:
+        root = state_root(instance, uid)
+    except (OSError, ValueError):
+        report["config"] = "unavailable: private Dirac layout validation failed"
+        report["embedding_readiness"] = f"skipped: {skip or 'private Dirac layout unavailable'}"
         return report, 1
-    report["embedding_readiness"] = embedding_readiness(instance, enabled)
-    return report, 1 if str(report["embedding_readiness"]).startswith("failed") else 0
+    enabled, problem = derived_config(root, uid, gateway)
+    report["config"] = problem or "ok"
+    code = 1
+    if skip:
+        report["embedding_readiness"] = f"skipped: {skip}"
+    elif problem:
+        report["embedding_readiness"] = "skipped: derived config failed validation"
+    else:
+        report["embedding_readiness"] = embedding_readiness(instance, enabled)
+        code = 1 if str(report["embedding_readiness"]).startswith("failed") else 0
+    return report, code
 
 
 def logs(instance: Instance, no_keys: bool, *, fresh: bool = False) -> None:

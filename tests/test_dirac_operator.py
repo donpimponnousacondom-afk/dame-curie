@@ -219,7 +219,7 @@ def test_derived_config_requires_the_bridge_endpoint(dirac, tmp_path):
     assert "172.23.0.1" in problem
     write_derived(root, "http://172.23.0.1:11434/v1")
     assert "172.23.0.1" in dirac.derived_config(root, os.getuid(), "172.23.0.1")[1]
-    write_derived(root, "http://172.23.0.1:11434", rag="false")
+    write_derived(root, "http://ollama:11434", rag="false")
     assert dirac.derived_config(root, os.getuid(), "172.23.0.1") == (False, "")
     write_derived(root, "http://172.23.0.1:11434")
     (root / "config" / "bot.env").chmod(0o644)
@@ -320,6 +320,12 @@ def test_start_replace_reports_the_previous_state_before_removing(dirac, tmp_pat
         ("start",): "dirac-v2\n",
     })
     engine.path = root.parent
+    with pytest.raises(ValueError, match="use start --replace") as refused:
+        dirac.restart(engine, os.getuid())
+    for evidence in ("exited", "exit 1", "oom false", "finished 2026-09-22T00:00:00Z"):
+        assert evidence in str(refused.value)
+    assert [call[0] for call in engine.calls] == ["ps", "inspect", "inspect"]
+    engine.calls.clear()
     monkeypatch.setattr(
         dirac, "print",
         lambda *values, **kwargs: engine.calls.append(("print", str(values[0]), kwargs.get("file"))),
@@ -338,6 +344,14 @@ def test_start_replace_reports_the_previous_state_before_removing(dirac, tmp_pat
     assert sum(call[0] == "print" for call in engine.calls) == 1
     assert report["action"] == "start"
     assert report["embedding_readiness"] == "ok"
+    engine.replies[("inspect", "abc123", "--format", dirac.STATE_FORMAT)] = (
+        "running|0|false|0001-01-01T00:00:00Z|sha256:bbbb|dame-curie-app:test\n"
+    )
+    engine.replies[("restart",)] = "dirac-v2\n"
+    restarted = dirac.restart(engine, os.getuid())
+    assert restarted["action"] == "restart"
+    assert restarted["embedding_readiness"] == "ok"
+    assert any(call[:2] == ("restart", "--time") for call in engine.calls)
 
 
 def test_status_reports_absent_container_without_mutating(dirac, tmp_path):
@@ -354,6 +368,79 @@ def test_status_reports_absent_container_without_mutating(dirac, tmp_path):
     assert report["present"] is False
     assert report["endpoint"] == "http://172.23.0.1:11434"
     assert report["config"] == "ok"
-    assert report["embedding_readiness"] == "not running"
+    assert report["embedding_readiness"] == "skipped: no owned container"
     assert "readiness" not in report  # the status field names the embedding check, not Discord readiness
-    assert engine.calls[-1] == ("ps", "-aq", "--filter", "label=dame-curie.dirac=dirac-v2")
+    assert engine.calls[0] == ("ps", "-aq", "--filter", "label=dame-curie.dirac=dirac-v2")
+
+    write_derived(root, "http://wrong:11434")
+    state = "exited|137|true|2026-09-22T00:00:00Z|sha256:bbbb|dame-curie-app:test\n"
+    replies = {
+        ("ps", "-aq"): "abc123\n",
+        ("inspect", "abc123", "--format", "{{.Name}}"): "/dirac-v2\n",
+        ("inspect", "abc123", "--format", dirac.STATE_FORMAT): state,
+        ("network", "ls"): "dame-curie_outbound\n",
+        ("network", "inspect"): "dame-curie|outbound|172.23.0.1\n",
+    }
+    engine = FakeEngine(replies)
+    engine.path = root.parent
+    report, code = dirac.status(engine, os.getuid())
+    assert code == 1
+    assert report["status"] == "exited"
+    assert report["exit_code"] == "137"
+    assert report["oom_killed"] == "true"
+    assert report["finished_at"] == "2026-09-22T00:00:00Z"
+    assert "172.23.0.1" in report["config"]
+    assert report["embedding_readiness"] == "skipped: container is exited"
+    assert [call[0] for call in engine.calls[:3]] == ["ps", "inspect", "inspect"]
+
+    replies[("inspect", "abc123", "--format", dirac.STATE_FORMAT)] = state.replace("exited", "running", 1)
+    report, code = dirac.status(engine, os.getuid())
+    assert code == 1
+    assert report["status"] == "running"
+    assert report["embedding_readiness"] == "skipped: derived config failed validation"
+    write_derived(root, "http://wrong:11434", rag="false")
+    report, code = dirac.status(engine, os.getuid())
+    assert code == 0
+    assert report["config"] == "ok"
+    assert report["embedding_readiness"].startswith("skipped: ENABLE_RAG is off")
+
+    bad_bridge = FakeEngine({**replies, ("network", "ls"): ""})
+    bad_bridge.path = root.parent
+    report, code = dirac.status(bad_bridge, os.getuid())
+    assert code == 1
+    assert report["status"] == "running"
+    assert report["image_id"] == "sha256:bbbb"
+    assert report["finished_at"] == "2026-09-22T00:00:00Z"
+    assert report["config"] == "unavailable: outbound bridge validation failed"
+    assert report["embedding_readiness"] == "skipped: outbound bridge validation failed"
+    assert "endpoint" not in report
+    assert [call[0] for call in bad_bridge.calls[:3]] == ["ps", "inspect", "inspect"]
+    bad_bridge.replies[("inspect", "abc123", "--format", dirac.STATE_FORMAT)] = state
+    report, code = dirac.status(bad_bridge, os.getuid())
+    assert code == 1
+    assert report["status"] == "exited"
+    assert report["exit_code"] == "137"
+    assert report["oom_killed"] == "true"
+    assert report["config"] == "unavailable: outbound bridge validation failed"
+    assert report["embedding_readiness"] == "skipped: container is exited"
+
+    (root / "shell").chmod(0o755)
+    report, code = dirac.status(engine, os.getuid())
+    assert code == 1
+    assert report["status"] == "running"
+    assert report["image_ref"] == "dame-curie-app:test"
+    assert report["config"] == "unavailable: private Dirac layout validation failed"
+    assert report["embedding_readiness"] == "skipped: private Dirac layout unavailable"
+    assert report["endpoint"] == "http://172.23.0.1:11434"
+
+    unowned = FakeEngine({**replies, ("inspect", "abc123", "--format", "{{.Name}}"): "/foreign\n"})
+    unowned.path = root.parent
+    with pytest.raises(ValueError, match="reserved label"):
+        dirac.status(unowned, os.getuid())
+    assert [call[0] for call in unowned.calls] == ["ps", "inspect"]
+    bad_inspect = FakeEngine({key: value for key, value in replies.items()
+                              if key != ("inspect", "abc123", "--format", dirac.STATE_FORMAT)})
+    bad_inspect.path = root.parent
+    with pytest.raises(AssertionError, match="unexpected engine call"):
+        dirac.status(bad_inspect, os.getuid())
+    assert [call[0] for call in bad_inspect.calls] == ["ps", "inspect", "inspect"]
