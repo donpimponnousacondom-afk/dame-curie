@@ -11,7 +11,7 @@ Report security concerns privately to the maintainer before public disclosure. D
 
 ## Model-directed actions
 
-**Source contract under audit remediation, not a claim about installed protection.** The actor/environment changes below are committed in `d198c37` and included in source/construction-verified candidate `be28b85`; that candidate has **not been deployed**. Consult [current status](docs/STATUS.md) for exact source/artifact/runtime evidence. The last recorded temporary image predates these mitigations.
+**Source contract under audit remediation, not a claim about installed protection.** The actor/environment changes below are committed in `d198c37` and included in source/construction-verified candidate `be28b85`; it was exercised only in a bounded temporary acceptance case and then rolled back to the prior image. These protections are **not a claim about the currently running old application image**. Consult [current status](docs/STATUS.md) for exact source/artifact/runtime evidence. The last recorded temporary image predates these mitigations.
 
 Shell is restricted to bot admins and the existing shell-user allowlist. Persistent personality/server-prompt rewrites are admin-only. The same actor policy applies to catalog visibility, dispatcher aliases and direct tool execution. A background or synthetic turn must retain the requesting permission actor, never substitute the bot poster.
 

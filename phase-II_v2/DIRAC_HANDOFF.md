@@ -1,6 +1,17 @@
 # Temporary Dirac V2 — retained runtime handoff
 
-**2026-09-25 hold:** receipts below are historical, not a fresh runtime observation or current operating grant. Audit remediation and bounded temporary-only acceptance are governed by `../AGENTS.md` and `../TODO.md`; no remediation candidate has been deployed. Preserve this evidence through accepted round two, then consolidate current operating/rollback facts as scheduled.
+**2026-09-25 hold:** audit remediation and bounded temporary-only acceptance are governed by `../AGENTS.md` and `../TODO.md`; no normal release or canonical activation. Preserve unaccepted evidence through round two, then consolidate operating/rollback facts as scheduled.
+
+## Current temporary runtime — 2026-09-25 bounded acceptance and restoration
+
+- Candidate source `be28b8598215ff6a0c72d7c3160403f2425a61f0`, image `sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`, ran only for the approved smoke case. Request `608cc14a42714fd58bafbf8084b09690` in channel `1550960386939817984` completed at12:25:37Z, eight seconds after submission: one exact marker-body reply plus the configured runtime footer, returned=true, no readback failure. This is not a broad feature/cancellation/provider acceptance claim.
+- The candidate was stopped cleanly and the **previous image restored**: `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`, container `495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, started2026-09-25T12:30:41.035310558Z. Running/embedding-ready, Discord identity1504398705539944560 reverified (startup log14:30:45.780 local,+02:00). Low reasoning,12345 output cap,REMoff/autonomyoff retained.
+- Candidate-only `allowed_channels` scope was the **only control-field delta**; original control bytes restored exactly and derived profile fingerprint unchanged after startup. RAG/shared embedding usage stayed normal; no backend service/profile-store conflation or shared-service mutation.
+- Root-only evidence/rollback: `/var/backups/dame-curie-dirac/audit-acceptance-20260925T121644Z/`, holding original operator/control copies and opaque old/candidate retained log archives. Do not print private contents. Request and terminal receipt remain together; never delete receipts alone.
+- Only temporary-specific `/opt/dame-curie/scripts/dirac.py`, `scripts/dirac_smoke.py` and `smoke_protocol.py` were updated and byte-verified. Shared instance/log-filter code was not changed; host viewer modules and Screen were not operated or reattached. No claim that the old viewer automatically follows the recreated container.
+- Full safe QA3984+28subtests, narrowed201/4 and actual-image construction/source verification are recorded separately in `../audit/20260924T210402Z-adversarial-audit/validation.md`, including failed attempts and the corrected startup-logger/footer checks. No normal release, V1/canonical/publisher deployment or remote push.
+
+## Historical verification before this acceptance
 
 Last runtime verification: **2026-09-24 19:04 UTC, temporary Dirac on `6859025`**, with bounded tool completion logs and `logs --fresh` recovery.
 
