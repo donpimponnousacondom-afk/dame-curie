@@ -1,6 +1,6 @@
 # Provider settings: idle-boundary reload
 
-Provider-file reload was implemented in `d43e4bf`; `dfc6141` subsequently fixed foreground final-delivery ownership. Deployed revision and dated receipts are separate in `STATUS.md`. Dirac uses `?` commands; the repository's default prefix remains `!`.
+Provider-file reload was implemented in `d43e4bf`; `dfc6141` subsequently fixed foreground final-delivery ownership. Deployed revision and dated receipts are separate in [STATUS.md](STATUS.md). The repository default prefix is `!`; the dated temporary Dirac profile used `?`, so the examples below are instance-specific, not a changed default.
 
 ## What to edit
 
@@ -46,4 +46,4 @@ This is not process-wide dotenv reload. It does not rewrite `os.environ`, restar
 - The original `d43e4bf` image separately verified its committed source blobs, baked provenance, module imports, staged edit and rejected invalid port in a credential-free/no-network probe; that probe did not exercise the delayed-final-edit schedule.
 - Boot/daily summary loops and tracked job workers are drained before transport teardown. General Gateway-command admission during shutdown remains a preexisting limitation; this change is not a wholesale shutdown redesign.
 - Live Dirac receipt `74d4aa30ddc0463c8162207491c46a80` held a temporary cooldown edit through 14.9 seconds of actual tool work, then applied it as generation 2. Removing the owned override restored the original environment bytes exactly and applied generation 3. No endpoint, model or credential was changed. This validates that observed deferral/restoration schedule, not every supported profile combination or the previously detached final-edit tail. The R3 integrated regression instead holds a single final Discord edit and verifies both the observer and `providers_idle` remain busy until delivery settles.
-- Deployment and live receipts are recorded in `STATUS.md` and `../phase-II_v2/DIRAC_HANDOFF.md`, separately from isolated acceptance.
+- Deployment and live receipts are recorded in [STATUS.md](STATUS.md) and the retained audit evidence, separately from isolated acceptance. Retired phase notes are recoverable, if genuinely needed, through `git show eb188ac:phase-II_v2/<file>`; they are not operating authority.

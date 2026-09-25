@@ -1,52 +1,36 @@
-# dame-curie development environment
+# Development and isolated validation
 
-## Interpreter boundary
+## Python and environments
 
-**Python 3.14 is mandatory.** The host's system interpreter is unrelated to the project's required version and must not be replaced. Do not install project packages into the system Python tree or use a system-package bypass flag.
+**Python3.14 is mandatory.** Never replace system Python, install project packages into its package tree or use a system-package bypass. Select the interpreter explicitly before creating an environment. `.venv/` is an interpreter/dependency environment; `.env`, `bot.env` and `deploy.env` are configuration files and may contain secrets.
 
-The redesigned app image declares Python3.14.4; separate shell/site/web images are no longer part of the approved topology. Shell uses the app environment inside the outer bot container, not a host interpreter or nested container. The earlier provisioned `/opt/dame-curie/.venv` is an operator-only Python3.14.4 environment; app dependencies live in the image. Historical shell/site checks do not establish redesign acceptance. A host-side project interpreter must also be 3.14 and isolated through a venv or an explicitly configured uv-managed environment. A venv created from the host's default Python does not automatically become 3.14.
+The app recipe selects Python3.14.4. Shell uses that app environment inside the outer container, not host Python or a nested image. `/opt/dame-curie/.venv` is a separate trusted **operator-only** environment, not the application's installation. A host project venv must also use an explicitly selected3.14 interpreter. No project uv workflow has been verified; do not assume one exists or search unrelated environments.
 
-| Name | Meaning |
-| --- | --- |
-| `.venv/` | Isolated interpreter and project dependencies; not runtime configuration |
-| `uv` | Optional interpreter/environment/package manager; its interpreter selection must be explicit |
-| `.env` | Configuration file name used by some source paths; potentially secret, not a Python environment |
-| `bot.env` | Neutral per-identity runtime configuration filename; potentially secret |
-| `deploy.env` | Deployment-selection configuration; not a virtual environment or blanket startup permission |
-
-## Chosen minimal local workflow
-
-Use an explicitly selected Python 3.14 venv. The source cut-off verified Python 3.14.4 and standard-library `venv --help` without creating an environment. Root's later static-audit assignment created a fresh `.venv` with Vulture 2.16 (besides bootstrap pip). The subsequently authorized provisioning assignment added `python-dotenv==1.2.3`, matching the image lock, for secret-safe configuration transfer. This is a tool environment, not application readiness. `uv` was not found on PATH or exercised; do not search unrelated environments to recover it.
-
-When environment creation is explicitly in scope, from this checkout and only if `.venv` is a new intended environment:
+Under an explicit environment-creation assignment, for a new intended checkout environment:
 
 ```sh
 python3.14 -m venv .venv
 .venv/bin/python --version
 ```
 
-Do not use `--clear`, `--system-site-packages`, an unrelated existing environment or generic `python3 -m venv`. Verify the selected interpreter is 3.14 before project work. Invoke `.venv/bin/python` and `.venv/bin/python -m pip` explicitly rather than relying on an activated shell or global pip. Dependency installation needs a separate compatible assignment and reviewed requirements/pins; the Vulture-only grant does not authorize installing the application's or entire development requirements. Do not weaken pins or automatically upgrade dependencies.
+Do not use `--clear`, `--system-site-packages`, an unrelated existing environment or generic `python3`. Invoke the selected interpreter/pip explicitly. Installation needs a compatible grant and reviewed pinned requirements; do not relax pins, upgrade packages automatically or install full application/dev requirements for a report-only tool task.
 
-If root later chooses uv, verify its local availability and document the exact 3.14 selection/environment path before use. This page does not pretend a second unverified workflow is configured.
+## Source review versus execution
 
-## Historical image evidence and dependency caveat
+A source-only assignment permits **no application import, test collection/execution, build or runtime probe**. Loading a skill does not expand that authority. Apply `implement-tyranny` to authorized new Python and `implement-sanity` to the actual diff, not as a whole-repository formatting/refactoring campaign. Preserve valid3.14 syntax, strict pins and real typing; avoid unrequested helpers, blanket catches, guards and logging. Type annotations do not validate external input.
 
-The earlier staged app/web release used code revision `b2f5380`; it is **not** the Discord-only redesign release. Historical site-runtime's offline `pip check` passed, but that image is now retired from the source design. The earlier app check did **not** pass: `discord-ext-voice-recv==0.5.2a179` declares `discord-py`, while the lock intentionally installs `discord.py-self==2.1.0` into the shared `discord` namespace. The installer also explicitly reinstalls the self-fork after optional extras. Do not install the competing distribution or relax pins to silence metadata checking. Voice compatibility and a clean/explicitly resolved packaging contract remain prerequisites for future Discord activation. Earlier API/primary-inference checks do not resolve that caveat or validate the redesign; no builds, application imports, provider/Discord probes or runtime re-observation occurred in this documentation round.
+**C09 is an accepted deferral:** `config.py` retains import-time dotenv loading with `override=True`. No lazy-loading/import-isolation redesign is pending. A synthetic `DAME_CURIE_ENV_FILE` redirect alone is **not** private-read isolation. Effective structural configuration may override injected deployment values and must be reconciled only under an explicit private/runtime grant.
 
-The redesigned `scripts/build_for_human.sh` builds only the app image from a Git archive in the explicitly selected V2 private engine; it does not deploy or start it. It remains a build/runtime actuator requiring separate authorization, not a source check. `install.sh` installs checkout dependencies/configuration only; it does not provision/activate the bot and supplies no host-Python or PM2 deployment recipe. Do not execute either script, even for discovery, during a source-only assignment.
+Root's closure assignment permits the coordinator to run the established frozen credential-free QA image with **synthetic configuration/state, no private mounts, no real Discord credentials and network-none**. Other source workers have no execution grant. Loopback sockets and subprocesses used by relay tests remain inside that container. No host/live-environment suite. Exact image, commands, source trees, failures and counts belong in the [validation ledger](../audit/20260924T210402Z-audit/validation.md), not this durable policy.
 
-## Source and review
+**No new test files/functions:** adapt existing cases/parameterization. Never run the historical dotenv/live-provider version of `tests/test_tool_progress.py::test_streaming_tick_inserts_space_between_glued_deltas`; only its inspected synthetic SSE/fake-channel replacement is admitted to isolated QA. `tests/test_streaming.py` and `tests/test_streaming_primary.py` remain excluded. Do not sum overlapping passing counts or call the safe selection unrestricted coverage.
 
-Apply `implement-tyranny` to authorized new Python, not as a whole-repository formatting campaign. Its current template targets are 3.14; obsolete hook-version examples were removed rather than replaced with invented pins. Use `implement-sanity` on the actual diff: real defects, unnecessary scaffolding, hidden complexity and typing—not a mandate to split every legacy file over a line-count threshold. Type hints alone do not validate external input.
+Guarded constructor probes may import the **actual candidate image** only inside the same no-network/no-private-state envelope. Source QA, copied-input/provenance checks, image construction, Discord identity, model delivery and broader feature acceptance are distinct gates. A baked source label alone does not prove image contents; a successful constructor is not a login or live-feature test.
 
-## Static dead-code audit
+## Builds and dependency limits
 
-Root authorized a first report-only Vulture pass after the source mapping. Use [the static-audit workflow](DEAD_CODE.md) for exact source selection, tool installation and confidence/exit-code interpretation. Initial results are in `../phase-II_v2/DEAD_CODE_PASS.md`. This AST-only exception does not permit application/test imports, full dependency installation or runtime checks, and does not authorize deleting reported code.
+`scripts/build_for_human.sh` is an app-image build actuator using a committed Git archive and selected V2 private engine. It does not deploy, but still requires build/runtime authority. `install.sh` installs checkout dependencies/configuration; it neither provisions nor activates the bot and supplies no host-Python/PM2 deployment permission. Do not execute either for discovery or `--help` during source-only work.
 
-## Execution is a separate boundary
+The historical app `pip check` reported `discord-ext-voice-recv==0.5.2a179` declaring `discord-py` while the lock intentionally supplies `discord.py-self==2.1.0` in the shared `discord` namespace. Do not install the competing distribution or weaken pins to silence that metadata conflict. Constructor/chat smoke acceptance does not resolve the voice compatibility or packaging caveat; voice remains unverified. Retired site/web-image checks do not validate the current topology.
 
-Do not import the application, run tests or even collect tests during source-only work. `config.py` loads dotenv at import time with `override=True`; the historical live-provider test named in `AGENTS.md` independently parsed `.env`. A dummy environment-variable setting is not sufficient proof of isolation. During separately authorized private reconciliation, the coordinator must audit structural settings that could override Compose (identity, container mode, storage roots and retired socket settings); this documentation task grants no private-file access.
-
-Future validation requires a separately agreed source-only environment, synthetic configuration/state, disposable databases, no private mounts or real Discord token, and no live provider/message/publisher side effects. This document itself authorizes no new tests, especially tests memorializing absence of removed features. Static source review is not runtime or image-build acceptance.
-
-For separately authorized QA, redirect `DAME_CURIE_ENV_FILE` before collection and use the approved credential-free container with synthetic state, no private mounts and no external networking; redirection alone is not isolation. Never execute the historical dotenv/live-provider version of `tests/test_tool_progress.py::test_streaming_tick_inserts_space_between_glued_deltas`. The current remediation replacement uses only synthetic SSE bytes and fake progress channels; after coordinator source inspection it was included in the isolated progress selection recorded in the current audit's `validation.md`. That permission is limited to the inspected replacement and isolated envelope, not host or live-provider execution. Relay hardening tests require loopback sockets and subprocess spawning inside that container, not host/service access.
+The Vulture report-only workflow, source selection, exit codes and immutable baseline recovery are in [DEAD_CODE.md](DEAD_CODE.md). Findings are not deletion authority. Runtime/account/private boundaries remain in [OPERATIONS.md](OPERATIONS.md) and [AGENTS.md](../AGENTS.md).

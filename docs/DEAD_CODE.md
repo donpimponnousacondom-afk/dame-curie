@@ -53,7 +53,15 @@ For the higher-confidence view, retain the same `sources` array and add `--min-c
 
 Exit statuses: **0** no findings; **3** findings produced; **1** invalid input/syntax/encoding; **2** CLI/configuration error. Keep stderr and investigate errors. Do not use `|| true` to turn every failure into an apparently successful audit. In a soft pass, exit 3 is an expected report outcome, not a failed application test.
 
-The initial manifest/report are `phase-II_v2/VULTURE_INPUTS.txt` and `phase-II_v2/VULTURE_BASELINE.txt`. They are a dated source snapshot; regenerate the selection after source additions/removals rather than silently ignoring missing files. Do not overwrite that baseline merely to make counts improve.
+The dated input manifest, baseline and reviewed report survive in the immutable audit-preservation commit; recover them read-only instead of keeping working copies:
+
+```bash
+git show eb188ac:phase-II_v2/VULTURE_INPUTS.txt
+git show eb188ac:phase-II_v2/VULTURE_BASELINE.txt
+git show eb188ac:phase-II_v2/DEAD_CODE_PASS.md
+```
+
+That snapshot is dated source, not current coverage: regenerate the selection after source additions/removals rather than silently ignoring missing files, and never overwrite the baseline merely to make counts improve.
 
 ## Triage before pruning
 
@@ -61,6 +69,6 @@ The initial manifest/report are `phase-II_v2/VULTURE_INPUTS.txt` and `phase-II_v
 2. Check decorators, inheritance, string/dynamic registration, serializers, platform interfaces, CLI entrypoints and relevant existing test references. Do not execute them to answer a static question.
 3. Record **candidate**, **retain with evidence**, or **unresolved**. An unused parameter body does not make its signature disposable. An unused configuration attribute does not establish that its environment name has no other consumer.
 4. Preserve shared dependencies and manual compatibility patches. No mass whitelist, blanket decorator suppression, dummy references or unused-name renames to make the report green. Suppressions, when later warranted, require specific evidence.
-5. Use the explicitly approved removal scope: `phase-II_v2/REDESIGN_PLAN.md` now authorizes the Discord-only cuts, not arbitrary deletion of Vulture findings. Verify the assigned diff; rerun an audit only under a compatible tooling grant. Tests/runtime validation still require their separate isolated assignment. No new tests are authorized.
+5. Removal scope is only what the current documented authority names: `AGENTS.md` and the approved design recorded in `ARCHITECTURE.md`, not arbitrary deletion of Vulture findings. Verify the assigned diff; rerun an audit only under a compatible tooling grant. Tests/runtime validation still require their separate isolated assignment. No new tests, no broad delete.
 
-Initial results and reviewed examples: `phase-II_v2/DEAD_CODE_PASS.md`. Vulture does not establish code coverage, actual enabled features, runtime reachability or a percentage of removable LOC.
+Reviewed historical results and examples are recoverable from the immutable snapshot above; no working copy is retained. Vulture does not establish code coverage, actual enabled features, runtime reachability or a percentage of removable LOC. Historical bytecode provenance stays permanently unattributable and is not a fresh investigation: no cache, ref or worktree cleanup is granted here.

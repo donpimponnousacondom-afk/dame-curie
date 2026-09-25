@@ -1,6 +1,6 @@
 # Image generation and editing
 
-One model-facing tool: `image_generator`. Generation and editing share one operator-configured native Images endpoint and credential. Image configuration is restart-only; chat-provider reload does not apply it.
+One canonical model-facing tool: `image_generator`; the retired `hd_image` name is a compatibility **alias to that same tool**, not a separate HD provider/profile. Generation and editing share one operator-configured native Images endpoint and credential. Image configuration is restart-only; chat-provider reload does not apply it.
 
 ## Configuration
 
@@ -38,15 +38,17 @@ image_generator(prompt="…", image=["/allowed/image-a.png", "/allowed/image-b.p
 
 These illustrate arguments, not verified provider quality values or readable local paths.
 
-- No resolved references: submit to `/images/generations`. Pass `image=""` (or an empty list) to request generation from scratch even when the triggering message has image attachments. Only `image=None`/omission falls back to those attachments.
+- No resolved references: submit to `/images/generations`. Pass `image=""` or **`image=[]`** to request generation from scratch even when the triggering message has image attachments. Only `image=None`/omission falls back to those attachments.
 - Resolved references: submit to `/images/edits`, preserving original reference bytes rather than adding native-path downscaling. Large edits can take longer or cost more than reduced inputs.
 - References retain the existing URL, local file, inline data URI and list handling. At most four references are used; additional ones are truncated.
 - Local paths resolve symlinks before enforcing the existing generated-image/`temp` path restrictions; a symlink escaping those roots is refused. This changes neither local authoring nor the independent publisher. HTTP(S) inputs retain the existing behavior, including private-host acceptance and refusal to follow image-input redirects.
 - Network/local reference reads retain the existing 20 MiB limit. The inherited inline-data-URI path does not enforce that same byte limit; consolidation does not claim to fix it.
 
+Incoming-attachment controls, image-reference limits and outgoing upload limits are separate. SDK attachment reads may buffer before actual-byte checks; these checks are not a hard transfer/RSS bound or proof of Discord's account/channel allowance. Raising a media-size setting does not add archive extraction/support. The historical root-selected20MiB incoming override and detailed earlier inventory remain recoverable at `eb188ac:phase-II_v2/DIRAC_ATTACHMENT_LIMITS.md`; that old inventory includes superseded behavior and is not the current source contract.
+
 ## Delivery and failures
 
-`auto_send=false` is the default: save the image and return its local/public references without posting it. Present the saved result with existing file/media tools or its image-preview URL.
+`auto_send=false` is the default: save the image and return its local/public references without posting it. Make **one explicit handoff**: present the saved result with an existing file/media tool or image-preview URL, or use the requested `image_output` handling. A post-request is explicit; do not infer delivery merely from saving.
 
 `auto_send=true` posts once. `__IMAGE_SENT__` means it was already delivered; do not resend it. If save-only persistence fails, the tool does not silently upload instead. Generation failures, ambiguous responses and delivery failures do not trigger an automatic second generation request.
 
@@ -58,4 +60,4 @@ Before canonical activation, the coordinator must reconcile that instance's priv
 
 The last recorded temporary runtime used quality `high` with a 600-second timeout; that is dated runtime evidence, not a fresh observation or the new source default. An explicit private quality setting is preserved; an omitted setting uses the new `low` default after restart. Verify that choice during the authorized migration/acceptance rather than assuming an unchanged default.
 
-The old `hd_image` execution name is retired; use `image_generator`. The coordinator must check private `disabled_tools` separately for that name before acceptance. This document specifies the source contract. Deployment and actual provider acceptance must be recorded separately in [STATUS.md](STATUS.md); a successful model-catalog lookup is not an image-generation/edit acceptance test.
+`hd_image` remains a compatibility alias, resolved only after checking exact built-in/eligible-plugin precedence. It must not bypass platform, disabled-tool or admin gates; the coordinator must check private `disabled_tools` for both names before acceptance. The canonical image-profile hold remains: inspect that instance's effective profile and migration readiness before canonical activation. A temporary-only activation decision belongs to the coordinator; it is not a canonical grant. Deployment and actual provider acceptance must be recorded separately in [STATUS.md](STATUS.md); a model-catalog lookup is not an image-generation/edit acceptance test.

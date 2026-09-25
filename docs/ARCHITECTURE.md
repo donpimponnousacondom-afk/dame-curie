@@ -1,67 +1,40 @@
-# dame-curie architecture and naming boundary
+# dame-curie architecture
 
-This describes the approved Discord-only source contract in `../phase-II_v2/REDESIGN_PLAN.md`, using the implementation lanes under review. It is not proof that the deployed V2 system matches it. Integration status belongs in `../phase-II_v2/REDESIGN_PROGRESS.md`; runtime has not been re-observed in this documentation round. V1 remains protected.
+This is the approved Discord-only **source contract**, not a claim about the running instance. Current milestones, temporary acceptance and release holds belong in [STATUS.md](STATUS.md); account/engine selection and runtime boundaries belong in [OPERATIONS.md](OPERATIONS.md). V1 and its publisher remain protected.
 
-## Approved components
+## Components and boundaries
 
-| Component | Source entry points | Responsibility |
+| Component | Source seam | Contract |
 | --- | --- | --- |
-| Discord conversation and providers | `bot.py`, `providers.py`, `message_pipeline.py` | The single Dame Curie transport/identity, conversation/tool orchestration, queueing and outbound provider requests |
-| Memory and prompts | `rag_memory.py`, `knowledge_graph.py`, `prompt_storage.py`, `control_defaults.py` | Functional RAG/REM/graph/context memory, persona/server prompts and controls |
-| Tools and local authoring | `bot_tools.py`, `tool_registry.py`, `tool_schemas.py`, `docker_runtime.py` | Tool dispatch, direct-container shell, file/media storage and attachment paths; no site server/tools |
-| Background jobs | `jobs.py`, `job_routing.py` | Detached jobs with trusted profile/model selection and canonical personality/server prompts |
-| Deployment | `compose.yaml`, `docker/app.Dockerfile`, `scripts/instance.py` | Only `bot`, `ollama`, `ollama-pull`; no published ports; staged startup is a validated no-op |
-| Independent publishing | `scripts/publisher/` | Protected external file mirroring, not a model-controlled deployment API |
-| Retained capabilities | Discord administration, autonomy/REM, games/plugins, voice/media, inbox | Preserve independent permissions and redaction as well as functional behavior |
+| Discord and remote generation | `bot.py`, `message_pipeline.py`, `providers.py` | One Dame Curie identity; OpenAI-compatible `OPENAI_*` endpoint/model explicitly configured, not an OpenAI account or a local-generation claim |
+| Memory and prompts | `rag_memory.py`, `knowledge_graph.py`, `prompt_storage.py` | Preserve functional RAG/REM/graph/context memory; server prompt is a separate protected message ([server-prompt contract](LONGPROMPT.md)) |
+| Tools and authoring | `bot_tools.py`, `tool_registry.py`, `tool_schemas.py`, `docker_runtime.py` | User/platform/disabled-tool gates, direct-container shell, local files/media and attachment paths |
+| Background jobs | `jobs.py`, `job_routing.py` | Trusted role/model selection, canonical personality and originating server prompt; no endpoint/key arguments |
+| V2 deployment | `compose.yaml`, `docker/app.Dockerfile`, `scripts/instance.py` | `bot`, `ollama`, `ollama-pull` only; no published ports; staged `up/start/restart` are validated no-ops |
+| Independent publication | `scripts/publisher/` | Protected external file mirroring, not a model-controlled deployment API |
 
-Dashboard/API/OAuth/Caddy/web image, local website/KV/FastAPI/uvicorn servers and six `site_*` tools, nested shell infrastructure, X/Telegram and companion/GF are removed from the target design. No replacement server, PHP/Perl/CGI installation or PM2 deployment. The human CAPTCHA HTTP fallback is removed; outbound CapSolver/TwoCaptcha remain. Historical `tg:%` privacy filtering remains to exclude old private records, not to enable Telegram.
+The redesign removes dashboard/API/OAuth/Caddy/web image, bot-local website/KV/FastAPI servers and six site tools, nested shell, X/Telegram and companion/GF. No replacement server, PM2 deployment or PHP/Perl/CGI installation. Preserve Discord administration, autonomy, games/plugins, voice/media, inbox, local authoring and image archives; old `tg:%` privacy filtering remains for historical records. Local Ollama serves RAG/embeddings only. Shared embedding **compute** with separately owned profile/storage is not by itself an isolation blocker; it does not justify a new server or migration.
 
-## Intended identity isolation
+One distinct Linux service account/private rootless engine per identity: V2 `dame-curie`, protected V1 `maxwell-curie`; future replicas require explicit assignment. Full instance/account/Compose slug `dame-curie` or `dame-curie-<identity>` (up to 30 characters); private root `/srv/<full-instance>`, app repository `dame-curie-app`, ownership labels `dame-curie.*`, RAG basename `dame-curie-rag.db`. Shell/Python identifiers use `DAME_CURIE_*`; neutral `.env`, `bot.env`, `.venv`, `/config` and `/state/{data,sites,shell}` keep their roles. Root's short public URL segment `dame` is intentional, not permission to reuse V1's publisher destination. Separate private configuration, mounts, credentials, data, ports and remote destinations; a separate engine alone cannot prove all of these. Resolve the account/socket afresh under a separate runtime grant. Archive images without `.git` cannot prove checkout revision via build labels alone.
 
-One Linux service account and private rootless Docker engine per bot identity. The first V2 account **dame-curie** and its separate engine were provisioned earlier (UID/GID1005 in that observation); re-resolve the account/socket before every authorized runtime operation. Protected V1 uses **maxwell-curie**. Additional identities require explicitly assigned separate accounts/engines rather than a second bot writer in the first identity's state.
+The shell runs `bash --noprofile --norc -c` as the **bot UID inside its outer container**, at `/home/dame-curie` → `/state/shell`, with minimal environment, no stdin and process-group cancellation. Files persist; process state does not. The actor must be bot admin **or** shell allowlisted; persistent prompt writes require admin. Dispatcher, catalog and execution gates apply independently. This same-UID shell can read bot-readable secrets **and write bot-writable control files, including admin controls under ordinary UID permissions**: the allowlist is effectively admin-level where such files are writable, not a separate isolation boundary. No Docker socket, nested container, host-root/network/exec or V1 mount is part of this design. There is no per-turn web-read confirmation lock; authorized tools can still act on injected instructions. Whether to keep this trust model or separate the control files is root's decision.
 
-Each identity owns its configuration, credentials, prompts, databases, generated files, shell workspace, model storage and publisher state. Explicitly separate host mounts and remote publisher destinations; the redesigned stack publishes no ports. Future V2 identities may deliberately use the same immutable source/image artifact in their separate engines; this does not share mutable bot state or authorize reusing the deployed V1 image namespace. V2's `dame-curie-app` repository remains distinct from protected V1's `maxwell-*` repositories. Record image content IDs/digests separately from mutable tags. No image or runtime change was performed in this documentation round.
+Built-in tools take precedence over plugins of the same name; eligible plugins are scoped by user/platform and must pass the disabled-tool and authorization gates, including at dispatch. Shell and prompt authorization cannot be inferred merely from a model-visible catalog. Locally authored files under `/state/sites` retain `_images`, matching sidecars, shared edit/attachment and URL helpers; removing HTTP serving does not change the protected publisher or confer remote administration. See [image-generation contract](IMAGE_GENERATION.md).
 
-The source contains ownership/socket/private-root checks. That is evidence of design, not V2 runtime acceptance. The observed running-only V1 inventory does not cover stopped objects, all volumes/networks, other engines or remote resources.
+Catalog selection starts with `CORE_TOOL_NAMES` and expands named `TOOL_DISCOVERY_GROUPS` through `more_tools` for the following model round of that task, not across users. Jobs keep separate catalog sets even when sharing foreground spend. Actor/platform/feature/disabled-tool gates still apply; registration counts are not live exposure. Historical fixture measurements and their exact conditions remain in the audit validation/recovery record.
 
-## Selected source conventions
+## Turn and prompt budgets
 
-- Canonical project/files/URLs/resource namespace: `dame-curie`.
-- Full instance/account/Compose slug: `dame-curie`, or `dame-curie-<identity>` for a replica, up to 30 characters. Accounts and resource prefixes derive directly from that slug, without duplicating the project name.
-- Private host root: `/srv/<full-instance>`. Host operator access uses the approved account's freshly resolved UID-derived rootless socket; no engine socket is mounted into the bot.
-- Shell/Python configuration identifiers: `DAME_CURIE_*`. Hyphenated shell/Python variable names are not the spelling to use.
-- App image repository: `dame-curie-app`; no web image. Selectors remain separate from protected `maxwell-*` images.
-- Custom ownership label namespace: `dame-curie.*`; Docker's reserved Compose/OCI labels are unchanged. Retired resource labels remain relevant only to ownership-checked cleanup.
-- RAG basename: `dame-curie-rag.db`, used by bot memory/graph inside the identity-owned data root. No live database rename/copy is implied.
-- Shell home: `/home/dame-curie` → `/state/shell`. Operator checkout convention: `/opt/dame-curie`; host wrappers require its `.venv/bin/python`.
-- No startup checkout listener/socket bridge: the `DAME_CURIE_STARTUP_GIT_SOCKET` deployment mount/environment and listener unit templates are retired. The existing local-Git fallback in `capture_running_build` reports unknown checkout metadata in an archive image without `.git`; OCI labels/build arguments are not checkout-snapshot proof.
-- Neutral filenames and storage paths (`bot.env`, `.env`, `.venv`, `/config`, `/state/data`, `/state/sites`, `/state/shell`) keep their names and explicit ownership. Retained public URL helpers are not local HTTP routes or hosting.
-- Root's short URL component `dame` is intentional. It does not authorize sharing V1's live publishing destination. Public examples use reserved `.invalid` destinations; V2 publisher activation/destination remains unestablished.
+`prompt_context_budget` defaults to **96,000 raw characters**, with output headroom making the default enforced prompt budget **72,000 characters**. The planner accounts for serialized tool schemas and the newest tool group (up to **24,000 characters**). The enforcer trims the oldest transcript lines before dropping memory, and sheds expanded-catalog schemas only after trimming cannot fit; protected identity/tool/server-prompt blocks fail visibly rather than middle-trim. Schema volume consumes this same budget. This is a character heuristic, not a provider token/context guarantee.
 
-Runtime-producing defaults, consumers, labels, path guards and templates were aligned together; no legacy-name compatibility alias was added to reconnect V2 to V1. Harmless historical prose, ordinary `max()`/`max_tokens`, persona content and unrelated internal identifiers are not a global replacement target. No new real domain, mailbox or Discord identity was inferred.
+Tool-tail history retains at most **36,000 characters / 12 messages**; the newest call/result group initially caps at **24,000 characters** and can shrink to **16,000**. Older groups are compacted/evicted first. Call/result pair IDs survive; payloads and reasoning are **not** guaranteed intact, including the just-executed native batch. Mandatory tool `reasoning` remains required, with history elision; changing that policy is root's pending decision.
 
-These are source contracts, not a fresh deployment observation. Private dotenv loads with `override=True`; the coordinator must audit effective structural settings during separately authorized reconciliation rather than assuming Compose wins. Consult `STATUS.md` and the redesign progress ledger for integration/acceptance limits. No V2 execution follows from this document.
+Native tool admission caps **8 calls**, **16,000 UTF-8 bytes per call's arguments**, **32,000 across batch arguments**, and **40,000 across the batch envelope**. A per-call oversize in an otherwise valid batch returns a recoverable tool error and refuses the **entire batch before effects**; malformed calls, aggregate/batch or envelope overflow fail closed. Large file-authoring arguments may therefore need a different approach; the limits do not imply a hidden truncation.
 
-## Direct shell and publication boundaries
+Foreground turn defaults are **32,768 reserved output tokens, 12 actual POST attempts and 600 seconds**. Non-200 failures and attempts with no observed/cached200-response body refund their reservation; partially received200-response bodies retain it (not a billing guarantee). The turn deadline dominates the older 3,600-second AI/tool controls and bounds descendant jobs; work is not promised to survive it. Terminal reasoning-only responses stay terminal without automatic fallback/recovery; root has not decided to change that policy.
 
-Shell executes `bash --noprofile --norc -c` inside the outer bot container, with explicit `cwd=/home/dame-curie`, a fixed minimal HOME/PATH/LANG/PYTHONUNBUFFERED environment, DEVNULL stdin and a new process group for timeout/cancellation cleanup. `/home/dame-curie` resolves to persistent `/state/shell`; files persist between calls, shell process state does not. Shell requires the permission actor to be a bot admin or on the shell-user allowlist; persistent prompt rewrites require a bot admin. Catalog selection, dispatcher aliases and direct execution share that policy. Existing Discord delivery/export limits remain. There is no per-turn web-read confirmation lock; authorization does not eliminate injected-instruction risk inside an authorized turn.
+## Commands, jobs and acceptance
 
-This shell runs as the bot's UID and can read bot-readable configuration/secrets. It is **not a separate inner security boundary**. Isolation comes from the outer service account/private rootless engine/container and explicitly V2-owned mounts. No nested Docker, Docker socket, host-root mount, host networking, host execution or V1 roots are granted. Process-group cleanup is not a general security sandbox.
+Default command prefix is `!`; a temporary instance may set `?` in its private configuration. Do not turn dated temporary controls into source defaults. `!bg GOAL` preserves free prose; `!bg --provider main|autonomy|aux [--model MODEL] -- GOAL` opts into trusted same-role settings. Model-facing `spawn_background` accepts `goal`, optional `context`, `provider`, `model`, never endpoints/keys/headers. Explicit routing requires the role's own endpoint/model, never silently borrows another role; a configured fallback may answer elsewhere. Jobs reuse tools, permissions, delivery and canonical personality/server prompt, not an independent credential sandbox. Goal/context is user-role content, not system policy.
 
-Author files locally under `/state/sites`; preserve `_images` files and matching prompt sidecars and their shared attachment/image-edit consumers. The independent publisher mirrors local authored directories and archives images externally. Its implementation/configuration and `scripts/publisher/**` are immutable in this redesign. Removing HTTP serving does not remove file/URL helpers or transfer remote administration to the model. Do not start local servers, install PHP/Perl/CGI, test an invented public destination or claim a public link proves publishing succeeded.
-
-## Background jobs and prompts
-
-Active command prefix: **`!`**. The source contract preserves free-prose goals and adds an opt-in routing header:
-
-```text
-!bg Summarize the design tradeoffs
-!bg --provider autonomy -- Summarize the design tradeoffs
-!bg --provider aux --model MODEL -- Summarize the design tradeoffs
-```
-
-`!bg GOAL` keeps ordinary prose intact; it does not shell-parse the goal. The optional `--provider main|autonomy|aux` / `--model MODEL` header requires the `-- GOAL` separator. Model-facing `spawn_background` accepts `goal`, optional `context`, `provider` and `model`, never endpoint URLs, keys or headers.
-
-Default main routing without overrides remains unchanged. Explicit routing resolves trusted **same-role** settings and requires that role's configured base URL and model; an AUX job does not silently borrow autonomy/main configuration. A model override changes only the primary request model: existing configured fallback may answer on another endpoint/model. A requested route is not proof of which provider returned the answer. Jobs share tools, permissions and delivery machinery, not a separate credential/security sandbox.
-
-Jobs use the canonical live personality and originating server prompt, with capability instructions kept separate from identity. Goal/context are user-role content, not system policy. Authoring/personality policy tuning remains deferred. This documents the approved routing/source behavior under review, not real provider or Discord acceptance.
+Source-only review cannot establish live integration, provider/image acceptance, Discord delivery, multi-instance replication or deployment readiness. Consult [STATUS.md](STATUS.md) and [OPERATIONS.md](OPERATIONS.md) before any separately authorized reconciliation; `config.py` dotenv loading with `override=True` means injected Compose values alone do not prove effective settings.

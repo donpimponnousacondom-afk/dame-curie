@@ -4,16 +4,14 @@ How local authored files become remote static files. The publisher is an indepen
 process that mirrors a local directory tree outward over SSH/rsync. It is not a
 deployment mechanism, not a runtime sync, and not something the model administers.
 
-Dirac's specific instance record, its template and its untested gaps are in
-`phase-II_v2/DIRAC_PUBLISHING.md`. This file is the durable operator guide for either
-instance.
+This is the durable guide for both instances, **not a publisher/private/remote operating grant**. Current closure work leaves publisher code, configuration, services and destinations untouched. The old phase record is recoverable through `git show eb188ac:phase-II_v2/DIRAC_PUBLISHING.md`; the protected template's historical citation is left unchanged, not treated as a live documentation link.
 
 ## Authoring
 
 There is no site-authoring tool. The shell tool is the only writer, and its contract is
 to author files locally and never to administer remote publication.
 
-- The model's shell runs `bash -lc` with `cwd`/`HOME` of `/home/dame-curie`, which is a
+- The model's shell runs `bash --noprofile --norc -c` with `cwd`/`HOME` of `/home/dame-curie`, which is a
   symlink to the persistent `/state/shell` bind.
 - The authoring root is **not** under `HOME`. Reach it as `/state/sites`, or as
   `"$DAME_CURIE_SITE_DIR"` (the container value; `config.py` defaults it to `public/bot`
@@ -81,8 +79,7 @@ The publisher needs a `python3` **and** an `rsync` on the remote host. It invoke
 remote `python3 -I -S -c` as its rsync transfer guard; that is not the remote hosting a
 Python application.
 
-Instances are isolated by directory, not by code. Two instances must differ in every one
-of `source`, `staging`, `state`, and in `host`/`user`/`port`/`site_root`/`image_root`.
+Instances are isolated by directory, not by code: use disjoint `source`, `staging` and `state` and distinct remote `site_root`/`image_root`. The SSH host/user/port or key may be shared under an explicit grant; that does not separate destinations.
 `state.py` refuses to start if any of those differs from the saved state, so an existing
 instance cannot be repointed without clearing its state directory — but on a **fresh**
 state directory the configured destination is adopted and pinned as-is, with no check
@@ -107,9 +104,17 @@ The isolation between instances is not uniform, and the difference matters:
   name that does not already exist. Names it never claimed are never removed by it, but
   they will be served.
 
-## Verifying a publication
+## Dirac-specific layout and retained limits
 
-Local, no credentials:
+The template is `scripts/publisher/config.dirac.example.toml`; the separate unit is `scripts/publisher/dirac-publisher.service`. Its intended account is `dame-curie`, working directory `/opt/dame-curie`, source `/srv/dame-curie/dirac/sites`, and private configuration/staging/state under `/srv/dame-curie/dirac/publisher/{config,staging,state}`. This is layout, not fresh service/destination verification. Real host, user, key and remote roots must never be guessed from the placeholders or copied wholesale from another instance.
+
+An explicitly authorized existing-key reuse needs a private regular copy owned by the process user, mode0600, link count1; symlink/hardlink reuse is refused. The publisher entry is `python -B -m scripts.publisher --config <private TOML>`; `--once` reconciles once, otherwise it watches/rescans. These are interfaces, not commands authorized by this page.
+
+The historical source review reported an **unresolved out-of-band remote-site deletion gap**: service mode can retain a cached binding to the missing directory, fail/restart and starve later sites. Its proposed `--once` re-claim recovery and any code change require a separate publisher assignment; neither was exercised or applied in this closure. Preserve that limitation rather than interpreting a prior running-service receipt as deletion-recovery acceptance. Full diagnosis and earlier lane-specific grants remain in the immutable phase record above, not as renewed authority.
+
+## Verifying a publication — separate grant required
+
+These examples access service/private state or the remote host. They are not permitted by the current source/Dirac-remediation assignment. Under a suitable publisher grant, local checks include:
 
 ```sh
 systemctl status dame-curie-publisher.service
@@ -171,9 +176,7 @@ host's configuration, by whether it honours per-directory overrides, and by what
 operator places in that remote root — for example opting out of the static policy by not
 deploying that `.htaccess` inside the site directory.
 
-Nothing here installs or provides PHP/Perl/CGI, and no local server exists: the Compose
-file publishes no ports, and the bot image contains no web framework or interpreter for
-these languages. There is no opt-in executable-hosting mode.
+The project provides no PHP/Perl/CGI hosting setup or local web-server feature; Compose publishes no ports. This does not certify the absence of incidental language utilities in inherited distribution packages, or constrain everything an authorized same-UID shell can execute. There is no supported opt-in executable-hosting mode.
 
 ## What the publisher never does
 

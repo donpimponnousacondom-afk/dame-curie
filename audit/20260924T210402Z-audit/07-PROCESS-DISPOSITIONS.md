@@ -1,6 +1,6 @@
 # 07 — Coordinator process evidence and retained limitations
 
-**RETIRE AFTER ACCEPTED ROUND TWO.** This records verified metadata and independently reviewed branch dispositions, not pruning authority or whole-application acceptance. Owner: coordinator. Keep the auditor's original reports unchanged.
+**Retained historical companion to the quarantine.** This records independently recollected metadata and branch dispositions, not current counts, pruning authority or whole-application acceptance. Owner: coordinator. The detailed internal mapping/review notes were retired from the working tree and remain recoverable in commit`89fb851` under the original audit directory name. Existing refs/worktrees remain retained; five later QA evidence refs do not rewrite the dated inventory below. Keep the auditor's original reports and `review-process-evidence.md` unchanged.
 
 ## P-05 — verified local Git snapshot
 

@@ -28,7 +28,7 @@ validated socket and is read-only (`info`/`inspect`); only the relay process
 itself keeps host root, and only for `setns` and `nsenter`. There is no proxy
 command, no user-supplied target, no V1 mutation and no published host port. Run
 it as host root under its own unit with an isolated interpreter (`-I -S -B`); see
-`phase-II_v2/DIRAC_RUNTIME_OPS.md`.
+`docs/OPERATIONS.md`.
 """
 
 import argparse

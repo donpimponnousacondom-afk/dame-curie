@@ -7,7 +7,7 @@ credentials and never touches the canonical Compose project. Mutations serialize
 on the canonical operations lock, so a Dirac start cannot interleave with
 `scripts/instance.py`. The container joins the canonical outbound bridge because
 the shared RAG relay listens on that bridge's gateway inside the V2 daemon's
-network namespace. Layout and acceptance steps: `phase-II_v2/DIRAC_RUNTIME_OPS.md`.
+network namespace. Layout and acceptance steps: `docs/OPERATIONS.md`.
 """
 
 import argparse

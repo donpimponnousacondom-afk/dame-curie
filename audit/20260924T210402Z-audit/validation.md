@@ -1,12 +1,12 @@
-# Remediation validation receipts — temporary
+# Remediation validation receipts — retained evidence
 
-Retire this file after accepted auditor round two, after consolidating final commit/QA/acceptance references into the implementer response and compact release receipt. This is ongoing work, not final acceptance. No candidate was deployed by these runs.
+Retain this ledger with the original reports and compact closure receipt. Early sections record offline checks; QA67–69 later exercised and restored a prior candidate. QA77/78 built and checked the round-two candidate without live activation. Each dated section defines its own source/image/runtime scope; an earlier no-deployment statement does not apply to later receipts.
 
-## Isolation and provenance
+## Initial offline isolation and provenance
 
 Coordinator re-resolved `dame-curie` to UID **1005** and verified its socket `/run/user/1005/docker.sock` as owned by that UID, mode **1660**. The initial unprivileged `stat` failed with ordinary Unix permission denial; the approved service-account run-as succeeded. No alternate engine was used. Engine ID **12fb714d-4e16-45ad-bb31-a86fb1a5ee8d**, security options include `rootless`.
 
-All runs below use frozen image **`sha256:a81175b66e37c3aabcb2d6f92e087af49974126e87e60064bbfd890695383792`**. Observed versions: **Python 3.14.4, pytest 9.0.2, Ruff 0.15.7**. Source is a Git archive, never a host application import or a bind-mounted live checkout. Candidate snapshots use an independent temporary Git index; the normal index is not changed.
+The initial offline runs used frozen image **`sha256:a81175b66e37c3aabcb2d6f92e087af49974126e87e60064bbfd890695383792`**; QA59 introduced the frozen Git-enabled QA image, and later artifact/live sections explicitly identify their different images and grants. Observed versions: **Python 3.14.4, pytest 9.0.2, Ruff 0.15.7**. Source is a Git archive, never a host application import or a bind-mounted live checkout. Candidate snapshots use an independent temporary Git index; the normal index is not changed.
 
 Runtime envelope: `--rm`, `--network none`, read-only root, all capabilities dropped, `no-new-privileges`, 256 PIDs, 3 GiB memory, 2 CPUs. Writable disposable tmpfs mounts only: `/suite` 768 MiB, `/tmp` 1 GiB, `/state` 256 MiB; `/suite` and `/tmp` permit synthetic executable fixtures. Explicit Bash entrypoint, never normal application startup. No private mounts, real dotenv, Docker socket mount, real Discord credential or real provider credential. Explicit `DAME_CURIE_ENV_FILE=/tmp/synthetic.env` points at an empty disposable file. Provider URLs use `.invalid`, the key is `synthetic-no-network`, model is `synthetic-model`; RAG/images are disabled, with a valid synthetic native image profile supplied for legacy validation. Loopback inside this isolated namespace is permitted; no outbound route exists.
 
@@ -239,4 +239,27 @@ Current evidence includes the full **safe** QA60 selection, integrated-core/narr
 
 - Fresh trusted-operator chain and installed temporary-specific operator/source hashes matched. Engine `12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`, current old-image container `495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, image `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`, running; prompt mount is the external writable `/config/prompts`. Metadata/status is not a fresh Discord identity proof.
 - Minimum authorized private read used trusted standalone Python with stdlib only, exact-path/symlink checks and selected counts/controls. **One stored server prompt,1939UTF-8 bytes; zero over16384.** External prompt-directory setting verified. Base personality is separate and was not inspected. Reasoninglow/output12345/REMoff/autonomyoff/RAGon/high image quality; neither `hd_image` nor `image_generator` disabled; three allowed channels include the prepared smoke channel. No migration was needed for these observed fields.
-- Control SHA256 `28644604d77b045cb1b90ae6b1bc269fb1cce896d4fcbfe6400fa448f3750b81`; REM-control SHA256 `4a30c9be3f878a9b2ecf59f5e0ada934c9d7e390f09c232597a46d5b4e929a50`. These are dated observations, not permission to restore stale controls over later human changes. No round-two application build, deployment, inference or profile mutation had occurred at this source checkpoint. Rollout decision, diff-focused closure and actual document retirement remain coordinator work.
+- Control SHA256 `28644604d77b045cb1b90ae6b1bc269fb1cce896d4fcbfe6400fa448f3750b81`; REM-control SHA256 `4a30c9be3f878a9b2ecf59f5e0ada934c9d7e390f09c232597a46d5b4e929a50`. These are dated observations, not permission to restore stale controls over later human changes. No round-two application build, deployment, inference or profile mutation had occurred at this source checkpoint. Rollout decision, diff-focused closure and actual document retirement remained coordinator work at that source checkpoint.
+
+## Round-two closure review and candidate artifact — QA77/78
+
+- Fresh independent Sol`a6b627d2` reviewed `eb188ac..89fb851` against section5: scoped source/test correction **pass**, no new source blocker. It verified Python source/test blobs equal QA75/76's tree. Source-only review, not its own QA run or original external-auditor sign-off. Documentation and fresh artifact/identity/live gates remained separate.
+- Owning account/socket and engine were freshly reverified. A metadata check for local `python:3.14.4-slim-trixie` returned exit1 (tag absent); no pull, alternate engine or dependency installation followed. The retained `dame-curie-app:be28b85` tag was verified as immutable `sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`. Normal Docker recipe/ignore and dependency lock are byte-unchanged between `be28b85` and `89fb851`.
+- QA77 built from a committed `89fb851` archive using a temporary **offline source-overlay recipe**: inherit that verified artifact's dependency layers, recopy every declared application input, regenerate the existing provenance manifest/OCI revision, omit package-install and already-established-directory steps. Network-none, pull=false, no credentials/private mounts. This is not a fresh dependency rebuild or execution of the unmodified normal Docker recipe. Temporary recipe only; repository Dockerfile/pins unchanged. Legacy-builder deprecation warning retained; build exit0.
+- Artifact **`dame-curie-app:89fb851`**, image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc`**. QA78 compared all **56 declared copied input files** against the committed archive, including the lock and embedding checker; hashes matched. Baked commit `89fb851144dbd9c0bd661a67c5937161d1b58b52`, branch and dirty=false matched; OCI revision matched. Python3.14.4.
+- The existing `CONSTRUCTION_PROBE` from `tests/test_bot_construction.py` was extracted as a literal, not replaced by a new test, and ran inside that **actual image**. Read-only root, network-none, caps dropped, synthetic `/state`, no private mounts/login/provider request. Audit hook refused network/process launch and writes outside synthetic state; constructor/plugin/data-root/idle-state assertions passed, exit0. This one actual-image probe used external prompts and `?`; the four existing fixture variants were separately covered by QA76. Build/constructor success is not fresh Discord identity or delivery acceptance. Old temporary image/container remained unchanged through these steps.
+
+## Consolidated historical catalog measurements
+
+The retired inventory's QA61/65 measurements remain reproducible evidence, not live counts: frozen tree`25763dfee4483e4887479b2997ff64b0009d562c`, source`d198c37`, all feature gates enabled, synthetic actors/plugin state plus actual checkers, real setup/catalog/schema/prompt builders, no tool/provider/Discord calls. Registered70built-ins+4plugin tools. Columns below: selected count / compact-schema characters / UTF-8 bytes / native-system characters / custom-combined characters.
+
+| Fixture | Count | Schema chars | Bytes | Native system | Custom combined |
+| --- | --- | --- | --- | --- | --- |
+| Admin core | 15 | 14413 | 14436 | 8272 | 14845 |
+| Admin workflow | 24 | 21431 | 21460 | 8381 | 17930 |
+| Admin full | 74 | 54608 | 54649 | 9072 | 30085 |
+| Ordinary core | 14 | 12892 | 12915 | 8265 | 13955 |
+| Ordinary workflow | 21 | 18744 | 18773 | 8327 | 16560 |
+| Ordinary full | 70 | 51085 | 51122 | 9005 | 28328 |
+
+Native/custom are alternatives, not additive; these are not tokens/billing or every profile's exposure. Corrected current default:96000 raw characters, **72000 enforced**, not96000 enforced;36k is only the history-tail bound. Discovery scope, authorization and serialization/budget contracts now live in `../../docs/ARCHITECTURE.md`. Historical full inventory and retired internal reviews are recoverable in commit`89fb851` under the original audit directory name; use Git's tree listing rather than interpreting obsolete paths as active files.
