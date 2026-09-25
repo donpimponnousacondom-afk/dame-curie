@@ -222,99 +222,99 @@ QA used the established Python3.14.4 image with network disabled, no private mou
 
 ## Finding C-26 — Image path resolution and edits
 
-- **Disposition:** deferred — image integration/documentation owner.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** Local references use realpath bounds; escaping symlinks are refused. Same-UID path replacement between check/use is not eliminated. Edit behavior/latency and explicit remote settings remain documented rather than silently claiming old downscaling behavior.
-- **Verification performed:** existing synthetic image/path cases and independent review; no live image request.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source for path containment and documented edit behavior; isolated verification complete; temporary acceptance pending. Same-UID realpath-to-read TOCTOU remains.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; packaging `be28b8598215ff6a0c72d7c3160403f2425a61f0` for the candidate artifact.
+- **What changed / why not:** Local references and allowed roots use realpath bounds; escaping symlinks are refused, but path replacement between check and read is not prevented. Edits use explicit image settings without a claim of old downscaling, equivalent latency or same-UID filesystem isolation.
+- **Verification performed:** `review-image-configuration.md` source/path trace and existing synthetic image/path cases in QA60 full-safe3984 passed plus28 subtests; QA64 actual-image constructor passed with image generation disabled. No live image request or TOCTOU elimination.
+- **Deployment effect:** candidate built and source/construction-verified, not deployed as of this editing pass; canonical migration held.
 
 ## Finding C-27 — Omitted versus empty image input
 
-- **Disposition:** deferred — final image/core commit.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Only `image is None` may fall back to incoming attachments. Empty string or empty JSON list means generation from scratch; schema descriptions must say so.
-- **Verification performed:** existing image/schema cases adapted; final integrated execution pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source and schema; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Only omitted/`None` image falls back to incoming attachments. Explicit `""`, `[]` or `"[]"` selects generation from scratch; schema/description clarify the distinction. This is not a live image-provider acceptance claim.
+- **Verification performed:** Independent image/config review traced attachment and generations paths; existing image/schema cases in QA60 full-safe3984 passed plus28 subtests. QA64 constructor had image generation disabled.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-28 — Retired hd_image and private controls
 
-- **Disposition:** deferred — coordinator final source rationale/private acceptance check.
-- **Commit(s):** no alias planned; final integrated documentation pending.
-- **What changed / why not:** Selected clean contract retains only `image_generator`; do not silently map retired high-quality/model behavior onto the new low-default generic capability. Retained capability is discoverable under its actual name; old traces are not restored as instructions. Final response must give the exact dispatch/schema counter-argument and minimal temporary disabled-tools observation; no fresh private-control claim yet. Canonical migration remains held.
-- **Verification performed:** independent image review; exact final anchors and authorized temporary metadata check pending.
-- **Deployment effect:** none.
+- **Disposition:** clean-cut source contract retained; private control reconciliation and temporary acceptance pending, not silently migrated.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; image documentation checkpoint `3754a8a`, `663749b`.
+- **What changed / why not:** Only `image_generator` remains registered/discoverable. Exact tool-name dispatch and schemas do not make a retired `hd_image` alias necessary; no alias or automatic transfer of high-quality/model/private `disabled_tools` controls is claimed. Explicit private high quality remains unchanged unless separately reconciled; canonical migration remains held.
+- **Verification performed:** `review-image-configuration.md` traced registration, tool-name aliases, schema and the private-control residual; QA60 full-safe3984 passed plus28 subtests and QA64 actual-image constructor passed with image generation disabled. No authorized private-control inspection or live image request in this document pass; temporary disabled-tools observation belongs to the separate parent runtime lane.
+- **Deployment effect:** candidate built, not deployed as of this editing pass; no canonical activation claim.
 
 ## Finding C-29 — Empty optional model/quality
 
-- **Disposition:** deferred — final image integration commit.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Empty optional model/quality uses configured defaults rather than becoming an invalid explicit selection. Nonempty unknown selections remain errors.
-- **Verification performed:** existing synthetic image cases; final current-tree integration pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Empty optional model/quality falls back to configured defaults; nonempty unknown selections remain errors. Explicit private high quality is not silently overwritten by the new low source default.
+- **Verification performed:** Independent image/config review traces fallback and existing synthetic generation/edit case; QA60 full-safe3984 passed plus28 subtests. No live image-provider or private next-boot check.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-30 — Configured runtime command prefix
 
-- **Disposition:** deferred — command-case verification/commit stage.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** Runtime usage/errors now interpolate the configured prefix, including command and solo/voice/context/REM/autonomy helpers. Background parsing takes the configured prefix. Canonical documentation examples/comments remain `!`; dated runtime receipts are explicitly historical.
-- **Verification performed:** coordinator bang-command grep leaves only comments/docstrings in bot.py; existing command cases being adapted, not yet executed in current integration.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`.
+- **What changed / why not:** Runtime usage/errors and background parsing honor the configured prefix across command and solo/voice/context/REM/autonomy paths. Canonical docs use `!`; dated runtime receipts are historical rather than evidence of a deployed prefix change.
+- **Verification performed:** Existing command/solo/REM and background cases in QA56 bounded core657 passed and QA60 full-safe3984 passed plus28 subtests. No live command invocation.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-31 — Incoming-message viewer latch trigger
 
-- **Disposition:** deferred — producer/core commit outstanding.
-- **Commit(s):** V covers viewer containment; producer anchor is pending integrated source commit.
-- **What changed / why not:** Incoming INFO logging uses IDs/length rather than arbitrary message content. Complete bounded JSON records use local redaction state while genuine outer spans/loss remain fail-closed. Do not mistake a consumer fix alone for a committed producer fix.
-- **Verification performed:** V plus independent viewer/authorization review; producer integration pending.
-- **Deployment effect:** none.
+- **Disposition:** producer fixed in source; viewer containment separately verified; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** producer source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; viewer `7286aa2fcdbfc5b87533b8ff81db93d6c52587ad`.
+- **What changed / why not:** Incoming INFO logging uses IDs and character count rather than arbitrary message text. Bounded complete JSON redaction uses record-local state, preserving outer-span protection and genuine framing-loss fail-closed behavior; do not conflate producer removal with consumer repair.
+- **Verification performed:** `review-viewer-authorization.md` traces producer and viewer paths; V six-suite185 passed; QA60 full-safe3984 passed plus28 subtests. No live viewer acceptance. Rejected scanned lines may affect span state without a separate marker for every redacted line.
+- **Deployment effect:** application producer is in the built candidate, not yet deployed; host viewer fixes are not bundled in that image and have not been installed or exercised in the existing Screen session.
 
 ## Finding C-32 — Visible viewer omissions
 
-- **Disposition:** fixed — source scope only.
-- **Commit(s):** V.
-- **What changed / why not:** Viewer diagnostics have their own always-visible scope and cannot disappear behind normal scope/error/replay filtering or health coalescing. Legitimate producer ERROR-group continuation semantics are preserved.
-- **Verification performed:** exact V selection and independent viewer source review; no live viewer operation for this remediation.
-- **Deployment effect:** none.
+- **Disposition:** fixed in viewer source; isolated verification complete; temporary acceptance pending, with bounded-retention/privacy limits.
+- **Commit(s):** viewer `7286aa2fcdbfc5b87533b8ff81db93d6c52587ad`.
+- **What changed / why not:** Viewer-owned omissions survive normal scope/error/replay filters and health coalescing; legitimate producer ERROR continuation remains intact. Tiny caller-supplied evidence budgets may not retain even a marker; scanned rejected/redacted lines do not each guarantee an individual marker.
+- **Verification performed:** Independent viewer/authorization review; exact V six-suite185 passed and QA60 full-safe3984 passed plus28 subtests. No live viewer operation.
+- **Deployment effect:** host viewer source only; not bundled in the application image, not installed into or exercised through the existing Screen session.
 
 ## Finding C-33 — Proportionate redaction continuity
 
-- **Disposition:** fixed — source scope only.
-- **Commit(s):** V.
-- **What changed / why not:** Bounded complete JSON is record-local; active outer PEM/config spans remain masked. Rejected fragments are scanned once, with correct last BEGIN/END ordering and sensitive-field span effects. Genuine framing loss still fails closed rather than claiming safe recovery.
-- **Verification performed:** exact V selection and independent viewer review.
-- **Deployment effect:** none.
+- **Disposition:** fixed in viewer source; isolated verification complete; temporary acceptance pending, with explicit line-omission privacy tradeoff.
+- **Commit(s):** viewer `7286aa2fcdbfc5b87533b8ff81db93d6c52587ad`.
+- **What changed / why not:** Complete bounded JSON uses record-local redaction; active outer PEM/config spans remain masked. Rejected fragments are scanned, including sensitive-field state and last BEGIN/END order. Genuine framing loss/overflow fails closed; not every redacted/rejected line receives its own visible omission marker.
+- **Verification performed:** `review-viewer-authorization.md` and narrow `review-lifecycle.md` redactor spot-check; exact V six-suite185 passed and QA60 full-safe3984 passed plus28 subtests. No live log/privacy acceptance.
+- **Deployment effect:** host viewer source only; not bundled in the application image, not installed into or exercised through the existing Screen session.
 
 ## Finding C-34 — Final delivery settlement result
 
-- **Disposition:** deferred — progress/core integration commit stage.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Propagate actual final settlement success/failure to callers rather than awaiting and discarding the result. Persist only confirmed delivered chunks/IDs; an acknowledgement loss does not prove no Discord side effect.
-- **Verification performed:**116-pass synthetic progress/error subset; real final-delivery/caller matrix pending. L separately verifies receipt uncertainty, not this uncommitted progress source.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary delivery acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; lifecycle receipt `551060dbb7d223e1f365c069fbff2db377406f17` is separate.
+- **What changed / why not:** Callers use the actual final settlement result; success is recorded only for confirmed delivery. Confirmed chunks/IDs are retained, while lost acknowledgements remain uncertain rather than proof of no Discord side effect.
+- **Verification performed:** Synthetic progress/error subset116 passed; QA56 bounded caller/core657 passed and QA60 full-safe3984 passed plus28 subtests. L four-suite117 passed addresses lifecycle receipt uncertainty, not substitute proof of live final delivery.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-35 — Cancellation must not delete a possibly delivered final answer
 
-- **Disposition:** deferred — progress/core integration commit stage.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Once a final edit is issued, cancellation/uncertainty must not trigger deletion of the possibly delivered answer. Settlement remains bounded and uncertainty remains explicit.
-- **Verification performed:** synthetic progress/error subset and independent source review; current integrated caller/cleanup coverage pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary delivery acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; lifecycle receipt `551060dbb7d223e1f365c069fbff2db377406f17` is separate.
+- **What changed / why not:** Cancellation after issuing a final edit preserves the possibly delivered final answer, including confirmed final delivery; bounded settlement retains uncertainty where acknowledgement is lost. No blanket assertion of external Discord delivery follows.
+- **Verification performed:** Synthetic progress/error subset116 passed; QA56 caller/cleanup selection657 passed and QA60 full-safe3984 passed plus28 subtests. No live cancellation/delivery outcome.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-36 — Operator status and restart evidence
 
-- **Disposition:** fixed — source scope only.
-- **Commit(s):** L.
-- **What changed / why not:** Report owned container state before expected configuration/layout failures; do not hide unexpected Docker failures. Refuse stopped/dead restart before private preparation, retaining stop evidence. Docs distinguish status metadata/probe limits and retained log replay.
-- **Verification performed:** exact L selection and independent lifecycle review; documentation final commit pending, installed operator behavior not re-accepted.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source/documentation scope; isolated verification complete; temporary-only operator installed and positive readiness verified (QA66).
+- **Commit(s):** lifecycle `551060dbb7d223e1f365c069fbff2db377406f17`; documentation `3754a8a`, `663749b`.
+- **What changed / why not:** Owned container metadata survives expected bridge/private-layout configuration failures; unexpected Docker/ownership failures remain failures. Stopped/dead restart is refused before private preparation, retaining stop evidence. Documentation distinguishes metadata/probe limits and retained log replay.
+- **Verification performed:** Independent `review-lifecycle.md`, exact L four-suite117 passed and QA60 full-safe3984 passed plus28 subtests. QA66 separately reverified the trusted3.14.4 operator interpreter/ownership and exact installed temporary-operator source; actual old-instance status returned config=ok and embedding_readiness=ok. Negative failure/refusal paths remain synthetic coverage, not live fault injection.
+- **Deployment effect:** temporary-only `dirac.py`, `dirac_smoke.py` and `smoke_protocol.py` installed from reviewed source, with root-only rollback copies. Shared `instance.py`, `log_filter.py` and existing Screen session untouched. Application candidate not yet deployed at this checkpoint.
 
 ## Finding C-37 — Opened smoke turn cleanup and settlement
 
-- **Disposition:** fixed — source scope only.
-- **Commit(s):** L.
-- **What changed / why not:** Cancel/settle the exact input task, retain cleanup receipts before awaits, keep admission closed until a known task truly settles and fail-stop taskless uncertainty. Stop can recover retained receipts after queue registration disappears. Unacknowledged sends may still have reached Discord; known IDs mean acknowledgement observations only.
-- **Verification performed:** exact L selection and independent lifecycle review; bounded live acceptance pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source for exact-task settlement and conservative cleanup; isolated verification complete; bounded temporary acceptance pending.
+- **Commit(s):** lifecycle `551060dbb7d223e1f365c069fbff2db377406f17`; smoke CLI withdrawal race `e540be6772f76d906720b79b07947a60893c3b24` is a distinct fix.
+- **What changed / why not:** Cancel/settle the exact input task, retaining cleanup receipts before awaits; known tasks hold admission until settled, taskless uncertainty fails closed, and stop may recover receipts after queue registration disappears. Cleanup of an unregistered task stays conservative. Confirmed IDs identify acknowledged sends only; unacknowledged sends may still reach Discord. A failed status write cannot guarantee an on-disk terminal receipt.
+- **Verification performed:** `review-lifecycle.md` source trace; exact L four-suite117 passed, S smoke-protocol5 passed, QA60 full-safe3984 passed plus28 subtests. No live Discord/task settlement claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding P-01 — Temporary live instance used as a test bed
 
