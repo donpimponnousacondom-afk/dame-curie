@@ -1,6 +1,6 @@
 # 05 — Implementer response — WORKING DRAFT
 
-**Not submitted for final acceptance.** Coordinator owns completion of every block below. `deferred` in this draft means **active remediation pending the stated evidence**, not a proposed permanent carve-out. Candidate `be28b85` is built, source/construction-verified and exercised in one bounded temporary happy-path case (QA67–69). The prior image and exact original controls were then restored; **the candidate is not the current running image**. The per-finding blocks below still retain intermediate pending wording and require final reconciliation; the latest evidence summary supersedes those execution/commit-state claims, not their disclosed limitations. Normal release, canonical/V1 activation, publisher and remote operations remain frozen.
+**Not submitted for final acceptance.** Coordinator owns completion of every block below. `deferred` in this draft means **active remediation pending the stated evidence**, not a proposed permanent carve-out. Candidate `be28b85` is built, source/construction-verified and exercised in one bounded temporary happy-path case (QA67–69). The prior image and exact original controls were then restored; **the candidate is not the current running image**. All52 finding blocks and6 implementer items are reconciled to the recorded evidence. Final independent consistency review is the remaining implementer gate; historical limitations and the external auditor's round-two verdict remain separate. Normal release, canonical/V1 activation, publisher and remote operations remain frozen.
 
 Root's current grant and its limits are recorded in `../../AGENTS.md`, `../../TODO.md` and the verbatim entry in `../../phase-II_v2/SESSION_LOG.md`. It does not retroactively authorize older actions. Originals00–04 are unchanged. Keep this bundle and independent reviews through accepted round two; follow the retirement ledger afterward, preserving unresolved provenance and operating boundaries.
 
@@ -9,8 +9,8 @@ Root's current grant and its limits are recorded in `../../AGENTS.md`, `../../TO
 - **V:** commit `7286aa2fcdbfc5b87533b8ff81db93d6c52587ad`, tree `bdd636d05898bcc41aafc4f3d75371c3991fbc5f`; Python3.14.4 isolated Ruff F821/F822/F823 passed; **185 passed**. Exact selection: `tests/test_log_console_render.py tests/test_log_console_robustness.py tests/test_log_console_events.py tests/test_log_console_history.py tests/test_log_console_integration.py tests/test_log_console_tty.py`.
 - **L:** commit `551060dbb7d223e1f365c069fbff2db377406f17`, tree `c13f3d5a492069da1594ee3e61ebe0e82e0ba119`; same isolated Ruff selection passed; **117 passed**. Exact selection: `tests/test_dirac.py tests/test_dirac_operator.py tests/test_dirac_smoke.py tests/test_message_pipeline.py`.
 - **S:** commit `e540be6772f76d906720b79b07947a60893c3b24`, tree `56062c02b3027ade1d58bd678ffc9efd1cc5fb48`; selected Ruff passed; **5 passed** in `tests/test_smoke_protocol.py`.
-- **P:** uncommitted provider seam tree `9b3ec91e304d0bacaa2515f14fe9904710eee50a`; selected Ruff passed; **199 passed** in `tests/test_provider_error_reporting.py tests/test_providers.py tests/test_error_reporting.py tests/test_smoke_protocol.py`. This predates the newly identified request-shape correction and is NOT current caller or complete provider acceptance.
-- **J:** uncommitted background seam tree `869157081116c6968c177e7f1954e0e56e418f37`; selected Ruff passed; **39 passed** in `tests/test_background_jobs.py`. Uses baseline bot plus existing doubles, not full real-bot integration.
+- **P (historical, uncommitted at measurement):** provider seam tree `9b3ec91e304d0bacaa2515f14fe9904710eee50a`; selected Ruff passed; **199 passed** in `tests/test_provider_error_reporting.py tests/test_providers.py tests/test_error_reporting.py tests/test_smoke_protocol.py`. This predates the newly identified request-shape correction and is NOT current caller or complete provider acceptance.
+- **J (historical, uncommitted at measurement):** background seam tree `869157081116c6968c177e7f1954e0e56e418f37`; selected Ruff passed; **39 passed** in `tests/test_background_jobs.py`. Uses baseline bot plus existing doubles, not full real-bot integration.
 - **First full-safe integration:** QA52 tree `21f57d4801720e33035f31b2353ed10d188d2844`: selected Ruff passed; **3894 passed,83 failed,9 errors,28 subtests passed**. QA53 preintegration `e540be6`: **3884 passed,42 failed,9 errors,1 deliberately deselected historical unsafe case,28 subtests passed**. QA54 fixture reconciliation tree `f38e3e400fa4c8036f0477a0d25cb1fe7a40a21d`: **970 passed,4 original unsupported-reasoning failures retained**. These are not whole-core acceptance. Case-level ownership and exact safe selections are in `qa52-53-triage.md`; full failed evidence remains retained.
 - **Bounded integration recheck:** root directed divide-and-conquer; oversized Luna run was stopped, not restarted. Six fresh single-issue handoffs completed. QA55 tree `1354ca309efa6ffe24cdf7beb2905dfd45cb8760`: selected Ruff passed; **644 passed,13 failed** in the explicit core selection, including successful real foreground/provider cases but remaining fixture errors. QA56 tree `a58e8932abdc9009bde187060a90806a79ef5416` reran the same22-file selection after existing-fixture corrections: **657 passed**, selected Ruff passed, exit0. This is green bounded core integration, not a green full suite. Final independent acceptance, definition inventory, remaining baseline/environment debt, artifact and bounded temporary acceptance remain open. Exact commands/failures/corrections are retained in `validation.md`; no xfail-for-green or hidden discarded failures.
 
@@ -18,7 +18,7 @@ Root's current grant and its limits are recorded in `../../AGENTS.md`, `../../TO
 - **Candidate artifact:** packaging fix `be28b8598215ff6a0c72d7c3160403f2425a61f0`; image **`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`**, tag`dame-curie-app:be28b85`. All56 copied inputs match Git; baked/OCI commit and dirty=false match. Existing guarded constructor probe passed inside the actual image (QA64). This is artifact evidence, not live delivery/feature acceptance. Subsequently exercised only during QA67–69 and reverted; see the bounded acceptance receipt below.
 - **Measured catalog:** QA61/65 synthetic real-builder measurements are in `06-TOOL-INVENTORY.md`, separating current15-tool admin core/74-tool full exposure from historical flat73. Metrics are chars/bytes, not token/billing or live-profile claims. Default schema-inclusive budget is96000 characters;36k is the history-tail bound.
 
-- **Bounded temporary acceptance, QA67–69:** request`608cc14a42714fd58bafbf8084b09690`, approved channel`1550960386939817984`, operator root`1482143139828596916`, confirmed Discord identity`1504398705539944560`. One180s-deadline request completed in8s with returned=true, one delivery, exact marker body plus the configured signed runtime footer and zero readback failures. The initial logger-selector and whole-wire-equality checks failed and are retained/corrected transparently in `validation.md`; no second inference request was submitted. Prior image`sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f` restored in container`495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, running/embedding-ready, identity reverified, original controls byte-exact and private profile fingerprint unchanged. Low/12345/REMoff retained. The source-reviewed temporary operator files remain installed. Host viewer fixes were **not** installed into the existing Screen workflow. Normal embedding API usage occurred; no shared-service configuration/lifecycle mutation.
+- **Bounded temporary acceptance, QA67–69:** request`608cc14a42714fd58bafbf8084b09690`, approved channel`1550960386939817984`, operator root`1482143139828596916`, confirmed Discord identity`1504398705539944560`. One180s-deadline request completed in8s with returned=true, one delivery, exact marker body plus the configured marker-tagged runtime footer and zero readback failures. The initial logger-selector and whole-wire-equality checks failed and are retained/corrected transparently in `validation.md`; no second inference request was submitted. Prior image`sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f` restored in container`495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, running/embedding-ready, identity reverified, original controls byte-exact and private profile fingerprint unchanged. Low/12345/REMoff retained. The source-reviewed temporary operator files remain installed. Host viewer fixes were **not** installed into the existing Screen workflow. Normal embedding API usage occurred; no shared-service configuration/lifecycle mutation.
 
 **Coverage convention:** this one real model/delivery/readback case is not a per-finding live scenario matrix. Isolated verification and disclosed residuals below remain the substantive coverage for unexercised adverse/tool/provider paths. Independent round-two acceptance is still outstanding; no normal release follows.
 
@@ -394,110 +394,110 @@ Isolated QA used the established Python3.14.4 image with network disabled, no pr
 
 ## Finding D-01 — Security posture after taint-gate removal
 
-- **Disposition:** deferred — final source/documentation consistency review.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** SECURITY/architecture distinguish removed taint confirmation from retained independent authorization/redaction, current shell/rewrite actor gates and the same-UID filesystem limitation. No claim that a minimal subprocess environment is a secret sandbox.
-- **Verification performed:** source review; final current-code/document cross-check pending.
-- **Deployment effect:** none.
+- **Disposition:** current source/documentation reconciliation recorded; final independent response consistency review pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`, `4c80d4c`.
+- **What changed / why not:** SECURITY/architecture distinguish removed taint confirmation from retained independent authorization/redaction and actor-gated shell/rewrite access. The same-UID filesystem risk remains real: neither the actor gate nor a minimal subprocess environment is a secret sandbox.
+- **Verification performed:** source/document review and QA56 bounded core657/QA60 full-safe3984 plus28 subtests; no same-UID isolation or live shell acceptance claim. Final independent consistency review remains forthcoming.
+- **Deployment effect:** candidate exercised temporarily and prior image/controls restored (QA67–69); no normal release.
 
 ## Finding D-02 — Text output example default
 
-- **Disposition:** deferred — documentation commit stage.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** `.env.example` uses16384 like source defaults. This does not rewrite the last recorded temporary12345 cap.
-- **Verification performed:** source/example comparison; no private edit.
-- **Deployment effect:** none.
+- **Disposition:** source/example mismatch corrected; final independent response consistency review pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`, `4c80d4c`.
+- **What changed / why not:** `.env.example` and source use16384; the private temporary12345 cap was preserved, not replaced by the example default.
+- **Verification performed:** source/example comparison and QA67–69 byte-exact original-control restoration; no canonical private configuration migration.
+- **Deployment effect:** candidate exercised temporarily and prior image/controls restored; private cap remains12345.
 
 ## Finding D-03 — Canonical prompt-guide examples
 
-- **Disposition:** deferred — documentation commit stage.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** LONGPROMPT uses canonical `!` examples and explains configured runtime prefix, bounded readback/upload/export and whole legacy omission. Historical temporary runtime receipts remain labelled, not generic examples.
-- **Verification performed:** documentation/source review; caller cases pending.
-- **Deployment effect:** none.
+- **Disposition:** canonical guidance reconciled; final independent response consistency review pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`, `4c80d4c`.
+- **What changed / why not:** LONGPROMPT uses canonical `!` examples and distinguishes configured runtime prefix, bounded readback/upload/export and whole legacy omission. Historical temporary prefix receipts remain historical, not generic command examples.
+- **Verification performed:** documentation/source review and existing prompt/caller cases in QA56 bounded core657 and QA60 full-safe3984 plus28 subtests; no live command invocation.
+- **Deployment effect:** candidate exercised temporarily and prior image/controls restored; temporary runtime prefix was not rewritten.
 
 ## Finding D-04 — Obsolete confirmation language
 
-- **Disposition:** deferred — documentation commit stage.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** Current job guidance reflects independent authorization rather than the retired taint-confirmation gate. PRUNING_MAP and redesign/handoff records are marked historical; they cannot assert today's resource readiness, security guarantees or human authority.
-- **Verification performed:** source/document review; final residual wording scan pending.
-- **Deployment effect:** none.
+- **Disposition:** current guidance reconciled while historical attribution limits remain; final independent response consistency review pending.
+- **Commit(s):** documentation `3754a8a`, `663749b`, `4c80d4c`; source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Current job guidance uses independent authorization rather than the retired taint-confirmation gate. PRUNING_MAP and redesign/handoff assertions are labelled historical; their wording is not proof of present security, readiness or earlier human authorization.
+- **Verification performed:** source/document review and QA56/QA60 isolated cases; no retroactive grant or final independent verdict inferred.
+- **Deployment effect:** documentation/source checkpoint and bounded temporary candidate exercise only; prior image/controls restored.
 
 ## Finding D-05 — Condensed current status
 
-- **Disposition:** deferred — documentation commit stage.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** STATUS now contains current authority, verified source milestones, holds and short dated receipt rows. The previous full narrative remains in `ab64853:docs/STATUS.md`; no uncertain history was rewritten as a fresh observation.
-- **Verification performed:** coordinator rewrite/review; final independent consistency check pending.
-- **Deployment effect:** none.
+- **Disposition:** current milestone/status record reconciled; only final independent response consistency review remains pending.
+- **Commit(s):** documentation `3754a8a`, `663749b`, `4c80d4c`.
+- **What changed / why not:** STATUS records current source/QA, candidate artifact, one bounded temporary acceptance and verified old-image/control restoration, alongside normal-release and canonical holds. Its dated historical receipts are not fresh observations; full earlier narrative remains at `ab64853:docs/STATUS.md`.
+- **Verification performed:** current `docs/STATUS.md` and handoff compared against the QA67–69 summary; independent round-two verdict has not arrived.
+- **Deployment effect:** documentation only; the separately authorized candidate exercise was reverted.
 
 ## Finding D-06 — Restart and log replay
 
-- **Disposition:** deferred — documentation commit stage.
-- **Commit(s):** L for lifecycle behavior; handoff clarification pending.
-- **What changed / why not:** Handoff states that restart retains Docker history; subsequent ordinary logs tails100. Only `logs --fresh` means tail0, without deletion; it is not a restart flag. Replacement starts a new container/log stream and must not be used to hide evidence. Current source refuses stopped/dead restart before private preparation.
-- **Verification performed:** inspected scripts/dirac.py parser/logs/restart/main and handoff text; L covers operator behavior, no live command run.
-- **Deployment effect:** none.
+- **Disposition:** operator/handoff semantics reconciled; no host viewer or Screen acceptance claimed.
+- **Commit(s):** lifecycle `551060dbb7d223e1f365c069fbff2db377406f17`; documentation `3754a8a`, `663749b`, `4c80d4c`.
+- **What changed / why not:** Restart retains the container and Docker log history; ordinary `logs` tails100 and can replay old lines. Only `logs --fresh` selects tail0 without deleting history, and is not a restart flag. Replacement starts a new container/log stream, not a way to erase evidence. Stopped/dead restart is refused before private preparation.
+- **Verification performed:** source parser/logs/restart and handoff review, L four-suite117 and QA60 full-safe3984 plus28 subtests. QA67–69 preserved opaque old/candidate logs before replacement and verified restoration, not live restart fault handling or viewer behavior.
+- **Deployment effect:** three temporary operator files installed; host viewer/Screen untouched, prior application image/controls restored.
 
 ## Implementer-raised items
 
 ### I-01 — Pending smoke request withdrawn between discovery and stat
 
-- **Disposition:** fixed — source scope only.
-- **Commit(s):** S.
+- **Disposition:** fixed in installed temporary operator/protocol source; final independent response consistency review pending.
+- **Commit(s):** smoke-protocol `e540be6772f76d906720b79b07947a60893c3b24`.
 - **What changed / why not:** Catch only FileNotFoundError at the second stat; preserve other filesystem failures. Keep the accepted pending protocol, not the rejected prototype queue.
-- **Verification performed:** exact S selection; independent Sol source check. The earlier incorrect selector ran no tests and remains in validation evidence.
-- **Deployment effect:** none.
+- **Verification performed:** exact S five protocol cases and independent Sol source check; QA60 full-safe3984 plus28 subtests. The earlier incorrect selector ran no tests and remains in validation evidence. No live withdrawal race injection.
+- **Deployment effect:** temporary `dirac_smoke.py` and `smoke_protocol.py` installed; prior application image/controls restored.
 
 ### I-02 — Background native replay overwritten while posting progress
 
-- **Disposition:** deferred — integration commit outstanding.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Snapshot native followups immediately after direct dispatch, before the progress-post await. Otherwise another job/channel can overwrite the shared slot and cross-contaminate the next model request. No broad state/API refactor was necessary for this assignment-based race.
-- **Verification performed:** J plus independent publication/return/await-order review; existing fake send deliberately overwrites the slot and asserts own paired replay survives.
-- **Deployment effect:** none.
+- **Disposition:** fixed in integrated source; isolated verification complete, no live background-race acceptance.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Snapshot native followups immediately after direct dispatch, before the progress-post await; the shared slot can otherwise be overwritten by another job/channel. No broad state/API refactor was necessary for this assignment-based race.
+- **Verification performed:** J's existing fake-send case overwrites the slot and checks paired replay; independent publication/return/await-order review, QA56 bounded core657 and QA60 full-safe3984 plus28 subtests. No live concurrent-background probe.
+- **Deployment effect:** candidate exercised in one smoke-only case and prior image/controls restored; no normal release.
 
 ### I-03 — Attachment actual bytes and SDK allocation boundary
 
-- **Disposition:** deferred — processing fix verification and explicit residual.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Check actual bytes before text decode/media use; refuse archive suffix/image-MIME contradictions. This does not repair the coordinator's earlier unsupported-archive/image-limit misclassification: the incoming20MiB override was a setting change, not archive/extraction support. `.7z` extraction remains unsupported; V1 10MiB parity remains unverified. SDK full-body allocation still precedes the post-read check. Do not advertise it as streaming/peak-memory containment; bounded URL reads and bounded admission are different claims.
-- **Verification performed:** independent source observations; existing forwarded cases adapted, current execution pending.
-- **Deployment effect:** none.
+- **Disposition:** post-read admission fixed in source; allocation/archive/parity residuals retained, no live media acceptance.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Check actual bytes before text decode/media use and refuse archive suffix/image-MIME contradictions. The incoming20MiB override changes a setting, not archive/extraction support: `.7z` remains unsupported and V1 10MiB parity unverified. SDK `.read()` fully allocates before the post-read check; this is not streaming or hard peak-memory containment.
+- **Verification performed:** independent source observations, existing forwarded/media cases in QA61's201-pass fixture recheck and QA60 full-safe3984 plus28 subtests. No live attachment or peak-memory experiment.
+- **Deployment effect:** candidate exercised only in a text smoke case, then prior image/controls restored.
 
 ### I-04 — Catalog state coupled to foreground spend
 
-- **Disposition:** deferred — integration commit outstanding.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Separate background catalog scope from spend inheritance and rebuild both schema/protocol and system prompt each step. Independent jobs begin with their own discovery state; model-spawned descendants still share the originating spend envelope. Catalog construction failure is terminal, not a silent no-tools fallback.
-- **Verification performed:** J and independent source recheck; real core15/plugin/native/custom integration pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in integrated source; isolated/synthetic catalog verification complete, no live background-job matrix.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Background catalog scope is separate from spend inheritance; schema/protocol and system prompt refresh together. Independent jobs begin with their own discovery state; model-spawned descendants inherit foreground spend. Catalog construction failure is terminal, not a silent no-tools fallback.
+- **Verification performed:** J and independent source recheck; QA56 bounded core657, QA60 full-safe3984 plus28 subtests and QA61/65 real-builder synthetic catalog measurements. These do not prove every actor/plugin or live job combination.
+- **Deployment effect:** candidate exercised in one bounded smoke case and prior image/controls restored.
 
 ### I-05 — Review-method violation and unsupported provenance
 
-- **Disposition:** deferred — evidence retained for auditor; coordinator owns unresolved facts.
-- **Commit(s):** no source change attributed to the violating analysis.
-- **What changed / why not:** Reviewer5f9fde83 performed prohibited interpreter metadata analysis, disclosed two then five invocations and could not provide complete literal receipts. Its Git totals and bytecode origin inferences were not accepted. Coordinator recomputed authorized metadata; a separate reviewer mapped retained histories. Preserve the failure/retractions, not merely the replacement report.
-- **Verification performed:** `07-PROCESS-DISPOSITIONS.md`, quarantined `review-process-evidence.md`, independent branch report. No application import/decoded execution was reported by that reviewer; that self-report is not independent proof.
-- **Deployment effect:** none.
+- **Disposition:** quarantined method failure retained; historical bytecode provenance remains unknown, not resolved by later QA.
+- **Commit(s):** process record `3754a8a`; no source change attributed to the violating analysis.
+- **What changed / why not:** Reviewer5f9fde83 performed prohibited interpreter metadata analysis, disclosed two then five invocations and could not provide complete literal receipts. Its Git totals and bytecode origin inferences were not accepted. Coordinator recomputed authorized metadata; a separate reviewer mapped retained histories. Preserve failure and retractions alongside replacement analysis.
+- **Verification performed:** `07-PROCESS-DISPOSITIONS.md`, quarantined `review-process-evidence.md` and independent branch report. No application import/decoded execution was reported by that reviewer; its self-report is not independent proof. QA60 does not attribute historical caches.
+- **Deployment effect:** none; unresolved evidence remains retained for independent review.
 
 ### I-06 — Newly discovered request multiplicity/cap ambiguity
 
-- **Disposition:** deferred — confirmed C-06 correction and independent recheck pending.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Generic primary extra-body JSON can retain n>1 and competing output fields. One max_tokens reservation cannot bound multiple compliant completions. The selected one-completion/positive-cap admission policy is recorded under C-06; do not dismiss the n bypass as provider dishonesty.
-- **Verification performed:** independent source path from config through constructor, request/retry and final POST; synthetic existing-case extension pending. No provider experiment or universal alternate-cap precedence claim.
-- **Deployment effect:** none.
+- **Disposition:** corrected and source-rechecked in integrated foreground admission; isolated verification complete, no universal provider-billing or alternate-cap-precedence claim.
+- **Commit(s):** source/test `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Foreground admission rejects `n` other than exact integer1 and invalid recognized positive competing cap fields before fallback selection, reservation or POST. Each selected payload is validated/clamped to reserved `max_tokens`; lower positive aliases are preserved. A single reservation cannot bound `n>1` compliant completions, so that bypass is rejected rather than blamed on provider behavior.
+- **Verification performed:** `micro-provider-admission.md` traced generation entry, fallback-first selection and final POST; existing case rejects malformed extras before any request/spend and checks clamping. QA56 bounded core657 and QA60 full-safe3984 plus28 subtests; no live provider experiment or universal precedence claim.
+- **Deployment effect:** candidate exercised only in bounded smoke case and prior image/controls restored; no normal release.
 
 ## Open questions for root
 
 None requiring an immediate new grant for the remaining authorized source/isolated work. Historical authorization/bytecode gaps remain unknown. Any operation outside the existing temporary-only acceptance boundary stays held; lack of evidence is not permission.
 
-## Required before this draft becomes the final reply
+## Completion gates and next handoff
 
-1. Freeze the core; close/recheck current admission, incomplete-caller and request-shape findings.
-2. Run the complete safe isolated selection and definition inventory; own every baseline/current failure.
-3. Commit coherent reviewed source/docs and replace every pending commit/evidence field above.
-4. Verify artifact and perform only safely established bounded temporary acceptance; preserve containment and record exact rollback/identity/channel evidence without private contents.
-5. Complete final independent dispositions and retain unresolved limitations; do not claim release or zero remaining defects.
+- Completed: frozen committed core, corrected/reviewed admission and caller paths, full safe suite plus narrowed final rechecks, tracked definition inventory, candidate artifact verification, bounded temporary delivery/body-readback case and verified restoration. Failed attempts and original auditor evidence remain retained.
+- Completed: all52 findings and6 implementer-raised items carry dispositions, commits, verification and deployment effects. Unresolved historical provenance/authority and intentional safety/coverage limits are not relabelled as fixed defects.
+- Remaining implementer gate: rotated independent consistency review of this final response/evidence, incorporation of any corrections, and final response/handoff checkpoint.
+- External gate: auditor round-two acceptance before retiring temporary evidence or considering normal release. This implementer response is not that verdict. Canonical activation/private migration and host viewer rollout remain separate operating gates; no additional deployment follows automatically.
+- Retirement owner/destinations are explicit in `../../TODO.md`. Preserve originals00–04, all failed/retracted/quarantined evidence, retained refs/worktrees and private rollback material until their respective acceptance/ownership gates. No zero-defect guarantee.
