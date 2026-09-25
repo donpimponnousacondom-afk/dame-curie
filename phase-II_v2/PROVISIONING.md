@@ -1,6 +1,12 @@
 # dame-curie V2 foundation — provisioned, activation held
 
-## Current authorization and hard stops
+This is a historical provisioning receipt, not current operating instructions. Component names and grants below describe that earlier slice; several components were subsequently retired. Current authority is in `AGENTS.md` and `TODO.md`. Temporary-Dirac acceptance does not activate the canonical instance. Retire this working receipt only after accepted round two, preserving unique isolation/readiness evidence in current operations documentation.
+
+## Canonical image activation hold — 2026-09-25
+
+Before any separately authorized canonical activation, reconcile its effective private `IMAGE_GEN_*` and `ENABLE_IMAGE_GEN` settings with the native-only contract in [IMAGE_GENERATION.md](../docs/IMAGE_GENERATION.md#migration): explicit endpoint, valid exact-ID model/description map, listed default model, intentional credential/quality settings, and no retired split profiles. The temporary Dirac migration is not evidence that the canonical profile was migrated. Invalid image settings now disable that capability without blocking unrelated startup; neither disabled capability nor successful startup proves image readiness. No canonical private configuration was inspected or changed during this remediation.
+
+## Historical provisioning authorization and hard stops
 
 Root explicitly included provisioning in this round: create the `dame-curie` account, separate private rootless Docker engine, images and containers. This supersedes the earlier source-only assignment for the coordinator's scoped V2 operations; it does not authorize modifying V1.
 
@@ -89,4 +95,4 @@ The four unstarted containers retain `StartedAt=0001-01-01T00:00:00Z`. The pinne
 
 **Discord remains held; RAG remains disabled and cold.** Root must explicitly authorize activation, resolve/accept the voice packaging/transport issue, establish embedding readiness, enable RAG and configure Discord credentials personally. No full bot, voice, media, auxiliary-provider, real-site, multi-instance or backup/rollback acceptance is claimed. The checkout snapshot socket is not deployed; its bind directory is empty.
 
-Logging is next: the Hortator/Screen proposal is researched and independently reviewed, but implementation and real Screen interaction/replay acceptance have not occurred. Twitter/X is queued as the next separate pruning cut; Telegram remains disabled for later removal. Existing logger and functional memory paths were preserved. Existing suites were not collected or run; no new tests or remote publication were added.
+**Historical roadmap at the original provisioning handoff, superseded:** logging implementation/Screen acceptance and the X/Telegram cuts were then future work; the existing logger and functional memory were preserved, and that provisioning assignment collected/ran no suites or remote publication. Logging and transport pruning were subsequently integrated. Use `../docs/STATUS.md` and `../TODO.md` for current source progress and temporary-versus-canonical holds; this old roadmap is not a new implementation assignment.

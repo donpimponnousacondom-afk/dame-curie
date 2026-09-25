@@ -1,4 +1,6 @@
-# Temporary Dirac V2 — current release handoff
+# Temporary Dirac V2 — retained runtime handoff
+
+**2026-09-25 hold:** receipts below are historical, not a fresh runtime observation or current operating grant. Audit remediation and bounded temporary-only acceptance are governed by `../AGENTS.md` and `../TODO.md`; no remediation candidate has been deployed. Preserve this evidence through accepted round two, then consolidate current operating/rollback facts as scheduled.
 
 Last runtime verification: **2026-09-24 19:04 UTC, temporary Dirac on `6859025`**, with bounded tool completion logs and `logs --fresh` recovery.
 
@@ -48,7 +50,9 @@ sudo -n /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac.py 
 sudo -n /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac.py stop
 ```
 
-`restart` retains the container/image. Replacement requires a stop, digest-selector update and explicit `start --replace`; building or committing is not deployment. Do not manage temporary Dirac with canonical `instance.py up`.
+`restart` retains the container/image **and its existing Docker log history**. A later ordinary `logs` follows with `--tail 100`, so pre-restart lines can replay. Only `logs --fresh` selects `--tail 0`; it skips retained history without deleting it, and `--fresh` is not a `restart` flag. `start --replace` creates a new container/log stream, so do not use replacement merely to hide bad records or discard evidence. Replacement requires a stop, digest-selector update and explicit `start --replace`; building or committing is not deployment. Do not manage temporary Dirac with canonical `instance.py up`.
+
+Current source at `551060d` additionally refuses `restart` for a stopped/dead container before private preparation, preserving its stop evidence; inspect that evidence and use the explicitly authorized replacement path when appropriate. This source change has isolated QA, not installed-runtime acceptance.
 
 ## Prior running build — 2026-09-23
 
@@ -78,10 +82,10 @@ Rollback evidence is private: `/var/backups/dirac-v2/20260922T124707Z-901200d` c
 - Private rollback copies: `/var/backups/dirac-v2/20260923T153711Z-d43e4bf` and `/opt/dame-curie-pre-provider-reload-d43e4bf`. Keep current settings/data on an image-only rollback.
 - Scope, precedence and restart-only settings: `../docs/PROVIDER_RELOAD.md`. General Gateway-command admission during shutdown remains a preexisting limit; idle reload does not claim to redesign shutdown.
 
-## Prompt failure diagnosis — read-only
+## Historical diagnosis of September 23 prompt failures — read-only
 
 - The two reported producer timestamps map to preserved Docker timestamps **2026-09-23T13:16:49.869939985Z** and **2026-09-23T13:17:04.751778908Z**, on the earlier `65fe79e` runtime. Both explicitly report HTTP400/Discord50035 and **`In content: Must be 2000 or fewer in length`**. No prompt contents or private messages were printed.
-- Current `bot.py:6570–6582` still sends the entire prompt as one `channel.send`, both when viewing it and acknowledging an update. The setter persists the prompt before sending its acknowledgement; an acknowledgement failure is not a rollback. The bounded evidence does not distinguish which branch those two requests used.
+- At that diagnosis, `bot.py:6570–6582` still sent the entire prompt as one `channel.send`, both when viewing it and acknowledging an update. The setter persists the prompt before sending its acknowledgement; an acknowledgement failure is not a rollback. The bounded evidence does not distinguish which branch those two requests used.
 - Smallest proposed fix: route both responses through the existing bounded `send_command_response` helper (or attach long text), including code-fence/footer overhead; make the empty-prompt usage hint follow the configured prefix. Validate oversized/Unicode/fenced prompts in isolated synthetic tests. **No prompt-handler patch, replay, provider call or restart was performed for this diagnosis.**
 
 ## Earlier September 23 role/provenance evidence

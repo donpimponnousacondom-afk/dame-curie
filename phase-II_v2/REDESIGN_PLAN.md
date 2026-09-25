@@ -1,6 +1,8 @@
-# Discord-only redesign: approved execution contract
+# Discord-only redesign — historical source-scope contract
 
-Baseline: `ac38b84`, branch `dev/phaseII_v2`. This is root's new implementation assignment, not permission inferred from older audit notes. Root is AFK and requested parallel execution with best bounded decisions, no repeated scope questions.
+Recorded baseline: `ac38b84`, branch `dev/phaseII_v2`. The retained/removed feature scope below describes the selected redesign; the old worker assignments, compile permission and runtime-removal instructions are **not current grants**. Current authority, ownership and the release freeze are in `../AGENTS.md`, `../TODO.md` and the verbatim 2026-09-25 human messages in `SESSION_LOG.md`.
+
+This is an implementation-authored historical record. Older assertions about root's choices are not independently corroborated merely by appearing here; the current grant does not retroactively authenticate them. Preserve unique scope/recovery facts through round two, then consolidate the surviving contracts and retire this plan as scheduled in `../TODO.md`.
 
 ## Integration order
 
@@ -29,7 +31,7 @@ Implementation and source inventories may run concurrently in isolated worktrees
 
 ## Shell boundary
 
-Root confirmed direct execution inside the bot container. Remove nested-container command/path restrictions, not the outer account/container isolation. No host-root mount, host Docker socket, host networking, V1 roots or host execution. Keep explicit V2-owned data/site/shell mounts, writable working storage, process cancellation and Discord output/delivery behavior. Preserve independent tool authorization. Root's explicit 2026-09-24 amendment removes the web-read taint/confirmation subsystem in full; it does not remove admin/owner checks or authorize host/V1 access. The model may author files with shell; local serving and remote administration are not the publishing workflow.
+Root confirmed direct execution inside the bot container. Remove nested-container command/path restrictions, not the outer account/container isolation. No host-root mount, host Docker socket, host networking, V1 roots or host execution. Keep explicit V2-owned data/site/shell mounts, writable working storage, process cancellation and Discord output/delivery behavior. Preserve independent tool authorization. The recorded 2026-09-24 source change `085c95b` removed the web-read taint/confirmation subsystem in full; the earlier ledger attributed that choice to root, but this plan does not contain the underlying verbatim instruction. That retirement does not remove independent admin/owner checks or authorize host/V1 access. The model may author files with shell; local serving and remote administration are not the publishing workflow.
 
 ## Command prefix
 

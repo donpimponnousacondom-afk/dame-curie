@@ -88,10 +88,10 @@ loudly instead of being fetched.
 sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
   /opt/dame-curie/scripts/dirac.py start  [--image REF] [--replace] \
   [--smoke-root /srv/dame-curie/dirac/smoke] [--smoke-status /srv/dame-curie/dirac/smoke-status]
-sudo -n -H -u dame-curie -- ... dirac.py status     # JSON; 0 only when running and embedding-ready
+sudo -n -H -u dame-curie -- ... dirac.py status     # JSON; running + configured embedding gate passed/skipped
 sudo -n -H -u dame-curie -- ... dirac.py stop       # keeps the container and its evidence
 sudo -n -H -u dame-curie -- ... dirac.py restart
-sudo -n -H -u dame-curie -- ... dirac.py logs [--no-keys]   # existing follow_logs(format=screen)
+sudo -n -H -u dame-curie -- ... dirac.py logs [--no-keys] [--fresh]   # tail100, or tail0 with --fresh
 ```
 
 `-I` is safe here: the operator restores its own script directory before
@@ -116,14 +116,21 @@ reserved label and the
 reserved name: a container carrying `dame-curie.dirac=dirac-v2` under any other
 name is refused, and a foreign container squatting on the name `dirac-v2`
 surfaces as a Docker create conflict rather than as a silent removal. `status`
-is read-only: container state, bridge, endpoint, config verdict and the reviewed
-embedding check; it exits non-zero when the container is absent, stopped,
-misconfigured or not ready. Its `embedding_readiness` field means exactly that -
-a running container whose embedding path works - and is **not** Discord
-readiness; the coordinator confirms the actual temporary identity on the first
-turn. A bad derived configuration is reported as a fixed reason class and a
-failed embedding check as its exit code only, so no configuration value, URL or
-credential can appear in `status` output; investigate a failure privately.
+does not mutate lifecycle/configuration, but **is not metadata-only discovery**:
+for a running container with RAG enabled it performs the reviewed embedding
+probe through `docker exec`. An inventory-only grant does not authorize that
+probe. With RAG disabled, embedding readiness is reported as skipped, and an
+otherwise valid running container can still return exit0. Absent/stopped,
+misconfigured or failed-readiness states return nonzero; expected config errors
+retain available owned-container metadata in current source, while unexpected
+Docker errors remain failures. A passed embedding check establishes only that
+probe; a skipped check establishes no embedding readiness. Neither exit0 nor
+the readiness field proves Discord READY or the intended identity. Re-verify
+those under the separately authorized acceptance procedure. Known configuration
+failures use fixed reason classes and failed probes expose exit codes, not
+private values; do not dump configuration or raw command errors while
+investigating. Current `551060d` source/isolated tests are not proof the installed
+operator has been updated.
 
 ### Smoke mounts
 

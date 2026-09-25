@@ -1,6 +1,8 @@
-# dame-curie: dependency map for surgical cuts
+# dame-curie: historical dependency map for surgical cuts
 
-## Current implementation queue — later root decisions
+**Retained evidence, not current authority.** The integration queue and audit below describe earlier source/runtime states. Their confirmation/taint, staged-resource, publisher-readiness and grant assertions must not be read as current guarantees or fresh human instructions. Current boundaries are `../AGENTS.md`, `../SECURITY.md`, `../docs/STATUS.md` and `../TODO.md`. Preserve this map through accepted round two; consolidate unique surviving facts before retirement.
+
+## Historical integration queue — earlier recorded decisions
 
 - The earlier V2 foundation was provisioned under the separate grant in `PROVISIONING.md`. Its last handoff reported API/web running and bot/Ollama/pull/shell created but never started; **runtime was not re-observed in this documentation round**. The coordinator must reconcile after reviewed source integration. Keep bot credentials blank, bot entrypoint never started, RAG false, Ollama/pull stopped and model storage empty; V1 remains protected.
 - **Email: source removal reviewed and integrated** as `9b01074`/`70b8ceb`, from isolated branch `work/prune-email-20260919`; shared inbox, confirmation/taint, JSON/tasks, media and provider infrastructure remain. Main-only UI follow-up landed in `df6c97e`; the earlier staged images included the cut. See `EMAIL_REMOVAL.md` and the separate staged acceptance in `PROVISIONING.md`.

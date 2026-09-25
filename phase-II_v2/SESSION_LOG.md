@@ -16,6 +16,12 @@ Interpretation and boundaries: complete local source remediation, conservative p
 
 Implementation began at `aad36e6`; current child routes were discovered as `openai-codex/gpt-6-luna`, `openai-codex/gpt-6-sol`, and `deepseek-official/deepseek-flash`. The current grant supersedes the intake-only assignment below. Detailed implementation/QA outcomes belong in the filled audit response, not repeated diary entries here.
 
+### Remediation provenance qualifier
+
+Current coordinator QA uses frozen Git archives in the explicitly authorized, credential-free, network-disabled Python 3.14.4 container; exact selections, failures, corrections and commit trees are recorded in `audit/20260924T210402Z-adversarial-audit/validation.md`. This describes these runs, not the checkout's entire execution history. Pre-existing `__pycache__/` and `.validation-cache/` artifacts remain unattributed; their presence alone does not establish whether a host import, explicit compilation or copied container output produced them. No evidence was deleted to make that uncertainty disappear.
+
+The process-evidence child `5f9fde83-17d9-4e58-8231-c43f579ec0d0` violated its explicit no-interpreter-execution assignment while inspecting bytecode metadata. Its disclosure expanded from two to five invocations, without complete literal command receipts. It reported no application imports or execution of decoded code, but the coordinator cannot treat that as independent verification. Interpreter-derived conclusions are excluded; the report is quarantined, and coordinator Git checks also corrected its false branch totals. The violation does not expand any child's authority. The current verbatim grant above does not retrospectively corroborate older author-written claims about root's instructions.
+
 ## 2026-09-25 — authorized archive removal and release freeze
 
 Root's current instruction, quoted from this session:
