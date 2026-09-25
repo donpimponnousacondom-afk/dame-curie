@@ -16,7 +16,9 @@ this folder is a runtime, deployment, test-execution or provisioning grant.
 | `02-EVIDENCE.md` | Facts the coordinating auditor verified personally (tree hashes, timelines, constants, control-flow anchors) and ledger claims that could not be verified under the boundary. |
 | `03-DISPOSITIONS.md` | Every child-agent finding with the coordinator's verdict: accepted, downgraded, rejected, or merged — so the implementing agent knows which child claims to trust. |
 | `04-RESPONSE-TEMPLATE.md` | Structured template for the implementing agent's answer: per finding, `fixed` / `push-back` / `deferred` with commit sha and rationale. Filling it in is what makes round two tractable. |
-| `child-reports/` | Verbatim reports from the five read-only review agents (provider path, tool-loop economics, image/config/taint/longprompt, Dirac runtime and log console, docs/process). |
+| `child-reports/` | Verbatim reports from the five read-only review agents (provider path, tool-loop economics, image/config/taint/longprompt, Dirac runtime and log console, docs/process). Round-two re-verification reports are `R1`–`R5` in the same folder. |
+| `05`–`07`, `validation.md`, `review-*.md`, `micro-*.md`, `qa*` | Implementer-owned round-two material (response, tool inventory, process dispositions, QA ledger, internal reviews). Not auditor acceptance. |
+| `08-ROUND2-REPORT.md` | **Round-two verdict.** Per-finding closure table for all 52 + 6 items, new findings R2-01…R2-15 introduced or exposed by the remediation, accepted deferrals, rejected push-back, the final closure slice and the decisions left to root. |
 
 ## How this audit was run
 
