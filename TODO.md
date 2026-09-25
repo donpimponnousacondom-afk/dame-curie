@@ -36,6 +36,19 @@ Primary deliverable: `audit/20260924T210402Z-adversarial-audit/05-IMPLEMENTER-RE
 | Process/history, P01–P09; I05 | Coordinator plus independent source/metadata reviewers | Current grants, failed attempts and checkpoints recorded; retained history and unresolved attribution are not erased. All refs/worktrees retained. |
 | Docs and final reply, D01–D06 | Coordinator plus bounded Sol reconciliation; rotated final reviewer pending | Finish remaining blocks and final consistency review. No normal release or external audit acceptance claimed. |
 
+## Retained items for round-two disposition
+
+Owner for every row is the **coordinator**, with root/the independent auditor deciding acceptance; a recorded limitation is not a claim of remediation.
+
+| Item | Current disposition and next gate | Durable destination |
+| --- | --- | --- |
+| C-09 import-time dotenv | Deferred loading-semantics redesign; retain startup behavior and strict synthetic/private-read isolation. Round two must explicitly accept this limit or request a separately scoped lazy-loading change. | Development/security import boundary. |
+| C-28 retired `hd_image` alias | Push-back on name-only compatibility: retain the current omitted/empty and save-only contract, reject stale names rather than silently reinterpret them. Temporary disabled-tool check is complete; round two reviews this chosen policy, not an alleged explicit root alias instruction. | Image/tool contract; canonical migration hold remains. |
+| P-08 / I-05 bytecode and reviewer-method provenance | Deferred attribution remains unknown; retain original/quarantined reports and corrections. No deletion, reconstruction or decoder conclusion accepted as proof. | Compact final provenance/limitations receipt. |
+| C-31–C-33 viewer operating coverage | Source/isolated fixes are complete; host viewer is not bundled in the app image, installed or exercised in Screen. Any rollout requires its operating assignment. | Operations/next authorized deployment plan. |
+| P-05 retained branch/worktree/checkpoint evidence | Mapping is complete at its documented snapshot, but physical ownership/dirty-state and checkpoint-content gates remain before any pruning. All refs/worktrees stay retained. | Compact retained-history/retirement gate. |
+| Canonical image/profile activation | Held, not performed by this remediation or temporary acceptance. | Provisioning/operations activation gate. |
+
 ## Review continuity — do not reopen oversized or unsafe lanes
 
 - Retired oversized Luna session **`9a83b781-cf05-414c-b824-e2401be2ff2d` must not be resumed**. Its work was preserved, decomposed and integrated, not discarded.
