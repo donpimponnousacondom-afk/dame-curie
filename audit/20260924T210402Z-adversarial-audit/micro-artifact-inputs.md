@@ -1,0 +1,7 @@
+# Micro-review: artifact inputs and constructor probe
+
+**Verdict: ready for isolated QA; no source-level blocker found.** Reviewed only the three changed lines against the Dockerfile and the existing constructor test. No interpreter, imports, tests, lint, builds, Docker, private data or network used.
+
+- `docker/app.Dockerfile.dockerignore:39,45` now admits `tool_policy.py` and `turn_budget.py` through its leading `**` exclusion. `docker/app.Dockerfile:22-23` already names both in `COPY ... ./`; previously the allowlist excluded these named COPY inputs, so the additions fix the missing-build-context failure.
+- `tests/test_bot_construction.py:94-102,107-145` copies allowlisted source into the temporary `app`, then launches the child with `cwd=app` and `PYTHONPATH=str(app)`. Removing the parent's `sys.path` prevents its explicit path entries (including the checkout) from masking a module absent from the copied source. The child still uses `sys.executable`; Python's ordinary interpreter path setup continues to provide the standard library and installed site-packages independently of `PYTHONPATH`.
+- Scope limit: this is source-level verification, not a test result or a guarantee against site-packages configured to expose the original checkout (for example, an editable installation). The parent should run the designated isolated QA to verify its actual environment. No broader audit performed.

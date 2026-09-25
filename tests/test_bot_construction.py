@@ -106,7 +106,7 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
     (state / "prompts/personality.txt").write_text("Synthetic constructor personality")
     env = {
         "PATH": os.defpath,
-        "PYTHONPATH": os.pathsep.join([str(app), *filter(None, sys.path)]),
+        "PYTHONPATH": str(app),
         "HOME": str(state / "home"),
         "TMPDIR": str(state / "tmp"),
         "PYTHONDONTWRITEBYTECODE": "1",
