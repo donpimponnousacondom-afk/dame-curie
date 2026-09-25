@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -10,7 +11,7 @@ from scripts.log_console.history import EventHistory
 from scripts.log_console.input import KeyBuffer, LineBuffer
 from scripts.log_console.paging import fit, page_text
 from scripts.log_console.render import entry_evidence, inspector_text, render_frame
-from scripts.log_console.scopes import SCOPE_KEYS
+from scripts.log_console.scopes import SCOPE_KEYS, VIEWER_SCOPE
 
 
 OBSERVED = datetime(2026, 9, 12, 12, 30, 45, tzinfo=UTC)
@@ -138,7 +139,7 @@ def test_every_live_event_has_a_timestamp_span_with_honest_source_facts():
     history = EventHistory()
     add(history, "warning", level="WARNING")
     history.append(EventParser().parse("ollama-1 | slot update_slots: ready\n", observed_at=OBSERVED))
-    frame = render_frame(history, ConsoleState(), 200, 24, color=True)
+    frame = render_frame(history, ConsoleState(show_ollama=True), 200, 24, color=True)
     timestamped = [line for line in frame if line.timestamp]
     assert len(timestamped) == 2
     assert any(" O]" in line.text for line in timestamped)
@@ -189,6 +190,18 @@ def test_all_scope_toggles_depth_controls_verbosity_and_reset_are_local(monkeypa
     for _ in range(20):
         state.key("-", history)
     assert LEVELS[state.verbosity] == "CRITICAL" and not state.visible(original.first)
+    omitted = add(history, "synthetic omission notice")
+    viewer = replace(omitted.first, kind="viewer.omitted", scope=VIEWER_SCOPE, level=None,
+                     service=None, logger=None, message="Evidence omitted: viewer-owned record.")
+    history.append(viewer)
+    scoped = ConsoleState(verbosity=len(LEVELS) - 1, enabled_scopes=set(), show_ollama=False)
+    assert not scoped.visible(original.first) and scoped.visible(viewer)
+    rendered = "\n".join(line.text for line in render_frame(history, scoped, 200, 24, color=False))
+    assert "Evidence omitted: viewer-owned record." in rendered and "synthetic omission notice" not in rendered
+    limited = EventHistory(max_evidence_bytes=2000)
+    oversized = add(limited, "x" * 3000, logger="jobs")
+    assert oversized.first.scope == VIEWER_SCOPE and scoped.visible(oversized.first)
+    assert "Evidence not retained" in screen(limited, scoped)
     state.key("T", history)
     state.key("P", history)
     assert state.tool_depth == state.provider_depth == 0
@@ -245,6 +258,7 @@ def test_history_selection_is_stable_and_eviction_is_not_silently_replaced():
 
 def test_live_health_requests_stay_coalesced_but_history_keeps_every_record():
     console = Console()
+    console.state.show_ollama = True
     for second in (0, 10, 20):
         console.ingest(f'ollama-1 | [GIN] 2026/09/12 - 10:22:{second:02d} | 200 | 12µs | 127.0.0.1 | HEAD "/"\n', second)
     assert console.history.event_count == 3 and len(console.health.hidden) == 2
@@ -255,6 +269,18 @@ def test_live_health_requests_stay_coalesced_but_history_keeps_every_record():
     assert "2 additional repeats" in after
     console.state.key("r", console.history)
     assert sum(bool(line.timestamp) for line in console.frame(250, 24, color=False)) == 3
+    console.state.view = "live"
+    console.ingest(None, 31)
+    for second in (32, 33):
+        console.ingest(f'ollama-1 | [GIN] 2026/09/12 - 10:22:{second:02d} | 200 | 12µs | 127.0.0.1 | HEAD "/"\n', second)
+    assert console.health.pending == {}
+    latest = console.history.recent()[0]
+    assert latest.first.scope == VIEWER_SCOPE and latest.sequence not in console.health.hidden
+    frame = render_frame(console.history, console.state, 250, 24, color=False,
+                         hidden=frozenset({latest.sequence}), notes=((latest.sequence, "synthetic repeat summary"),))
+    displayed = "\n".join(line.text for line in frame)
+    assert f"#{latest.sequence} " in displayed and "Evidence omitted" in displayed
+    assert "synthetic repeat summary" not in displayed
 
 
 def test_byte_line_buffer_handles_partial_utf8_and_bounds_oversized_input():
@@ -273,17 +299,41 @@ def test_input_overflow_is_a_local_omission_notice_not_a_fake_producer_record():
     console = Console()
     console.ingest(None, 0)
     entry = console.history.recent()[0]
-    assert entry.first.kind == "console.omitted"
-    assert entry.first.parse_error == "InputRecordTooLarge"
+    assert entry.first.kind == "viewer.omitted" and entry.first.scope == VIEWER_SCOPE
+    assert entry.first.parse_error == "RedactionContinuityLost"
     assert entry.first.timestamp_origin == "observed" and entry.first.level is None
     assert "Docker logs" in entry.first.message
+    console.ingest("bot-1 | synthetic mid-key reveal\n", 0)
+    console.ingest("bot-1 | -----END PRIVATE KEY-----\n", 0)
+    console.ingest("bot-1 | ordinary after the gap\n", 0)
+    later = [record.first for record in console.history.recent()[:3]]
+    assert [event.parse_error for event in later] == ["RedactionContinuityLost"] * 3
+    assert [event.kind for event in later] == ["viewer.omitted"] * 3
+    assert all(event.scope == VIEWER_SCOPE for event in later)
+    assert "synthetic mid-key reveal" not in "\n".join(event.json_line() for event in later)
+    assert console.parser.continuity_lost is True
+    console.state.verbosity = len(LEVELS) - 1
+    console.state.enabled_scopes.clear()
+    rendered = "\n".join(line.text for line in console.frame(200, 24, color=False))
+    assert "ordinary after the gap" not in rendered
+    assert "Docker logs" in rendered
+    intact = Console()
+    intact.ingest("[" * 33 + "\n", 0)
+    intact.ingest("ordinary after a scanned rejection\n", 0)
+    assert len(intact.history.entries) == 2
+    assert not intact.parser.continuity_lost
+    intact.state.enabled_scopes.clear()
+    intact.state.verbosity = len(LEVELS) - 1
+    visible = screen(intact.history, intact.state)
+    assert "Evidence omitted" in visible
+    assert "ordinary after a scanned rejection" not in visible
 
 
-def test_escape_sequences_do_not_trigger_scope_or_history_keys():
+def test_arrow_keys_navigate_without_dispatching_other_escape_bytes():
     keys = KeyBuffer()
     assert keys.feed(b"\x1b", 0) == []
     assert keys.feed(b"[", 0.01) == []
-    assert keys.feed(b"Aq", 0.02) == ["q"]
+    assert keys.feed(b"Aq", 0.02) == ["[", "q"]
     assert keys.feed(b"\x1b[1;2aq", 0.03) == ["q"]
     assert keys.feed(b"\x1b", 1) == []
     assert keys.flush(1.2) == ["\x1b"]

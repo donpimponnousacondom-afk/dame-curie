@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from .events import LogEvent
 from .grouping import error_event, record_boundary, traceback_fragment
 from .safety import JSONValue
+from .scopes import VIEWER_SCOPE
 
 
 DEFAULT_MAX_EVENTS = 500
@@ -46,7 +47,8 @@ class HistoryEntry:
         request_id = first.details.get("request_id")
         if isinstance(request_id, str) and len(request_id.encode("utf-8", errors="surrogatepass")) <= 256:
             details["request_id"] = request_id
-        marker = replace(first, kind="history.omitted", message=NOT_RETAINED, source_line=NOT_RETAINED, details=details)
+        marker = replace(first, scope=VIEWER_SCOPE, service=None, logger=None, kind="history.omitted",
+                         message=NOT_RETAINED, source_line=NOT_RETAINED, details=details)
         return replace(self, records=(marker.json_line(),), omitted_events=count,
                        partial_reason="whole event/error group exceeded the retained-history budget")
 
@@ -73,7 +75,8 @@ class EventHistory:
         self.entries: OrderedDict[int, HistoryEntry] = OrderedDict()
 
     def recent(self, *, errors_only: bool = False) -> tuple[HistoryEntry, ...]:
-        return tuple(entry for entry in reversed(self.entries.values()) if not errors_only or entry.is_error)
+        return tuple(entry for entry in reversed(self.entries.values())
+                     if not errors_only or entry.is_error or entry.first.scope == VIEWER_SCOPE)
 
     def discard(self, sequence: int) -> None:
         entry = self.entries.pop(sequence)
@@ -119,7 +122,7 @@ class EventHistory:
             )
             entry = HistoryEntry(self.sequence, (record,), is_error, "open" if is_error else "standalone", partial)
         entry = self.retain(entry)
-        self.streams[snapshot.service] = StreamTail(entry.sequence, entry.is_error)
+        self.streams[snapshot.service] = StreamTail(entry.sequence, entry.is_error and snapshot.scope != VIEWER_SCOPE)
         self.streams.move_to_end(snapshot.service)
         if len(self.streams) > self.max_events:
             self.streams.popitem(last=False)

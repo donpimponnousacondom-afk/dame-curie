@@ -1,14 +1,19 @@
 import io
 import json
 from datetime import UTC, datetime
+from itertools import product
+from types import SimpleNamespace
 
 import pytest
 
 import error_reporting
+from scripts.log_console.append_events import AppendHistory, AppendParser
+from scripts.log_console.append_state import AppendState, Filters
 from scripts.log_console.events import EventParser
 from scripts.log_console.jsonl import write_jsonl
 from scripts.log_console.recognizers import RECOGNIZERS, Recognition
 from scripts.log_console.safety import terminal_text
+from scripts.log_console.scopes import VIEWER_SCOPE
 
 
 OBSERVED = datetime(2026, 9, 12, 12, 30, 45, tzinfo=UTC)
@@ -121,6 +126,27 @@ def test_jsonl_does_not_coalesce_health_or_drop_interleaved_traceback_lines():
     write_jsonl(lines, output, clock=lambda: OBSERVED)
     assert [json.loads(line)["source_line"] for line in output.getvalue().splitlines()] == [line.rstrip("\n") for line in lines]
     assert "additional repeats" not in output.getvalue()
+    parser = AppendParser()
+    framed = [parser.record(line) for line in lines[:-1]]
+    assert [event.parse_error for event in framed] == [None] * len(framed)
+    dropped = ["synthetic dropped secret must not render", *lines[-1:]]
+    gapped = [parser.record(None), *(parser.record(line) for line in dropped)]
+    assert parser.continuity_lost is True
+    assert [event.parse_error for event in gapped] == ["RedactionContinuityLost"] * len(gapped)
+    assert [event.kind for event in gapped] == ["viewer.omitted"] * len(gapped)
+    assert all(event.scope == VIEWER_SCOPE for event in gapped)
+    assert "synthetic dropped secret must not render" not in "\n".join(event.json_line() for event in gapped)
+    state = SimpleNamespace(history=AppendHistory(), filters=Filters(scopes=set(), minimum=4))
+    for event in [*framed, *gapped]:
+        state.history.append(event)
+    large = AppendParser().record("bot-1 | Image request start " + json.dumps({"prompt": "漢" * 16_000}, ensure_ascii=False) + "\n")
+    marker = state.history.append(large)
+    assert marker.event.parse_error == "SerializedBudget" and marker.event.scope == VIEWER_SCOPE
+    for scope in ("", "tool", "provider"):
+        selected = AppendState.choices(state, scope=scope)
+        assert len(selected) == len(gapped) + 1
+        assert all(record.event.scope == VIEWER_SCOPE for record in selected)
+    assert marker in AppendState.choices(state, errors=True)
 
 
 def test_registry_hook_marks_subagent_scope_without_inventing_native_events():
@@ -161,16 +187,27 @@ def test_jsonl_redacts_registered_secrets_auth_fields_and_config_without_clippin
     '{"Config":{"Env":["OPAQUE=synthetic-config-secret"]},"useful":"kept"}',
     'Authorization: Bearer synthetic-config-secret',
     'https://user:synthetic-config-secret@example.invalid/path?token=synthetic-config-secret',
+    'Image request start {"prompt":"-----BEGIN PRIVATE KEY-----","body":"synthetic-config-secret"}',
+    'Image request start {"api_key":"-----BEGIN PRIVATE KEY-----","body":"synthetic-config-secret"}',
+    '{"api_key":"-----BEGIN PRIVATE KEY-----","body":"synthetic-config-secret"}',
+    'Image request start {"prompt":"Config: {","body":"synthetic-config-secret"}',
+    json.dumps({"prompt": "-----BEGIN PRIVATE KEY-----", "body": "synthetic-config-secret"}).replace("-----", r"\u002d" * 5),
 ])
 def test_generic_diagnostics_do_not_emit_auth_or_configuration_arrays(message):
     event = EventParser().parse("ollama-1 | " + message + "\n", observed_at=OBSERVED)
     assert "synthetic-config-secret" not in event.json_line()
+    parser = AppendParser()
+    appended = parser.record("ollama-1 | " + message + "\n")
+    assert "synthetic-config-secret" not in appended.json_line()
+    assert parser.redactor.private_keys == set() and parser.redactor.config_depth == {}
+    assert parser.record("ollama-1 | ordinary after structured data\n").message == "ordinary after structured data"
 
 
 def test_multiline_private_key_and_config_blocks_are_redacted_per_service():
     lines = [
-        "bot-1 | -----BEGIN PRIVATE KEY-----\n", "bot-1 | synthetic-key-body\n",
-        "api-1 | independent ready\n", "bot-1 | -----END PRIVATE KEY-----\n",
+        "bot-1 | " + "-----BEGIN PRIVATE KEY-----" + "\n", "bot-1 | synthetic-key-body\n",
+        "api-1 | independent ready\n", "bot-1 | " + "-----END PRIVATE KEY-----" + "\n",
+        "bot-1 | " + "[".ljust(33, "[") + "\n", "bot-1 | ordinary after brackets\n",
         'bot-1 | "Config": {\n', 'bot-1 | "Env": [\n', 'bot-1 | "OPAQUE=synthetic-config-secret"\n',
         "bot-1 | ]\n", "bot-1 | }\n", "bot-1 | resumed ready\n",
     ]
@@ -180,6 +217,58 @@ def test_multiline_private_key_and_config_blocks_are_redacted_per_service():
     assert "synthetic-key-body" not in value and "synthetic-config-secret" not in value
     assert "independent ready" in value and "resumed ready" in value
     assert len(value.splitlines()) == len(lines)
+    parser = AppendParser()
+    appended = [parser.record(line) for line in lines]
+    omitted = [index for index, event in enumerate(appended) if event.parse_error]
+    assert omitted == [4]
+    assert appended[4].parse_error == "Omitted"
+    assert [index for index, event in enumerate(appended) if event.kind == "viewer.omitted"] == omitted
+    assert all(appended[index].scope == VIEWER_SCOPE for index in omitted)
+    assert appended[1].message == "[REDACTED]" and "synthetic-key-body" not in appended[1].json_line()
+    assert appended[3].parse_error is None and appended[-1].parse_error is None
+    assert parser.continuity_lost is False
+    assert "synthetic-key-body" not in "\n".join(event.json_line() for event in appended)
+    assert Filters().visible(appended[4])
+    assert Filters(scopes=set(), minimum=4, ollama=False, folded=True).visible(appended[4])
+    assert not Filters(scopes=set(), minimum=4, ollama=False, folded=True).visible(
+        EventParser().parse("bot-1 | INFO record\n", observed_at=OBSERVED)
+    )
+    service = "測" * 100
+    parser = AppendParser()
+    parser.record("bot-1 | -----BEGIN PRIVATE KEY-----\n")
+    opening = parser.record(f"{service} | -----BEGIN PRIVATE KEY-----\n")
+    assert opening.parse_error == "ServicePrefixOmitted" and opening.scope == VIEWER_SCOPE
+    assert parser.redactor.private_keys == {"bot-1", service}
+    secret = parser.record(f"{service} | synthetic-key-body\n")
+    assert secret.parse_error == "ServicePrefixOmitted"
+    assert "synthetic-key-body" not in secret.json_line()
+    assert parser.record("bot-1 | synthetic-key-body\n").message == "[REDACTED]"
+    parser.record(f"{service} | -----END PRIVATE KEY-----\n")
+    parser.record("bot-1 | -----END PRIVATE KEY-----\n")
+    assert parser.redactor.private_keys == set()
+    parser.record(f'{service} | "Config": {{\n')
+    assert parser.redactor.config_depth == {service: 1}
+    config_secret = parser.record(f"{service} | synthetic-config-secret\n")
+    assert "synthetic-config-secret" not in config_secret.json_line()
+    parser.record(f"{service} | }}\n")
+    assert parser.redactor.config_depth == {}
+    assert not parser.continuity_lost
+    assert parser.record("bot-1 | healthy after omission\n").message == "healthy after omission"
+    spans = [("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
+             ("-----END PRIVATE KEY----- -----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
+             ('"Config": {', "}"), ("[Config: {", "}]")]
+    for parser_type, prefix, (opening, closing) in product((EventParser, AppendParser), ("", "Image request start "), spans):
+        parser = parser_type()
+        parse = parser.record if parser_type is AppendParser else parser.parse
+        lines = [f"bot-1 | {opening}\n", "bot-1 | " + prefix + json.dumps({"prompt": closing, "body": "synthetic-typed-secret"}) + "\n",
+                 "bot-1 | synthetic-secret-inside-span\n", f"bot-1 | {closing}\n", "bot-1 | recovered after actual boundary\n"]
+        events = [parse(line) for line in lines]
+        assert events[1].message == events[2].message == "[REDACTED]"
+        assert events[-1].message == "recovered after actual boundary"
+        output = io.StringIO()
+        write_jsonl(lines, output, clock=lambda: OBSERVED)
+        assert "synthetic-typed-secret" not in output.getvalue() and "synthetic-secret-inside-span" not in output.getvalue()
+        assert "recovered after actual boundary" in output.getvalue()
 
 
 def test_untrusted_terminal_controls_are_encoded_without_losing_prompt_evidence():

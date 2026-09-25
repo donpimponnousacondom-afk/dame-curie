@@ -75,6 +75,7 @@ def test_oversized_event_gets_explicit_marker_without_retaining_or_truncating_pr
     assert "prompt" not in marker.first.details and PROMPT not in "".join(marker.records)
     assert original.details["prompt"] == PROMPT
     assert history.recent() == (marker,)
+    assert history.recent(errors_only=True) == (marker,)
     assert_bounds(history)
 
 
@@ -241,7 +242,7 @@ def test_gin_http_errors_are_available_without_inventing_log_levels(status, is_e
     assert entry.first.source_line == line.rstrip("\n")
 
 
-def test_recognized_subagent_scope_survives_history_and_oversized_marker():
+def test_subagent_history_stays_folded_but_oversized_marker_is_viewer_owned():
     def synthetic_scope(envelope, service):
         return Recognition("fixture.only", "subagent", {"prompt": envelope.message})
 
@@ -249,7 +250,8 @@ def test_recognized_subagent_scope_survives_history_and_oversized_marker():
     original = parser.parse("bot-1 | " + PROMPT, observed_at=OBSERVED)
     retained = EventHistory().append(original)
     omitted = EventHistory(max_evidence_bytes=2048).append(original)
-    assert retained.first.live_collapsed and omitted.first.live_collapsed
+    assert retained.first.live_collapsed and not omitted.first.live_collapsed
+    assert omitted.first.scope == "viewer"
     assert retained.first.details["prompt"] == PROMPT
     assert omitted.omitted_events == 1
 

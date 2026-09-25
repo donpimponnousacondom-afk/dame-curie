@@ -6,7 +6,7 @@ from .append_render import HELP, LEVELS, Snapshot, event_block, evidence_parts, 
 from .append_repeats import AppendRepeats
 from .append_terminal import AppendWriter, TerminalLease
 from .events import LogEvent
-from .scopes import SCOPE_KEYS, SERVICE_SCOPES
+from .scopes import SCOPE_KEYS, SERVICE_SCOPES, VIEWER_SCOPE
 
 
 @dataclass
@@ -20,6 +20,8 @@ class Filters:
 
     def visible(self, event: LogEvent) -> bool:
         """Unknown severity remains visible at INFO, not falsely relabelled INFO."""
+        if event.scope == VIEWER_SCOPE:
+            return True
         level = "WARNING" if event.level == "WARN" else event.level
         rank = LEVELS.index(level) if level in LEVELS else 1
         local_service = SERVICE_SCOPES[0][0].search(event.service or "") is not None
@@ -79,7 +81,7 @@ class AppendState:
     def choices(self, *, errors: bool = False, scope: str = "") -> list[Record]:
         """The error view deliberately ignores severity, scope and Ollama visibility."""
         return [record for record in self.history.records.values() if (
-            record.warning if errors else self.filters.visible(record.event) and (not scope or record.event.scope == scope)
+            record.warning if errors else self.filters.visible(record.event) and (not scope or record.event.scope in {scope, VIEWER_SCOPE})
         )]
 
     def pin(self, record: Record, candidates: tuple[int, ...]) -> None:

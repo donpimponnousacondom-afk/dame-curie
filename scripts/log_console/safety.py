@@ -33,23 +33,13 @@ def terminal_text(text: str) -> str:
 
 
 def safe_fields(fields: dict[str, JSONValue]) -> dict[str, JSONValue]:
-    return {
-        redact_sensitive_text(key): REDACTED if SENSITIVE_KEY.search(key) else safe_value(item)
-        for key, item in fields.items()
-    }
+    """Keep secret-span state inside this complete JSON record."""
+    return EvidenceRedactor().fields(fields)
 
 
 def safe_value(value: JSONValue) -> JSONValue:
-    result: JSONValue
-    if isinstance(value, dict):
-        result = safe_fields(value)
-    elif isinstance(value, list):
-        result = [safe_value(item) for item in value]
-    elif isinstance(value, float) and not math.isfinite(value):
-        result = str(value)
-    else:
-        result = redact_sensitive_text(value) if isinstance(value, str) else value
-    return result
+    """Redact a complete JSON value without changing the surrounding log stream."""
+    return EvidenceRedactor().value(value)
 
 
 def safe_fallback(text: str) -> str:
@@ -78,6 +68,27 @@ class EvidenceRedactor:
         self.private_keys: set[str | None] = set()
         self.config_depth: dict[str | None, int] = {}
 
+    def fields(self, fields: dict[str, JSONValue]) -> dict[str, JSONValue]:
+        """Scan even wholly hidden fields so their span boundaries are not skipped."""
+        result: dict[str, JSONValue] = {}
+        for key, item in fields.items():
+            value = self.value(item)
+            result[redact_sensitive_text(key)] = REDACTED if SENSITIVE_KEY.search(key) else value
+        return result
+
+    def value(self, value: JSONValue) -> JSONValue:
+        """Share span state across fields within one parsed JSON record."""
+        result: JSONValue
+        if isinstance(value, dict):
+            result = self.fields(value)
+        elif isinstance(value, list):
+            result = [self.value(item) for item in value]
+        elif isinstance(value, float) and not math.isfinite(value):
+            result = str(value)
+        else:
+            result = self.text(value, service=None) if isinstance(value, str) else value
+        return result
+
     def text(self, text: str, *, service: str | None, redacted: bool = False) -> str:
         hidden = service in self.private_keys
         if service in self.config_depth or CONFIG_DUMP.search(text):
@@ -89,10 +100,12 @@ class EvidenceRedactor:
             else:
                 self.config_depth.pop(service, None)
             hidden = True
-        if PRIVATE_BEGIN.search(text):
+        last_begin = max((match.end() for match in PRIVATE_BEGIN.finditer(text)), default=-1)
+        last_end = max((match.end() for match in PRIVATE_END.finditer(text)), default=-1)
+        if last_begin >= 0:
             self.private_keys.add(service)
             hidden = True
-        if PRIVATE_END.search(text):
+        if last_end > last_begin:
             self.private_keys.discard(service)
         if hidden or CONFIG_DUMP.search(text):
             text = REDACTED
@@ -104,8 +117,9 @@ class EvidenceRedactor:
         structured = None
         if text.startswith(("{", "[")):
             structured = json.loads(text)
-        if isinstance(structured, (dict, list)) and service not in self.private_keys and service not in self.config_depth:
-            result = json.dumps(safe_value(structured), ensure_ascii=True)
+        if isinstance(structured, (dict, list)):
+            result = (REDACTED if service in self.private_keys or service in self.config_depth
+                      else json.dumps(safe_value(structured), ensure_ascii=True))
         else:
             result = self.text(text, service=service)
         return result

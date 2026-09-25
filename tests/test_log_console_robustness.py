@@ -8,8 +8,10 @@ import pytest
 
 import error_reporting
 from scripts.log_console import events
+from scripts.log_console.append_events import AppendParser
 from scripts.log_console.events import EventParser
 from scripts.log_console.jsonl import write_jsonl
+from scripts.log_console.scopes import VIEWER_SCOPE
 
 
 OBSERVED = datetime(2026, 9, 12, 12, 30, 45, tzinfo=UTC)
@@ -20,14 +22,16 @@ def image_line(payload):
     return "bot-1 | 2026-09-12 10:22:49,123 - bot_tools - INFO - Image request start " + payload + "\n"
 
 
-@pytest.mark.parametrize("payload,error", [
-    ('{"nested":' + '[' * 5000 + '0' + ']' * 5000 + '}', "RecursionError"),
-    ('{"nested":' + '[' * 5000 + '0' + ']' * 4999 + '}', "JSONDecodeError"),
-    ('{"number":' + '9' * 10000 + '}', "ValueError"),
-    ('{"prompt":"unfinished', "JSONDecodeError"),
-], ids=["deep-valid", "deep-malformed", "integer-digit-limit", "unfinished-string"])
+@pytest.mark.parametrize("payload,error,append_error", [
+    ('{"nested":' + '[' * 5000 + '0' + ']' * 5000 + '}', "RecursionError", "Omitted"),
+    ('{"nested":' + '[' * 5000 + '0' + ']' * 4999 + '}', "JSONDecodeError", "Omitted"),
+    ('{"number":' + '9' * 10000 + '}', "ValueError", "ValueError"),
+    ('{"prompt":"unfinished', "JSONDecodeError", "JSONDecodeError"),
+    ('[' * 33 + '0', "JSONDecodeError", "Omitted"),
+    ('{"prompt":{"nested":' + '[' * 5000 + '0' + ']' * 5000 + '}}', "RecursionError", "Omitted"),
+], ids=["deep-valid", "deep-malformed", "integer-digit-limit", "unfinished-string", "bracket-depth", "deep-image-envelope"])
 @pytest.mark.parametrize("image", [False, True], ids=["generic", "image"])
-def test_failed_json_ingestion_retains_safe_fallback_and_next_event(payload, error, image):
+def test_failed_json_ingestion_retains_safe_fallback_and_next_event(payload, error, append_error, image):
     first = image_line(payload) if image else "bot-1 | " + payload + "\n"
     lines = [first, "bot-1 | next event\n"]
     output = io.StringIO()
@@ -39,6 +43,13 @@ def test_failed_json_ingestion_retains_safe_fallback_and_next_event(payload, err
     assert records[0]["kind"] in {"unparsed", "image.request.unparsed"}
     assert records[0]["source_line"] == first.rstrip("\n")
     assert records[1]["message"] == "next event" and records[1]["parse_error"] is None
+    parser = AppendParser()
+    appended = [parser.record(line) for line in lines]
+    assert [index for index, event in enumerate(appended) if event.parse_error] == [0]
+    assert appended[0].parse_error == append_error
+    assert appended[-1].parse_error is None and appended[-1].kind == "text"
+    assert parser.continuity_lost is False
+    assert appended[0].kind == "viewer.omitted" and appended[0].scope == VIEWER_SCOPE
 
 
 @pytest.mark.parametrize("key", [r"\u0061pi_key", r"\u0045nv", r"\u0041uthorization"])

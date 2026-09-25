@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from .recognizers import COMPOSE, DOCKER_TIME, ENVELOPES, RECOGNIZERS, Envelope, EnvelopeRecognizer, EventRecognizer, Recognition
-from .safety import EvidenceRedactor, JSONValue, SGR, safe_fallback, safe_fields
+from .safety import EvidenceRedactor, JSONValue, REDACTED, SGR, safe_fallback, safe_fields
 from .scopes import metadata_scope
 
 
@@ -70,15 +70,22 @@ class EventParser:
             recognized = next((found for recognize in self.recognizers if (found := recognize(envelope, service))), None)
             parse_error = recognized.parse_error if recognized else None
             if parse_error is None:
-                details = safe_fields(recognized.details) if recognized else {}
-                encoded = json.dumps(details, ensure_ascii=True, allow_nan=False)
-                message = (recognized.detail_prefix + encoded if recognized and recognized.detail_prefix is not None
-                           else self.redactor.message(envelope.message, service=service))
+                typed = recognized is not None and recognized.detail_prefix is not None
+                if typed and (service in self.redactor.private_keys or service in self.redactor.config_depth):
+                    details = {}
+                    message = REDACTED
+                else:
+                    details = safe_fields(recognized.details) if recognized else {}
+                    encoded = json.dumps(details, ensure_ascii=True, allow_nan=False)
+                    message = (recognized.detail_prefix + encoded if typed
+                               else self.redactor.message(envelope.message, service=service))
         except (ValueError, RecursionError) as error:
             parse_error = type(error).__name__
             recognized = Recognition("unparsed", recognized.scope if recognized else "service")
         if parse_error is not None:
-            message = self.redactor.text(safe_fallback(envelope.message), service=service, redacted=True)
+            message = self.redactor.text(envelope.message, service=service, redacted=True)
+            if message != REDACTED:
+                message = safe_fallback(message)
             details = {}
         return recognized, message, details, parse_error
 

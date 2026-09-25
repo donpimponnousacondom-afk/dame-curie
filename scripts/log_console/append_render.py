@@ -12,10 +12,11 @@ PAGE_ROWS = 80
 LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 LEVEL_COLORS = {"DEBUG": 90, "INFO": 32, "WARNING": 33, "WARN": 33, "ERROR": 31, "CRITICAL": 91}
 SCOPE_COLORS = {"system": 37, "bot": 36, "provider": 35, "discord": 34,
-                "tool": 33, "context": 32, "web": 36, "subagent": 95}
+                "tool": 33, "context": 32, "web": 36, "subagent": 95, "viewer": 91}
 HELP = """Append-only screen viewer; controls affect this viewer only.
 + / = lower minimum severity; - raises it; absent producer events cannot be recovered.
 s b p d t c w a toggle system/bot/provider/Discord/tool/context/web/subagent.
+Viewer omission records are not scope-toggleable; an omitted record is never re-rendered.
 o shows/hides received Ollama rows (hidden initially); never starts a service.
 f toggles folding and replays five matches. T/P cycle tool/provider summary/JSON/evidence.
 r pauses and replays twenty matches. e pauses and replays warnings/errors/failures UNFILTERED.
