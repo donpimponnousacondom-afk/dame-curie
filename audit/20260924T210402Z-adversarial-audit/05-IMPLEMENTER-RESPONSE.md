@@ -22,107 +22,107 @@ QA used the established Python3.14.4 image with network disabled, no private mou
 
 ## Finding C-01 — Visible, terminal incomplete output
 
-- **Disposition:** deferred — coordinator/core owner; `../../TODO.md` provider/caller row.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Selected policy delivers genuine partial text with a leading, sanitizer-safe cutoff notice; reasoning-only/empty output gets an explanation, never reasoning. No recovery, tool dispatch or paid retry may follow either outcome. The initial and follow-up branches now exist; review caught a bracketed label being stripped and stale test fixtures, now corrected in moving source. Follow-up incomplete coverage and execution remain pending.
-- **Verification performed:** P covers provider typing, not final Discord delivery. Independent source recheck in `review-provider-budget.md`; real foreground matrix unrun.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Genuine partial text has a leading sanitizer-safe cutoff notice; empty/reasoning-only output gets an explanation without disclosing reasoning. Initial and follow-up typed incomplete outcomes terminate without recovery, tool dispatch or paid retry. Confirmed delivery only is persisted.
+- **Verification performed:** Independent caller/source recheck in `review-provider-budget.md`; QA56 foreground/provider selection passed657 cases and QA60 full-safe suite, including the existing caller matrix, passed3984 plus28 subtests. This is synthetic isolated coverage, not live Discord/provider delivery acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-02 — Native admission, history groups and replay
 
-- **Disposition:** deferred — core integration owner/coordinator.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Compact before eviction, retain whole native groups within36k characters/12 messages, limit newest/older results and replay original execution arguments as JSON strings with matching IDs. Whole-batch malformed/duplicate/oversized admission must reject before effects. Independent review found byte/depth/argument gaps and lost per-call failure replay; corrections remain under review. The additional background shared-slot race is covered by J and implementer item I-02.
-- **Verification performed:** moving-source review `review-core-tool-contracts.md`; complete native/history selection pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Compact before eviction; retain whole native groups within36k characters/12 messages. Admission rejects malformed, duplicate, oversized and nonfinite JSON batches before effects; replay keeps matching IDs, original executed arguments as JSON strings and per-call failure results. The background shared-slot race is separately recorded under I-02.
+- **Verification performed:** Independent frozen-source review `review-core-tool-contracts.md` identified earlier gaps subsequently integrated; QA56 bounded core657 passed and QA60 full-safe3984 passed plus28 subtests. No live tool/provider execution claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-03 — Bounded prompt readback and upload
 
-- **Disposition:** deferred — core integration owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** New prompt writes use16KiB UTF-8, exports512KiB and inline readback1800 UTF-8 bytes. Setters acknowledge briefly without echo; response paths suppress mentions. Oversized legacy storage remains retained, with bounded export behavior and no silent context truncation.
-- **Verification performed:** independent source review; existing `tests/test_longprompt_command.py` and prompt-storage cases adapted, integrated execution pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`.
+- **What changed / why not:** New prompt writes use16KiB UTF-8, exports512KiB and inline readback1800 UTF-8 bytes. Setters acknowledge briefly without echo; response paths suppress mentions. Oversized legacy storage remains retained; readback/export is bounded rather than silently clipping model context.
+- **Verification performed:** Existing longprompt/prompt-storage cases included in QA56 green core and QA60 full-safe selection; no live Discord delivery acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-04 — Invalid image configuration and canonical migration
 
-- **Disposition:** deferred — image/coordinator integration and canonical hold ledger.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** Image configuration errors disable that capability rather than crashing unrelated bot construction; forcing enablement cannot override invalid configuration. Native protocol, explicit endpoint and exact model-description mapping are required. `../../docs/IMAGE_GENERATION.md` and `../../phase-II_v2/PROVISIONING.md` retain the canonical migration/activation hold; no canonical private profile was migrated or enabled here.
-- **Verification performed:** synthetic image/config subsets and independent source review recorded in validation/image review; final integrated artifact pending.
-- **Deployment effect:** none; canonical remains held.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending. Canonical activation intentionally held, not claimed fixed or deployed.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`.
+- **What changed / why not:** Invalid image configuration disables only that capability even when forced on; native protocol, explicit endpoint and exact nonempty model-description mapping are required. `../../docs/IMAGE_GENERATION.md` and `../../phase-II_v2/PROVISIONING.md` retain the canonical migration/activation hold. No canonical private profile migrated or enabled.
+- **Verification performed:** Existing synthetic image/config refusals and source review in `review-image-configuration.md`; QA60 full-safe3984 passed plus28 subtests. QA64 actual-image constructor passed with image generation disabled; it is not a live image-capability probe.
+- **Deployment effect:** candidate built, not deployed as of this editing pass; canonical activation held.
 
 ## Finding C-05 — Image quality default
 
-- **Disposition:** deferred — coordinator, final documentation/source commit.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** Code and examples choose low. Explicit private high/timeout settings are not silently replaced; the guide distinguishes defaults from the last recorded temporary profile.
-- **Verification performed:** source/config review and synthetic image cases; no fresh private value inspection.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`.
+- **What changed / why not:** Code and examples choose low. Explicit private high/timeout settings are not silently replaced; the guide distinguishes source defaults from the last recorded temporary profile. Next-boot private configuration has not been established by this evidence.
+- **Verification performed:** Source/config review and existing synthetic image cases in QA60 full-safe3984 plus28 subtests; no fresh private value inspection or live image generation.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-06 — Aggregate foreground budget
 
-- **Disposition:** deferred — confirmed request-shape hole still open; core owner/coordinator.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Selected task-local defaults are32768 reserved output tokens,12 actual generation POSTs and600 monotonic seconds; validated consistent explicit output alone may refund. Model-spawned descendants share spend; independently issued background jobs retain their separate limits. Review found `OPENAI_EXTRA_BODY n=2` could request twice the reserved output. Selected correction: foreground permits one completion only, rejects invalid multiplicity terminally before reserve/POST, and bounds recognized competing output-cap fields without raising lower values. Final source recheck is pending; this is not bot-wide expenditure or provider/billing compliance control.
-- **Verification performed:** P predates the request-shape fix. `review-provider-budget.md` records the concrete bypass and policy; real wrapper deadline, cancellation and preparation cleanup cases remain unrun.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Task-local defaults are32768 reserved output tokens,12 actual generation POSTs and600 monotonic seconds; only validated consistent explicit output may refund. Model-spawned descendants share spend; independently issued background jobs retain separate limits. Foreground rejects invalid `n` and malformed recognized competing cap fields before reserve/POST, enforces one completion and clamps competing caps without raising lower values. This is not bot-wide expenditure, provider billing compliance, a hard bound on detached work or post-timeout cleanup; provider-specific competing-field precedence remains unproven live.
+- **Verification performed:** `review-provider-budget.md` recorded the earlier alternate-first malformed-cap gap; subsequent source correction and existing provider/foreground cases are covered by QA56 green657 and QA60 full-safe3984 plus28 subtests. No live provider experiment.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-07 — Replayed reasoning argument
 
-- **Disposition:** deferred — core/history owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Bound reasoning/arguments in retained history without changing the arguments actually executed or the canonical immediate native replay. Preserve whole call/result pairing.
-- **Verification performed:** independent bounded source review; integrated existing native/history cases pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Bound reasoning/arguments in retained history without changing actually executed arguments or canonical immediate native replay; preserve whole call/result pairs.
+- **Verification performed:** Independent bounded source review; existing native/history cases in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live replay acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-08 — Unsafe dotenv/live-provider test
 
-- **Disposition:** deferred — final integration/no-new-test audit.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Replaced the existing historical live-provider case with synthetic SSE bytes and fake progress channels, not an opt-in real-provider probe. The historical version remains forbidden to execute; no new test function/file was authorized.
-- **Verification performed:** coordinator inspected the replacement before the116-pass isolated progress/error selection recorded in `validation.md`; final full safe suite pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source/test `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Historical live-provider case replaced in place with synthetic SSE bytes and fake progress channels. Historical version remains forbidden; no new test function/file survived final source inventory.
+- **Verification performed:** Coordinator inspected replacement before isolated116-pass subset; QA60 full-safe3984 passed plus28 subtests, excluding only two manual live-provider programs with no collected cases. QA61 removed two newly introduced fixture constructors and passed201 cases; QA62 copied-app constructor passed4 cases. No host application import/test execution or live-provider acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-09 — Import-time dotenv boundary
 
-- **Disposition:** no-change-needed for loading semantics; residual explicitly retained.
-- **Commit(s):** no loading-semantics change; documentation pending.
-- **What changed / why not:** Import-time configuration loading remains a real boundary, not a claim that imports are harmless. Preserve configured startup behavior; isolate application execution instead. Shell environment filtering does not prevent same-UID filesystem reads, and current QA says nothing about the origin of historical bytecode.
-- **Verification performed:** QA receipts specify synthetic env selection and no private mounts/network; P-08 provenance remains unresolved. No host application import used for this verification.
-- **Deployment effect:** none.
+- **Disposition:** retained limitation — no loading-semantics change; synthetic isolation verified, temporary acceptance pending.
+- **Commit(s):** no loading-semantics change; documentation `3754a8a`, `663749b`.
+- **What changed / why not:** Import-time dotenv loading remains a real boundary. Preserve configured startup behavior and isolate application execution; shell environment filtering cannot prevent same-UID filesystem reads. Historical bytecode origin remains unresolved (P-08).
+- **Verification performed:** QA60/61/62 used synthetic configuration without private mounts/network; QA64 guarded constructor ran inside actual candidate image with synthetic `/state`, not on the host. These receipts do not prove imports intrinsically harmless or resolve historical provenance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-10 — Build-context exclusions
 
-- **Disposition:** deferred — coordinator artifact/commit stage.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Root `.dockerignore` excludes `audit/` and `reports/`; application COPY lists include the new required policy/budget modules. Context exclusion is not itself artifact provenance.
-- **Verification performed:** source inspection; actual candidate artifact inspection pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated artifact verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; packaging `be28b8598215ff6a0c72d7c3160403f2425a61f0`.
+- **What changed / why not:** Root `.dockerignore` excludes `audit/` and `reports/`; Dockerfile COPY and Dockerfile-specific allowlist include new policy/budget modules. Context exclusion alone is not artifact provenance.
+- **Verification performed:** QA63 built `sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214` from packaging commit; all56 copied files matched Git, baked/OCI commit and dirty=false matched. QA62 copied-app constructor4 passed; QA64 existing guarded constructor passed in the actual image. No live service acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-11 — Actual reasoning content, not raw truthiness
 
-- **Disposition:** deferred — provider/core commit stage.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Reasoning-only classification uses normalized actual reasoning content, not merely a nonempty `reasoning_details` container. No reasoning is promoted into user-visible text.
-- **Verification performed:** P and independent provider recheck; current full integration pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Reasoning-only classification uses normalized actual reasoning content rather than nonempty `reasoning_details` container truthiness; reasoning is not promoted into user-visible text.
+- **Verification performed:** Provider source recheck, existing provider/core cases in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live provider acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-12 — Preserve explicit incomplete usage
 
-- **Disposition:** deferred — caller verification outstanding.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Bounded SSE usage drainage retains explicit counters and producing metrics. Explicit Gemini total was lost by merge and is now preserved; total-minus-input is never an output refund. Review also found canonical input/output keys were ignored by the daily tracker; moving source now accepts those aliases.
-- **Verification performed:** P proves the SSE correction. Caller tracker and producing-call assertions await the real foreground selection.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Bounded SSE usage drainage retains explicit counters and producing-call metrics, including Gemini total; total-minus-input never grants output refund. Daily tracker accepts canonical input/output aliases. Missing counters are not synthesized.
+- **Verification performed:** `review-provider-budget.md` traced producing-call and initial/follow-up caller cases; QA56 foreground/provider green657 and QA60 full-safe3984 plus28 subtests executed existing caller coverage. No live provider/billing claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-13 — Bounded diagnostic captures
 
-- **Disposition:** deferred — final provider/error commit stage.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Raw diagnostic capture is byte-bounded; decoded payload is bounded plus fixed omission-marker overhead; persisted details/traceback are capped at256KiB characters. This does not bound network ingress or successful response assembly. Nested re-truncation lengths describe their intermediate input, not original provider bytes.
-- **Verification performed:** P and independent provider review; final exact-tree suite pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending, with explicit scope limits.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Raw diagnostic capture is byte-bounded; decoded payload is bounded plus fixed omission-marker overhead; persisted details/traceback are capped at256KiB characters. Network-body ingress and successful response assembly are not capped here. Nested re-truncation lengths describe intermediate input rather than original provider bytes.
+- **Verification performed:** Independent provider review and existing provider/error cases in QA56 green657 and QA60 full-safe3984 plus28 subtests; no live ingress/incident acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-14 — Reasoning-only terminal policy
 
