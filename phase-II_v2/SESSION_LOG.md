@@ -1,5 +1,21 @@
 # Phase II session ledger
 
+## 2026-09-25 — full audit remediation and mandatory document retirement
+
+Root's subsequent instruction, quoted verbatim:
+
+> We do agree about your implementation to solve the audit surface and you have full authority to do the fixes and bring greatness, dirac is on the freezer for the time being (connected but we don't need anything from him right now).
+
+> You know the drill, you automated the test injecting messages into him in the #test channel we prepared for this so you don't need humans to do the work anymore, please take the wheel and finish this properly; fill the reply to the auditor and we will ask them to make the second and final round to come back and finish this.
+
+> at least leave a side note to remove all of this so you never trip over this over and over; but more importantly no other agent will do the same without a context
+
+> You have luna, deepseek and sol sub-agents to bring home this must need round and make it better, make them to review your work and implement things, be a boss and architect if you need it
+
+Interpretation and boundaries: complete local source remediation, conservative policy decisions, independently reviewed commits, credential-free isolated QA and bounded temporary-Dirac/test-channel acceptance. No normal release, canonical/V1/publisher/remote mutation, model-route change or unlimited inference. Coordinator owns runtime/private access after re-verifying target identity and scope; children are source-only. Existing-test adaptation remains the validation contract, not new test files/functions. `TODO.md` replaces the obsolete integration checklist and explicitly schedules retirement of temporary inventories, responses, lane notes and phase ledgers after round-two acceptance and consolidation of surviving contracts. Audit originals stay unchanged until that review is accepted. Historical deployment receipts below remain historical.
+
+Implementation began at `aad36e6`; current child routes were discovered as `openai-codex/gpt-6-luna`, `openai-codex/gpt-6-sol`, and `deepseek-official/deepseek-flash`. The current grant supersedes the intake-only assignment below. Detailed implementation/QA outcomes belong in the filled audit response, not repeated diary entries here.
+
 ## 2026-09-25 — authorized archive removal and release freeze
 
 Root's current instruction, quoted from this session:

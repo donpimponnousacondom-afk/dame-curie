@@ -4,7 +4,7 @@ A Discord bot undergoing the approved Discord-only V2 redesign. The existing V1 
 
 **Redesign source integration/review is in progress, not deployment acceptance.** The isolated V2 foundation was provisioned earlier; its deployed runtime has not been re-observed for this documentation round. The coordinator owns reconciliation after reviewed source integration. Lifecycle helpers are not discovery commands; do not run an installer, application or test suite from old instructions.
 
-**Release freeze, 2026-09-25:** root requested adversarial-audit review and an agreed remediation plan before further releases. See [Status](docs/STATUS.md). The archive-removal commit is cleanup, not application or deployment acceptance.
+**Release freeze, 2026-09-25:** root approved complete audit remediation, isolated validation and bounded temporary-Dirac acceptance. Normal releases remain frozen pending the final independent audit. [TODO](TODO.md) owns the work and mandatory temporary-document retirement; [Status](docs/STATUS.md) records milestones. The archive-removal commit is cleanup, not application acceptance.
 
 ## Approved source contract
 

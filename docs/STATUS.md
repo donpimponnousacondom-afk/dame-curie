@@ -1,10 +1,10 @@
 # dame-curie status
 
-## Release freeze and audit intake — 2026-09-25
+## Release freeze and authorized remediation — 2026-09-25
 
-**Releases are frozen by root's current instruction.** Review `audit/20260924T210402Z-adversarial-audit/` and agree the remediation plan before implementing its recommendations. No build, deployment, restart, private/runtime inspection or test execution is authorized by this source/documentation assignment. The last recorded deployment below has not been re-observed today.
+**Normal releases remain frozen.** Root subsequently approved complete remediation of `audit/20260924T210402Z-adversarial-audit/`, Luna/Sol/DeepSeek cross-review, isolated QA and bounded automated temporary-Dirac acceptance. Implementation is in progress, not accepted or deployed. `../TODO.md` is the authoritative work/retirement ledger; the final auditor response will carry per-finding commits and exact QA evidence. Coordinator-only runtime boundaries remain in `../AGENTS.md`. The last recorded deployment below has not yet been re-observed under this assignment.
 
-Root explicitly authorized committing all 24 pending `legacy/` deletions: obsolete V1 guides/assets and two archived DNS provisioners, 3,970 text lines. Active references now state that the archive is removed. Historical V2 evidence remains dated evidence, not current operating instructions; further documentation retirement awaits reconciliation. Application source, active publisher files and unrelated user work are unchanged. The current grant is quoted in `../phase-II_v2/SESSION_LOG.md`.
+Root explicitly authorized committing all 24 pending `legacy/` deletions: obsolete V1 guides/assets and two archived DNS provisioners, 3,970 text lines. Active references now state that the archive is removed. Historical V2 evidence remains dated evidence, not current operating instructions; further documentation retirement follows the new TODO schedule. That cleanup did not change application source, active publisher files or unrelated user work. The current grant is quoted in `../phase-II_v2/SESSION_LOG.md`.
 
 ## Last recorded temporary Dirac release — bounded tool logging, 2026-09-24
 
