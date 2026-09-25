@@ -1,6 +1,8 @@
-# 05 — Implementer response — WORKING DRAFT
+# 05 — Implementer response — ready for independent round two
 
-**Not submitted for final acceptance.** Coordinator owns completion of every block below. `deferred` in this draft means **active remediation pending the stated evidence**, not a proposed permanent carve-out. Candidate `be28b85` is built, source/construction-verified and exercised in one bounded temporary happy-path case (QA67–69). The prior image and exact original controls were then restored; **the candidate is not the current running image**. All52 finding blocks and6 implementer items are reconciled to the recorded evidence. Final independent consistency review is the remaining implementer gate; historical limitations and the external auditor's round-two verdict remain separate. Normal release, canonical/V1 activation, publisher and remote operations remain frozen.
+**Implementation handoff complete; auditor acceptance outstanding.** All52 finding blocks and6 implementer items have explicit dispositions, commits/evidence and deployment effects. Deferred items are **C-09 import-time dotenv semantics and P-08/I-05 unresolved historical provenance**, with named coordinator ownership and round-two gates in `../../TODO.md`; they are not claimed fixed. C-28 explicitly pushes back on a retired-name alias using the current contract and preserves the canonical migration hold. Independent Luna evidence and DeepSeek coverage reviews found documentation defects; their corrections were committed in `ddd2b2a` and narrowly rechecked without new findings. These reviews are not the external auditor's acceptance verdict.
+
+Candidate `be28b85` is built, source/construction-verified and exercised in one bounded temporary happy-path case (QA67–69). The prior image and exact original controls were then restored; **the candidate is not the current running image**. Normal release, canonical/V1 activation, publisher and remote operations remain frozen.
 
 Root's current grant and its limits are recorded in `../../AGENTS.md`, `../../TODO.md` and the verbatim entry in `../../phase-II_v2/SESSION_LOG.md`. It does not retroactively authorize older actions. Originals00–04 are unchanged. Keep this bundle and independent reviews through accepted round two; follow the retirement ledger afterward, preserving unresolved provenance and operating boundaries.
 
@@ -12,7 +14,7 @@ Root's current grant and its limits are recorded in `../../AGENTS.md`, `../../TO
 - **P (historical, uncommitted at measurement):** provider seam tree `9b3ec91e304d0bacaa2515f14fe9904710eee50a`; selected Ruff passed; **199 passed** in `tests/test_provider_error_reporting.py tests/test_providers.py tests/test_error_reporting.py tests/test_smoke_protocol.py`. This predates the newly identified request-shape correction and is NOT current caller or complete provider acceptance.
 - **J (historical, uncommitted at measurement):** background seam tree `869157081116c6968c177e7f1954e0e56e418f37`; selected Ruff passed; **39 passed** in `tests/test_background_jobs.py`. Uses baseline bot plus existing doubles, not full real-bot integration.
 - **First full-safe integration:** QA52 tree `21f57d4801720e33035f31b2353ed10d188d2844`: selected Ruff passed; **3894 passed,83 failed,9 errors,28 subtests passed**. QA53 preintegration `e540be6`: **3884 passed,42 failed,9 errors,1 deliberately deselected historical unsafe case,28 subtests passed**. QA54 fixture reconciliation tree `f38e3e400fa4c8036f0477a0d25cb1fe7a40a21d`: **970 passed,4 original unsupported-reasoning failures retained**. These are not whole-core acceptance. Case-level ownership and exact safe selections are in `qa52-53-triage.md`; full failed evidence remains retained.
-- **Bounded integration recheck:** root directed divide-and-conquer; oversized Luna run was stopped, not restarted. Six fresh single-issue handoffs completed. QA55 tree `1354ca309efa6ffe24cdf7beb2905dfd45cb8760`: selected Ruff passed; **644 passed,13 failed** in the explicit core selection, including successful real foreground/provider cases but remaining fixture errors. QA56 tree `a58e8932abdc9009bde187060a90806a79ef5416` reran the same22-file selection after existing-fixture corrections: **657 passed**, selected Ruff passed, exit0. This is green bounded core integration, not a green full suite. Final independent acceptance, definition inventory, remaining baseline/environment debt, artifact and bounded temporary acceptance remain open. Exact commands/failures/corrections are retained in `validation.md`; no xfail-for-green or hidden discarded failures.
+- **Bounded integration recheck:** root directed divide-and-conquer; oversized Luna run was stopped, not restarted. Six fresh single-issue handoffs completed. QA55 tree `1354ca309efa6ffe24cdf7beb2905dfd45cb8760`: selected Ruff passed; **644 passed,13 failed** in the explicit core selection, including successful real foreground/provider cases but remaining fixture errors. QA56 tree `a58e8932abdc9009bde187060a90806a79ef5416` reran the same22-file selection after existing-fixture corrections: **657 passed**, selected Ruff passed, exit0. This is green bounded core integration, not a green full suite. At that intermediate checkpoint, independent acceptance, definition inventory, baseline/environment debt, artifact and bounded temporary acceptance remained open; subsequent receipts below close the completed execution gates, not historical failures. Exact commands/failures/corrections are retained in `validation.md`; no xfail-for-green or hidden discarded failures.
 
 - **Current accepted source/QA checkpoint:** `d198c37ee038e57e7cca4183b60eef0eaef6f1fc` commits the integrated application/test fixes; `3754a8a` checkpoints the full dated audit evidence. QA60 full-safe suite on tree`e2d639755f90bfb16ff8a834975ae704772cb6ae`: **3984 passed,28 subtests passed**. Two final fixture helper removals rechecked in QA61: **201 passed**. QA62: **4 constructor cases passed** after preventing copied-app imports from falling back to the original checkout. New helper definitions were removed, existing fetch cases renamed one-to-one, no xfail-for-green. Exact source/image/selector/environment limits and retained failures are in `validation.md`.
 - **Candidate artifact:** packaging fix `be28b8598215ff6a0c72d7c3160403f2425a61f0`; image **`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`**, tag`dame-curie-app:be28b85`. All56 copied inputs match Git; baked/OCI commit and dirty=false match. Existing guarded constructor probe passed inside the actual image (QA64). This is artifact evidence, not live delivery/feature acceptance. Subsequently exercised only during QA67–69 and reverted; see the bounded acceptance receipt below.
@@ -394,15 +396,15 @@ Isolated QA used the established Python3.14.4 image with network disabled, no pr
 
 ## Finding D-01 — Security posture after taint-gate removal
 
-- **Disposition:** fixed — current source/documentation reconciliation recorded; final independent response consistency review pending.
+- **Disposition:** fixed — current source/documentation reconciliation recorded; independent response consistency review and narrow correction recheck complete; external round-two acceptance outstanding.
 - **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`, `4c80d4c`.
 - **What changed / why not:** SECURITY/architecture distinguish removed taint confirmation from retained independent authorization/redaction and actor-gated shell/rewrite access. The same-UID filesystem risk remains real: neither the actor gate nor a minimal subprocess environment is a secret sandbox.
-- **Verification performed:** source/document review and QA56 bounded core657/QA60 full-safe3984 plus28 subtests; no same-UID isolation or live shell acceptance claim. Final independent consistency review remains forthcoming.
+- **Verification performed:** source/document review and QA56 bounded core657/QA60 full-safe3984 plus28 subtests; no same-UID isolation or live shell acceptance claim. Independent document consistency review and narrow correction recheck are recorded in `review-final-evidence.md` and `review-final-coverage.md`; neither reran source/runtime verification.
 - **Deployment effect:** candidate exercised temporarily and prior image/controls restored (QA67–69); no normal release.
 
 ## Finding D-02 — Text output example default
 
-- **Disposition:** fixed — source/example mismatch corrected; final independent response consistency review pending.
+- **Disposition:** fixed — source/example mismatch corrected; independent response consistency review and narrow correction recheck complete; external round-two acceptance outstanding.
 - **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`, `4c80d4c`.
 - **What changed / why not:** `.env.example` and source use16384; the private temporary12345 cap was preserved, not replaced by the example default.
 - **Verification performed:** source/example comparison and QA67–69 byte-exact original-control restoration; no canonical private configuration migration.
@@ -410,7 +412,7 @@ Isolated QA used the established Python3.14.4 image with network disabled, no pr
 
 ## Finding D-03 — Canonical prompt-guide examples
 
-- **Disposition:** fixed — canonical guidance reconciled; final independent response consistency review pending.
+- **Disposition:** fixed — canonical guidance reconciled; independent response consistency review and narrow correction recheck complete; external round-two acceptance outstanding.
 - **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`; documentation `3754a8a`, `663749b`, `4c80d4c`.
 - **What changed / why not:** LONGPROMPT uses canonical `!` examples and distinguishes configured runtime prefix, bounded readback/upload/export and whole legacy omission. Historical temporary prefix receipts remain historical, not generic command examples.
 - **Verification performed:** documentation/source review and existing prompt/caller cases in QA56 bounded core657 and QA60 full-safe3984 plus28 subtests; no live command invocation.
@@ -418,7 +420,7 @@ Isolated QA used the established Python3.14.4 image with network disabled, no pr
 
 ## Finding D-04 — Obsolete confirmation language
 
-- **Disposition:** fixed — current guidance reconciled while historical attribution limits remain; final independent response consistency review pending.
+- **Disposition:** fixed — current guidance reconciled while historical attribution limits remain; independent response consistency review and narrow correction recheck complete; external round-two acceptance outstanding.
 - **Commit(s):** documentation `3754a8a`, `663749b`, `4c80d4c`; source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
 - **What changed / why not:** Current job guidance uses independent authorization rather than the retired taint-confirmation gate. PRUNING_MAP and redesign/handoff assertions are labelled historical; their wording is not proof of present security, readiness or earlier human authorization.
 - **Verification performed:** source/document review and QA56/QA60 isolated cases; no retroactive grant or final independent verdict inferred.
@@ -426,7 +428,7 @@ Isolated QA used the established Python3.14.4 image with network disabled, no pr
 
 ## Finding D-05 — Condensed current status
 
-- **Disposition:** fixed — current milestone/status record reconciled; only final independent response consistency review remains pending.
+- **Disposition:** fixed — current milestone/status record reconciled; independent document consistency review/recheck complete; external round-two acceptance remains outstanding.
 - **Commit(s):** documentation `3754a8a`, `663749b`, `4c80d4c`.
 - **What changed / why not:** STATUS records current source/QA, candidate artifact, one bounded temporary acceptance and verified old-image/control restoration, alongside normal-release and canonical holds. Its dated historical receipts are not fresh observations; full earlier narrative remains at `ab64853:docs/STATUS.md`.
 - **Verification performed:** current `docs/STATUS.md` and handoff compared against the QA67–69 summary; independent round-two verdict has not arrived.
@@ -444,7 +446,7 @@ Isolated QA used the established Python3.14.4 image with network disabled, no pr
 
 ### I-01 — Pending smoke request withdrawn between discovery and stat
 
-- **Disposition:** fixed — in installed temporary operator/protocol source; final independent response consistency review pending.
+- **Disposition:** fixed — in installed temporary operator/protocol source; independent response consistency review and narrow correction recheck complete; external round-two acceptance outstanding.
 - **Commit(s):** smoke-protocol `e540be6772f76d906720b79b07947a60893c3b24`.
 - **What changed / why not:** Catch only FileNotFoundError at the second stat; preserve other filesystem failures. Keep the accepted pending protocol, not the rejected prototype queue.
 - **Verification performed:** exact S five protocol cases and independent Sol source check; QA60 full-safe3984 plus28 subtests. The earlier incorrect selector ran no tests and remains in validation evidence. No live withdrawal race injection.
@@ -498,6 +500,6 @@ None requiring an immediate new grant for the remaining authorized source/isolat
 
 - Completed: frozen committed core, corrected/reviewed admission and caller paths, full safe suite plus narrowed final rechecks, tracked definition inventory, candidate artifact verification, bounded temporary delivery/body-readback case and verified restoration. Failed attempts and original auditor evidence remain retained.
 - Completed: all52 findings and6 implementer-raised items carry dispositions, commits, verification and deployment effects. Unresolved historical provenance/authority and intentional safety/coverage limits are not relabelled as fixed defects.
-- Remaining implementer gate: rotated independent consistency review of this final response/evidence, incorporation of any corrections, and final response/handoff checkpoint.
+- Completed: rotated independent consistency/coverage reviews (`review-final-evidence.md`, `review-final-coverage.md`), corrections in `ddd2b2a`, and narrow reviewer follow-ups with no remaining finding in their scopes. Final handoff includes their original findings and addenda; it is not self-certified external acceptance. Frozen candidate code and originals00–04/child reports were also compared against their committed checkpoints without differences.
 - External gate: auditor round-two acceptance before retiring temporary evidence or considering normal release. This implementer response is not that verdict. Canonical activation/private migration and host viewer rollout remain separate operating gates; no additional deployment follows automatically.
 - Retirement owner/destinations are explicit in `../../TODO.md`. Preserve originals00–04, all failed/retracted/quarantined evidence, retained refs/worktrees and private rollback material until their respective acceptance/ownership gates. No zero-defect guarantee.

@@ -55,3 +55,27 @@ Scope is response coverage and handoff gates only — not new code audit, not ru
   outside this read scope and were not opened. Block-field presence was verified; evidence contents were not.
 - `TODO.md:84–86` gates correctly remain open (final consistency review, handoff checkpoint, external round two).
   Per instruction, WORKING DRAFT / final-review-pending is expected and is not raised as a finding.
+
+---
+
+# Addendum — narrow correction recheck (HEAD `ddd2b2a`)
+
+Count clarification for the section above: three defect categories were listed; item 4 was the negative scope
+statement, mislabelled as a fourth defect. Original text left unchanged; the other 54 blocks, evidence contents
+and runtime were not re-reviewed.
+
+1. `07:9` union89 is now dated — "the union **at that checkpoint was89**" under the `e540be6` re-run, not a live
+   ref-position claim. Compliant.
+2. `07:55` now reads "current authorization/environment corrections are committed in `d198c37`"; `07:75` now reads
+   "committed in `3754a8a` and updated ... in `663749b`/`4c80d4c`". Both stale present-tense rows resolved;
+   `07:49` and `07:57` also refreshed. Compliant.
+3. `05:19` now anchors the96000-character budget to `control_defaults.py:175`, source `d198c37`, C-16. Compliant.
+4. Disposition prefixes: all58 blocks now open with the template enum. `05:93` C-09, `05:381` P-08 and `05:479`
+   I-05 are `deferred` and name coordinator ownership plus `TODO.md` → "Retained items for round-two disposition";
+   `05:245` C-28 is `push-back` with a source-contract argument; `05:325` P-01 is `fixed` with the historical
+   cadence violation acknowledged. Compliant.
+5. `TODO.md:43–49` is the retained-items table (`Item | Current disposition and next gate | Durable destination`)
+   owning C-09 (:45), C-28 (:46), P-08/I-05 (:47), C-31–C-33 (:48), P-05 (:49); `:41` names the coordinator as row
+   owner. Owner/destination exist. Compliant.
+
+No new defect in the checked corrections. Handoff gates `TODO.md:84–86` still correctly open.

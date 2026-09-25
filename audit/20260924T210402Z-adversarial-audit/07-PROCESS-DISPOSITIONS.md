@@ -1,4 +1,4 @@
-# 07 — Coordinator process evidence and dispositions (in progress)
+# 07 — Coordinator process evidence and retained limitations
 
 **RETIRE AFTER ACCEPTED ROUND TWO.** This records verified metadata and independently reviewed branch dispositions, not pruning authority or whole-application acceptance. Owner: coordinator. Keep the auditor's original reports unchanged.
 

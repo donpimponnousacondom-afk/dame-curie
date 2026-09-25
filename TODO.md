@@ -4,9 +4,9 @@
 
 Root approved complete remediation of `audit/20260924T210402Z-adversarial-audit/`, independent Luna/Sol/DeepSeek review, coherent local commits, isolated QA and bounded temporary-Dirac acceptance. Normal release and canonical/V1/publisher/remote changes remain frozen. Ordinary use of the existing shared embedding API is permitted; separate profile stores are not merged by sharing computation. No shared-service configuration/lifecycle changes, dependency-pin relaxation or new test files/functions. Coordinator owns runtime/private access; source children do not.
 
-Primary deliverable: `audit/20260924T210402Z-adversarial-audit/05-IMPLEMENTER-RESPONSE.md`:52 findings plus6 implementer-raised items. It remains a working draft until the final consistency pass, and is not the independent auditor's acceptance verdict.
+Primary deliverable: `audit/20260924T210402Z-adversarial-audit/05-IMPLEMENTER-RESPONSE.md`:52 findings plus6 implementer-raised items, complete and ready for independent round two. Rotated Luna/DeepSeek document reviews and narrow correction rechecks are recorded in the dated bundle; no remaining finding within those review scopes. This is not the external auditor's acceptance verdict.
 
-**Remaining:** independently check final evidence/disposition consistency, then checkpoint the completed response and handoff. All52 finding blocks and6 implementer items are now reconciled. Do not manufacture historical authorization/bytecode provenance or equate one live happy path with comprehensive feature acceptance. Retirement is gated on accepted round two, not this implementation pass.
+**Implementation handoff complete. Remaining:** external round-two acceptance and explicit disposition of the retained limits/operating gates below. No new runtime operation or code task is assigned automatically. Do not manufacture historical authorization/bytecode provenance or equate one live happy path with comprehensive feature acceptance. Retirement is gated on accepted round two, not this implementation pass.
 
 ## Checkpoints and demonstrated results
 
@@ -34,7 +34,7 @@ Primary deliverable: `audit/20260924T210402Z-adversarial-audit/05-IMPLEMENTER-RE
 | Operator/smoke, C36/37; I01 | Sol source, independent Luna/Sol, coordinator runtime | `551060d`:117 focused passes; `e540be6`:5 protocol passes; QA60. Three temporary operator files installed/verified; real readiness and one receipt passed. Negative lifecycle/cancellation cases remain isolated coverage. |
 | Import/build boundaries, C09/10 | Coordinator plus independent packaging review | Artifact verified after allowlist/import-isolation correction. Import-time dotenv remains; no host application imports/test execution. |
 | Process/history, P01–P09; I05 | Coordinator plus independent source/metadata reviewers | Current grants, failed attempts and checkpoints recorded; retained history and unresolved attribution are not erased. All refs/worktrees retained. |
-| Docs and final reply, D01–D06 | Coordinator plus bounded Sol reconciliation; rotated final reviewer pending | Finish remaining blocks and final consistency review. No normal release or external audit acceptance claimed. |
+| Docs and final reply, D01–D06 | Coordinator/Sol reconciliation; independent Luna/DeepSeek document reviews | All blocks reconciled; corrections committed in `ddd2b2a` and narrowly rechecked without remaining scoped findings. No normal release or external audit acceptance claimed. |
 
 ## Retained items for round-two disposition
 
@@ -94,6 +94,6 @@ Durable set: `AGENTS.md`, concise `README.md`/`docs/STATUS.md`, current developm
 - [x] Complete safe suite and narrowed final corrections recorded with baseline failures retained.
 - [x] Artifact source/provenance and actual-image construction checked.
 - [x] Bounded temporary acceptance, identity/channel, checker failures, cleanup/restoration and limits recorded.
-- [ ] Rotated final response/evidence consistency review completed and findings addressed.
-- [ ] Final response/handoff checkpointed; no relevant jobs or intended uncommitted changes left.
+- [x] Rotated final response/evidence consistency reviews completed; corrections committed and narrow rechecks complete.
+- [x] Final response/handoff checkpoint includes reviewer addenda and this ledger; no runtime/QA jobs remain. Unrelated untracked work is preserved.
 - [ ] External round-two acceptance received before any evidence retirement or normal release.
