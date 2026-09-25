@@ -1,15 +1,17 @@
 import asyncio
 import base64
 import json
+import runpy
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import config as config_module
 from bot import MaxwellBot
 from bot_tools import ImageGeneratorTool
-from config import Config, _json_env
+from config import _json_env
 from tool_schemas import TOOL_PARAMETERS, build_openai_tools
 
 
@@ -69,7 +71,7 @@ def test_chat_settings_cannot_enable_unconfigured_images(image_tool, base, image
     message.channel.send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("model", [None, "synthetic-image-a", "synthetic-image-b"])
+@pytest.mark.parametrize("model", [None, "", "synthetic-image-a", "synthetic-image-b"])
 def test_native_model_default_and_exact_override(image_tool, model):
     tool, message, session, _ = image_tool
     arguments = {} if model is None else {"model": model}
@@ -108,57 +110,110 @@ def test_missing_or_invalid_image_configuration_errors_before_http(image_tool, m
 
 
 @pytest.fixture
-def isolated_config(monkeypatch):
-    monkeypatch.setattr(Config, "DISCORD_TOKEN", "synthetic-token")
-    monkeypatch.setattr(Config, "OPENAI_BASE_URL", "https://chat.example.invalid/v1")
-    monkeypatch.setattr(Config, "OPENAI_MODEL", "synthetic-chat-model")
-    monkeypatch.setattr(Config, "OPENAI_MAX_TOKENS", 4096)
-    monkeypatch.setattr(Config, "IMAGE_GEN_PROTOCOL", "images")
-    monkeypatch.setattr(Config, "IMAGE_GEN_MODELS", {})
-    monkeypatch.setattr(Config, "IMAGE_GEN_MODEL", "")
-    monkeypatch.setattr(Config, "ENABLE_SHELL", False)
-    monkeypatch.setattr(Config, "feature_report", classmethod(lambda cls: []))
-    return Config
+def isolated_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAME_CURIE_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.setenv("DISCORD_TOKEN", "synthetic-token")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://chat.example.invalid/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "synthetic-chat-model")
+    monkeypatch.setenv("OPENAI_EXTRA_BODY", "{}")
+    monkeypatch.setenv("OPENAI_EXTRA_HEADERS", "{}")
+    monkeypatch.setenv("ENABLE_SHELL", "false")
+    for name in ("IMAGE_GEN_BASE_URL", "IMAGE_GEN_API_KEY", "IMAGE_GEN_MODELS", "IMAGE_GEN_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("IMAGE_GEN_PROTOCOL", "images")
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", "auto")
+    return config_module.__file__
 
 
 @pytest.mark.parametrize("raw", ["{not json", "[]", "null", '"synthetic-image-a"'])
-def test_config_image_model_map_requires_strict_json_object(monkeypatch, raw):
+def test_config_image_model_map_requires_strict_json_object(isolated_config, image_tool, monkeypatch, raw):
     monkeypatch.setenv("IMAGE_GEN_MODELS", raw)
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://images.example.invalid/v1")
+    monkeypatch.setenv("IMAGE_GEN_MODEL", "synthetic-image-a")
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", "true")
     with pytest.raises(ValueError, match="IMAGE_GEN_MODELS.*JSON object"):
         _json_env("IMAGE_GEN_MODELS", strict=True)
-
-
-def test_config_accepts_valid_operator_model_map(isolated_config, monkeypatch):
-    monkeypatch.setenv("IMAGE_GEN_MODELS", json.dumps(MODELS))
-    monkeypatch.setattr(isolated_config, "IMAGE_GEN_MODELS", _json_env("IMAGE_GEN_MODELS", strict=True))
-    monkeypatch.setattr(isolated_config, "IMAGE_GEN_MODEL", "synthetic-image-b")
-    isolated_config.validate()
-    assert isolated_config.IMAGE_GEN_MODELS == MODELS
-
-
-@pytest.mark.parametrize("models,default,diagnostic", [
-    ({"synthetic-image-a": ""}, "synthetic-image-a", "IMAGE_GEN_MODELS"),
-    ({"synthetic-image-a": "   "}, "synthetic-image-a", "IMAGE_GEN_MODELS"),
-    ({" synthetic-image-a": "Illustrations"}, " synthetic-image-a", "IMAGE_GEN_MODELS"),
-    ({"synthetic-image-a": 123}, "synthetic-image-a", "IMAGE_GEN_MODELS"),
-    ({"synthetic-image-a": "Illustrations"}, "", "IMAGE_GEN_MODEL"),
-    ({"synthetic-image-a": "Illustrations"}, "unknown-image", "IMAGE_GEN_MODEL"),
-])
-def test_config_rejects_invalid_image_map_or_default(isolated_config, monkeypatch, models, default, diagnostic):
-    monkeypatch.setattr(isolated_config, "IMAGE_GEN_MODELS", models)
-    monkeypatch.setattr(isolated_config, "IMAGE_GEN_MODEL", default)
-    with pytest.raises(ValueError, match=diagnostic):
-        isolated_config.validate()
-
-
-def test_unconfigured_image_profile_can_boot_but_cannot_generate(isolated_config, image_tool):
-    isolated_config.validate()
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.ENABLE_IMAGE_GEN is False
+    assert "IMAGE_GEN_MODELS" in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert raw not in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert any(
+        name == "ENABLE_IMAGE_GEN" and not enabled and loaded.IMAGE_GEN_CONFIG_ERROR in reason
+        for name, _, enabled, reason in loaded.feature_report()
+    )
     tool, message, session, get_session = image_tool
-    tool.bot.config.IMAGE_GEN_MODELS = isolated_config.IMAGE_GEN_MODELS
-    tool.bot.config.IMAGE_GEN_MODEL = isolated_config.IMAGE_GEN_MODEL
+    tool.bot.config = loaded
+    result = asyncio.run(tool.execute(message, prompt="a red fox"))
+    assert loaded.IMAGE_GEN_CONFIG_ERROR in result
+    get_session.assert_not_awaited()
+    session.post.assert_not_called()
+
+
+@pytest.mark.parametrize("switch,enabled", [("auto", True), ("true", True), ("false", False)])
+def test_config_accepts_valid_operator_model_map(isolated_config, image_tool, monkeypatch, switch, enabled):
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://images.example.invalid/v1")
+    monkeypatch.setenv("IMAGE_GEN_MODELS", json.dumps(MODELS))
+    monkeypatch.setenv("IMAGE_GEN_MODEL", "synthetic-image-b")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "")
+    monkeypatch.setenv("IMAGE_GEN_QUALITY", "")
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", switch)
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.IMAGE_GEN_MODELS == MODELS
+    assert loaded.IMAGE_GEN_CONFIG_ERROR == ""
+    assert loaded.ENABLE_IMAGE_GEN is enabled
+    assert loaded.IMAGE_GEN_API_KEY == ""
+    assert loaded.IMAGE_GEN_QUALITY == "low"
+    assert next(row[2] for row in loaded.feature_report() if row[0] == "ENABLE_IMAGE_GEN") is enabled
+    if not enabled:
+        tool, message, session, get_session = image_tool
+        tool.bot.config = loaded
+        assert "ENABLE_IMAGE_GEN=false" in asyncio.run(tool.execute(message, prompt="a red fox"))
+        get_session.assert_not_awaited()
+        session.post.assert_not_called()
+
+
+@pytest.mark.parametrize("models,default,protocol,diagnostic", [
+    ({"synthetic-image-a": ""}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": "   "}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({" synthetic-image-a": "Illustrations"}, " synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": 123}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": "private-description", "synthetic-image-b": ""}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": "Illustrations"}, "", "images", "IMAGE_GEN_MODEL"),
+    ({"synthetic-image-a": "Illustrations"}, "unknown-image", "images", "IMAGE_GEN_MODEL"),
+    ({"synthetic-image-a": "Illustrations"}, "synthetic-image-a", "pollinations", "IMAGE_GEN_PROTOCOL"),
+])
+def test_config_rejects_invalid_image_map_or_default(isolated_config, monkeypatch, models, default, protocol, diagnostic):
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://images.example.invalid/v1")
+    monkeypatch.setenv("IMAGE_GEN_MODELS", json.dumps(models))
+    monkeypatch.setenv("IMAGE_GEN_MODEL", default)
+    monkeypatch.setenv("IMAGE_GEN_PROTOCOL", protocol)
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", "true")
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.ENABLE_IMAGE_GEN is False
+    assert diagnostic in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert "Illustrations" not in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert "private-description" not in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert any(
+        name == "ENABLE_IMAGE_GEN" and not enabled and diagnostic in reason
+        for name, _, enabled, reason in loaded.feature_report()
+    )
+
+
+@pytest.mark.parametrize("switch", ["auto", "false"])
+def test_unconfigured_image_profile_can_boot_but_cannot_generate(isolated_config, image_tool, monkeypatch, switch):
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", switch)
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.ENABLE_IMAGE_GEN is False
+    assert "IMAGE_GEN_BASE_URL" in loaded.IMAGE_GEN_CONFIG_ERROR
+    tool, message, session, get_session = image_tool
+    tool.bot.config = loaded
     result = asyncio.run(tool.execute(message, prompt="a red fox"))
     assert result.startswith("Error:")
-    assert "IMAGE_GEN_MODELS" in result
+    assert loaded.IMAGE_GEN_CONFIG_ERROR in result
     get_session.assert_not_awaited()
     session.post.assert_not_called()
 
@@ -179,6 +234,8 @@ def test_dynamic_schema_exposes_every_configured_model_without_mutating_shared_s
         assert model in model_property["description"]
         assert description in model_property["description"]
     assert second["parameters"]["properties"]["model"] == model_property
+    image_description = first["parameters"]["properties"]["image"]["description"]
+    assert "empty string" in image_description and "empty JSON list" in image_description
     assert TOOL_PARAMETERS["image_generator"]["properties"] == original
 
     bot = SimpleNamespace(

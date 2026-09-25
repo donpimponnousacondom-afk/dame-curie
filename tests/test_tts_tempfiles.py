@@ -218,12 +218,14 @@ def test_execute_fish_uses_real_helper_and_preserves_voice(
     assert result == "__TTS_SENT__"
     tts_runtime.riva.assert_not_called()
     tts_runtime.gtts.assert_not_called()
+    assert session.post.call_args.args[0] == "https://api.ppq.ai/v1/audio/speech"
     assert session.post.call_args.kwargs["json"] == {
-        "text": "[excited] synthetic",
-        "format": "mp3",
-        "reference_id": "synthetic-mommy",
+        "model": "synthetic-model",
+        "input": "[excited] synthetic",
+        "voice": "synthetic-mommy",
+        "language": "en",
     }
-    assert session.post.call_args.kwargs["headers"]["model"] == "synthetic-model"
+    assert session.post.call_args.kwargs["headers"]["Authorization"] == "Bearer synthetic-fish"
     assert list(tts_runtime.scratch.iterdir()) == []
 
 

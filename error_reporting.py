@@ -43,6 +43,7 @@ _SECRET_QUERY = re.compile(
     r"x-amz-(?:credential|signature|security-token))=)[^&#\s\"'<>]*"
 )
 _URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/\s@]+@")
+_INCIDENT_TEXT_LIMIT = 256 * 1024
 _configuration_lock = threading.RLock()
 _secrets: tuple[str, ...] = ()
 _store: IncidentStore | None = None
@@ -116,6 +117,15 @@ def redact_sensitive_text(text: str) -> str:
     return text
 
 
+def _bounded_incident_text(text: str) -> str:
+    if len(text) <= _INCIDENT_TEXT_LIMIT:
+        return text
+    marker = f"\n[... diagnostic capture truncated; {len(text)} characters total ...]\n"
+    retained = _INCIDENT_TEXT_LIMIT - len(marker)
+    head_size = retained // 2
+    return text[:head_size] + marker + text[-(retained - head_size):]
+
+
 def _exception_chain(exception: BaseException | None) -> list[BaseException]:
     pending = [exception] if exception is not None else []
     found: list[BaseException] = []
@@ -169,7 +179,8 @@ def _make_incident(
         incident_id=incident_id,
         timestamp=datetime.now(UTC).isoformat(),
         source=_redact(source), summary=_redact(summary),
-        traceback=_redact(full_traceback), details=_redact(details),
+        traceback=_bounded_incident_text(_redact(full_traceback)),
+        details=_bounded_incident_text(_redact(details)),
         context={_redact(key): _redact(value) for key, value in identifiers.items()},
     )
 
@@ -181,8 +192,8 @@ def _merge_incident(previous: Incident, current: Incident) -> Incident:
     return Incident(
         incident_id=previous.incident_id, timestamp=previous.timestamp,
         source=previous.source, summary=previous.summary,
-        traceback=_merge_text(previous.traceback, current.traceback),
-        details=_merge_text(previous.details, observation),
+        traceback=_bounded_incident_text(_merge_text(previous.traceback, current.traceback)),
+        details=_bounded_incident_text(_merge_text(previous.details, observation)),
         context=dict(previous.context) | dict(current.context),
     )
 

@@ -123,11 +123,11 @@ def test_longprompt_accepts_whitespace_only_text_without_trimming(longprompt_cas
 @pytest.mark.parametrize(
     ("declared_size", "payload", "accepted"),
     [
-        (bot_module.TEXT_ATTACHMENT_MAX_BYTES, b"x" * bot_module.TEXT_ATTACHMENT_MAX_BYTES, True),
-        (bot_module.TEXT_ATTACHMENT_MAX_BYTES + 1, b"x", False),
+        (bot_module.SERVER_PROMPT_MAX_BYTES, b"x" * bot_module.SERVER_PROMPT_MAX_BYTES, True),
+        (bot_module.SERVER_PROMPT_MAX_BYTES + 1, b"x", False),
         (
             1,
-            ("é" * (bot_module.TEXT_ATTACHMENT_MAX_BYTES // 2 + 1)).encode("utf-8"),
+            ("é" * (bot_module.SERVER_PROMPT_MAX_BYTES // 2 + 1)).encode("utf-8"),
             False,
         ),
     ],
@@ -151,8 +151,8 @@ def test_longprompt_upload_enforces_declared_and_actual_byte_limits(
     else:
         memory.set_server_prompt.assert_not_called()
         response = message.channel.sent[0]["content"].lower()
-        assert any(term in response for term in ("size", "limit", "large", "512"))
-        if declared_size > bot_module.TEXT_ATTACHMENT_MAX_BYTES:
+        assert any(term in response for term in ("size", "limit", "large", "16 kib"))
+        if declared_size > bot_module.SERVER_PROMPT_MAX_BYTES:
             attachment.read.assert_not_awaited()
         else:
             attachment.read.assert_awaited_once()
@@ -278,6 +278,22 @@ def test_longprompt_export_is_utf8_byte_exact_short_and_mention_safe(longprompt_
     assert not allowed_mentions.roles
     assert not allowed_mentions.replied_user
 
+    message.channel.sent.clear()
+    message.content = f"{bot.command_prefix}prompt"
+    short_prompt = "small prompt @everyone"
+    memory.get_server_prompt.return_value = short_prompt
+    asyncio.run(MaxwellBot._handle_command(bot, message))
+    assert len(message.channel.sent) == 1
+    assert message.channel.sent[0]["content"] == (
+        f"Current prompt for this server:\n```\n{short_prompt}\n```"
+    )
+    assert "file" not in message.channel.sent[0]
+    allowed_mentions = message.channel.sent[0]["allowed_mentions"]
+    assert not allowed_mentions.everyone
+    assert not allowed_mentions.users
+    assert not allowed_mentions.roles
+    assert not allowed_mentions.replied_user
+
 
 @pytest.mark.parametrize(
     ("prompt", "exported"),
@@ -285,6 +301,7 @@ def test_longprompt_export_is_utf8_byte_exact_short_and_mention_safe(longprompt_
         ("x" * bot_module.TEXT_ATTACHMENT_MAX_BYTES, True),
         ("é" * (bot_module.TEXT_ATTACHMENT_MAX_BYTES // 2 + 1), False),
     ],
+    ids=["ascii-at-export-limit", "unicode-over-export-limit"],
 )
 def test_longprompt_export_enforces_utf8_byte_limit_without_truncation(
     longprompt_case, prompt, exported
@@ -406,12 +423,35 @@ def test_prompt_and_clearprompt_retain_their_existing_command_behavior(longpromp
     asyncio.run(MaxwellBot._handle_command(bot, message))
 
     memory.set_server_prompt.assert_called_once_with("31", prompt)
+    assert message.channel.sent[0]["content"] == "Prompt updated."
+    assert prompt not in message.channel.sent[0]["content"]
+    allowed_mentions = message.channel.sent[0]["allowed_mentions"]
+    assert not allowed_mentions.everyone
+    assert not allowed_mentions.users
+    assert not allowed_mentions.roles
+    assert not allowed_mentions.replied_user
+
+    message.channel.sent.clear()
+    memory.get_server_prompt.return_value = prompt
+    message.content = "?prompt"
+    asyncio.run(MaxwellBot._handle_command(bot, message))
     assert message.channel.sent[0]["content"] == (
-        f"Prompt updated for {message.guild.name}:\n```\n{prompt}\n```"
+        f"Current prompt for this server:\n```\n{prompt}\n```"
     )
+    assert not message.channel.sent[0]["allowed_mentions"].everyone
+
+    memory.set_server_prompt.reset_mock()
+    message.channel.sent.clear()
+    oversized = "x" * (bot_module.SERVER_PROMPT_MAX_BYTES + 1)
+    message.content = "?prompt " + oversized
+    asyncio.run(MaxwellBot._handle_command(bot, message))
+    memory.set_server_prompt.assert_not_called()
+    assert oversized not in message.channel.sent[0]["content"]
+    assert "16 kib" in message.channel.sent[0]["content"].lower()
 
     message.channel.sent.clear()
     message.content = "?clearprompt"
     asyncio.run(MaxwellBot._handle_command(bot, message))
     memory.clear_server_prompt.assert_called_once_with("31")
     assert [item["content"] for item in message.channel.sent] == ["Server prompt cleared."]
+    assert not message.channel.sent[0]["allowed_mentions"].everyone

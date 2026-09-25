@@ -41,6 +41,8 @@ def _sse_chunks_for(body):
         delta["content"] = message.get("content") or ""
     if message.get("reasoning_content"):
         delta["reasoning_content"] = message["reasoning_content"]
+    if message.get("reasoning_details"):
+        delta["reasoning_details"] = message["reasoning_details"]
     if message.get("tool_calls"):
         delta["tool_calls"] = [
             {"index": i, **tc} for i, tc in enumerate(message["tool_calls"])
@@ -102,7 +104,7 @@ class FakeReasoningOnlyResponse(FakeResponse):
                     "message": {
                         "role": "assistant",
                         "content": None,
-                        "reasoning_content": "pong",
+                        "reasoning_details": [{"type": "reasoning.text", "text": "pong"}],
                     }
                 }
             ]

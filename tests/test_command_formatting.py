@@ -21,6 +21,7 @@ def command_report():
     bot = SimpleNamespace(
         _control={"footer_enabled": True}, _split_response=MaxwellBot._split_response,
         _is_admin=lambda uid: True, config=SimpleNamespace(ENABLE_VC=True),
+        command_prefix="!",
         _vc_get_client=lambda guild, channel: None, _vc_is_listening=lambda vc: False,
         memory=SimpleNamespace(get_relevant_shared_context=AsyncMock(return_value=facts), list_shared_context=AsyncMock(return_value=facts)),
         _rem_status=AsyncMock(return_value=status), rem_store=SimpleNamespace(load_runs=AsyncMock(return_value=runs)),

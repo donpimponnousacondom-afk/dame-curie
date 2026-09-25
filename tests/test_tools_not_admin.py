@@ -1,8 +1,4 @@
-"""Creative and social tools stay open to everyone; join_server does not.
-
-The one exception is deliberate: joining a server parks the account somewhere
-permanent, under moderators nobody here controls, so it is gated on identity.
-"""
+"""Creative/social requests stay open; shell and persistent changes need authority."""
 
 import asyncio
 from types import SimpleNamespace
@@ -29,14 +25,9 @@ from bot_tools import (
 
 
 def test_tool_protocol_keeps_creative_tools_open():
-    assert (
-        "update_base_personality / update_server_prompt: admin-only"
-        not in TOOL_PROTOCOL
-    )
-    assert (
-        "Sites, games, code, search, plugins and chat are open to everyone"
-        in TOOL_PROTOCOL
-    )
+    assert "update_base_personality / update_server_prompt: admin-only" in TOOL_PROTOCOL
+    assert "shell requires an admin or shell-whitelisted permission actor" in TOOL_PROTOCOL
+    assert "Creative requests, games, search and chat are open to everyone" in TOOL_PROTOCOL
     personality = DEFAULT_CONTROL["base_personality"].lower()
     assert "run tools" not in personality
     assert "politely decline" not in personality
@@ -48,7 +39,7 @@ def test_tool_protocol_states_the_join_server_restriction():
     assert "join_server is admin-only" in TOOL_PROTOCOL
 
 
-def test_tool_descriptions_do_not_say_admin_only():
+def test_tool_descriptions_match_actor_policy():
     bot = SimpleNamespace()
     for cls in (
         UpdateBasePersonalityTool,
@@ -67,7 +58,8 @@ def test_tool_descriptions_do_not_say_admin_only():
         PurgeMessagesTool,
     ):
         desc = cls(bot).get_description().lower()
-        assert "admin-only" not in desc
+        privileged = cls in {UpdateBasePersonalityTool, UpdateServerPromptTool}
+        assert ("admin-only" in desc) is privileged
         assert "admin only" not in desc
 
 

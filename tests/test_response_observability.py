@@ -457,7 +457,8 @@ def test_progress_registers_only_actual_success(metrics, edit_fails, send_fails)
             record_delivery(bot, message.channel, sent, metrics)
             done.set()
 
-        assert await progress.transition_to_final("answer", on_delivered=delivered)
+        settled = await progress.transition_to_final("answer", on_delivered=delivered)
+        assert settled is not (edit_fails and send_fails)
         if send_fails:
             assert bot._delivery_measurements.lookup("100") is None
             assert not done.is_set()

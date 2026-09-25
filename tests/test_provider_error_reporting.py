@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import logging
+import time
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -9,6 +10,11 @@ import pytest
 
 import error_reporting
 import providers
+from turn_budget import (
+    ForegroundTurn,
+    reset_foreground_turn,
+    set_foreground_turn,
+)
 from providers import (
     OpenAICompatibleProvider,
     ProviderEmptyResponseError,
@@ -58,6 +64,8 @@ class Response:
     async def iter_any(self):
         for chunk in self.chunks:
             self.read_chunks += 1
+            if chunk is None:
+                await asyncio.Event().wait()
             yield chunk
 
 
@@ -165,8 +173,8 @@ def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics
     assert provider.deepseek_reasoning_level(provider._endpoints[0]) == number
 
 
-def test_full_http400_body_is_private_with_exact_request_metadata(captured, caplog):
-    body = "reason=" + "x" * 300 + "; missing reasoning_content in assistant continuation; END405"
+def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, caplog):
+    body = "reason=" + "x" * 90_000 + "; missing reasoning_content in assistant continuation; END405"
     response = Response(body.encode(), 400, headers={
         "X-Request-ID": "synthetic-request-400", "CF-Ray": "synthetic-ray",
         "Retry-After": "7", "Set-Cookie": "synthetic-response-cookie",
@@ -182,7 +190,10 @@ def test_full_http400_body_is_private_with_exact_request_metadata(captured, capl
     error = caught.value
     assert str(error) == "Provider API error: 400"
     assert body not in str(error) + repr(error) + caplog.text
-    assert body in error.incident_details
+    assert body not in error.incident_details
+    assert body[:100] in error.incident_details
+    assert "END405" in error.incident_details
+    assert "response characters omitted from provider diagnostics" in error.incident_details
     assert error.incident_id == "synthetic-incident-1"
     assert len(captured) == len(provider._session.requests) == 1
     report = captured[0]
@@ -293,41 +304,100 @@ def test_quota_body_not_echoed_and_no_retry_added(captured, caplog, retry_sleep)
 
 @pytest.mark.parametrize("response_format", ["json", "sse"])
 @pytest.mark.parametrize("kind", [
-    "upstream", "length-text", "length-custom", "length-native", "length-reasoning",
-    "reasoning-only", "reasoning-only-alias", "reasoning-only-details",
+    "upstream", "length-text", "length-large", "length-custom", "length-native",
+    "length-reasoning", "length-drain-timeout", "length-total-only",
+    "length-input-total-only", "length-gemini-ambiguous", "length-zero-output",
+    "reasoning-only",
+    "reasoning-only-alias", "reasoning-only-details",
 ])
-def test_http200_error_preserves_full_body_and_same_error(captured, caplog, retry_sleep, response_format, kind):
+def test_http200_incomplete_response_is_typed_bounded_and_terminal(
+    captured, caplog, retry_sleep, response_format, kind, monkeypatch,
+):
     explanation = "private completion detail " + "x" * 405 + " complete private suffix"
+    custom_call = json.dumps({"name": "wait", "arguments": {"seconds": 10, "reasoning": explanation}})
     messages = {
-        "length-text": {"content": '{"name":"wait","arguments":{"seconds":10}} ' + explanation},
-        "length-custom": {"content": json.dumps({"name": "wait", "arguments": {"seconds": 10, "reasoning": explanation}})},
+        "length-text": {"content": "Partial answer: " + explanation},
+        "length-large": {"content": "P" * 20_000 + "TAIL"},
+        "length-custom": {"content": "Before " + custom_call + " after"},
         "length-native": {"tool_calls": [{
             "index": 0, "id": "call_1", "type": "function",
             "function": {"name": "send_message", "arguments": '{"content":"' + explanation},
         }]},
         "length-reasoning": {"reasoning_content": explanation},
+        "length-drain-timeout": {"content": "Partial answer before usage timeout."},
+        "length-total-only": {"content": "Partial answer with total usage only."},
+        "length-input-total-only": {"content": "Partial answer with input and total only."},
+        "length-gemini-ambiguous": {"content": "Partial answer with ambiguous Gemini thoughts."},
+        "length-zero-output": {"content": "Partial answer with zero output usage."},
         "reasoning-only": {"content": "  ", "reasoning_content": explanation},
         "reasoning-only-alias": {"content": None, "reasoning": explanation},
         "reasoning-only-details": {"content": "", "reasoning_details": [{"type": "reasoning.text", "text": explanation}]},
     }
+    reported_usage = {
+        "prompt_tokens": 17,
+        "completion_tokens": 23,
+        "total_tokens": 40,
+        "completion_tokens_details": {"reasoning_tokens": 5},
+    }
+    reported_metadata = {}
+    if kind == "length-total-only":
+        reported_usage = {"total_tokens": 40}
+    elif kind == "length-input-total-only":
+        reported_usage = {"prompt_tokens": 17, "total_tokens": 40}
+    elif kind == "length-zero-output":
+        reported_usage = {"prompt_tokens": 17, "completion_tokens": 0, "total_tokens": 17}
+    elif kind == "length-gemini-ambiguous":
+        reported_usage = {}
+        reported_metadata = {
+            "promptTokenCount": 17,
+            "candidatesTokenCount": 23,
+            "totalTokenCount": 40,
+        }
     payload = {"error": {"code": 400, "message": explanation, "metadata": {"raw": "useful upstream detail"}}}
     if kind != "upstream":
         payload = {"choices": [{
             "message" if response_format == "json" else "delta": messages[kind],
             "finish_reason": "length" if kind.startswith("length-") else "stop",
         }]}
+        if kind.startswith("length-") and kind != "length-drain-timeout":
+            if reported_usage:
+                payload["usage"] = reported_usage
+            if reported_metadata:
+                payload["usageMetadata"] = reported_metadata
     if response_format == "json":
         body = b" \n" + json.dumps(payload, indent=2).encode() + b"\n "
         response = Response(body)
     else:
         prefix = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\nevent: error\n' if kind == "upstream" else b""
-        if kind == "length-custom":
+        if kind.startswith("length-"):
             prefix = b"data: " + json.dumps({"choices": [{"delta": messages[kind]}]}).encode() + b"\n\n"
             payload = {"choices": [{"finish_reason": "length"}]}
         body = prefix + b"data: " + json.dumps(payload).encode() + b"\n\n"
-        if kind.startswith("reasoning-only"):
-            body += b"data: [DONE]\n\n"
-        response = Response(chunks=[body, b"unread trailing transport data"], headers={"Content-Type": "text/event-stream"})
+        if kind.startswith("length-") and kind != "length-drain-timeout":
+            usage_frame = {"choices": []}
+            if reported_usage:
+                usage_frame["usage"] = reported_usage
+            if reported_metadata:
+                usage_frame["usageMetadata"] = reported_metadata
+            usage_trailer = b"data: " + json.dumps(usage_frame).encode() + b"\n\n"
+            response = Response(
+                chunks=[body, usage_trailer + b"data: [DONE]\n\n", b"unread trailing transport data"],
+                headers={"Content-Type": "text/event-stream"},
+            )
+        elif kind == "length-drain-timeout":
+            monkeypatch.setattr(providers, "_SSE_LENGTH_DRAIN_SECONDS", 0.001)
+
+            response = Response(
+                chunks=[body, None],
+                headers={"Content-Type": "text/event-stream"},
+            )
+        else:
+            if kind.startswith("reasoning-only"):
+                body += b"data: [DONE]\n\n"
+            response = Response(
+                chunks=[body, b"unread trailing transport data"],
+                headers={"Content-Type": "text/event-stream"},
+            )
     provider = provider_for(
         [response, success()], retry_attempts=1 if kind == "upstream" else 5, empty_response_retries=3,
         fallback_base_url="https://fallback.example.test/v1", fallback_model="fallback-model",
@@ -346,8 +416,68 @@ def test_http200_error_preserves_full_body_and_same_error(captured, caplog, retr
         assert "useful upstream detail" in captured[0]["details"]
     else:
         assert isinstance(caught.value, ProviderResponseError)
+        if kind.startswith("length-"):
+            assert caught.value.finish_reason == "length"
+            assert caught.value.classification == "output_token_limit"
+            assert str(caught.value) == "The provider stopped at the output token limit."
+            assert not hasattr(caught.value, "tool_calls")
+            assert not hasattr(caught.value, "assistant_message")
+            if kind in {
+                "length-text", "length-large", "length-custom", "length-drain-timeout",
+                "length-total-only",
+            }:
+                assert caught.value.partial_content
+            if kind == "length-text":
+                assert caught.value.partial_content == messages[kind]["content"]
+            if kind == "length-native":
+                assert caught.value.partial_content == ""
+            if kind == "length-large":
+                assert len(caught.value.partial_content) == providers._MAX_PARTIAL_CONTENT_CHARS
+                assert caught.value.partial_content_truncated
+            if kind == "length-custom":
+                assert "Before " in caught.value.partial_content
+                if response_format == "sse":
+                    assert " after" in caught.value.partial_content
+                else:
+                    assert " after" not in caught.value.partial_content
+                assert "wait" not in caught.value.partial_content and "seconds" not in caught.value.partial_content
+            if kind == "length-total-only":
+                assert caught.value.usage == {"total_tokens": 40}
+                assert caught.value.metrics.output_source == "cl100k_base"
+            elif kind in {"length-input-total-only", "length-gemini-ambiguous"}:
+                assert caught.value.usage == {
+                    "input_tokens": 17,
+                    "total_tokens": 40,
+                }
+                assert "output_tokens" not in caught.value.usage
+            elif kind == "length-zero-output":
+                assert caught.value.usage == {
+                    "input_tokens": 17,
+                    "output_tokens": 0,
+                    "total_tokens": 17,
+                }
+            elif kind != "length-drain-timeout":
+                assert caught.value.usage == {
+                    "input_tokens": 17,
+                    "output_tokens": 23,
+                    "reasoning_tokens": 5,
+                    "total_tokens": 40,
+                }
+                assert caught.value.metrics.input_tokens == 17
+                assert caught.value.metrics.output_tokens == 23
+                assert caught.value.metrics.output_source == "provider"
+            if kind == "length-text" and response_format == "sse":
+                assert '"usage_drain_complete": true' in captured[0]["details"]
+            if kind == "length-drain-timeout" and response_format == "sse":
+                assert caught.value.usage == {}
+                assert '"usage_drain_complete": false' in captured[0]["details"]
+                assert response.read_chunks == 2
+        elif kind.startswith("reasoning-only"):
+            assert caught.value.classification == "reasoning_only"
+            assert str(caught.value) == "The provider returned reasoning without an answer."
+            assert caught.value.partial_content == ""
     if response_format == "sse":
-        assert response.read_chunks == 1
+        assert response.read_chunks == (2 if kind.startswith("length-") else 1)
     else:
         assert response.json_calls == 1 and response.text_calls == 0
 
@@ -362,10 +492,16 @@ def test_http200_json_diagnostics_preserve_declared_text_encoding(captured):
     assert len(captured) == 1
 
 
-def test_upstream_exception_keeps_private_details_without_public_body():
-    explanation = {"message": "private upstream explanation " + "x" * 405, "metadata": {"raw": "tail"}}
+@pytest.mark.parametrize("size", [405, 90_000])
+def test_upstream_exception_keeps_private_details_without_public_body(size):
+    explanation = {"message": "private upstream explanation " + "x" * size, "metadata": {"raw": "tail"}}
     error = ProviderUpstreamError(explanation)
-    assert json.loads(error.incident_details) == explanation
+    if size == 405:
+        assert json.loads(error.incident_details) == explanation
+    else:
+        assert len(error.incident_details) <= providers._PROVIDER_DIAGNOSTIC_BODY_LIMIT + 100
+        assert "diagnostic characters omitted" in error.incident_details
+        assert '"raw": "tail"' in error.incident_details
     assert "private upstream explanation" not in str(error) + repr(error)
 
 
@@ -451,7 +587,12 @@ def test_timeout_then_network_recovery_keeps_all_traces_and_backoff(captured, re
 
 
 def test_empty_response_recovery_keeps_original_shape_and_nonstream_switch(captured, retry_sleep):
-    body = b'{"choices":[{"message":{"content":"","reasoning_content":""}}]}'
+    body = json.dumps({
+        "choices": [{"message": {
+            "content": "",
+            "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}],
+        }}],
+    }).encode()
     provider = provider_for([Response(body), success()], retry_attempts=2, empty_response_retries=1)
     assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
     assert len(captured) == 1
@@ -477,6 +618,162 @@ def test_healthy_json_and_sse_never_capture_incidents(captured):
     assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
     assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
     assert len(provider._session.requests) == 2
+
+    usage_only_total = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 17, "total_tokens": 40},
+        }).encode()
+    )
+    explicit_zero = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"completion_tokens": 0},
+        }).encode()
+    )
+    ambiguous_gemini = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usageMetadata": {
+                "promptTokenCount": 17,
+                "candidatesTokenCount": 23,
+                "totalTokenCount": 40,
+            },
+        }).encode()
+    )
+    fractional_usage = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"completion_tokens": 1.5, "total_tokens": 40},
+        }).encode()
+    )
+    malformed_usage = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {
+                "completion_tokens": True,
+                "output_tokens": -1,
+                "eval_count": "not-a-number",
+                "total_tokens": 40,
+            },
+        }).encode()
+    )
+    conflicting_usage = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"completion_tokens": 0, "output_tokens": 23},
+        }).encode()
+    )
+    malformed_alias_usage = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"completion_tokens": 23, "output_tokens": 1.5},
+        }).encode()
+    )
+    complete_gemini = Response(
+        json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usageMetadata": {
+                "candidatesTokenCount": 23,
+                "thoughtsTokenCount": 5,
+            },
+        }).encode()
+    )
+    budgeted_provider = provider_for(
+        [
+            usage_only_total,
+            explicit_zero,
+            ambiguous_gemini,
+            fractional_usage,
+            malformed_usage,
+            conflicting_usage,
+            malformed_alias_usage,
+            complete_gemini,
+        ]
+    )
+    turn = ForegroundTurn(65536, 12, time.monotonic() + 600)
+
+    token = set_foreground_turn(turn)
+    try:
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        reserved = budgeted_provider._session.requests[0][1]["max_tokens"]
+        assert turn.output_remaining == 65536 - reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - 2 * reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - 3 * reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - 4 * reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - 5 * reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - 6 * reserved
+        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+        assert turn.output_remaining == 65536 - 6 * reserved - 28
+
+        multi_choice = provider_for([], extra_body={"n": 2})
+        with pytest.raises(
+            ValueError, match="Foreground provider calls support only n=1"
+        ):
+            asyncio.run(multi_choice.generate_response(MESSAGES))
+        assert multi_choice._session.requests == []
+        assert turn.attempts == 8
+
+        turn.output_remaining = 512
+        for key, value in (
+            ("max_completion_tokens", True),
+            ("max_output_tokens", 0),
+        ):
+            invalid_caps = provider_for(
+                [],
+                extra_body={key: value},
+                fallback_base_url="https://fallback.example.test/v1",
+                fallback_model="synthetic-fallback",
+                fallback_api_key="synthetic-fallback-key",
+            )
+            with pytest.raises(ValueError, match=key):
+                asyncio.run(
+                    invalid_caps.generate_response(MESSAGES, prefer_fallback=True)
+                )
+            assert invalid_caps._session.requests == []
+            assert turn.output_remaining == 512
+            assert turn.attempts == 8
+
+        capped = provider_for(
+            [success()],
+            extra_body={
+                "n": 1,
+                "max_completion_tokens": 9000,
+                "max_output_tokens": 128,
+                "custom": {"labels": ["preserved"]},
+            },
+        )
+        assert asyncio.run(capped.generate_response(MESSAGES)) == "ok"
+        capped_payload = capped._session.requests[0][1]
+        assert capped_payload["n"] == 1
+        assert capped_payload["max_tokens"] == 512
+        assert capped_payload["max_completion_tokens"] == 512
+        assert capped_payload["max_output_tokens"] == 128
+        assert capped_payload["custom"] == {"labels": ["preserved"]}
+    finally:
+        reset_foreground_turn(token)
+    assert turn.attempts == 9
+
+    nonforeground = provider_for(
+        [success()],
+        extra_body={
+            "n": 2,
+            "max_completion_tokens": 9000,
+            "max_output_tokens": 1280,
+        },
+    )
+    assert asyncio.run(nonforeground.generate_response(MESSAGES)) == "ok"
+    nonforeground_payload = nonforeground._session.requests[0][1]
+    assert nonforeground_payload["n"] == 2
+    assert nonforeground_payload["max_completion_tokens"] == 9000
+    assert nonforeground_payload["max_output_tokens"] == 1280
     assert captured == []
 
 
@@ -585,7 +882,12 @@ def test_recovered_incident_is_redacted_and_not_coalesced_with_next_request(priv
 
 
 def test_midstream_network_error_retains_received_body_and_trace(captured):
-    partial = b'data: {"choices":[{"delta":{"content":"partial private content"}}]}\n\n'
+    partial = (
+        b'data: {"choices":[{"delta":{"content":"'
+        + b"x" * 90_000
+        + b"STREAM_CAPTURE_TAIL"
+        + b'"}}]}\n\n'
+    )
 
     class BrokenStream(Response):
         async def iter_any(self):
@@ -595,10 +897,13 @@ def test_midstream_network_error_retains_received_body_and_trace(captured):
     provider = provider_for([BrokenStream(headers={"Content-Type": "text/event-stream"})], retry_attempts=1)
     with pytest.raises(RuntimeError) as caught:
         asyncio.run(provider.generate_response(MESSAGES))
-    assert partial.decode() in caught.value.incident_details
+    assert partial.decode() not in caught.value.incident_details
+    assert "response bytes omitted from provider diagnostics" in caught.value.incident_details
+    assert "STREAM_CAPTURE_TAIL" in caught.value.incident_details
+    assert '"response_body_capture_truncated": true' in caught.value.incident_details
     assert "synthetic stream connection reset" in caught.value.incident_details
     assert "ClientPayloadError" in caught.value.incident_details
-    assert "partial private content" not in str(caught.value)
+    assert "STREAM_CAPTURE_TAIL" not in str(caught.value)
     assert len(captured) == len(provider._session.requests) == 1
 
 
@@ -771,7 +1076,7 @@ def test_cancellation_in_next_attempt_preserves_prior_http_failure(production_ha
 
         class PendingStream(Response):
             async def iter_any(self):
-                yield b'data: {"choices":[{"delta":{"content":"healthy partial content"}}]}\n\n'
+                yield b'data: {"choices":[{"delta":{"content":"healthy partial content"},"finish_reason":"length"}]}\n\n'
                 blocked.set()
                 await release.wait()
 

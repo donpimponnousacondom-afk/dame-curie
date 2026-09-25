@@ -169,9 +169,19 @@ def test_other_models_are_explicitly_unsupported(tmp_path, setting):
     bot = reasoning_bot(tmp_path)
     bot.ai_provider.model = "google/gemini-3.7-flash"
     text = command(bot, "!" + setting)
-    assert "verified only for DeepSeek V4.1 Flash" in text
+    assert "require a recognized DeepSeek Flash transport" in text
     assert "Current model unchanged" in text
-    assert not (tmp_path / "bot_control.json").exists()
+    assert "configured provider request options remain unchanged" in text
+    assert "effective reasoning:" not in text
+    assert "Wire:" not in text
+    path = tmp_path / "bot_control.json"
+    assert not path.exists()
+    existing = '{"deepseek_reasoning":"low","unrelated":"keep"}'
+    path.write_text(existing, encoding="utf-8")
+    bot._control["deepseek_reasoning"] = "low"
+    assert command(bot, "!" + setting) == text
+    assert path.read_text(encoding="utf-8") == existing
+    assert bot._control["deepseek_reasoning"] == "low"
 
 
 def test_off_report_is_not_claimed_to_be_numeric_minimum(tmp_path):
@@ -239,6 +249,7 @@ def test_main_constructor_wires_live_control_callback(tmp_path, monkeypatch):
                   OPENAI_VISION_DISABLE_REASONING=True, OPENAI_RETRY_ATTEMPTS=1,
                   OPENAI_EXTRA_HEADERS={}, OPENAI_EXTRA_BODY={}, ENABLE_AUDIO_INPUT=False)
     bot = SimpleNamespace(config=SimpleNamespace(**config), _control={"deepseek_reasoning": "low"})
+    bot._create_main_provider = MethodType(MaxwellBot._create_main_provider, bot)
     MaxwellBot._setup_ai(bot)
     assert captured["reasoning_control"]() == "low"
     bot._control = {"deepseek_reasoning": "max"}

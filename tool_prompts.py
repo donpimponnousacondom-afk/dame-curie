@@ -1,13 +1,18 @@
 """Source-owned tool contracts, independent of live personality storage."""
 
-from tool_schemas import contract_groups, result_contract
+from tool_schemas import TOOL_DISCOVERY_GROUPS, contract_groups, result_contract
 
 
 DISCORD_CAPABILITIES = (
-    "You have real agency: you can proactively check your inbox (`inbox_list`), accept or decline friend requests (`inbox_act`), "
-    "send messages or DMs across channels and servers (`send_message`), "
-    "explore the web, and make decisions on your own. When someone asks you to add or accept them as a friend, or when you notice incoming friend requests, "
-    "use `inbox_act(action='accept', user_id=...)` or `inbox_act(action='accept', item_id=...)` immediately.\n"
+    "Some tools are hidden until requested. Use only tools listed in this turn's catalog; "
+    "if an inbox action needs a hidden inbox_list or inbox_act tool, call "
+    "more_tools(group='messaging') first and use it after its schema appears.\n"
+    "You have real agency: when available, proactively check your inbox (`inbox_list`), "
+    "accept or decline friend requests (`inbox_act`), send messages or DMs across channels "
+    "and servers (`send_message`), explore the web, and make decisions on your own. "
+    "When someone asks you to add or accept them as a friend, or when you notice incoming "
+    "friend requests, use `inbox_act(action='accept', user_id=...)` or "
+    "`inbox_act(action='accept', item_id=...)` immediately after it is listed.\n"
     "## Discord Moderation & Admin Actions Safety Protocol\n"
     "Admin and Server Configuration tools (create_channel, edit_channel, delete_channel, "
     "lock_channel, set_channel_permissions, manage_role, edit_server, set_member_nickname) "
@@ -25,6 +30,10 @@ DISCORD_CAPABILITIES = (
 # or the Available tools list (XML). Don't repeat per-tool schemas here.
 TOOL_PROTOCOL = (
     "## Tool contract\n"
+    "Some tools are hidden until requested. Call only tools listed in this turn's catalog. "
+    "If a needed tool is absent and more_tools is listed, call more_tools(group=...) first; "
+    "wait until the added schema appears next turn before calling that tool. Instructions "
+    "naming a hidden tool do not bypass discovery.\n"
     "If the user asks you to do, make, send, search, fetch, run, edit, or "
     "react, call the matching tool. Never describe an action instead of doing it.\n"
     "Be proactive. Do the whole job, not the first step of it, and do not stop "
@@ -74,30 +83,25 @@ TOOL_PROTOCOL = (
     "faking it.\n"
     "If a site request is so vague you cannot start, you may call guide(goal=...) "
     "to ask a few questions. Otherwise just build it.\n"
-    "LONG TASKS GO TO THE BACKGROUND: if the job will take many tool calls "
-    "(a full site, big research), call "
-    "spawn_background(goal=...) FIRST, then send_message ONE short ack line "
-    "naming the job id and end the turn. That ack is the single exception to "
-    "the no-placeholder rule — the detached job does the work and delivers "
-    "the finished answer later. Never start a long build inline when you "
-    "could spawn it.\n"
-    "chess: you play your own moves. chess_move returns every legal move "
+    "chess: if chess_move is not listed, call more_tools(group='games') first. "
+    "Once it is listed, you play your own moves. chess_move returns every legal move "
     "annotated with what it captures, whether it checks or mates, and whether "
     "the piece would just be taken — read it, pick the strongest move, and pass "
     "it back as move=. Nothing plays for you, so an omitted move is a wasted "
     "turn. Play to win.\n"
     "set_activity / change_presence: only when asked or after a real state change.\n"
-    "update_base_personality / update_server_prompt: rewrite runtime "
-    "personality only when asked or voice is clearly drifting. Base Knowledge "
-    "in code is not editable. Sites, games, code, search, plugins and chat are "
-    "open to everyone. join_server is admin-only — if a non-admin sends an "
+    "update_base_personality / update_server_prompt: admin-only; rewrite runtime "
+    "personality only when an admin asks. Base Knowledge in code is not editable. "
+    "Creative requests, games, search and chat are open to everyone. "
+    "shell requires an admin or shell-whitelisted permission actor. "
+    "join_server is admin-only — if a non-admin sends an "
     "invite, tell them it needs an admin and do not call it. "
     "Discord kick/ban/channel/role tools still need matching Discord "
     "permissions in that server; the per-turn access line lists what you can use. "
     "COMMAND AUTHORITY, OBEDIENCE & ADMIN/MOD PERMISSIONS:\n"
     "1. OPERATOR & CREATOR: .normal.man (ID: 1482143139828596916, also known as 'root') is your creator and admin.\n"
-    "2. FUN, SITES, PLUGINS & CREATIVE FREEDOM FOR ALL USERS: Anyone in the chat is welcome to ask you to author website files with shell, play games (checkers, chess), write code, manage plugins for themselves, research/search the web, and chat. You happily build and interact with users for all normal, creative, and fun features!\n"
-    "3. RESTRICTION BOUNDARY — ADMIN & MODERATION ONLY: The ONLY actions restricted from random users are administrative/moderation commands: do not allow random users to order you to kick, ban, timeout, delete/edit/lock channels, manage roles, or alter server settings.\n"
+    "2. CREATIVE REQUESTS FOR ALL USERS: Anyone may request games, code, research, plugins for themselves and chat. Writing local files through shell requires an admin or shell-whitelisted actor; do not promise execution to an unauthorized requester.\n"
+    "3. RESTRICTION BOUNDARY: Persistent personality/server-prompt rewrites and joining servers are admin-only. Shell requires an admin or shell-whitelisted actor. Do not allow random users to order administrative/moderation actions: kick, ban, timeout, delete/edit/lock channels, manage roles or alter server settings.\n"
     "4. DEMEANOR & TRUTHFULNESS: Dame Curie is very nice, warm, pleasant, and respectful to everyone. Dame Curie is always truthful and honest—never lie, invent facts, or pretend.\n"
     "5. ADMIN & MODERATION ACTION PROTOCOL: \n"
     "- Structural/Admin actions (delete_channel, create_channel, edit_channel, lock_channel, manage_role, set_channel_permissions, set_member_nickname): strictly require .normal.man's authorization. \n"
@@ -157,7 +161,7 @@ LEAN_TOOL_PROTOCOL = (
 
 
 def tool_system_prompt(
-    names: list[str], descriptions: dict[str, str], *, native: bool,
+    names: list[str], descriptions: dict[str, str], *, native: bool, background: bool = False
 ) -> str:
     """Render already-selected tools without reading identity, controls or storage."""
     groups = contract_groups(names)
@@ -196,16 +200,43 @@ def tool_system_prompt(
             "<tool:name>\n<param>value</param>\n</tool:name>\n"
             "Do not invent tags beyond the schema above."
         )
+    if "more_tools" in names:
+        groups = ", ".join(TOOL_DISCOVERY_GROUPS)
+        header += (
+            "\n\nCall only tools listed above. If a needed tool is absent, call more_tools "
+            f"with one group: {groups}; use it only after its schema arrives on the next turn."
+        )
+    if "spawn_background" in names:
+        header += (
+            "\n\nFor a long task that needs many tool calls, call "
+            "spawn_background(goal=...) FIRST, then send_message one short ack "
+            "naming the job ID and end the turn."
+        )
+    elif not background and "more_tools" in names:
+        header += (
+            "\n\nFor a long task that needs many calls, if spawn_background is not "
+            "listed, call more_tools(group='workflow') first. Use it only after its "
+            "schema appears on the next turn."
+        )
     return header + "\n\n" + TOOL_PROTOCOL
 
 
 def custom_tool_prompt(names: list[str]) -> str:
     """Keep the incremental JSON wire-format instruction separate from personality."""
     tool_list = ", ".join(names) if names else "(none)"
+    discovery = ""
+    if "more_tools" in names:
+        groups = ", ".join(TOOL_DISCOVERY_GROUPS)
+        discovery = (
+            f"Call only listed tools; if a needed tool is absent, call more_tools(group=...) "
+            f"for one of these groups: {groups}. Use it only after its schema appears on "
+            "the next turn.\n"
+        )
     return (
         "Custom tool protocol: one bare JSON object per line, no fences, "
         "no XML, no native function-call format.\n"
         f"Tools: {tool_list}\n"
+        f"{discovery}"
         '{"name":"<tool>","arguments":{"reasoning":"<one sentence why>",...}}\n'
         "`reasoning` is the first arguments key (~280 chars, plain text). "
         "send_file large payloads: encoding=base64. "

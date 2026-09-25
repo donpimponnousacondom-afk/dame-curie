@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import contextlib
+import copy
 import hashlib
 import html
 import inspect
@@ -342,6 +343,7 @@ from context_budget import (  # noqa: E402
 from control_defaults import (  # noqa: E402
     DEAD_CONTROL_KEYS,
     DEFAULT_CONTROL,
+    SERVER_PROMPT_MAX_BYTES,
     DEEPSEEK_REASONING_EFFORTS,
     KNOWN_TOOLS,
     parse_bool,
@@ -357,12 +359,13 @@ from providers import (  # noqa: E402
     MIME_MAP,
     OpenAICompatibleProvider,
     ProviderEmptyResponseError,
+    ProviderIncompleteResponseError,
     ProviderUsageExhaustedError,
     deepseek_reasoning_transport,
 )
 from rag_memory import RAGMemoryManager, RemEventLog, _parse_iso  # noqa: E402
 from job_routing import JobProvider, create_job_provider, parse_background_request, resolve_job_endpoint  # noqa: E402
-from jobs import BackgroundJobManager, SpawnBackgroundTool  # noqa: E402
+from jobs import BackgroundJobManager, JOB_TURN, SpawnBackgroundTool  # noqa: E402
 from rem import RemStore, load_rem_defaults, run_rem_once  # noqa: E402
 from tool_progress import make_progress as _make_tool_progress  # noqa: E402
 from tool_prompts import (  # noqa: E402
@@ -377,9 +380,11 @@ from tool_registry import (  # noqa: E402 — reasoning now rides inside tool ca
     record_reasoning,
 )
 from plugin_manager import PluginManager, PluginReloadFailure  # noqa: E402
+from tool_policy import tool_authorized
 from tool_schemas import (  # noqa: E402
-    CHAT_CORE_TOOL_NAMES,
+    CORE_TOOL_NAMES,
     RESULT_TOOL_NAMES,
+    TOOL_DISCOVERY_GROUPS,
     build_openai_tools,
     contract_groups,
     elide_tool_calls_for_history,
@@ -388,6 +393,15 @@ from tool_schemas import (  # noqa: E402
     recover_text_tool_calls,
     returns_result as tool_schemas_returns_result,
     trim_tool_tail,
+    tool_tail_groups,
+)
+from turn_budget import (
+    ForegroundTurn,
+    TurnBudgetExceeded,
+    current_foreground_turn,
+    current_tool_groups,
+    reset_foreground_turn,
+    set_foreground_turn,
 )
 from utils import (  # fd-safe, single source of truth  # noqa: E402
     _atomic_json_write_sync,
@@ -990,6 +1004,12 @@ async def _transcribe_vc_wav(wav_path: str) -> str:
     except Exception as e:
         logger.warning("Riva ASR failed for %s: %s", Path(wav_path).name, e)
         return ""
+
+
+_ARCHIVE_MEDIA_EXTS = {
+    ".7z", ".bz2", ".gz", ".rar", ".tar", ".tbz", ".tbz2", ".tgz",
+    ".txz", ".xz", ".zip", ".zst",
+}
 
 
 TEXT_ATTACHMENT_EXTS = {
@@ -1822,6 +1842,26 @@ def _sanitize_visible_reply(text: str, *, scrub_repeats: bool = True) -> str:
     return response
 
 
+def _format_incomplete_response(error: ProviderIncompleteResponseError) -> str:
+    """Render bounded terminal text without exposing reasoning or executing calls."""
+    if error.classification == "output_token_limit":
+        partial = _sanitize_visible_reply(error.partial_content)
+        if partial:
+            return (
+                "INCOMPLETE RESPONSE: The provider stopped at the output-token limit. "
+                "No tool calls from this response were executed.\n\n"
+                f"{partial}"
+            )
+        return (
+            "The provider stopped at the output-token limit before producing a usable answer. "
+            "No tool calls from this response were executed."
+        )
+    return (
+        "The provider returned reasoning without a usable answer. "
+        "No tool calls from this response were executed."
+    )
+
+
 def _auto_format_discord(text: str) -> str:
     if not text or len(text.strip()) < 10:
         return text
@@ -2232,6 +2272,16 @@ class ToolCircuitBreaker:
         return False
 
 
+class PromptBudgetExceeded(RuntimeError):
+    """The protected foreground input and tool contract cannot fit the prompt cap."""
+
+    def __init__(self):
+        super().__init__(
+            "This request and its required tool instructions exceed the prompt budget. "
+            "Shorten the request or reduce the active tool catalog and retry."
+        )
+
+
 class TokenBudgetTracker:
     """Daily token spend tracker with budget alerts."""
 
@@ -2255,8 +2305,12 @@ class TokenBudgetTracker:
             self._completion_tokens = 0
             self._total_tokens = 0
             self._alerted = False
-        self._prompt_tokens += _safe_int(usage.get("prompt_tokens", 0), 0)
-        self._completion_tokens += _safe_int(usage.get("completion_tokens", 0), 0)
+        self._prompt_tokens += _safe_int(
+            usage.get("prompt_tokens", usage.get("input_tokens", 0)), 0
+        )
+        self._completion_tokens += _safe_int(
+            usage.get("completion_tokens", usage.get("output_tokens", 0)), 0
+        )
         self._total_tokens += _safe_int(usage.get("total_tokens", 0), 0)
         # Tracking only — daily-budget enforcement was removed; we just keep
         # the counter so dashboards/reports can still show usage if desired.
@@ -3262,8 +3316,6 @@ class MaxwellBot(commands.Bot):
         if self.config.ENABLE_WEB_SEARCH:
             self.tools["web_search"] = WebSearchTool(self)
         self.tools["no_response"] = NoResponseTool(self)
-        # Kept as a no-op so a model that still calls it from an old prompt
-        # does not error. The full catalog is attached every turn.
         self.tools["more_tools"] = MoreToolsTool(self)
         if self.config.ENABLE_SHELL:
             self.tools["shell"] = ShellTool(self)
@@ -5763,11 +5815,12 @@ class MaxwellBot(commands.Bot):
             if channel_name == "crazyshit":
                 return
 
-            preview = message.content[:100] if message.content else "[no text]"
-#            if not self._control.get("log_messages", True):
-#                preview = "[hidden]"
             logger.info(
-                f"MSG from {message.author.display_name} ({message.author.id}) in {getattr(message.channel, 'name', 'DM')}: {preview}"
+                "MSG from user_id=%s channel_id=%s guild_id=%s chars=%d",
+                message.author.id,
+                message.channel.id,
+                getattr(message.guild, "id", "DM"),
+                len(message.content or ""),
             )
 
         # BUG FIX: blacklist/ignore must be checked BEFORE command handling.
@@ -6468,10 +6521,15 @@ class MaxwellBot(commands.Bot):
             elif cmd == "bg":
                 # Manual background job: !bg GOAL or !bg --provider aux --model MODEL -- GOAL.
                 if not (args or "").strip():
-                    await message.channel.send("usage: `!bg GOAL` or `!bg --provider main|autonomy|aux --model MODEL -- GOAL`")
+                    await message.channel.send(
+                        f"usage: `{self.command_prefix}bg GOAL` or "
+                        f"`{self.command_prefix}bg --provider main|autonomy|aux --model MODEL -- GOAL`"
+                    )
                 else:
                     try:
-                        _goal, _provider, _model = parse_background_request(args)
+                        _goal, _provider, _model = parse_background_request(
+                            args, prefix=self.command_prefix
+                        )
                         if _provider != JobProvider.MAIN or _model is not None:
                             resolve_job_endpoint(_provider, self._control, self.config)
                         _job = self.bg_jobs.create(
@@ -6520,7 +6578,7 @@ class MaxwellBot(commands.Bot):
                     _uid = str(message.author.id)
                     _is_adm = self._is_admin(message.author.id)
                     if _job is None:
-                        await message.channel.send("usage: `!job <id>` or `!job cancel <id>`")
+                        await message.channel.send(f"usage: `{self.command_prefix}job <id>` or `{self.command_prefix}job cancel <id>`")
                     elif not _is_adm and ((_gid and _job.guild_id != _gid) or (not _gid and _job.user_id != _uid)):
                         await message.channel.send("job not found.")
                     else:
@@ -6531,28 +6589,54 @@ class MaxwellBot(commands.Bot):
                             _detail += f"\nno progress thread: {_job.thread_error}"
                         await message.channel.send(_detail)
             elif cmd == "prompt":
+                mentions = discord.AllowedMentions.none()
                 if args is None:
                     current = self.memory.get_server_prompt(server_id)
+                    if not current:
+                        await message.channel.send(
+                            f"No custom prompt set. Use `{self.command_prefix}prompt <text>` to set one.",
+                            allowed_mentions=mentions,
+                        )
+                    elif len(payload := current.encode("utf-8")) > TEXT_ATTACHMENT_MAX_BYTES:
+                        await message.channel.send(
+                            f"Prompt exceeds {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB export limit; "
+                            f"unchanged. Replace via `{self.command_prefix}longprompt` with a bounded UTF-8 .txt file.",
+                            allowed_mentions=mentions,
+                        )
+                    elif len(payload) <= 1800:
+                        await message.channel.send(
+                            f"Current prompt for this server:\n```\n{current}\n```",
+                            allowed_mentions=mentions,
+                        )
+                    else:
+                        with io.BytesIO(payload) as buffer, contextlib.closing(
+                            discord.File(buffer, filename="prompt.txt")
+                        ) as prompt_file:
+                            await message.channel.send(
+                                "Current server prompt attached.",
+                                file=prompt_file,
+                                allowed_mentions=mentions,
+                            )
+                elif len(args.encode("utf-8")) > SERVER_PROMPT_MAX_BYTES:
                     await message.channel.send(
-                        f"Current prompt for this server:\n```\n{current}\n```"
-                        if current
-                        else "No custom prompt set. Use `!prompt <text>` to set one."
+                        f"Prompt exceeds the {SERVER_PROMPT_MAX_BYTES // 1024} KiB UTF-8 write limit; nothing was changed.",
+                        allowed_mentions=mentions,
                     )
                 else:
                     self.memory.set_server_prompt(server_id, args)
                     await message.channel.send(
-                        f"Prompt updated for {message.guild.name if message.guild else 'DMs'}:\n```\n{args}\n```"
+                        "Prompt updated.", allowed_mentions=mentions
                     )
             elif cmd == "longprompt":
                 attachments = message.attachments
                 mentions = discord.AllowedMentions.none()
                 usage = (
-                    f"Use `{self.command_prefix}longprompt` alone to download the prompt, "
+                    f"Use `{self.command_prefix}longprompt` alone to read the prompt, "
                     "or attach one UTF-8 .txt file with no inline text "
-                    f"(maximum {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB)."
+                    f"(maximum {SERVER_PROMPT_MAX_BYTES // 1024} KiB)."
                 )
-                size_error = (
-                    f"Prompt exceeds the {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB limit; "
+                write_size_error = (
+                    f"Prompt exceeds the {SERVER_PROMPT_MAX_BYTES // 1024} KiB UTF-8 write limit; "
                     "nothing was changed or truncated."
                 )
                 if args is not None or len(attachments) > 1:
@@ -6561,27 +6645,35 @@ class MaxwellBot(commands.Bot):
                 if not attachments:
                     current = self.memory.get_server_prompt(server_id)
                     if not current:
-                        await message.channel.send("No custom prompt set. " + usage, allowed_mentions=mentions)
+                        await message.channel.send(
+                            "No custom prompt set. " + usage, allowed_mentions=mentions
+                        )
                     elif len(payload := current.encode("utf-8")) > TEXT_ATTACHMENT_MAX_BYTES:
-                        await message.channel.send(size_error, allowed_mentions=mentions)
+                        await message.channel.send(
+                            f"Prompt exceeds {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB export limit; "
+                            f"unchanged. Replace via `{self.command_prefix}longprompt` with a bounded UTF-8 .txt file.",
+                            allowed_mentions=mentions,
+                        )
                     else:
                         with io.BytesIO(payload) as buffer, contextlib.closing(
                             discord.File(buffer, filename="prompt.txt")
                         ) as prompt_file:
                             await message.channel.send(
-                                "Current server prompt attached.", file=prompt_file, allowed_mentions=mentions
+                                "Current server prompt attached.",
+                                file=prompt_file,
+                                allowed_mentions=mentions,
                             )
                     return
                 attachment = attachments[0]
-                if not attachment.filename.lower().endswith(".txt") or attachment.size > TEXT_ATTACHMENT_MAX_BYTES:
-                    await message.channel.send(
-                        size_error if attachment.size > TEXT_ATTACHMENT_MAX_BYTES else usage,
-                        allowed_mentions=mentions,
-                    )
+                if not attachment.filename.lower().endswith(".txt"):
+                    await message.channel.send(usage, allowed_mentions=mentions)
+                    return
+                if attachment.size > SERVER_PROMPT_MAX_BYTES:
+                    await message.channel.send(write_size_error, allowed_mentions=mentions)
                     return
                 payload = await attachment.read()
-                if len(payload) > TEXT_ATTACHMENT_MAX_BYTES:
-                    await message.channel.send(size_error, allowed_mentions=mentions)
+                if len(payload) > SERVER_PROMPT_MAX_BYTES:
+                    await message.channel.send(write_size_error, allowed_mentions=mentions)
                 elif not payload:
                     await message.channel.send(
                         f"Empty prompt file; nothing was changed. Use `{self.command_prefix}clearprompt` to clear it.",
@@ -6592,14 +6684,21 @@ class MaxwellBot(commands.Bot):
                         current = payload.decode("utf-8")
                     except UnicodeDecodeError:
                         await message.channel.send(
-                            "Prompt file must be valid UTF-8; nothing was changed.", allowed_mentions=mentions
+                            "Prompt file must be valid UTF-8; nothing was changed.",
+                            allowed_mentions=mentions,
                         )
                     else:
                         self.memory.set_server_prompt(server_id, current)
-                        await message.channel.send("Server prompt updated from attachment.", allowed_mentions=mentions)
+                        await message.channel.send(
+                            "Server prompt updated from attachment.",
+                            allowed_mentions=mentions,
+                        )
             elif cmd == "clearprompt":
                 self.memory.clear_server_prompt(server_id)
-                await message.channel.send("Server prompt cleared.")
+                await message.channel.send(
+                    "Server prompt cleared.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             elif cmd == "clearmem":
                 active = self._active_requests.get(channel_id)
                 if active is not None and not active.done():
@@ -6633,7 +6732,7 @@ class MaxwellBot(commands.Bot):
                     target_id = str(message.reference.message_id)
                 if not target_id:
                     await message.channel.send(
-                        "Usage: `!downvote <msg_id_or_chunks_id>`  "
+                        f"Usage: `{self.command_prefix}downvote <msg_id_or_chunks_id>`  "
                         "(or reply to the message you want to mark)"
                     )
                     return
@@ -6664,13 +6763,13 @@ class MaxwellBot(commands.Bot):
                         )
                 elif op == "add":
                     if not rest:
-                        await message.channel.send("Usage: `!neg add <text>`")
+                        await message.channel.send(f"Usage: `{self.command_prefix}neg add <text>`")
                         return
                     nid = await self.memory.add_negative(rest, reason="manual")
                     await message.channel.send(f"✓ negative `{nid}` added.")
                 elif op in ("del", "rm", "delete"):
                     if not rest:
-                        await message.channel.send("Usage: `!neg del <id>`")
+                        await message.channel.send(f"Usage: `{self.command_prefix}neg del <id>`")
                         return
                     ok = await self.memory.remove_negative(rest.strip())
                     await message.channel.send(
@@ -6680,7 +6779,7 @@ class MaxwellBot(commands.Bot):
                     )
                 else:
                     await message.channel.send(
-                        "Usage: `!neg add <text>` · `!neg list` · `!neg del <id>`"
+                        f"Usage: `{self.command_prefix}neg add <text>` · `{self.command_prefix}neg list` · `{self.command_prefix}neg del <id>`"
                     )
             elif cmd == "summarize":
                 # Manually trigger the LTM auto-summarizer over the
@@ -6778,7 +6877,7 @@ class MaxwellBot(commands.Bot):
                         self._save_jailbreak()
                         await message.channel.send(
                             "jailbreak ON for this server. freedom-mode prompt is now injected. "
-                            "use `!jailbreak off` to disable."
+                            f"use `{self.command_prefix}jailbreak off` to disable."
                         )
                 elif arg in {"off", "disable", "no"}:
                     if server_id == "DM":
@@ -6801,7 +6900,7 @@ class MaxwellBot(commands.Bot):
                     await message.channel.send(f"jailbreak is {state} for this server")
                 else:
                     await message.channel.send(
-                        "usage: `!jailbreak on|off|status` — toggles the freedom-mode "
+                        f"usage: `{self.command_prefix}jailbreak on|off|status` — toggles the freedom-mode "
                         "(jailbreak) prompt for this server. off by default everywhere."
                     )
             elif cmd == "progress":
@@ -6869,7 +6968,7 @@ class MaxwellBot(commands.Bot):
                     )
                 else:
                     await message.channel.send(
-                        "usage: `!progress on|off|status` — toggles the live "
+                        f"usage: `{self.command_prefix}progress on|off|status` — toggles the live "
                         "'thinking: …' status message shown while tools run, for THIS "
                         "server. off by default; opt in for visibility during slow tool "
                         "calls. (admin)"
@@ -6892,7 +6991,7 @@ class MaxwellBot(commands.Bot):
                     # Numeric IDs only (17-20 digit Discord snowflake range).
                     if not uid.isdigit() or not (17 <= len(uid) <= 20):
                         await message.channel.send(
-                            "usage: `!admin <@user|user_id>` (a 17-20 digit Discord snowflake) or `!admin clear`"
+                            f"usage: `{self.command_prefix}admin <@user|user_id>` (a 17-20 digit Discord snowflake) or `{self.command_prefix}admin clear`"
                         )
                         return
                     if uid in self._admins:
@@ -6999,7 +7098,7 @@ class MaxwellBot(commands.Bot):
                     # mention or url fragment from ending up in the whitelist.
                     if not uid.isdigit() or not (17 <= len(uid) <= 20):
                         await message.channel.send(
-                            "usage: `!shell <user_id>` (a 17-20 digit Discord snowflake) or `!shell clear`"
+                            f"usage: `{self.command_prefix}shell <user_id>` (a 17-20 digit Discord snowflake) or `{self.command_prefix}shell clear`"
                         )
                         return
                     if uid in self._shell_whitelist:
@@ -7044,7 +7143,7 @@ class MaxwellBot(commands.Bot):
                 elif sub in ("enable", "on"):
                     if len(parts) < 2:
                         await message.channel.send(
-                            "Usage: `!plugin enable <name> [--global]`"
+                            f"Usage: `{self.command_prefix}plugin enable <name> [--global]`"
                         )
                         return
                     p_name = parts[1].lower()
@@ -7063,7 +7162,7 @@ class MaxwellBot(commands.Bot):
                 elif sub in ("disable", "off"):
                     if len(parts) < 2:
                         await message.channel.send(
-                            "Usage: `!plugin disable <name> [--global]`"
+                            f"Usage: `{self.command_prefix}plugin disable <name> [--global]`"
                         )
                         return
                     p_name = parts[1].lower()
@@ -7092,7 +7191,7 @@ class MaxwellBot(commands.Bot):
                         await message.channel.send(res)
                 else:
                     await message.channel.send(
-                        "Usage: `!plugin <list|enable|disable|reload> [plugin_name] [--global]`"
+                        f"Usage: `{self.command_prefix}plugin <list|enable|disable|reload> [plugin_name] [--global]`"
                     )
             elif cmd in ("blacklist", "unblacklist"):
                 if not self._is_admin(message.author.id):
@@ -7119,7 +7218,7 @@ class MaxwellBot(commands.Bot):
                         uid = args.strip().strip("<@!>")
                         if not uid.isdigit() or not (17 <= len(uid) <= 20):
                             await message.channel.send(
-                                "usage: `!blacklist <user_id>` (a 17-20 digit Discord snowflake) or `!blacklist clear`"
+                                f"usage: `{self.command_prefix}blacklist <user_id>` (a 17-20 digit Discord snowflake) or `{self.command_prefix}blacklist clear`"
                             )
                             return
                         self._blacklist.add(uid)
@@ -7132,7 +7231,7 @@ class MaxwellBot(commands.Bot):
                     uid = args.strip().strip("<@!>")
                     if not uid.isdigit() or not (17 <= len(uid) <= 20):
                         await message.channel.send(
-                            "usage: `!unblacklist <user_id>` (a 17-20 digit Discord snowflake)"
+                            f"usage: `{self.command_prefix}unblacklist <user_id>` (a 17-20 digit Discord snowflake)"
                         )
                         return
                     self._blacklist.discard(uid)
@@ -7163,8 +7262,14 @@ class MaxwellBot(commands.Bot):
         code_block = False
         if not reporting and not self._is_admin(message.author.id):
             text = "not authorized"
-        #elif not transport:
-        #    text = "These controls are verified only for DeepSeek V4.1 Flash on OpenRouter or the official DeepSeek API. Current model unchanged."
+        elif not transport:
+            text = (
+                "These controls require a recognized DeepSeek Flash transport on "
+                "OpenRouter or the official DeepSeek API. Current model unchanged; "
+                "no control saved. Previously stored DeepSeek preferences are not "
+                "applied to this primary model; configured provider request options "
+                "remain unchanged."
+            )
         else:
             code_block = True
             presets = {str(value): key for key, value in DEEPSEEK_REASONING_EFFORTS.items()}
@@ -7262,7 +7367,7 @@ class MaxwellBot(commands.Bot):
         allowed_channels list.
         """
         if message.guild is None:
-            await message.channel.send("`!solo` only makes sense in a server.")
+            await message.channel.send(f"`{self.command_prefix}solo` only makes sense in a server.")
             return
         gid = str(message.guild.id)
         arg = (args or "").strip()
@@ -7273,12 +7378,12 @@ class MaxwellBot(commands.Bot):
             if not current:
                 await message.channel.send(
                     "Not locked — I reply anywhere in this server I'm allowed to. "
-                    "`!solo` here to lock me to this channel."
+                    f"`{self.command_prefix}solo` here to lock me to this channel."
                 )
             else:
                 await message.channel.send(
                     f"Locked to <#{current}>. Everywhere else in this server is "
-                    "silent and autonomy is off. `!solo off` to unlock."
+                    f"silent and autonomy is off. `{self.command_prefix}solo off` to unlock."
                 )
             return
 
@@ -7301,8 +7406,8 @@ class MaxwellBot(commands.Bot):
             match = re.search(r"\d{5,}", arg)
             if not match:
                 await message.channel.send(
-                    "Usage: `!solo` (lock to this channel), `!solo #channel`, "
-                    "`!solo off`, `!solo status`."
+                    f"Usage: `{self.command_prefix}solo` (lock to this channel), `{self.command_prefix}solo #channel`, "
+                    f"`{self.command_prefix}solo off`, `{self.command_prefix}solo status`."
                 )
                 return
             target = match.group(0)
@@ -7319,7 +7424,7 @@ class MaxwellBot(commands.Bot):
         await message.channel.send(
             f"Locked to {where}. Every other channel in **{message.guild.name}** "
             "is silent for me now, and I won't start anything on my own here. "
-            "`!solo off` undoes it."
+            f"`{self.command_prefix}solo off` undoes it."
         )
 
     async def _save_solo(self, mapping: dict, gid: str, *, unblock_autonomy: bool):
@@ -7367,7 +7472,7 @@ class MaxwellBot(commands.Bot):
 
         if sub in {"", "help"}:
             await message.channel.send(
-                "VC commands: `!vc join`, `!vc leave`, `!vc status`, `!vc listen`, `!vc unlisten`, `!vc say <text>`"
+                f"VC commands: `{self.command_prefix}vc join`, `{self.command_prefix}vc leave`, `{self.command_prefix}vc status`, `{self.command_prefix}vc listen`, `{self.command_prefix}vc unlisten`, `{self.command_prefix}vc say <text>`"
             )
             return
         if sub == "status":
@@ -7452,7 +7557,7 @@ class MaxwellBot(commands.Bot):
                 return
             vc = self._vc_get_client(message.guild, target_channel)
             if not vc or not vc.is_connected():
-                await message.channel.send("not connected; use `!vc join` first")
+                await message.channel.send(f"not connected; use `{self.command_prefix}vc join` first")
                 return
             try:
                 listening = await self._vc_start_listening(
@@ -7475,11 +7580,11 @@ class MaxwellBot(commands.Bot):
             return
         if sub == "say":
             if not rest.strip():
-                await message.channel.send("usage: `!vc say <text>`")
+                await message.channel.send(f"usage: `{self.command_prefix}vc say <text>`")
                 return
             vc = self._vc_get_client(message.guild, target_channel)
             if not vc or not vc.is_connected():
-                await message.channel.send("connect me first with `!vc join`")
+                await message.channel.send(f"connect me first with `{self.command_prefix}vc join`")
                 return
             try:
                 with tempfile.TemporaryDirectory(prefix="dame-curie-vc-") as tmp:
@@ -7518,7 +7623,7 @@ class MaxwellBot(commands.Bot):
                 logger.warning(f"VC TTS say failed: {e}")
                 await send_public_error(self, message.channel)
             return
-        await message.channel.send("unknown vc command. try `!vc help`")
+        await message.channel.send(f"unknown vc command. try `{self.command_prefix}vc help`")
 
     def _vc_context_key(self, guild=None, voice_channel=None, text_channel=None) -> int:
         if guild is not None:
@@ -8180,7 +8285,7 @@ class MaxwellBot(commands.Bot):
                 scope, fact = parts[0], parts[1]
             fact = " ".join(fact.split())[:1000]
             if not fact:
-                await message.channel.send("Usage: `!context add [scope] <fact>`")
+                await message.channel.send(f"Usage: `{self.command_prefix}context add [scope] <fact>`")
                 return
             context_id = await self.memory.add_shared_context(
                 {
@@ -8202,7 +8307,7 @@ class MaxwellBot(commands.Bot):
             )
             return
         await message.channel.send(
-            "Usage: `!context`, `!context all`, `!context add [scope] <fact>`, `!context forget <id>`, `!context private <id>`, `!context global <id>`"
+            f"Usage: `{self.command_prefix}context`, `{self.command_prefix}context all`, `{self.command_prefix}context add [scope] <fact>`, `{self.command_prefix}context forget <id>`, `{self.command_prefix}context private <id>`, `{self.command_prefix}context global <id>`"
         )
 
     # Tombstone: old `,auto` mode lived here. It ran an LLM decider on ambient
@@ -9015,7 +9120,7 @@ class MaxwellBot(commands.Bot):
             await message.channel.send("REM defaults restored.")
             return
         await message.channel.send(
-            "Usage: `!rem`, `!rem now`, `!rem on`, `!rem off`, `!rem audit [N]`, `!rem fix`"
+            f"Usage: `{self.command_prefix}rem`, `{self.command_prefix}rem now`, `{self.command_prefix}rem on`, `{self.command_prefix}rem off`, `{self.command_prefix}rem audit [N]`, `{self.command_prefix}rem fix`"
         )
 
     async def _handle_autonomy_command(self, message, args: str | None):
@@ -9117,7 +9222,7 @@ class MaxwellBot(commands.Bot):
             parts = arg.split()
             if len(parts) < 2:
                 await message.channel.send(
-                    f"Current interval: {self._control.get('autonomy_interval_seconds', 300)}s. Usage: `!autonomy interval <seconds>`"
+                    f"Current interval: {self._control.get('autonomy_interval_seconds', 300)}s. Usage: `{self.command_prefix}autonomy interval <seconds>`"
                 )
                 return
             try:
@@ -9147,13 +9252,13 @@ class MaxwellBot(commands.Bot):
                     "Autonomy blacklists:\n"
                     f"channels: {', '.join(ab_ch) or '(none)'}\n"
                     f"servers: {', '.join(ab_sv) or '(none)'}\n"
-                    "Add: `!autonomy blacklist channel <id>` or `server <id>`\n"
-                    "Remove: `!autonomy unblacklist channel <id>` etc."
+                    f"Add: `{self.command_prefix}autonomy blacklist channel <id>` or `server <id>`\n"
+                    f"Remove: `{self.command_prefix}autonomy unblacklist channel <id>` etc."
                 )
                 return
             if len(parts) < 3:
                 await message.channel.send(
-                    "Usage: `!autonomy blacklist channel <id>` / `server <id>` ; unblacklist to remove"
+                    f"Usage: `{self.command_prefix}autonomy blacklist channel <id>` / `server <id>` ; unblacklist to remove"
                 )
                 return
             kind = parts[1].lower()
@@ -9183,8 +9288,8 @@ class MaxwellBot(commands.Bot):
             return
 
         await message.channel.send(
-            "Usage: `!autonomy`, `!autonomy on`, `!autonomy off`, `!autonomy tick`, "
-            "`!autonomy log`, `!autonomy interval <seconds>`, "
+            f"Usage: `{self.command_prefix}autonomy`, `{self.command_prefix}autonomy on`, `{self.command_prefix}autonomy off`, `{self.command_prefix}autonomy tick`, "
+            f"`{self.command_prefix}autonomy log`, `{self.command_prefix}autonomy interval <seconds>`, "
             "`blacklist`/`unblacklist channel|server <id>`"
         )
 
@@ -10439,6 +10544,8 @@ class MaxwellBot(commands.Bot):
             blob = read()
             if inspect.isawaitable(blob):
                 blob = await blob
+            if len(blob) > max_bytes:
+                raise ValueError("attachment exceeds its byte limit")
             return blob
         url = str(
             getattr(attachment, "url", None)
@@ -10470,6 +10577,26 @@ class MaxwellBot(commands.Bot):
         images = []
         media = []
         max_size = self._max_media_bytes()
+        turn = current_foreground_turn()
+        local_media_keys: set[str] = set()
+        local_media_bytes = 0
+
+        def admit_media_item(item: dict) -> bool:
+            nonlocal local_media_bytes
+            raw = str(item.get("b64") or "")
+            if not raw:
+                return True
+            decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+            key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+            if turn is not None:
+                return turn.admit_media(key, decoded_bytes)
+            if key in local_media_keys or len(local_media_keys) >= 12:
+                return False
+            if local_media_bytes + decoded_bytes > 20 * 1024 * 1024:
+                return False
+            local_media_keys.add(key)
+            local_media_bytes += decoded_bytes
+            return True
         image_exts = {
             ".png",
             ".jpg",
@@ -10496,8 +10623,12 @@ class MaxwellBot(commands.Bot):
                 if "." in attachment.filename
                 else ""
             )
-            is_media = ext in media_exts or content_type.startswith(
-                ("image/", "video/", "audio/")
+            is_archive = ext in _ARCHIVE_MEDIA_EXTS
+            if is_archive and content_type.lower().startswith("image/"):
+                continue
+            is_media = not is_archive and (
+                ext in media_exts
+                or content_type.startswith(("image/", "video/", "audio/"))
             )
             is_known_text = _is_text_attachment(attachment.filename, content_type)
             # Enforce absolute size limit for ALL attachments including text
@@ -10518,9 +10649,25 @@ class MaxwellBot(commands.Bot):
                     f"Skipping text attachment {attachment.filename}: too large ({att_size} bytes)"
                 )
                 continue
+            remaining_media = 20 * 1024 * 1024 - (
+                turn.media_bytes if turn is not None else local_media_bytes
+            )
+            media_count = turn.media_count if turn is not None else len(local_media_keys)
+            if not is_known_text:
+                if media_count >= 12 or remaining_media <= 0:
+                    continue
+                if att_size and att_size > remaining_media:
+                    continue
             try:
+                read_limit = (
+                    max_size
+                    if is_media or not is_known_text
+                    else TEXT_ATTACHMENT_MAX_BYTES
+                )
+                if not is_known_text:
+                    read_limit = min(read_limit, remaining_media)
                 blob = await self._read_attachment_bytes(
-                    attachment, max_bytes=max(att_size, max_size, 1)
+                    attachment, max_bytes=read_limit
                 )
                 is_text = is_known_text or (
                     not is_media
@@ -10572,6 +10719,8 @@ class MaxwellBot(commands.Bot):
                         include_frames=proc_img,
                     )
                     for derived_item in derived:
+                        if not admit_media_item(derived_item):
+                            continue
                         if derived_item.get("is_image"):
                             images.append(derived_item["b64"])
                         media.append(derived_item)
@@ -10587,8 +10736,6 @@ class MaxwellBot(commands.Bot):
                         continue
                 else:
                     b64 = base64.b64encode(blob).decode("utf-8")
-                if is_image:
-                    images.append(b64)
                 item = self._media_item(
                     b64=b64,
                     mime_type=mime,
@@ -10604,6 +10751,10 @@ class MaxwellBot(commands.Bot):
                 )
                 if id(attachment) not in wrapper_att_ids:
                     item["source"] = "forward"
+                if not admit_media_item(item):
+                    continue
+                if is_image:
+                    images.append(b64)
                 media.append(item)
                 kind = "text" if text else "media"
                 logger.info(
@@ -10619,6 +10770,8 @@ class MaxwellBot(commands.Bot):
                     item["message_id"] = getattr(message, "id", None)
                     if source is not message:
                         item["source"] = item.get("source") or "forward"
+                    if not admit_media_item(item):
+                        continue
                     if item.get("is_image") and item.get("b64"):
                         images.append(item["b64"])
                     media.append(item)
@@ -11381,6 +11534,8 @@ class MaxwellBot(commands.Bot):
         if ext == ".svg":
             mime = "image/svg+xml"
         mime = image_mime(blob, mime)
+        if ext in _ARCHIVE_MEDIA_EXTS and mime.startswith("image/"):
+            return None
         if not mime.startswith(("image/", "video/", "audio/")):
             logger.warning(
                 f"Skipping embed media {url[:120]}: unsupported mime {mime or 'unknown'}"
@@ -11464,6 +11619,7 @@ class MaxwellBot(commands.Bot):
         if not embeds:
             return []
         max_size = self._max_media_bytes()
+        turn = current_foreground_turn()
         proc_img = MaxwellBot._image_input_enabled(self)
         proc_aud = _owner_audio_input_enabled(self)
         video_input_enabled = parse_bool(
@@ -11508,11 +11664,23 @@ class MaxwellBot(commands.Bot):
                     continue
                 ext = Path(urlparse(url).path).suffix.lower()
                 filename = f"embed-{idx}-{label}{ext or ''}"
+                download_limit = max_size
+                if turn is not None:
+                    remaining_media = 20 * 1024 * 1024 - turn.media_bytes
+                    if turn.media_count >= 12 or remaining_media <= 0:
+                        break
+                    download_limit = min(download_limit, remaining_media)
                 item = await self._download_embed_media(
-                    url, filename, max_size, message_id
+                    url, filename, download_limit, message_id
                 )
                 if not item:
                     continue
+                raw = str(item.get("b64") or "")
+                if turn is not None and raw:
+                    key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                    decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+                    if not turn.admit_media(key, decoded_bytes) and key not in turn.media_keys:
+                        continue
                 mime = str(item.get("mime_type") or "")
                 # A gif/klipy video URL can already have been normalized to a
                 # JPEG contact sheet by _download_embed_media. It is still a
@@ -11553,6 +11721,12 @@ class MaxwellBot(commands.Bot):
                                 continue
                             if not derived_item.get("is_image") and not proc_aud:
                                 continue
+                            raw = str(derived_item.get("b64") or "")
+                            if turn is not None and raw:
+                                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                                decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+                                if not turn.admit_media(key, decoded_bytes) and key not in turn.media_keys:
+                                    continue
                             media.append(derived_item)
                             media_count += 1
                     elif mime.startswith("image/") and proc_img:
@@ -11675,14 +11849,27 @@ class MaxwellBot(commands.Bot):
         if not wanted:
             return []
         max_size = self._max_media_bytes()
+        turn = current_foreground_turn()
         media = []
         message_id = getattr(message, "id", None)
         for idx, (url, ext) in enumerate(wanted[:5], 1):
+            download_limit = max_size
+            if turn is not None:
+                remaining_media = 20 * 1024 * 1024 - turn.media_bytes
+                if turn.media_count >= 12 or remaining_media <= 0:
+                    break
+                download_limit = min(download_limit, remaining_media)
             item = await self._download_embed_media(
-                url, f"linked-media-{idx}{ext}", max_size, message_id
+                url, f"linked-media-{idx}{ext}", download_limit, message_id
             )
             if item:
                 item["url"] = url
+                raw = str(item.get("b64") or "")
+                if turn is not None and raw:
+                    key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                    decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+                    if not turn.admit_media(key, decoded_bytes) and key not in turn.media_keys:
+                        continue
                 mime = str(item.get("mime_type") or "").lower()
                 if mime.startswith("video/"):
                     # The provider layer intentionally drops raw video_url
@@ -11695,7 +11882,13 @@ class MaxwellBot(commands.Bot):
                     )
                     for derived_item in derived:
                         derived_item["url"] = url
-                    media.extend(derived)
+                        raw = str(derived_item.get("b64") or "")
+                        if turn is not None and raw:
+                            key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                            decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+                            if not turn.admit_media(key, decoded_bytes) and key not in turn.media_keys:
+                                continue
+                        media.append(derived_item)
                 else:
                     item["source"] = "link"
                     # The media item already carries url= from
@@ -12206,6 +12399,32 @@ class MaxwellBot(commands.Bot):
         return False
 
     async def _handle_message(self, message, content: str | None = None):
+        turn = ForegroundTurn.from_controls(self._control)
+        token = set_foreground_turn(turn)
+        timeout_scope = asyncio.timeout_at(turn.deadline)
+        timed_out = False
+        try:
+            try:
+                async with timeout_scope:
+                    await MaxwellBot._handle_message_inner(self, message, content)
+            except TimeoutError:
+                if not timeout_scope.expired():
+                    raise
+                timed_out = True
+        finally:
+            try:
+                await turn.cleanup()
+            finally:
+                reset_foreground_turn(token)
+        if timed_out and self._control.get("error_replies", True):
+            with notice_send():
+                await message.channel.send(
+                    "This response exceeded the foreground turn deadline. No further model requests were made.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
+    async def _handle_message_inner(self, message, content: str | None = None):
+        turn = current_foreground_turn()
         apply_provider_reload(self, excluding=asyncio.current_task())
         content = content or message.content
         channel_id = str(message.channel.id)
@@ -12219,6 +12438,28 @@ class MaxwellBot(commands.Bot):
         if not await self._check_sleep_gate(message):
             return
         turn_context = self._begin_inflight_context(message, content)
+        live_typing = None
+        active_progresses: list[Any] = []
+        gen_progress = None
+        current_task = asyncio.current_task()
+
+        async def _cleanup_turn_resources():
+            self._end_inflight_context(turn_context)
+            await self._exit_live_typing(live_typing)
+            for progress in active_progresses:
+                if progress is not None:
+                    with contextlib.suppress(Exception):
+                        await progress.stop()
+            active_progresses.clear()
+            with contextlib.suppress(Exception):
+                forget_shell_progress(self, message)
+            self._current_progress_by_channel.pop(channel_id, None)
+            if self._active_requests.get(channel_id) is current_task:
+                self._active_requests.pop(channel_id, None)
+                self._active_request_user.pop(channel_id, None)
+            self._replying_channels.discard(channel_id)
+
+        turn.set_cleanup(_cleanup_turn_resources)
         live_typing = await self._enter_live_typing(message)
         author = getattr(message, "author", None)
         if (
@@ -12235,7 +12476,6 @@ class MaxwellBot(commands.Bot):
             await self._record_rem_event(message, "user", content)
         except Exception as e:
             logger.warning(f"REM event recording failed: {e}")
-        current_task = asyncio.current_task()
         ai_timeout = max(
             10,
             min(
@@ -12333,6 +12573,31 @@ class MaxwellBot(commands.Bot):
         except Exception as e:
             logger.warning(f"Media extraction failed: {e}")
             media = []
+        accepted_media = []
+        accepted_media_keys: set[str] = set()
+        accepted_media_bytes = 0
+        for item in media:
+            raw = str(item.get("b64") or "")
+            if not raw:
+                accepted_media.append(item)
+                continue
+            key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+            if key in accepted_media_keys:
+                continue
+            decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+            if turn is not None:
+                admitted = turn.admit_media(key, decoded_bytes) or key in turn.media_keys
+            else:
+                admitted = (
+                    len(accepted_media_keys) < 12
+                    and accepted_media_bytes + decoded_bytes <= 20 * 1024 * 1024
+                )
+                if admitted:
+                    accepted_media_bytes += decoded_bytes
+            if admitted:
+                accepted_media.append(item)
+                accepted_media_keys.add(key)
+        media = accepted_media
         current_images = [item for item in media if item.get("is_image")]
         cached_media = []
         reply_media_id = self._reply_media_message_id(
@@ -12375,7 +12640,30 @@ class MaxwellBot(commands.Bot):
                         )
         # Current attachments always go through. Cached images are gated above;
         # otherwise normal chat gets polluted by yesterday's meme/screenshot.
-        active_media = current_images + cached_media + self._current_binary_media(media)
+        active_candidates = current_images + cached_media + self._current_binary_media(media)
+        active_media = []
+        active_media_keys: set[str] = set()
+        active_media_bytes = 0
+        for item in active_candidates:
+            raw = str(item.get("b64") or "")
+            if not raw:
+                continue
+            key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+            if key in active_media_keys:
+                continue
+            decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+            if turn is not None:
+                admitted = turn.admit_media(key, decoded_bytes) or key in turn.media_keys
+            else:
+                admitted = (
+                    len(active_media_keys) < 12
+                    and active_media_bytes + decoded_bytes <= 20 * 1024 * 1024
+                )
+                if admitted:
+                    active_media_bytes += decoded_bytes
+            if admitted:
+                active_media.append(item)
+                active_media_keys.add(key)
         media_summary = self._format_media_summary(media, active_media)
         # If the message carries attachable media but nothing made it into the
         # turn (a failed/partial extraction, an embed that didn't download, a
@@ -12435,6 +12723,9 @@ class MaxwellBot(commands.Bot):
         async def _run_pre_tools():
             pre_results: list[str] = []
             pre_images: list[str] = []
+            turn = current_foreground_turn()
+            local_media_keys: set[str] = set()
+            local_media_bytes = 0
             if (
                 self._control.get("tools_enabled", True)
                 and "youtube" in self.tools
@@ -12475,9 +12766,26 @@ class MaxwellBot(commands.Bot):
                             _IMG_RE = re.compile(
                                 r"__IMAGE_B64__([A-Za-z0-9+/=\s]+)__END_IMAGE_B64__"
                             )
-                            pre_images.extend(
-                                m.group(1).strip() for m in _IMG_RE.finditer(yt_result)
-                            )
+                            for match in _IMG_RE.finditer(yt_result):
+                                raw = re.sub(r"\s+", "", match.group(1))
+                                if len(raw) >= 5_000_000:
+                                    continue
+                                decoded_bytes = max(
+                                    0, (len(raw) * 3) // 4 - raw.count("=")
+                                )
+                                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                                if turn is not None:
+                                    admitted = turn.admit_media(key, decoded_bytes) or key in turn.media_keys
+                                else:
+                                    admitted = (
+                                        key not in local_media_keys
+                                        and len(local_media_keys) < 12
+                                        and local_media_bytes + decoded_bytes <= 20 * 1024 * 1024
+                                    )
+                                if admitted and key not in local_media_keys:
+                                    local_media_keys.add(key)
+                                    local_media_bytes += decoded_bytes
+                                    pre_images.append(raw)
 
             # Auto web_search for queries about new/recent AI models, releases, current events.
             # This is code logic (not a prompt rule) to ensure the bot looks up the most
@@ -12557,6 +12865,21 @@ class MaxwellBot(commands.Bot):
                     self._message_media_fingerprint(message),
                     time.monotonic(),
                 )
+        except PromptBudgetExceeded as e:
+            logger.warning("Prompt cannot fit the protected tool/input budget: %s", e)
+            self._replying_channels.discard(channel_id)
+            if self._active_requests.get(channel_id) is current_task:
+                self._active_requests.pop(channel_id, None)
+                self._active_request_user.pop(channel_id, None)
+            self._end_inflight_context(turn_context)
+            await self._exit_live_typing(live_typing)
+            if self._control.get("error_replies", True):
+                with notice_send():
+                    await message.channel.send(
+                        str(e), allowed_mentions=discord.AllowedMentions.none()
+                    )
+                normal_reply_sent = True
+            return
         except Exception as e:
             logger.error(f"Failed to build messages: {e}\n{traceback.format_exc()}")
             self._replying_channels.discard(channel_id)
@@ -12601,8 +12924,18 @@ class MaxwellBot(commands.Bot):
                         "content": "\n\n".join(injection_parts),
                     }
                 )
-            if pre_tool_images:
-                active_media = [
+            youtube_media = []
+            for img in pre_tool_images:
+                key = hashlib.sha256(img.encode("ascii")).hexdigest()
+                if key in active_media_keys:
+                    continue
+                decoded_bytes = max(0, (len(img) * 3) // 4 - img.count("="))
+                if turn is None and (
+                    len(active_media_keys) >= 12
+                    or active_media_bytes + decoded_bytes > 20 * 1024 * 1024
+                ):
+                    continue
+                youtube_media.append(
                     {
                         "b64": img,
                         "mime_type": "image/jpeg",
@@ -12613,8 +12946,10 @@ class MaxwellBot(commands.Bot):
                         "message_id": None,
                         "source": "youtube_tool",
                     }
-                    for img in pre_tool_images
-                ] + active_media
+                )
+                active_media_keys.add(key)
+                active_media_bytes += decoded_bytes
+            active_media = youtube_media + active_media
 
         # Mark as in-flight only once we are about to do real LLM work (after
         # expensive pre-work like memory building + tool pre-invocation). This
@@ -12639,7 +12974,6 @@ class MaxwellBot(commands.Bot):
         # runs longer, the user sees 'working on it…' as before. The
         # awaitable form (start()) would block the LLM call for 800ms which
         # defeats the point.
-        gen_progress = None
         # In DMs, disable progress messages so it doesn't spam 'working on it…' to the user
         if message.guild and self._progress_enabled(str(message.guild.id)):
             gen_progress = _make_tool_progress(message)
@@ -12651,7 +12985,6 @@ class MaxwellBot(commands.Bot):
         # net in finally() walks this list and calls stop() on anything
         # still alive, so a stray "thinking: …" or "tool: …" message can
         # never outlive the bot's reply.
-        active_progresses: list[Any] = []
         if gen_progress is not None:
             active_progresses.append(gen_progress)
 
@@ -12711,6 +13044,7 @@ class MaxwellBot(commands.Bot):
                     )
                 )
 
+        incomplete_error: ProviderIncompleteResponseError | None = None
         try:
             turn_context["generation_started"] = True
             platform = MaxwellBot._message_tool_platform(self, message)
@@ -12747,24 +13081,27 @@ class MaxwellBot(commands.Bot):
             # it from the text stream incrementally, so the bot's progress
             # message can switch to "<tool>: …" as soon as the name appears
             # (early in the stream) rather than at the very end.
+            visible_tool_names = tuple(
+                sorted(self._turn_tool_names(platform, message, content))
+            )
             if custom_tool_calls:
-                # Catalog already lives in _tool_system_prompt (XML mode).
-                # Only teach the bare-JSON wire format here.
-                disabled = set(self._control.get("disabled_tools", []) or [])
-                names = [
-                    name
-                    for name in self._turn_tool_names(platform, message, content)
-                    if name not in disabled
-                ]
-                snip = custom_tool_prompt(names)
-                messages = list(messages)
-                # Append to the first system message if present, else add one.
-                for _m in messages:
-                    if _m.get("role") == "system":
-                        _m["content"] = (_m["content"] or "") + "\n\n" + snip
-                        break
-                else:
-                    messages.insert(0, {"role": "system", "content": snip})
+                messages = [dict(item) for item in messages]
+                snip = custom_tool_prompt(list(visible_tool_names))
+                catalog_index = next(
+                    (
+                        index
+                        for index, item in enumerate(messages)
+                        if item.get("role") == "system"
+                        and "## Tool contract" in str(item.get("content") or "")
+                    ),
+                    0,
+                )
+                messages.insert(
+                    catalog_index + 1, {"role": "system", "content": snip}
+                )
+            messages = MaxwellBot._apply_prompt_budget(
+                self, messages, provider_tools
+            )
             await self._acquire_ai_slot(
                 timeout=ai_timeout, priority="user", key=channel_id
             )
@@ -12779,19 +13116,27 @@ class MaxwellBot(commands.Bot):
                     on_token=_on_token,
                     custom_tool_calls=custom_tool_calls,
                 )
+            except ProviderIncompleteResponseError as exc:
+                incomplete_error = exc
+                response = _format_incomplete_response(exc)
             finally:
                 await self._release_ai_slot()
-            native_calls = self._native_calls_from(response)
-            # Token usage rides on the ProviderResult, so read it BEFORE the
-            # recovery below can replace `response` with a plain string.
-            response_metrics = getattr(response, "metrics", None)
-            usage = self._usage_from(response)
+            native_calls = (
+                [] if incomplete_error is not None else self._native_calls_from(response)
+            )
+            # Token usage rides on the ProviderResult or terminal error; read it
+            # BEFORE recovery can replace a result with plain text.
+            response_metrics = (
+                incomplete_error.metrics
+                if incomplete_error is not None
+                else getattr(response, "metrics", None)
+            )
+            usage = self._usage_from(incomplete_error or response)
             if usage:
                 self._token_tracker.record(usage)
-            # No native tool_calls, but the model may have written the call
-            # into the visible text instead. Recover it so it actually runs
-            # instead of being posted to the channel as raw markup.
-            if not native_calls:
+            # Incomplete responses are terminal: their partial text is display
+            # only and must never be recovered into executable tool calls.
+            if not native_calls and incomplete_error is None:
                 native_calls, response = self._recover_text_tool_calls(response)
             # If the model returned tool calls, hand the generation progress off
             # to the tool dispatch so the same Discord message transitions from
@@ -12820,18 +13165,21 @@ class MaxwellBot(commands.Bot):
                         pass
                 return
             response = response or ""
-            max_iters = max(
-                0,
-                min(
-                    _safe_int(self._control.get("max_tool_iterations", 30) or 0, 0), 100
-                ),
+            max_iters = (
+                0
+                if incomplete_error is not None
+                else max(
+                    0,
+                    min(
+                        _safe_int(self._control.get("max_tool_iterations", 30) or 0, 0),
+                        100,
+                    ),
+                )
             )
             tool_deadline = time.monotonic() + float(
                 self._control.get("tool_iteration_timeout_seconds", 3600) or 3600
             )
             all_tool_results = []
-            all_tool_images = []
-            all_tool_media = []
             # Accumulate multi-iteration history so intermediate tool results
             # are not discarded on the next follow-up turn.
             conversation_tail: list[dict] = []
@@ -12847,7 +13195,6 @@ class MaxwellBot(commands.Bot):
             # #maxwell-the-bot 2026-08-02 with "Mat Dickie" / "you a fan"
             # — see PM2 out.log 01:25:17→28 for the canonical reproduction.
             followup_turn_ran = False
-            tools_expanded = False
             promise_followups = 0
             tool_results: list[str] = []
             for _iteration in range(max_iters):
@@ -12864,35 +13211,51 @@ class MaxwellBot(commands.Bot):
                 )
                 first_dispatch_progress = None
                 pending_native = None
-                # more_tools sets _tools_expanded on the message. Rebuild the
-                # payload once so the follow-up turn actually carries the full
-                # catalog instead of the lean set this turn started with.
-                if getattr(message, "_tools_expanded", False) and not tools_expanded:
-                    tools_expanded = True
+                iter_media = list(getattr(self, "_last_native_tool_media", None) or [])
+                native_followup = list(
+                    getattr(self, "_last_native_followup_messages", None) or []
+                )
+                all_tool_results.extend(tool_results)
+                current_tool_names = tuple(
+                    sorted(self._turn_tool_names(platform, message, content))
+                )
+                if current_tool_names != visible_tool_names:
+                    visible_tool_names = current_tool_names
                     openai_tools = self._build_openai_tools(
                         platform, message=message, content=content
                     )
                     custom_tool_calls, provider_tools = self._select_tool_protocol(
                         openai_tools
                     )
-                    max_out_tokens = (
-                        getattr(self.config, "OPENAI_MAX_TOKENS", 16384) or 16384
+                    refreshed_tool_prompt = MaxwellBot._tool_system_prompt(
+                        self, platform, message=message, content=content
                     )
-                    logger.info(
-                        "more_tools: reattached %d tools for follow-up",
-                        len(openai_tools or []),
+                    for item in messages:
+                        if item.get("role") == "system" and "## Tool contract" in str(
+                            item.get("content") or ""
+                        ):
+                            item["content"] = refreshed_tool_prompt
+                            break
+                    custom_indices = [
+                        index
+                        for index, item in enumerate(messages)
+                        if item.get("role") == "system"
+                        and str(item.get("content") or "").startswith(
+                            "Custom tool protocol:"
+                        )
+                    ]
+                    if custom_tool_calls:
+                        custom_text = custom_tool_prompt(list(visible_tool_names))
+                        if custom_indices:
+                            messages[custom_indices[0]]["content"] = custom_text
+                        else:
+                            messages.insert(2, {"role": "system", "content": custom_text})
+                    else:
+                        for index in reversed(custom_indices):
+                            del messages[index]
+                    messages = MaxwellBot._apply_prompt_budget(
+                        self, messages, provider_tools
                     )
-                native_followup = list(
-                    getattr(self, "_last_native_followup_messages", None) or []
-                )
-                all_tool_results.extend(tool_results)
-                all_tool_media.extend(
-                    list(getattr(self, "_last_native_tool_media", None) or [])
-                )
-                # Cap image growth across iterations (keep newest frames).
-                all_tool_images.extend(iter_images)
-                if len(all_tool_images) > 12:
-                    all_tool_images = all_tool_images[-12:]
                 if not tool_results:
                     break
                 if not _tool_results_need_followup(tool_results):
@@ -12924,14 +13287,16 @@ class MaxwellBot(commands.Bot):
                 # the role=tool messages holding its tool_call_ids.
                 conversation_tail = trim_tool_tail(conversation_tail)
                 result_messages = MaxwellBot._apply_prompt_budget(
-                    self, [dict(m) for m in messages] + list(conversation_tail)
+                    self,
+                    [dict(item) for item in messages] + list(conversation_tail),
+                    provider_tools,
                 )
                 await self._acquire_ai_slot(
                     timeout=ai_timeout, priority="user", key=channel_id
                 )
                 try:
                     # Attach images from tools so the model can SEE them
-                    followup_images = all_tool_images if all_tool_images else []
+                    followup_images = iter_images
                     # Post a progress message during the followup LLM generation
                     # too — without this, the user sees the progress message
                     # get deleted (by the previous tool dispatch) and then nothing
@@ -12983,7 +13348,7 @@ class MaxwellBot(commands.Bot):
                         followup = await self._generate_response(
                             result_messages,
                             images=followup_images,
-                            media=all_tool_media,
+                            media=iter_media,
                             timeout=ai_timeout,
                             max_tokens=max_out_tokens,
                             tools=provider_tools,
@@ -12991,6 +13356,15 @@ class MaxwellBot(commands.Bot):
                             on_token=_on_followup_token,
                             custom_tool_calls=custom_tool_calls,
                         )
+                    except ProviderIncompleteResponseError as exc:
+                        incomplete_error = exc
+                        response = _format_incomplete_response(exc)
+                        response_metrics = exc.metrics
+                        usage = self._usage_from(exc)
+                        if usage:
+                            self._token_tracker.record(usage)
+                        followup_turn_ran = True
+                        break
                     except Exception:
                         # Ensure followup progress is cleaned up on error
                         if followup_progress is not None:
@@ -13043,7 +13417,7 @@ class MaxwellBot(commands.Bot):
             # assistant text is not a second reply. A later follow-up
             # with real text and no new send_message still posts (the
             # "checking…" placeholder case).
-            if _should_skip_plaintext_after_send(
+            if incomplete_error is None and _should_skip_plaintext_after_send(
                 tool_results, all_tool_results, followup_turn_ran, response
             ):
                 await self._ensure_reasoning_trace(
@@ -13118,8 +13492,11 @@ class MaxwellBot(commands.Bot):
                 response, send_stickers = self._extract_stickers_from_text(
                     response, message.guild
                 )
-                _, chunks = prepare_delivery(self, response, response_metrics, self._split_response)
+                clean_chunks, chunks = prepare_delivery(
+                    self, response, response_metrics, self._split_response
+                )
                 if not chunks and send_stickers:
+                    clean_chunks = [""]
                     chunks = [""]
                 # Fast-tool fix: try to transition the live progress message
                 # (if any) into the final reply instead of deleting it and
@@ -13133,6 +13510,15 @@ class MaxwellBot(commands.Bot):
                 # batch ran) or never posted (deferred window won the race),
                 # transition_to_final returns False and we fall through to
                 # the normal reply path.
+                delivered_chunks: list[tuple[str, str | None]] = []
+
+                def _record_transition_delivery(sent) -> None:
+                    sent_id = getattr(sent, "id", None)
+                    delivered_chunks.append(
+                        (clean_chunks[0], str(sent_id) if sent_id is not None else None)
+                    )
+                    record_delivery(self, message.channel, sent, response_metrics)
+
                 transitioned = False
                 if chunks and chunks[0]:
                     for _prog in reversed(active_progresses):
@@ -13142,100 +13528,123 @@ class MaxwellBot(commands.Bot):
                             with contextlib.suppress(Exception):
                                 if await _prog.transition_to_final(
                                     chunks[0],
-                                    on_delivered=lambda sent, metrics=response_metrics: record_delivery(self, message.channel, sent, metrics),
+                                    on_delivered=_record_transition_delivery,
                                 ):
                                     transitioned = True
+                                    if not delivered_chunks:
+                                        delivered_chunks.append((clean_chunks[0], None))
                                     break
                         except Exception as _e:  # noqa: BLE001
                             logger.debug("transition_to_final failed: %s", _e)
-                reply_delivered = bool(transitioned)
-                async with self._reply_typing(
-                    message.channel, response, message=message
-                ):
-                    for i, chunk in enumerate(chunks):
-                        if i == 0 and transitioned:
-                            # Progress message is already the first chunk.
-                            continue
-                        elif i == 0:
-                            try:
+                if delivered_chunks:
+                    transitioned = True
+                try:
+                    async with self._reply_typing(
+                        message.channel, response, message=message
+                    ):
+                        for i, chunk in enumerate(chunks):
+                            if i == 0 and transitioned:
+                                continue
+                            if i == 0:
+                                try:
+                                    sent = await self._send_with_slowmode(
+                                        message.channel,
+                                        content=chunk,
+                                        reply_to=message,
+                                        stickers=send_stickers,
+                                    )
+                                except (discord.NotFound, discord.HTTPException) as exc:
+                                    if not _is_unknown_reference_error(exc):
+                                        raise
+                                    sent = await self._send_with_slowmode(
+                                        message.channel,
+                                        content=chunk,
+                                        stickers=send_stickers,
+                                    )
+                            else:
                                 sent = await self._send_with_slowmode(
-                                    message.channel,
-                                    content=chunk,
-                                    reply_to=message,
-                                    stickers=send_stickers,
-                                )
-                            except (discord.NotFound, discord.HTTPException) as _exc:
-                                # Referenced message was deleted between read and reply;
-                                # fall back to a plain channel send so the user still sees it.
-                                # _send_with_slowmode already handles this, but keep the
-                                # outer net for reply paths that bypass it (fake_message
-                                # reply shims). Non-reference errors keep propagating.
-                                if not _is_unknown_reference_error(_exc):
-                                    raise
-                                logger.warning(
-                                    "message.reply parent is gone, falling back to channel.send in channel %s",
-                                    getattr(message.channel, "id", "?"),
-                                )
-                                sent = await self._send_with_slowmode(
-                                    message.channel,
-                                    content=chunk,
-                                    stickers=send_stickers,
+                                    message.channel, content=chunk
                                 )
                             if sent is None:
                                 break
-                            reply_delivered = True
-                        else:
-                            sent = await self._send_with_slowmode(
-                                message.channel, content=chunk
+                            sent_id = getattr(sent, "id", None)
+                            delivered_chunks.append(
+                                (clean_chunks[i], str(sent_id) if sent_id is not None else None)
                             )
-                            if sent is None:
-                                break
-                            reply_delivered = True
-                        record_delivery(self, message.channel, sent, response_metrics)
-                # Write the bot's own reply to channel memory. Without
-                # this the next turn sees the user's "Explain X" question
-                # but NOT the bot's answer — the user comes back and
-                # asks "what did you say?" and the model genuinely has
-                # no record. The user reported this as "I asked for an
-                # explanation and maxwell couldn't recall its own
-                # explanation, and even when I pasted it back maxwell
-                # couldn't remember". The fix is to add_to_channel_memory
-                # for every normal reply path. The send_message tool
-                # path already records via _remember_tool_call (writes
-                # a Tool entry); this covers the message.reply(...)
-                # path. The synthetic message_id is derived from the
-                # user's message_id so it's stable across retries and
-                # doesn't collide with the user's own message_id.
-                if (
-                    reply_delivered
-                    and response
-                    and self._control.get("store_memory", True)
-                    and getattr(self, "memory", None) is not None
-                ):
-                    try:
-                        await self.add_message_to_memory(
-                            str(message.channel.id),
-                            {
-                                "author": self.bot_name,
-                                "author_id": str(self.user.id) if self.user else "",
-                                "author_is_bot": True,
-                                "content": response,
-                                "message_id": f"bot_reply:{message.id}",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            },
-                            message,
+                            record_delivery(
+                                self, message.channel, sent, response_metrics
+                            )
+                finally:
+                    reply_delivered = bool(delivered_chunks)
+                    if reply_delivered:
+                        delivery_complete = len(delivered_chunks) == len(chunks)
+                        delivery_note = (
+                            ""
+                            if delivery_complete
+                            else f"[Delivery incomplete: {len(delivered_chunks)} of "
+                            f"{len(chunks)} chunks confirmed; unsent remainder omitted.]"
                         )
-                    except Exception as _e:  # noqa: BLE001
-                        logger.debug(
-                            f"Failed to record bot reply in channel memory: {_e}"
+                        if (
+                            response
+                            and self._control.get("store_memory", True)
+                            and getattr(self, "memory", None) is not None
+                        ):
+                            for index, (chunk, sent_id) in enumerate(delivered_chunks):
+                                stored_content = chunk
+                                if index == len(delivered_chunks) - 1 and delivery_note:
+                                    stored_content = f"{stored_content}\n\n{delivery_note}"
+                                if not stored_content:
+                                    continue
+                                try:
+                                    await self.add_message_to_memory(
+                                        str(message.channel.id),
+                                        {
+                                            "author": self.bot_name,
+                                            "author_id": str(self.user.id) if self.user else "",
+                                            "author_is_bot": True,
+                                            "content": stored_content,
+                                            "message_id": (
+                                                f"bot_reply:{sent_id}"
+                                                if sent_id is not None
+                                                else f"bot_reply:{message.id}:chunk:{index}"
+                                            ),
+                                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        },
+                                        message,
+                                    )
+                                except Exception as exc:
+                                    logger.debug("Failed to record delivered reply chunk: %s", exc)
+                        delivered_text = "\n".join(
+                            chunk for chunk, _sent_id in delivered_chunks if chunk
                         )
-                if reply_delivered:
-                    await self._record_rem_event(message, "assistant", response)
-                    normal_reply_sent = True
-                    await self._mark_inbox_announced()
+                        if delivery_note:
+                            delivered_text = f"{delivered_text}\n\n{delivery_note}"
+                        if delivered_text:
+                            await self._record_rem_event(
+                                message, "assistant", delivered_text
+                            )
+                        normal_reply_sent = True
+                        await self._mark_inbox_announced()
         except asyncio.CancelledError as _exc:
             logger.info(f"Cancelled active request in channel {channel_id}")
             raise
+        except TurnBudgetExceeded as e:
+            logger.warning("Foreground turn budget exhausted: %s", e)
+            if self._control.get("error_replies", True):
+                with notice_send():
+                    await message.channel.send(
+                        f"{e}. No additional provider attempt will be made.",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                normal_reply_sent = True
+        except PromptBudgetExceeded as e:
+            logger.warning("Prompt cannot fit the protected tool/input budget: %s", e)
+            if self._control.get("error_replies", True):
+                with notice_send():
+                    await message.channel.send(
+                        str(e), allowed_mentions=discord.AllowedMentions.none()
+                    )
+                normal_reply_sent = True
         except ProviderUsageExhaustedError as e:
             logger.warning(f"Provider usage exhausted while handling message: {e}")
             if self._control.get("error_replies", True):
@@ -13310,6 +13719,7 @@ class MaxwellBot(commands.Bot):
                 self._last_bot_reply = {
                     c: t for c, t in self._last_bot_reply.items() if t > cutoff
                 }
+            turn.clear_cleanup()
 
     async def _ensure_reasoning_trace(
         self, message, tool_results: list[str], response: str, outcome: str
@@ -13384,12 +13794,6 @@ class MaxwellBot(commands.Bot):
             "dm": "send_message",
         }
         raw_name = name
-        if name not in self.tools and name in _TOOL_ALIASES:
-            resolved = _TOOL_ALIASES[name]
-            logger.info(
-                "Aliasing hallucinated/alternate tool name %r -> %r", name, resolved
-            )
-            name = resolved
 
         # Extract reasoning first. It is NOT a real tool argument; tools must
         # never receive it (some tools forward **kwargs straight to an API and
@@ -13397,23 +13801,34 @@ class MaxwellBot(commands.Bot):
         reasoning, params = extract_reasoning(params)
         # Re-strip server-only _-keys AFTER extract so reasoning stays out too.
         params = {k: v for k, v in params.items() if not str(k).startswith("_")}
-        params = _prepare_tool_params(name, params)
         result_text = ""
         try:
             plugin_manager = getattr(self, "plugin_manager", None)
-            plugin_tool = (
-                plugin_manager.get_tool(name) if plugin_manager is not None else None
-            )
-            plugin_allowed = False
-            if plugin_tool is not None:
+            available_plugins = {}
+            if plugin_manager is not None:
                 author_id = getattr(getattr(message, "author", None), "id", None)
                 try:
-                    plugin_allowed = name in plugin_manager.get_available_tools(
+                    available_plugins = plugin_manager.get_available_tools(
                         user_id=author_id,
                         platform=self._message_tool_platform(message),
                     )
                 except Exception:
-                    logger.exception("Failed to check access for plugin tool %s", name)
+                    logger.exception("Failed to check plugin access for %s", name)
+            plugin_tool = (
+                plugin_manager.get_tool(name) if plugin_manager is not None else None
+            )
+            plugin_allowed = plugin_tool is not None and name in available_plugins
+            if name not in self.tools and not plugin_allowed and name in _TOOL_ALIASES:
+                resolved = _TOOL_ALIASES[name]
+                logger.info(
+                    "Aliasing hallucinated/alternate tool name %r -> %r", name, resolved
+                )
+                name = resolved
+                plugin_tool = (
+                    plugin_manager.get_tool(name) if plugin_manager is not None else None
+                )
+                plugin_allowed = plugin_tool is not None and name in available_plugins
+            params = _prepare_tool_params(name, params)
             if name == "send_message" and isinstance(params.get("content"), str):
                 params = dict(params)
                 content = params.get("content", "")
@@ -13432,6 +13847,8 @@ class MaxwellBot(commands.Bot):
             elif name not in self.tools and not plugin_allowed:
                 logger.warning("Unknown tool called: %r (original: %r)", name, raw_name)
                 result_text = f"Error - unknown tool '{name}'"
+            elif not tool_authorized(self, message, name):
+                result_text = "Error - permission actor is not authorized for this tool"
             elif self._tool_breaker.is_open(name):
                 result_text = (
                     "Error - tool temporarily disabled (too many recent failures)"
@@ -13489,30 +13906,124 @@ class MaxwellBot(commands.Bot):
         channel_id = getattr(channel, "id", None)
         if channel_id is None or not hasattr(self, "memory"):
             return
-        mem_params: dict = dict(params or {})
+        mem_params: dict = copy.deepcopy(params or {})
+        pending = [(mem_params, False)]
+        media_keys = {
+            "audio", "audio_url", "b64", "base64", "image", "image_url", "images",
+            "media", "video", "video_url",
+        }
+        while pending:
+            value, media_context = pending.pop()
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    key_is_media = str(key).lower() in media_keys
+                    if isinstance(child, str):
+                        data_marker = re.search(
+                            r"data:(image|audio|video)/([^;,\s]+)", child, re.IGNORECASE
+                        )
+                        is_base64 = (
+                            (media_context or key_is_media)
+                            and len(child) > 64
+                            and re.fullmatch(r"[A-Za-z0-9+/=_-]+", child)
+                        )
+                        if data_marker or is_base64:
+                            kind = (
+                                f"{data_marker.group(1).lower()}/{data_marker.group(2).lower()}"
+                                if data_marker
+                                else "media"
+                            )
+                            value[key] = (
+                                f"[embedded {kind} omitted; full value "
+                                f"{len(child.encode('utf-8'))} UTF-8 bytes]"
+                            )
+                    elif isinstance(child, (dict, list)):
+                        pending.append((child, media_context or key_is_media))
+            elif isinstance(value, list):
+                for index, child in enumerate(value):
+                    if isinstance(child, str):
+                        is_base64 = (
+                            media_context
+                            and len(child) > 64
+                            and re.fullmatch(r"[A-Za-z0-9+/=_-]+", child)
+                        )
+                        if is_base64:
+                            value[index] = (
+                                f"[embedded media omitted; full value "
+                                f"{len(child.encode('utf-8'))} UTF-8 bytes]"
+                            )
+                    elif isinstance(child, (dict, list)):
+                        pending.append((child, media_context))
+        for heavy_key in ("body", "content", "code", "html", "data"):
+            if (
+                heavy_key in mem_params
+                and isinstance(mem_params[heavy_key], str)
+                and len(mem_params[heavy_key]) > 2000
+            ):
+                mem_params[heavy_key] = (
+                    f"[large {heavy_key} omitted, {len(mem_params[heavy_key])} chars]"
+                )
         try:
-            for heavy_key in ("body", "content", "code", "html", "data"):
-                if (
-                    heavy_key in mem_params
-                    and isinstance(mem_params[heavy_key], str)
-                    and len(mem_params[heavy_key]) > 2000
-                ):
-                    mem_params[heavy_key] = (
-                        f"[large {heavy_key} omitted, {len(mem_params[heavy_key])} chars]"
-                    )
-            params_text = json.dumps(mem_params, ensure_ascii=False, sort_keys=True)
+            params_text = json.dumps(
+                mem_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
         except TypeError:
             params_text = str(params or {})
-            mem_params = dict(params or {})
+        if len(params_text) > 8000:
+            original_chars = len(params_text)
+            preview_chars = 3000
+            marker = (
+                f"[tool parameters truncated: {original_chars - preview_chars * 2} of "
+                f"{original_chars} chars omitted]"
+            )
+            params_text = params_text[:preview_chars] + marker + params_text[-preview_chars:]
+            mem_params = {
+                "_truncated": True,
+                "original_chars": original_chars,
+                "preview": params_text,
+            }
+        stored_result = re.sub(
+            r"__(IMAGE|AUDIO)_B64__([A-Za-z0-9+/=\s]+)__END_\1_B64__",
+            lambda match: (
+                f"[embedded {match.group(1).lower()} omitted; encoded payload "
+                f"{len(match.group(2).encode('utf-8'))} UTF-8 bytes]"
+            ),
+            str(result),
+        )
+        stored_result = re.sub(
+            r"data:(image|audio|video)/([^;,\s]+);base64,([A-Za-z0-9+/=_-]+)",
+            lambda match: (
+                f"[embedded {match.group(1).lower()}/{match.group(2).lower()} omitted; "
+                f"full value {len(match.group(0).encode('utf-8'))} UTF-8 bytes]"
+            ),
+            stored_result,
+            flags=re.IGNORECASE,
+        )
+        if len(stored_result) > 8000:
+            original_chars = len(stored_result)
+            half = 4000
+            stored_result = (
+                f"{stored_result[:half]}\n[tool result truncated: "
+                f"{original_chars - half * 2} of {original_chars} chars omitted]\n"
+                f"{stored_result[-half:]}"
+            )
+        content = f"Called {name} with {params_text} -> {stored_result}"
+        if len(content) > 16000:
+            original_chars = len(content)
+            half = 7900
+            content = (
+                f"{content[:half]}\n[tool memory content truncated: "
+                f"{original_chars - half * 2} of {original_chars} chars omitted]\n"
+                f"{content[-half:]}"
+            )
         await self.memory.add_to_channel_memory(
             str(channel_id),
             {
                 "author": "Tool",
-                "content": f"Called {name} with {params_text} -> {result}",
+                "content": content,
                 "is_tool": True,
                 "tool_name": name,
                 "tool_params": mem_params,
-                "tool_result": result,
+                "tool_result": stored_result,
             },
         )
 
@@ -13539,31 +14050,59 @@ class MaxwellBot(commands.Bot):
             return (cleaned, [], []) if include_images else (cleaned, [])
 
         disabled = set(self._control.get("disabled_tools", []) or [])
-        compatible = MaxwellBot._compatible_tool_names(
-            self, MaxwellBot._message_tool_platform(self, message)
-        )
+        platform = self._message_tool_platform(message)
+        compatible = self._compatible_tool_names(platform)
         calls = normalize_native_tool_calls(raw_tool_calls)
         if not calls:
             return (cleaned, [], []) if include_images else (cleaned, [])
+        eligible_names = MaxwellBot._turn_tool_names(self, platform, message)
+        builtin_names = set(getattr(self, "tools", {}) or {})
+        turn_tools = MaxwellBot._tools_for_turn(self, platform, message)
+        eligible_plugin_names = {
+            name
+            for name in turn_tools
+            if name not in builtin_names
+            and name not in disabled
+            and tool_authorized(self, message, name)
+        }
+        for call in calls:
+            original_name = call["raw_name"]
+            if (
+                original_name in builtin_names
+                or original_name in eligible_names
+                or original_name in eligible_plugin_names
+            ):
+                call["name"] = original_name
 
-        # Preserve raw tool_calls for the assistant message in the follow-up turn
-        raw_for_history = []
-        for c in calls:
-            raw = c.get("raw")
-            if isinstance(raw, dict):
-                raw_for_history.append(raw)
-            else:
-                raw_for_history.append(
-                    {
-                        "id": c["id"],
-                        "type": "function",
-                        "function": {
-                            "name": c["name"],
-                            "arguments": json.dumps(c.get("arguments") or {}),
-                        },
-                    }
-                )
-        history_tool_calls = elide_tool_calls_for_history(raw_for_history)
+        # Replay only normalized calls; history elision must never change dispatch inputs.
+        canonical_tool_calls = [
+            {
+                "id": call["id"],
+                "type": "function",
+                "function": {
+                    "name": call["raw_name"],
+                    "arguments": json.dumps(
+                        call["arguments"], ensure_ascii=False, separators=(",", ":")
+                    ),
+                },
+            }
+            for call in calls
+        ]
+        history_tool_calls = elide_tool_calls_for_history(canonical_tool_calls)
+        preflight_history = trim_tool_tail(
+            [
+                {
+                    "role": "assistant",
+                    "content": cleaned if cleaned else None,
+                    "tool_calls": history_tool_calls,
+                },
+                *(
+                    {"role": "tool", "tool_call_id": call["id"], "content": ""}
+                    for call in calls
+                ),
+            ]
+        )
+        history_tool_calls = preflight_history[0]["tool_calls"]
 
         # Sequencing rules (2026-08-08):
         # - non_terminal = pure helper tools (web_search, shell, image_gen,
@@ -13765,7 +14304,15 @@ class MaxwellBot(commands.Bot):
                         # Surface the exception to the LLM context as
                         # a tool error (NOT a "Sorry" abort).
                         name = call.get("name", "unknown")
-                        err_line = f"Tool {name}: Error - {type(res).__name__}: {res}"
+                        error_text = str(res)
+                        if len(error_text) > 4_000:
+                            omitted = len(error_text) - 4_000
+                            error_text = (
+                                f"{error_text[:2_000]} [error truncated: {omitted} chars omitted] "
+                                f"{error_text[-2_000:]}"
+                            )
+                        err_line = f"Tool {name}: Error - {type(res).__name__}: {error_text}"
+                        result_by_id[call["id"]] = err_line
                         with contextlib.suppress(Exception):
                             await MaxwellBot._remember_tool_call(
                                 self,
@@ -13900,29 +14447,48 @@ class MaxwellBot(commands.Bot):
                 with contextlib.suppress(Exception):
                     await progress.stop()
 
-        # 2026-07-21: extract embedded base64 images from tool_results
-        # BEFORE building follow-up messages. Previously the LLM on
-        # the next turn received the full base64 string in the tool
-        # message AND got the image attached separately — a 10MB
-        # string + 10MB vision attachment per image, which OOMed the
-        # provider. Now: strip base64 from the LLM-facing content,
-        # only attach the decoded image as vision. Also cap each
-        # tool result at 32KB to keep context size bounded.
+        # Strip embedded media before replay and admit only a bounded number of
+        # distinct decoded payloads across the foreground turn.
         _IMG_RE = re.compile(r"__IMAGE_B64__([A-Za-z0-9+/=\s]+)__END_IMAGE_B64__")
         _AUDIO_RE = re.compile(r"__AUDIO_B64__([A-Za-z0-9+/=\s]+)__END_AUDIO_B64__")
         _MAX_TOOL_RESULT_CHARS = 32_000
-        seen_images: set[str] = set()
-        seen_audio: set[str] = set()
+        turn = current_foreground_turn()
+        local_media_keys: set[str] = set()
+        local_media_bytes = 0
         for tr in list(result_by_id.values()) + list(tool_results):
-            for m in _IMG_RE.finditer(tr):
-                raw = m.group(1).replace("\n", "").replace(" ", "")
-                if len(raw) < 5_000_000 and raw not in seen_images:
-                    seen_images.add(raw)
+            for match in _IMG_RE.finditer(tr):
+                raw = re.sub(r"\s+", "", match.group(1))
+                if len(raw) >= 5_000_000:
+                    continue
+                decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                admitted = (
+                    turn.admit_media(key, decoded_bytes)
+                    if turn is not None
+                    else key not in local_media_keys
+                    and len(local_media_keys) < 12
+                    and local_media_bytes + decoded_bytes <= 20 * 1024 * 1024
+                )
+                if admitted:
+                    local_media_keys.add(key)
+                    local_media_bytes += decoded_bytes
                     tool_images.append(raw)
-            for m in _AUDIO_RE.finditer(tr):
-                raw = m.group(1).replace("\n", "").replace(" ", "")
-                if len(raw) < 5_000_000 and raw not in seen_audio:
-                    seen_audio.add(raw)
+            for match in _AUDIO_RE.finditer(tr):
+                raw = re.sub(r"\s+", "", match.group(1))
+                if len(raw) >= 5_000_000:
+                    continue
+                decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
+                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                admitted = (
+                    turn.admit_media(key, decoded_bytes)
+                    if turn is not None
+                    else key not in local_media_keys
+                    and len(local_media_keys) < 12
+                    and local_media_bytes + decoded_bytes <= 20 * 1024 * 1024
+                )
+                if admitted:
+                    local_media_keys.add(key)
+                    local_media_bytes += decoded_bytes
                     tool_media.append(
                         {
                             "b64": raw,
@@ -13936,16 +14502,23 @@ class MaxwellBot(commands.Bot):
                         }
                     )
 
-        def _truncate_tool_result(tr: str) -> str:
-            tr = _IMG_RE.sub("", _AUDIO_RE.sub("", tr)).strip()
-            if len(tr) > _MAX_TOOL_RESULT_CHARS:
+        truncated_by_id = {}
+        for call_id, tool_result in result_by_id.items():
+            tool_result = _IMG_RE.sub("", _AUDIO_RE.sub("", tool_result)).strip()
+            if len(tool_result) > _MAX_TOOL_RESULT_CHARS:
+                original_chars = len(tool_result)
                 half = _MAX_TOOL_RESULT_CHARS // 2
-                return f"{tr[:half]}\n\n[...truncated {len(tr) - _MAX_TOOL_RESULT_CHARS} chars...]\n\n{tr[-half:]}"
-            return tr
-
-        truncated_by_id = {
-            cid: _truncate_tool_result(tr) for cid, tr in result_by_id.items()
-        }
+                while True:
+                    omitted = original_chars - 2 * half
+                    marker = (
+                        f"\n\n[tool result truncated: {omitted} of "
+                        f"{original_chars} chars omitted]\n\n"
+                    )
+                    if 2 * half + len(marker) <= _MAX_TOOL_RESULT_CHARS:
+                        break
+                    half -= 1
+                tool_result = tool_result[:half] + marker + tool_result[-half:]
+            truncated_by_id[call_id] = tool_result
 
         # Build OpenAI tool-role follow-up messages (assistant + tool results)
         assistant_msg: dict[str, Any] = {
@@ -14151,17 +14724,25 @@ class MaxwellBot(commands.Bot):
     def _turn_tool_names(
         self, platform: str, message=None, content: str | None = None
     ) -> set[str]:
-        """The tool names this specific turn is allowed to see."""
-        compatible = MaxwellBot._compatible_tool_names(self, platform)
+        """Return the authorized catalog for this turn or a full debug preview."""
+        compatible = self._compatible_tool_names(platform)
         disabled = set(self._control.get("disabled_tools", []) or [])
-        names = {n for n in compatible if n not in disabled}
+        expanded_groups = current_tool_groups()
+        if expanded_groups is None:
+            names = set(compatible)
+        else:
+            expanded_names = set().union(
+                *(TOOL_DISCOVERY_GROUPS[group] for group in expanded_groups)
+            ) if expanded_groups else set()
+            names = {
+                name
+                for name in compatible
+                if name in CORE_TOOL_NAMES or name in expanded_names
+            }
 
-        # Include enabled plugin tools for this user or global
         plugin_manager = getattr(self, "plugin_manager", None)
         if plugin_manager is not None:
-            author_id = None
-            if message is not None:
-                author_id = getattr(getattr(message, "author", None), "id", None)
+            author_id = getattr(getattr(message, "author", None), "id", None)
             try:
                 plugin_tools = plugin_manager.get_available_tools(
                     user_id=author_id, platform=platform
@@ -14169,30 +14750,13 @@ class MaxwellBot(commands.Bot):
             except Exception:
                 logger.exception("Failed to load per-turn plugin tool names")
                 plugin_tools = {}
-            for pt_name in plugin_tools:
-                if pt_name not in disabled:
-                    names.add(pt_name)
+            if expanded_groups is None or "plugins" in expanded_groups:
+                names.update(name for name in plugin_tools if name not in disabled)
 
-        if "join_server" in names:
-            author_id = (
-                getattr(getattr(message, "author", None), "id", None)
-                if message is not None
-                else None
-            )
-            is_admin = False
-            try:
-                is_admin = bool(
-                    author_id
-                    and getattr(self, "_is_admin", lambda _uid: False)(author_id)
-                )
-            except Exception:
-                is_admin = False
-            if not is_admin:
-                names.discard("join_server")
-        # leftover no-op from the old gated catalog — keep the handler so a
-        # stale call does not error, but do not offer it.
-        names.discard("more_tools")
-        return names
+        if JOB_TURN.get():
+            names.discard("spawn_background")
+        names = {name for name in names if name not in disabled}
+        return {name for name in names if tool_authorized(self, message, name)}
 
     def _tools_for_turn(self, platform: str, message=None) -> dict[str, Any]:
         """Return built-in tools plus plugins enabled for this caller.
@@ -14204,6 +14768,8 @@ class MaxwellBot(commands.Bot):
         only if a model fabricates its function name.
         """
         tools = dict(getattr(self, "tools", {}) or {})
+        if JOB_TURN.get():
+            tools.pop("spawn_background", None)
         manager = getattr(self, "plugin_manager", None)
         if manager is None:
             return tools
@@ -14287,7 +14853,9 @@ class MaxwellBot(commands.Bot):
         descriptions = {} if native else {
             name: tools[name].get_description() for name in names
         }
-        return tool_system_prompt(names, descriptions, native=native)
+        return tool_system_prompt(
+            names, descriptions, native=native, background=JOB_TURN.get()
+        )
 
     @staticmethod
     def _topic_tokens(text: str) -> set[str]:
@@ -14612,7 +15180,11 @@ class MaxwellBot(commands.Bot):
     # ─── per-tier context budget ──────────────────────────────────────
 
     def _context_budget_plan(
-        self, message, user_message: str, system_parts: list[str]
+        self,
+        message,
+        user_message: str,
+        system_parts: list[str],
+        extra_chars: int = 0,
     ) -> BudgetPlan:
         """Divide the prompt's memory characters across the memory tiers.
 
@@ -14629,6 +15201,7 @@ class MaxwellBot(commands.Bot):
         control = getattr(self, "_control", None) or {}
         overhead = (
             sum(len(p) for p in system_parts)
+            + extra_chars
             + len(JAILBREAK_PROMPT)
             + 4000  # live user turn, media summary, music context
         )
@@ -14714,36 +15287,74 @@ class MaxwellBot(commands.Bot):
             "background, don't recite):\n" + "\n".join(lines)
         )
 
-    def _apply_prompt_budget(self, messages: list[dict]) -> list[dict]:
+    def _apply_prompt_budget(
+        self, messages: list[dict], provider_tools: list[dict] | None = None
+    ) -> list[dict]:
         budget = MaxwellBot._prompt_budget_chars(self)
-        total = sum(MaxwellBot._message_content_chars(m) for m in messages)
+        schema_chars = (
+            len(json.dumps(provider_tools, ensure_ascii=False, separators=(",", ":")))
+            if provider_tools
+            else 0
+        )
+        out = [dict(message) for message in messages]
+        total = schema_chars + sum(MaxwellBot._message_content_chars(m) for m in out)
         if total <= budget:
-            return messages
-        out = [dict(m) for m in messages]
-        # Trim low-priority system blocks first. Do not drop the core identity
-        # wholesale; some providers get weird if the first system vanishes.
-        for idx in range(len(out) - 1, 0, -1):
+            return out
+
+        protected_messages = {id(out[0])} if out else set()
+        live_input = None
+        for index in range(len(out) - 1, -1, -1):
+            item = out[index]
+            text = str(item.get("content") or "")
+            if item.get("role") == "user" and live_input is None:
+                live_input = index
+            if item.get("role") == "system" and (
+                text.startswith("## Tool contract")
+                or text.startswith("## Tools")
+                or text.startswith("## Available tools\n")
+                or text.startswith("Custom tool protocol:")
+                or text.startswith("Server-specific instructions:")
+                or text.startswith("The stored server prompt was omitted because it exceeds")
+            ):
+                protected_messages.add(id(item))
+        if live_input is not None:
+            protected_messages.add(id(out[live_input]))
+            tail_start = live_input + 1
+            groups = tool_tail_groups(out[tail_start:])
+            for group in groups[:-1]:
+                if total <= budget:
+                    break
+                removed = out[tail_start : tail_start + len(group)]
+                total -= sum(MaxwellBot._message_content_chars(m) for m in removed)
+                del out[tail_start : tail_start + len(group)]
+            for index, item in enumerate(out):
+                content = item.get("content")
+                if (
+                    total > budget
+                    and item.get("role") == "user"
+                    and isinstance(content, str)
+                    and content.startswith("<previous_conversation>\n")
+                    and id(item) not in protected_messages
+                ):
+                    total -= MaxwellBot._message_content_chars(item)
+                    del out[index]
+                    break
+
+        for index in range(len(out) - 1, -1, -1):
             if total <= budget:
                 break
-            if out[idx].get("role") != "system" or not isinstance(
-                out[idx].get("content"), str
-            ):
+            item = out[index]
+            if id(item) in protected_messages or item.get("role") != "system":
                 continue
-            old = out[idx]["content"]
-            target = max(1000, len(old) - (total - budget))
-            target = min(target, 8000)
-            out[idx]["content"] = MaxwellBot._trim_middle(old, target)
-            total -= len(old) - len(out[idx]["content"])
-        if total > budget and isinstance(out[0].get("content"), str):
-            old = out[0]["content"]
-            out[0]["content"] = MaxwellBot._trim_middle(old, max(12000, budget // 3))
-            total -= len(old) - len(out[0]["content"])
-        if total > budget and isinstance(out[-1].get("content"), str):
-            old = out[-1]["content"]
-            out[-1]["content"] = MaxwellBot._trim_middle(
-                old, max(8000, budget - (total - len(old)))
-            )
-        logger.info("Trimmed prompt to budget=%s chars messages=%s", budget, len(out))
+            old = item.get("content")
+            if not isinstance(old, str):
+                continue
+            target = max(512, len(old) - (total - budget))
+            item["content"] = MaxwellBot._trim_middle(old, target)
+            total -= len(old) - len(item["content"])
+
+        if total > budget:
+            raise PromptBudgetExceeded()
         return out
 
     async def _build_messages(
@@ -14801,6 +15412,11 @@ class MaxwellBot(commands.Bot):
         dynamic_parts: list[str] = []
         server_id = str(message.guild.id) if message.guild else "DM"
         custom_prompt = self.memory.get_server_prompt(server_id)
+        server_prompt_text = ""
+        server_prompt_diagnostic = ""
+        tool_prompt = MaxwellBot._tool_system_prompt(
+            self, message=message, content=user_message
+        )
         personality = (
             self._get_personality()
             if hasattr(self, "_get_personality")
@@ -14812,7 +15428,14 @@ class MaxwellBot(commands.Bot):
             self._control.get("max_response_chars", 1000) or 1000, 1000
         )
         if custom_prompt:
-            system_parts.append(f"Server-specific instructions: {custom_prompt}")
+            if len(custom_prompt.encode("utf-8")) <= SERVER_PROMPT_MAX_BYTES:
+                server_prompt_text = f"Server-specific instructions: {custom_prompt}"
+            else:
+                server_prompt_diagnostic = (
+                    "The stored server prompt was omitted because it exceeds "
+                    f"{SERVER_PROMPT_MAX_BYTES} UTF-8 bytes. Shorten or replace it "
+                    f"with {self.command_prefix}prompt <replacement>."
+                )
         system_parts.append(
             f"Core personality: {personality}\nReply limit: {char_limit} chars."
         )
@@ -14875,7 +15498,7 @@ class MaxwellBot(commands.Bot):
         # left, so anything a lookup tier does not use flows to the running
         # conversation, which is the tier worth protecting.
         ctx_plan = MaxwellBot._context_budget_plan(
-            self, message, user_message, system_parts
+            self, message, user_message, system_parts, len(tool_prompt)
         )
         # Characters a lookup tier declined to spend, offered to the tiers that
         # come after it. Without this, a turn with no web results and no
@@ -15231,9 +15854,6 @@ class MaxwellBot(commands.Bot):
                         + ", ".join(f"[STICKER ({sname})]" for sname in sticker_items)
                     )
                 system_parts.append("\n".join(grid_parts))
-        tool_prompt = self._tool_system_prompt(message=message, content=user_message)
-        if tool_prompt:
-            system_parts.append(tool_prompt)
         if has_media:
             dynamic_parts.append(
                 "Multimodal: images/audio/video are in the payload (oldest→newest). "
@@ -15285,6 +15905,12 @@ class MaxwellBot(commands.Bot):
         # message capped the reusable prefix at a few hundred tokens and left
         # the whole (much larger) transcript uncacheable.
         messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
+        if server_prompt_text:
+            messages.append({"role": "system", "content": server_prompt_text})
+        if server_prompt_diagnostic:
+            messages.append({"role": "system", "content": server_prompt_diagnostic})
+        if tool_prompt:
+            messages.append({"role": "system", "content": tool_prompt})
         memory = await self.memory.get_channel_memory(channel_id)
         if memory:
             # 2026-07-19: Discord chat does not need a 200k-char dump. Keep

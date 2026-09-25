@@ -260,17 +260,25 @@ def test_native_edit_preserves_original_reference_bytes(native_image, image):
     assert "Edited image" in case.tool.bot.memory.add_to_channel_memory.await_args.args[1]["content"]
 
 
-def test_native_auto_attachments_keep_four_reference_limit(native_image, monkeypatch):
+@pytest.mark.parametrize("image", [None, "", [], "[]"])
+def test_native_auto_attachments_keep_four_reference_limit(native_image, monkeypatch, image):
     case = native_image
     case.message.attachments = [SimpleNamespace(
         url=f"https://example.invalid/{index}.png", content_type="image/png", filename="input.png",
     ) for index in range(6)]
     load = AsyncMock(return_value=(PNG, ""))
     monkeypatch.setattr(case.tool, "_load_one", load)
-    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="combine these"))
-    assert load.await_count == 4
-    assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}] * 4
-    assert "from 4 input images" in result
+    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="combine these", image=image))
+    if image is None:
+        assert load.await_count == 4
+        assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}] * 4
+        assert "from 4 input images" in result
+        assert case.session.post.call_args.args[0].endswith("/images/edits")
+    else:
+        load.assert_not_awaited()
+        assert "images" not in case.session.post.call_args.kwargs["json"]
+        assert "Image generated" in result
+        assert case.session.post.call_args.args[0].endswith("/images/generations")
     case.session.post.assert_called_once()
 
 
@@ -311,13 +319,20 @@ def test_native_private_http_reference_uses_existing_fetch_rules(native_image, m
 
 
 @pytest.mark.parametrize("allowed", [False, True])
-def test_native_local_reference_uses_existing_allowed_image_paths(native_image, tmp_path, allowed):
+@pytest.mark.parametrize("linked", [False, True])
+def test_native_local_reference_uses_existing_allowed_image_paths(native_image, tmp_path, allowed, linked):
     case = native_image
     case.tool.bot.config.DAME_CURIE_SITE_DIR = str(tmp_path / "site")
     directory = tmp_path / "site" / "_images" if allowed else tmp_path / "outside"
     directory.mkdir(parents=True)
     reference = directory / "reference.png"
     reference.write_bytes(PNG)
+    if linked:
+        image_dir = tmp_path / "site" / "_images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        alias = image_dir / "linked.png"
+        alias.symlink_to(reference)
+        reference = alias
     result = asyncio.run(case.tool.execute(case.message, prompt="edit", image=str(reference)))
     if allowed:
         assert not result.startswith("Error")

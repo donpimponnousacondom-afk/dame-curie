@@ -132,10 +132,8 @@ def test_runtime_wins_conflicting_extra_options_and_preserves_routing(base, mode
 
 
 @pytest.mark.parametrize("base,model", [
-    ("https://openrouter.ai/api/v1", "deepseek/deepseek-v4-flash"),
     ("https://openrouter.ai/api/v1", "google/gemini-3.7-flash"),
     ("https://api.deepseek.com/v1", "deepseek-v4-pro"),
-    ("https://api.deepseek.com/v1", "deepseek-v4.1-flash"),
     ("https://api.deepseek.com.evil.test/v1", "deepseek-flash"),
     ("https://openrouter.ai.evil.test/api/v1", "deepseek/deepseek-v4.1-flash"),
     ("https://gateway.example/v1", "deepseek-flash"),
@@ -144,6 +142,17 @@ def test_other_models_and_hosts_are_untouched(base, model):
     assert deepseek_reasoning_transport(base, model) == ""
     provider = OpenAICompatibleProvider(base, model, 8192, 0.6, reasoning_control=lambda: "max")
     assert reasoning_fields(provider._request_payload(provider._endpoints[0], [])) == {}
+    # Recognized DeepSeek Flash aliases on the configured hosts are not "other
+    # models": the control applies to them, so they keep their transport and
+    # their explicit reasoning fields instead of falling through as unknown.
+    for alias, transport in (
+        ("deepseek/deepseek-v4-flash", "openrouter"),
+        ("deepseek-v4.1-flash", "deepseek"),
+    ):
+        host = next(url for url, _model, name in ROUTES if name == transport)
+        assert deepseek_reasoning_transport(host, alias) == transport
+        provider = OpenAICompatibleProvider(host, alias, 8192, 0.6, reasoning_control=lambda: "max")
+        assert reasoning_fields(provider._request_payload(provider._endpoints[0], [])) == expected_fields(transport, "max")
 
 
 def test_main_control_does_not_leak_to_model_overrides_fallback_or_vision():

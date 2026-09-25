@@ -68,6 +68,7 @@ def message_in(channel=None):
 def tool_bot():
     return SimpleNamespace(
         user=SimpleNamespace(id=99), _control={"footer_enabled": True},
+        _is_admin=lambda actor_id: actor_id == 42,
         _current_progress_by_channel={},
     )
 
@@ -363,11 +364,20 @@ def invite_call():
     return bot_tools.JoinServerTool(bot), message, dm
 
 
-def test_private_url_refusal_is_not_an_incident(incidents, monkeypatch):
-    session = image_session(monkeypatch, Response())
-    with pytest.raises(ValueError, match="private/internal"):
-        asyncio.run(bot_tools._fetch_public_url("http://127.0.0.1/private", max_bytes=100))
-    session.get.assert_not_called()
+@pytest.mark.parametrize("url,allowed", [("http://127.0.0.1/private", True), ("file:///private", False), ("https://", False)])
+def test_fetch_url_policy_is_not_an_incident(incidents, monkeypatch, url, allowed):
+    response = Response(content_type="text/plain")
+    chunks = AsyncMock()
+    chunks.__aiter__.return_value = [b"synthetic response"]
+    response.content = SimpleNamespace(iter_chunked=Mock(return_value=chunks))
+    session = image_session(monkeypatch, response)
+    if allowed:
+        assert asyncio.run(bot_tools._fetch_public_url(url, max_bytes=100)) == (url, "text/plain", b"synthetic response")
+        session.get.assert_called_once()
+    else:
+        with pytest.raises(ValueError, match=r"HTTP\(S\)"):
+            asyncio.run(bot_tools._fetch_public_url(url, max_bytes=100))
+        session.get.assert_not_called()
     assert incidents.get(0) is None
 
 

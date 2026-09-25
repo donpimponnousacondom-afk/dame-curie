@@ -7,6 +7,8 @@ come from the live tool instances at request time so they stay in sync with
 
 from __future__ import annotations
 
+import json
+import math
 import re
 from typing import Any
 
@@ -46,6 +48,55 @@ def _num(desc: str = "") -> dict[str, Any]:
 
 
 # parameter schemas only — descriptions are attached from tool.get_description()
+CORE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "send_message", "react", "search_messages", "lookup_user", "web_search",
+        "fetch_url", "shell", "image_generator", "see_image", "see_video",
+        "youtube", "send_file", "wait", "no_response", "more_tools",
+    }
+)
+TOOL_DISCOVERY_GROUPS: dict[str, frozenset[str]] = {
+    "messaging": frozenset(
+        {
+            "edit_message", "delete_message", "create_poll", "create_invite",
+            "forward_message", "typing", "pin_message", "inbox_list", "inbox_act",
+        }
+    ),
+    "media": frozenset(
+        {"change_avatar", "send_meme", "send_media", "tts"}
+    ),
+    "identity": frozenset(
+        {"set_nickname", "set_member_nickname", "change_avatar", "change_presence"}
+    ),
+    "servers": frozenset(
+        {
+            "join_server", "server_setup", "leave_server", "list_servers",
+            "list_admin_servers", "create_category", "create_channel", "edit_channel",
+            "delete_channel", "set_channel_permissions", "edit_server", "manage_emoji",
+        }
+    ),
+    "moderation": frozenset(
+        {
+            "kick_member", "ban_member", "unban_member", "list_bans", "timeout_member",
+            "manage_role", "purge_messages", "set_member_nickname", "voice_mod",
+            "lock_channel", "audit_log", "pin_message",
+        }
+    ),
+    "voice": frozenset(
+        {"join_vc", "vc_status", "vc_where", "leave_vc", "voice_mod", "tts"}
+    ),
+    "workflow": frozenset(
+        {
+            "set_activity", "sleep", "clear_sleep", "update_base_personality",
+            "update_server_prompt", "guide", "spawn_background", "usage", "manage_plugin",
+        }
+    ),
+    "games": frozenset(
+        {"chess_start", "chess_move", "chess_state", "chess_resign"}
+    ),
+    "plugins": frozenset({"manage_plugin"}),
+}
+
 TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "image_generator": _obj(
         {
@@ -54,7 +105,8 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
             ),
             "image": _str(
                 "Optional image URL, data URI, or local path Dame Curie wrote; for several, pass a "
-                "JSON list or comma-separated refs (max 4). Omit to use message attachments."
+                "JSON list or comma-separated refs (max 4). Omit to use message attachments. "
+                "Pass an empty string or empty JSON list to generate from scratch without attachments."
             ),
             "model": _str(
                 "Optional exact configured model ID; defaults to IMAGE_GEN_MODEL."
@@ -415,11 +467,13 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "no_response": _obj({}),
     "more_tools": _obj(
         {
-            "need": _str(
-                "What you are trying to do, in a few words — 'ban a raider', "
-                "'run a script'. Used to point you at the right tool."
+            "group": _str(
+                "Optional tools to add for the next response turn.",
+                enum=sorted(TOOL_DISCOVERY_GROUPS),
             )
-        }
+        },
+        ["group"],
+        additional=False,
     ),
     "send_file": _obj(
         {
@@ -667,7 +721,7 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "set_activity",
         "update_base_personality",
         "update_server_prompt",
-        # more_tools hands the full catalog back and must get a turn to use it.
+        # more_tools expands the selected group for the following model turn.
         "more_tools",
         # chess + usage return data the model needs a follow-up turn to react to.
         "chess_start",
@@ -678,31 +732,6 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         # spawn_background hands the job id back so the live turn can ack it
         # by name, then ends (the detached job delivers the real answer later).
         "spawn_background",
-    }
-)
-
-# ── unused leftover (full catalog ships every turn; do not gate on this) ──
-# Kept so older tests and comments that name this set still import cleanly.
-CHAT_CORE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "send_message",
-        "no_response",
-        "react",
-        "typing",
-        "wait",
-        "web_search",
-        "fetch_url",
-        "see_image",
-        "see_video",
-        "send_media",
-        "send_meme",
-        "image_generator",
-        "more_tools",
-        "chess_start",
-        "chess_move",
-        "chess_state",
-        "chess_resign",
-        "usage",
     }
 )
 
@@ -970,26 +999,174 @@ def _decode_tool_arguments(raw_args: Any) -> dict[str, Any]:
     return {"content": text}
 
 
+_NATIVE_MAX_CALLS = 8
+_NATIVE_MAX_ID_BYTES = 128
+_NATIVE_MAX_NAME_BYTES = 128
+_NATIVE_MAX_ARGUMENT_BYTES = 16_000
+_NATIVE_MAX_BATCH_ARGUMENT_BYTES = 32_000
+_NATIVE_MAX_BATCH_ENVELOPE_BYTES = 40_000
+_NATIVE_MAX_ARGUMENT_DEPTH = 32
+
+
+def _native_argument_depth_is_bounded(text: str) -> bool:
+    """Reject malformed or over-nested JSON before decoding."""
+    depth = 0
+    quoted = escaped = False
+    for character in text:
+        if quoted and escaped:
+            escaped = False
+        elif quoted and character == "\\":
+            escaped = True
+        elif character == '"':
+            quoted = not quoted
+        elif not quoted and character in "{[":
+            depth += 1
+            if depth > _NATIVE_MAX_ARGUMENT_DEPTH:
+                return False
+        elif not quoted and character in "}]":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and not quoted
+
+
+def _native_argument_values_are_json_safe(value: dict) -> bool:
+    """Reject non-string keys and non-finite numbers in argument objects."""
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            if any(not isinstance(key, str) for key in current):
+                return False
+            pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            pending.extend(current)
+        elif isinstance(current, float) and not math.isfinite(current):
+            return False
+    return True
+
+
+def _parse_native_argument_json(
+    text: str, decoder: json.JSONDecoder
+) -> object:
+    """Parse one complete nesting-bounded JSON argument value."""
+    if text[:1] in {"{", "[", '"'} and not _native_argument_depth_is_bounded(
+        text
+    ):
+        raise ValueError("Malformed or oversized native tool-call batch")
+    try:
+        parsed, end = decoder.raw_decode(text)
+    except json.JSONDecodeError:
+        raise ValueError("Malformed native tool-call batch") from None
+    if text[end:].strip():
+        raise ValueError("Malformed native tool-call batch")
+    return parsed
+
+
+def _decode_native_tool_arguments(raw_args: object) -> tuple[dict[str, object], int]:
+    """Strictly decode one bounded JSON-object argument payload."""
+    if raw_args is None:
+        return {}, 0
+    if isinstance(raw_args, dict):
+        if not _native_argument_values_are_json_safe(raw_args):
+            raise ValueError("Malformed native tool-call batch")
+        encoded = json.dumps(
+            raw_args, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+        argument_bytes = len(encoded.encode("utf-8"))
+        current = raw_args
+    elif isinstance(raw_args, str):
+        argument_bytes = len(raw_args.encode("utf-8"))
+        current = raw_args.strip().lstrip("\ufeff")
+    else:
+        raise ValueError("Malformed native tool-call batch")
+    if argument_bytes > _NATIVE_MAX_ARGUMENT_BYTES or (
+        isinstance(raw_args, dict)
+        and not _native_argument_depth_is_bounded(encoded)
+    ):
+        raise ValueError("Malformed or oversized native tool-call batch")
+    if isinstance(current, str) and not current:
+        return {}, argument_bytes
+
+    decoder = json.JSONDecoder()
+    for _ in range(3):
+        if isinstance(current, str):
+            current = _parse_native_argument_json(current, decoder)
+            continue
+        if not isinstance(current, dict):
+            raise ValueError("Malformed native tool-call batch")
+        wrapper = next(
+            (
+                key
+                for key in ("arguments", "parameters")
+                if len(current) == 1 and key in current and isinstance(current[key], (dict, str))
+            ),
+            None,
+        )
+        if wrapper is not None:
+            current = current[wrapper]
+            continue
+        if not _native_argument_values_are_json_safe(current):
+            raise ValueError("Malformed native tool-call batch")
+        return dict(current), argument_bytes
+    raise ValueError("Malformed or oversized native tool-call batch")
+
+
 def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
-    """Normalize provider tool_calls into {id, name, arguments: dict, raw}."""
+    """Validate and normalize a complete bounded provider tool-call batch."""
+    if raw_calls is None:
+        return []
+    if not isinstance(raw_calls, list) or len(raw_calls) > _NATIVE_MAX_CALLS:
+        raise ValueError("Malformed or oversized native tool-call batch")
     normalized: list[dict[str, Any]] = []
-    for i, call in enumerate(raw_calls or []):
-        if not isinstance(call, dict):
-            continue
-        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
-        name = str(fn.get("name") or call.get("name") or "").strip()
+    seen_ids: set[str] = set()
+    batch_argument_bytes = 0
+    batch_envelope_bytes = 0
+    for i, call in enumerate(raw_calls):
+        if not isinstance(call, dict) or call.get("type") not in (None, "function"):
+            raise ValueError("Malformed native tool-call batch")
+        fn_value = call.get("function")
+        if fn_value is not None and not isinstance(fn_value, dict):
+            raise ValueError("Malformed native tool-call batch")
+        fn = fn_value if isinstance(fn_value, dict) else {}
+        raw_name = fn.get("name") or call.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValueError("Malformed native tool-call batch")
+        if len(raw_name.encode("utf-8")) > _NATIVE_MAX_NAME_BYTES:
+            raise ValueError("Oversized native tool-call batch")
+        original_name = raw_name.strip()
+        name = original_name[5:] if original_name.lower().startswith("tool_") else original_name
         if not name:
-            continue
-        # Some providers use tool_ name prefixes
-        if name.lower().startswith("tool_"):
-            name = name[5:]
+            raise ValueError("Malformed native tool-call batch")
         raw_args = fn.get("arguments", call.get("arguments", {}))
-        args = _decode_tool_arguments(raw_args)
-        call_id = str(call.get("id") or f"call_{i}_{name}")
+        args, argument_bytes = _decode_native_tool_arguments(raw_args)
+        batch_argument_bytes += argument_bytes
+        if batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
+            raise ValueError("Oversized native tool-call batch")
+        raw_id = call.get("id")
+        if raw_id in (None, ""):
+            call_id = f"call_{i}"
+        elif isinstance(raw_id, str):
+            call_id = raw_id
+        else:
+            raise ValueError("Malformed native tool-call batch")
+        if (
+            not call_id.strip()
+            or len(call_id.encode("utf-8")) > _NATIVE_MAX_ID_BYTES
+            or call_id in seen_ids
+        ):
+            raise ValueError("Malformed or oversized native tool-call batch")
+        seen_ids.add(call_id)
+        batch_envelope_bytes += len(
+            json.dumps(call, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES:
+            raise ValueError("Oversized native tool-call batch")
         normalized.append(
             {
                 "id": call_id,
                 "name": name,
+                "raw_name": original_name,
                 "arguments": args,
                 "raw": call,
             }
@@ -1020,6 +1197,8 @@ def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
 # whatever prose surrounded the markup survives as the leftover text.
 
 _RECOVERY_MAX_CALLS = 8
+_RECOVERY_MAX_INPUT_CHARS = 16_000
+_RECOVERY_MAX_ARGUMENT_CHARS = 4_000
 
 _FENCE_RE = re.compile(r"```.*?(?:```|$)|~~~.*?(?:~~~|$)", re.DOTALL)
 
@@ -1470,7 +1649,7 @@ def recover_text_tool_calls(
     import json
 
     raw = str(text or "")
-    if not raw.strip():
+    if len(raw) > _RECOVERY_MAX_INPUT_CHARS or not raw.strip():
         return [], raw
     allowed = {str(n).lower() for n in (known_names or ())} or None
     # Recovery runs on every reply the provider did not attach tool_calls to —
@@ -1584,8 +1763,8 @@ def recover_text_tool_calls(
         if any(not (span[1] <= k[0] or span[0] >= k[1]) for k in kept):
             continue
         kept.append(span)
-        if len(kept) >= _RECOVERY_MAX_CALLS:
-            break
+    if len(kept) > _RECOVERY_MAX_CALLS:
+        return [], raw
     kept.sort(key=lambda item: item[0])
 
     if not kept:
@@ -1604,14 +1783,14 @@ def recover_text_tool_calls(
 
     calls: list[dict[str, Any]] = []
     for i, (_start, _end, name, args) in enumerate(kept):
+        arguments = json.dumps(_coerce_args(name, args))
+        if len(arguments) > _RECOVERY_MAX_ARGUMENT_CHARS:
+            return [], raw
         calls.append(
             {
                 "id": f"recovered_{i}_{name}",
                 "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps(_coerce_args(name, args)),
-                },
+                "function": {"name": name, "arguments": arguments},
             }
         )
     return calls, leftover
@@ -1625,7 +1804,11 @@ def recover_text_tool_calls(
 # chars riding on top of an already-full prompt.
 TOOL_TAIL_MAX_MESSAGES = 12
 TOOL_TAIL_MAX_CHARS = 36_000
+TOOL_TAIL_NEWEST_GROUP_CHARS = 24_000
 TOOL_RESULT_COMPACT_CHARS = 4_000
+_HISTORY_MARKER_RE = re.compile(
+    r"\n… \[(\d+) chars truncated from (?:earlier tool result|tool result|tool history)\]$"
+)
 
 
 def message_chars(message: dict) -> int:
@@ -1636,10 +1819,11 @@ def message_chars(message: dict) -> int:
     prompt tokens — counting only ``content`` leaves a budget blind to the
     heaviest messages in the conversation.
     """
-    extra = 0
+    extra = len(str(message.get("tool_call_id") or ""))
     for call in message.get("tool_calls") or []:
         if not isinstance(call, dict):
             continue
+        extra += len(str(call.get("id") or ""))
         fn = call.get("function")
         if isinstance(fn, dict):
             extra += len(str(fn.get("name") or "")) + len(
@@ -1661,19 +1845,83 @@ def message_chars(message: dict) -> int:
 
 
 def tool_tail_groups(tail: list[dict]) -> list[list[dict]]:
-    """Split a tool-loop tail into (assistant, tool, tool, ...) rounds.
+    """Group complete native batches and assistant/synthetic-user result pairs.
 
-    A ``role: "tool"`` message is only valid while the assistant message that
-    emitted its ``tool_call_id`` is still present, so grouping is what makes
-    trimming safe.
+    Reject orphan or mismatched native results rather than replaying a broken
+    assistant/tool sequence or silently trimming half of a batch.
     """
     groups: list[list[dict]] = []
     for msg in tail:
-        if msg.get("role") == "tool" and groups:
+        role = msg.get("role")
+        if role == "tool":
+            if not groups or not groups[-1][0].get("tool_calls"):
+                raise ValueError("Orphan tool result in tool history")
+            groups[-1].append(msg)
+        elif (
+            role == "user"
+            and groups
+            and groups[-1][0].get("role") == "assistant"
+            and len(groups[-1]) == 1
+            and str(msg.get("content") or "").startswith("=== TOOL RESULTS ===\n")
+        ):
             groups[-1].append(msg)
         else:
             groups.append([msg])
+    for group in groups:
+        calls = group[0].get("tool_calls") or []
+        if not calls:
+            continue
+        ids = [str(call.get("id") or "") for call in calls]
+        results = [str(msg.get("tool_call_id") or "") for msg in group[1:]]
+        if not all(ids) or len(set(ids)) != len(ids) or sorted(ids) != sorted(results):
+            raise ValueError("Incomplete or mismatched native tool-call batch")
     return groups
+
+
+def _truncate_history_text(content: str, limit: int, label: str) -> str:
+    """Shorten a replay string without inventing new omission counts on retries."""
+    if len(content) <= limit:
+        return content
+    match = _HISTORY_MARKER_RE.search(content)
+    body = content[: match.start()] if match else content
+    omitted = int(match.group(1)) if match else 0
+    retained = min(len(body), limit)
+    while retained:
+        missing = omitted + len(body) - retained
+        marker = f"\n… [{missing} chars truncated from {label}]"
+        if retained + len(marker) <= limit:
+            return body[:retained] + marker
+        retained -= max(1, retained + len(marker) - limit)
+    marker = f"\n… [{omitted + len(body)} chars truncated from {label}]"
+    return marker if len(marker) <= limit else "…"[:limit]
+
+
+def _fit_tool_group(group: list[dict], limit: int) -> None:
+    """Share one strict char allowance across every result in a batch."""
+    for msg in group:
+        calls = msg.get("tool_calls") or []
+        if calls:
+            msg["tool_calls"] = elide_tool_calls_for_history(
+                calls, max_args_chars=max(160, 4_000 // len(calls))
+            )
+    fixed = sum(message_chars(msg) for msg in group)
+    contents = [msg for msg in group if isinstance(msg.get("content"), str)]
+    fixed -= sum(len(msg["content"]) for msg in contents)
+    if fixed > limit:
+        raise ValueError("Tool-call IDs, names, or arguments exceed history budget")
+    available = limit - fixed
+    if sum(len(msg["content"]) for msg in contents) <= available:
+        return
+    low, high = 0, max(len(msg["content"]) for msg in contents)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if sum(min(len(msg["content"]), mid) for msg in contents) <= available:
+            low = mid
+        else:
+            high = mid - 1
+    for msg in contents:
+        label = "tool result" if msg.get("role") == "tool" else "tool history"
+        msg["content"] = _truncate_history_text(msg["content"], low, label)
 
 
 def trim_tool_tail(
@@ -1682,56 +1930,60 @@ def trim_tool_tail(
     max_messages: int = TOOL_TAIL_MAX_MESSAGES,
     max_chars: int = TOOL_TAIL_MAX_CHARS,
 ) -> list[dict]:
-    """Bound a tool-loop tail by size AND count, oldest round first.
+    """Compact before evicting; retain only complete groups under both caps.
 
-    Never slices mid-round: a plain ``tail[-24:]`` can cut an assistant message
-    away from the ``role: "tool"`` replies carrying its tool_call_ids, which
-    OpenAI-compatible providers reject with a 400 ("tool_call_id not found").
-    Whole rounds are dropped instead, and the newest round always survives so
-    the model still sees what it just ran.
+    The newest whole batch receives at most 24k of the total 36k chars.
+    Batches with more messages than the count cap or immutable overhead beyond
+    the char cap must be rejected by the caller before executing their tools.
     """
     groups = tool_tail_groups(tail)
-    used = sum(message_chars(m) for m in tail)
-    count = len(tail)
-    while len(groups) > 1 and (count > max_messages or used > max_chars):
-        dropped = groups.pop(0)
-        count -= len(dropped)
-        used -= sum(message_chars(m) for m in dropped)
+    while len(groups) > 1 and sum(map(len, groups)) > max_messages:
+        groups.pop(0)
+    if not groups:
+        return []
+    if len(groups[-1]) > max_messages:
+        raise ValueError("Newest tool-call batch exceeds history message cap")
     _compact_old_tool_results(groups)
+    group_limit = min(TOOL_TAIL_NEWEST_GROUP_CHARS, max_chars)
+    _fit_tool_group(groups[-1], group_limit)
+    for group in groups[:-1]:
+        _fit_tool_group(group, group_limit)
+    used = sum(message_chars(msg) for group in groups for msg in group)
+    while len(groups) > 1 and used > max_chars:
+        room = max_chars - sum(
+            message_chars(msg) for group in groups[:-1] for msg in group
+        )
+        if room >= min(16_000, group_limit):
+            _fit_tool_group(groups[-1], room)
+            used = sum(message_chars(msg) for group in groups for msg in group)
+            if used <= max_chars:
+                break
+        dropped = groups.pop(0)
+        used -= sum(message_chars(msg) for msg in dropped)
     return [msg for group in groups for msg in group]
 
 
 def _compact_old_tool_results(groups: list[list[dict]]) -> None:
-    """Shrink older tool results so a huge dump cannot evict the other file.
-
-    The newest round stays intact (the model just produced it). Earlier
-    rounds already got a follow-up turn; keeping a 40k HTML dump of them
-    only inflates the tail until trim_tool_tail drops the sibling read.
-    """
-    if len(groups) < 2:
-        return
-    marker_prefix = "\n… ["
+    """Compact all older replay text before considering whole-group eviction."""
     for group in groups[:-1]:
         for msg in group:
-            if msg.get("role") != "tool":
-                continue
             content = msg.get("content")
-            if not isinstance(content, str) or len(content) <= TOOL_RESULT_COMPACT_CHARS:
-                continue
-            omitted = len(content) - TOOL_RESULT_COMPACT_CHARS
-            msg["content"] = (
-                content[:TOOL_RESULT_COMPACT_CHARS]
-                + f"{marker_prefix}{omitted} chars truncated from earlier tool result]"
-            )
+            if isinstance(content, str):
+                label = (
+                    "earlier tool result" if msg.get("role") == "tool" else "tool history"
+                )
+                msg["content"] = _truncate_history_text(
+                    content, TOOL_RESULT_COMPACT_CHARS, label
+                )
 
 
 def elide_tool_calls_for_history(
     tool_calls: list[dict],
     *,
-    heavy_keys: tuple[str, ...] = ("body", "content", "code", "html", "data"),
     max_chars: int = 2000,
+    max_args_chars: int = 4000,
 ) -> list[dict]:
-    """Copy tool_calls with huge argument strings elided for context budget."""
+    """Copy calls with bounded public arguments; never edit executable calls."""
     import copy
     import json
 
@@ -1743,25 +1995,33 @@ def elide_tool_calls_for_history(
         raw_args = fn.get("arguments")
         if isinstance(raw_args, str):
             try:
-                args = json.loads(raw_args) if raw_args.strip() else {}
+                args = json.loads(raw_args.strip() or "{}")
             except json.JSONDecodeError:
-                if len(raw_args) > max_chars:
-                    fn["arguments"] = json.dumps(
-                        {"_elided": f"[large arguments omitted, {len(raw_args)} chars]"}
-                    )
+                fn["arguments"] = json.dumps({"_elided": f"[malformed arguments omitted, {len(raw_args)} chars]"})
                 continue
         elif isinstance(raw_args, dict):
             args = raw_args
         else:
             continue
         if not isinstance(args, dict):
+            fn["arguments"] = json.dumps({"_elided": f"[non-object arguments omitted, {len(str(raw_args))} chars]"})
             continue
+        original_chars = len(raw_args) if isinstance(raw_args, str) else len(json.dumps(raw_args, ensure_ascii=False))
         changed = False
-        for key in heavy_keys:
-            val = args.get(key)
-            if isinstance(val, str) and len(val) > max_chars:
-                args[key] = f"[large {key} omitted, {len(val)} chars]"
+        for key, value in args.items():
+            limit = 300 if key == "reasoning" else max_chars
+            if isinstance(value, str) and len(value) > limit:
+                if key == "reasoning":
+                    marker = f"… [{len(value)} chars total; reasoning shortened]"
+                    args[key] = value[: limit - len(marker)] + marker
+                else:
+                    args[key] = f"[large {key} omitted, {len(value)} chars]"
                 changed = True
-        if changed:
-            fn["arguments"] = json.dumps(args, ensure_ascii=False)
+        encoded = json.dumps(args, ensure_ascii=False)
+        if len(encoded) > max_args_chars:
+            fn["arguments"] = json.dumps(
+                {"_elided": f"[large arguments omitted, {original_chars} chars]"}
+            )
+        elif changed or isinstance(raw_args, dict) or not raw_args.strip() or len(raw_args) > max_args_chars:
+            fn["arguments"] = encoded
     return out

@@ -105,6 +105,29 @@ def _first_env(*names: str, default: str = "") -> str:
     return default
 
 
+def _image_config_error(protocol: str, base_url: str, models: dict, model: str) -> str:
+    """Name unusable image settings without disclosing configured values."""
+    error = ""
+    if protocol != "images":
+        error = "IMAGE_GEN_PROTOCOL must be 'images'; other image protocols are unsupported"
+    elif not base_url.strip().rstrip("/"):
+        error = "set IMAGE_GEN_BASE_URL to the native Images endpoint"
+    elif not models:
+        error = "set IMAGE_GEN_MODELS to a JSON object of exact model IDs and descriptions"
+    elif any(
+        not isinstance(model_id, str)
+        or not model_id.strip()
+        or model_id != model_id.strip()
+        or not isinstance(description, str)
+        or not description.strip()
+        for model_id, description in models.items()
+    ):
+        error = "IMAGE_GEN_MODELS must map exact non-empty model IDs to non-empty descriptions"
+    elif model not in models:
+        error = "IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
+    return error
+
+
 # --- optional-feature detection -------------------------------------------
 # Every check below is cheap and runs once, at import: find_spec() does NOT
 # execute the module, and shutil.which() is a PATH scan. Restart to re-detect
@@ -239,13 +262,37 @@ class Config:
     # time; restart to re-detect.
     # -------------------------------------------------------------------------
 
+    IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "images").strip().lower()
+    IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "").strip()
+    IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "").strip()
+    IMAGE_GEN_CONFIG_ERROR = ""
+    try:
+        IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
+    except ValueError as error:
+        IMAGE_GEN_MODELS = {}
+        IMAGE_GEN_CONFIG_ERROR = str(error)
+    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "").strip()
+    IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY", "low").strip() or "low"
+    IMAGE_GEN_TIMEOUT = _int_env(
+        "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
+    )
+    IMAGE_GEN_CONFIG_ERROR = IMAGE_GEN_CONFIG_ERROR or _image_config_error(
+        IMAGE_GEN_PROTOCOL, IMAGE_GEN_BASE_URL, IMAGE_GEN_MODELS, IMAGE_GEN_MODEL
+    )
+
     # No external dependency — pure code paths, on by default.
     ENABLE_IMAGE_INPUT = _feature_env("ENABLE_IMAGE_INPUT")
     ENABLE_FETCH_URL = _feature_env("ENABLE_FETCH_URL")
     ENABLE_AVATAR = _feature_env("ENABLE_AVATAR")
     ENABLE_AUTONOMY = _feature_env("ENABLE_AUTONOMY")
-    # One configured native Images endpoint handles generation and edits.
-    ENABLE_IMAGE_GEN = _feature_env("ENABLE_IMAGE_GEN")
+    # One usable configured native Images endpoint handles generation and edits.
+    ENABLE_IMAGE_GEN = _feature_env(
+        "ENABLE_IMAGE_GEN", lambda error=IMAGE_GEN_CONFIG_ERROR: not error,
+        off_text="auto: off, image profile is not configured",
+    )
+    if IMAGE_GEN_CONFIG_ERROR:
+        ENABLE_IMAGE_GEN = False
+        FEATURE_REASONS["ENABLE_IMAGE_GEN"] = f"disabled: {IMAGE_GEN_CONFIG_ERROR}"
 
     # Needs a system binary or Python package.
     ENABLE_VIDEO_INPUT = _feature_env(
@@ -371,16 +418,6 @@ class Config:
         "CAPTCHA_SOLVER_TIMEOUT", 180, min_value=10, max_value=600
     )
 
-    IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "images").strip().lower()
-    IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "").strip()
-    IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "").strip()
-    IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
-    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "").strip()
-    IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY", "low").strip()
-    IMAGE_GEN_TIMEOUT = _int_env(
-        "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
-    )
-
     NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
     # NVIDIA Riva ASR (Parakeet) for live VC transcription. Whisper is too
     # slow for this path; VC utterances go through Riva then the text model.
@@ -479,28 +516,6 @@ class Config:
             )
         if cls.OPENAI_MAX_TOKENS < 1:
             raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
-        if cls.IMAGE_GEN_PROTOCOL != "images":
-            raise ValueError(
-                "IMAGE_GEN_PROTOCOL must be 'images'; other image protocols are unsupported"
-            )
-        if any(
-            not isinstance(model_id, str)
-            or not model_id.strip()
-            or model_id != model_id.strip()
-            or not isinstance(description, str)
-            or not description.strip()
-            for model_id, description in cls.IMAGE_GEN_MODELS.items()
-        ):
-            raise ValueError(
-                "IMAGE_GEN_MODELS must map exact non-empty model IDs to non-empty descriptions"
-            )
-        if cls.IMAGE_GEN_MODELS and not cls.IMAGE_GEN_MODEL:
-            raise ValueError(
-                "IMAGE_GEN_MODEL is required when IMAGE_GEN_MODELS is configured"
-            )
-        if cls.IMAGE_GEN_MODEL and cls.IMAGE_GEN_MODEL not in cls.IMAGE_GEN_MODELS:
-            raise ValueError("IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS")
-
         # Soft warnings — these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is
         # confusing without a hint. Log via the standard logging facility

@@ -13,6 +13,8 @@ logs/
 .git/
 legacy/
 phase-II_v2/
+audit/
+reports/
 *.log
 avatar.b64
 public/bot/

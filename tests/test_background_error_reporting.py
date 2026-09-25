@@ -261,7 +261,10 @@ def test_job_thread_creation_failure_preserves_success_and_private_trace(tmp_pat
     message.create_thread.side_effect = RuntimeError("private creation detail " + "x" * 3000 + " CREATION TAIL")
     asyncio.run(run_background_job(bot, job.id))
     assert job.status == "done"
-    assert len(message.channel.sent) == 1
+    assert len(message.channel.sent) == 2
+    assert "no progress thread (RuntimeError)" in message.channel.sent[0]
+    assert "safe result" in message.channel.sent[1]
+    assert "private creation detail" not in "\n".join(message.channel.sent)
     assert PUBLIC_ERROR_TEXT not in message.channel.sent
     assert "CREATION TAIL" in private_store.get(0).format_report()
 

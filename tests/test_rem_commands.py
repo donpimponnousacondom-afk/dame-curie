@@ -89,6 +89,12 @@ def test_rem_command_admin_gating_and_on_off_fix(tmp_path):
         await MaxwellBot._handle_command(bot, msg)
         assert "Assimilate the short-term slice" in bot.rem_prompt_body
 
+        msg = FakeMessage(",rem invalid")
+        await MaxwellBot._handle_command(bot, msg)
+        assert msg.channel.sent == [
+            "Usage: `,rem`, `,rem now`, `,rem on`, `,rem off`, `,rem audit [N]`, `,rem fix`"
+        ]
+
     asyncio.run(run())
 
 

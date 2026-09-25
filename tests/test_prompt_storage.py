@@ -112,7 +112,12 @@ def test_prompt_tools_share_external_store(tmp_path, external):
     from rag_memory import RAGMemoryManager
 
     memory = RAGMemoryManager(str(tmp_path / "runtime"))
-    bot = SimpleNamespace(config=SimpleNamespace(DATA_DIR=str(tmp_path / "runtime")), _control={}, memory=memory)
+    bot = SimpleNamespace(
+        config=SimpleNamespace(DATA_DIR=str(tmp_path / "runtime")),
+        _control={},
+        memory=memory,
+        _is_admin={100: True}.get,
+    )
     message = SimpleNamespace(author=SimpleNamespace(id=100))
 
     async def run():
@@ -121,6 +126,11 @@ def test_prompt_tools_share_external_store(tmp_path, external):
         assert (external / "personality.txt").read_text().startswith("A personality written")
         result = await UpdateServerPromptTool(bot).execute(message, server_id="DM", text="Tool prompt")
         assert "updated" in result
+        assert json.loads((external / "servers.json").read_text()) == {"DM": "Tool prompt"}
+        result = await UpdateServerPromptTool(bot).execute(
+            message, server_id="DM", text="x" * 4001
+        )
+        assert "Error" in result and "4000" in result
         assert json.loads((external / "servers.json").read_text()) == {"DM": "Tool prompt"}
 
     asyncio.run(run())

@@ -5,9 +5,11 @@ of only two global LLM slots) for minutes, so everyone else in the room
 queues behind it and the bot looks channel-locked.
 
 The fix: the model calls ``spawn_background`` (or a user runs ``!bg``).
-The live turn ends immediately with a one-line ack naming the job id, and
-the real work runs detached in :func:`run_background_job` with EXTENDED
-budgets (more thinking, more output, longer timeout than a live turn).
+The live turn ends with a one-line ack naming the job id, and the work runs
+detached in :func:`run_background_job`. An independently issued ``!bg`` uses
+its configured job limits; a model-spawned job still shares its originating
+foreground turn's remaining provider-output, attempt and deadline budget.
+Detaching work does not reset that budget.
 When the job finishes it mentions the requester in the origin channel with
 the result data. Progress lands in a ``build: <goal>`` thread — in the origin
 thread's parent channel when the job was started from inside a thread, since
@@ -37,9 +39,11 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from control_defaults import SERVER_PROMPT_MAX_BYTES
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident
 from job_routing import JobProvider, resolve_job_endpoint
 from tools import Tool
+from turn_budget import TOOL_GROUPS_CONTEXT
 from response_observability import TURN_INPUT, prepare_delivery, record_delivery
 from utils import _safe_int, _spawn_background
 
@@ -53,9 +57,8 @@ logger = logging.getLogger(__name__)
 # A job id is short on purpose: the model has to quote it in its ack line.
 JOB_ID_BYTES = 4
 
-# Extended-budget defaults for background jobs. Live turns stay tight;
-# jobs get the big headroom. Env-overridable, control-overridable
-# (bg_max_tokens / bg_timeout_seconds / bg_max_iters).
+# Independent-job limits; model-spawned descendants also retain their foreground budget.
+# Env/control overrides: bg_max_tokens / bg_timeout_seconds / bg_max_iters.
 BG_MAX_TOKENS_DEFAULT_FLOOR = 32768
 BG_MAX_TOKENS_HARD_CAP = 131072
 BG_TIMEOUT_DEFAULT = 7200
@@ -384,9 +387,10 @@ class SpawnBackgroundTool(Tool):
     def get_description(self):
         return (
             "Start a BACKGROUND job for a long task (site build, big research, "
-            "multi-step work) and END this turn. The job runs detached with "
-            "bigger budgets and pings the user when done, so the channel stays "
-            "free. Params: goal (what to build/do, required), context (extra "
+            "multi-step work) and END this turn. The job runs detached and pings "
+            "the user when done, so the channel stays free. It shares this foreground "
+            "turn's remaining provider-output, attempt and deadline budget; spawning "
+            "does not replenish them. Params: goal (what to build/do, required), context (extra "
             "spec, optional), provider (main/autonomy/aux, default main), model "
             "(optional primary-model override; configured fallback models "
             "may answer instead). Profiles use trusted configuration, never URLs or keys. "
@@ -490,13 +494,19 @@ def background_messages(
     server_prompt = bot.memory.get_server_prompt(server_id)
     system_parts = [f"Core personality: {bot._get_personality()}"]
     if server_prompt:
-        system_parts.append(f"Server-specific instructions: {server_prompt}")
+        if len(server_prompt.encode("utf-8")) > SERVER_PROMPT_MAX_BYTES:
+            system_parts.append(
+                "Stored server prompt omitted from model context: it exceeds the 16 KiB UTF-8 limit. "
+                f"An admin can export it with {bot.command_prefix}longprompt and replace it with a bounded prompt."
+            )
+        else:
+            system_parts.append(f"Server-specific instructions: {server_prompt}")
     system_parts.append(bot._tool_system_prompt(platform, message=message, content=job.goal))
     system_parts.append(
         f"You are working on background job `{job.id}`. The user was already "
         "told the work is running. Complete the goal with the available tools; "
-        "do not spawn another background job. Preserve tool execution and "
-        "confirmation rules. Keep intermediate chatter out of the main channel "
+        "do not spawn another background job. Preserve actor authorization and "
+        "configured tool/platform restrictions. Keep intermediate chatter out of the main channel "
         "— progress goes to the job thread. End with a concise summary of the "
         "result and relevant URLs, if any.\n"
         "Website authoring uses shell writes to local files. An external "
@@ -619,7 +629,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
             thread,
             f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
             f"{job.requested_route}. An explicit model override applies only to primary; configured fallback models may answer.\n"
-            f"Budgets: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. Progress lands here.",
+            f"Job limits: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. "
+            "An originating foreground budget, if any, still applies. Progress lands here.",
             context=job_context,
         ):
             # A thread whose first post failed carries no progress, and it is
@@ -654,23 +665,6 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     except Exception:
         pass
 
-    openai_tools: list[dict[str, Any]] = []
-    try:
-        openai_tools = list(bot._build_openai_tools(platform, message=orig_message, content=job.goal) or [])
-    except Exception as exc:
-        logger.warning("background job %s tool catalog failed: %s", job.id, exc)
-    # No recursion: the job IS the background worker.
-    openai_tools = [t for t in openai_tools if (t.get("function") or {}).get("name") != _NO_RECURSE_TOOL]
-    try:
-        custom_tool_calls, provider_tools = bot._select_tool_protocol(openai_tools)
-    except Exception:
-        custom_tool_calls, provider_tools = False, openai_tools
-
-    known_tool_names = {
-        name for tool in openai_tools
-        if isinstance(name := (tool.get("function") or {}).get("name"), str)
-        and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
-    }
     final_text = ""
     final_metrics = None
     succeeded = False
@@ -683,6 +677,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     # value and refuses to spawn another job. The live turn that started this
     # job runs in its own task and is unaffected.
     job_turn_token = JOB_TURN.set(True)
+    tool_groups_token = TOOL_GROUPS_CONTEXT.set(set())
     try:
         for step in range(max(1, max_iters)):
             if time.monotonic() > deadline:
@@ -690,6 +685,20 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 final_text = final_text or "I ran out of time budget — partial work is in the thread."
                 break
 
+            try:
+                openai_tools = list(bot._build_openai_tools(platform, message=orig_message, content=job.goal) or [])
+                openai_tools = [t for t in openai_tools if (t.get("function") or {}).get("name") != _NO_RECURSE_TOOL]
+                custom_tool_calls, provider_tools = bot._select_tool_protocol(openai_tools)
+            except Exception as exc:
+                terminal_failure = exc
+                failure_text = f"tool catalog failed at step {step + 1}: {exc}"
+                logger.warning("background job %s tool catalog failed: %s", job.id, type(exc).__name__)
+                break
+            known_tool_names = {
+                name for tool in openai_tools
+                if isinstance(name := (tool.get("function") or {}).get("name"), str)
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+            }
             remaining = max(10.0, deadline - time.monotonic())
             try:
                 await bot._acquire_ai_slot(
@@ -710,6 +719,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     messages = background_messages(bot, job, orig_message, platform)
                     if job.provider != JobProvider.MAIN or job.model is not None:
                         job_provider = bot._create_background_provider(job.provider)
+                else:
+                    messages[0] = background_messages(bot, job, orig_message, platform)[0]
                 if job_provider is None:
                     response = await bot._generate_response(
                         messages,
@@ -775,6 +786,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 dispatched = await bot._dispatch_tool_calls(
                     orig_message, response, native_tool_calls=calls, **metrics_kwargs
                 )
+                followups = list(getattr(bot, "_last_native_followup_messages", None) or [])
                 if isinstance(dispatched, (list, tuple)):
                     resp_text = str(dispatched[0] or "")
                     tool_results = list(dispatched[1] or []) if len(dispatched) > 1 else []
@@ -806,10 +818,6 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 final_text = resp_text.strip()
                 final_metrics = response_metrics if final_text else None
                 break
-            try:
-                followups = list(getattr(bot, "_last_native_followup_messages", None) or [])
-            except Exception:
-                followups = []
             if followups:
                 messages.extend(followups)
             else:
@@ -828,6 +836,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         await _post_thread(thread, f"Job `{job.id}` cancelled.", context=job_context)
         raise
     finally:
+        TOOL_GROUPS_CONTEXT.reset(tool_groups_token)
         JOB_TURN.reset(job_turn_token)
         try:
             if job_provider is not None:

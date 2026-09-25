@@ -18,7 +18,7 @@ class JobProvider(StrEnum):
     AUX = "aux"
 
 
-def parse_background_request(text: str) -> tuple[str, JobProvider, str | None]:
+def parse_background_request(text: str, *, prefix: str = "!") -> tuple[str, JobProvider, str | None]:
     """Parse only an opt-in flag header; leave the goal's prose untouched."""
     text = text.strip()
     provider = JobProvider.MAIN
@@ -36,7 +36,7 @@ def parse_background_request(text: str) -> tuple[str, JobProvider, str | None]:
                 text = text[stream.tell():].strip()
                 break
             if flag not in {"--provider", "--model"} or flag in seen:
-                raise ValueError("usage: !bg [--provider PROFILE] [--model MODEL] -- GOAL; each flag once")
+                raise ValueError(f"usage: {prefix}bg [--provider PROFILE] [--model MODEL] -- GOAL; each flag once")
             seen.add(flag)
             start = stream.tell()
             value = header.get_token()

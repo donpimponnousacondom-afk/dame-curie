@@ -112,6 +112,7 @@ def test_unknown_vector_cannot_produce_a_cache_hit(tmp_path, monkeypatch):
         raise OSError("offline test endpoint")
 
     monkeypatch.setattr(rag_memory.aiohttp, "ClientSession", _offline)
+    monkeypatch.setattr(rag_memory, "EMBEDDINGS_ENABLED", True)
 
     got = _run(mgr2._embed(content))
     assert got is None
@@ -150,6 +151,7 @@ def test_embed_pending_all_does_not_truncate_long_rows(tmp_path, monkeypatch):
         return _unit_vec(1)
 
     monkeypatch.setattr(RAGMemoryManager, "_embed", _embed_stub)
+    monkeypatch.setattr(rag_memory, "EMBEDDINGS_ENABLED", True)
     _run(mgr._embed_pending_all(batch_size=10))
 
     assert seen, "_embed was never called for the long row"
@@ -199,6 +201,7 @@ def test_embed_pending_all_terminates_when_embedding_always_fails(
         raise RuntimeError("batch API down")
 
     monkeypatch.setattr(rag_memory.aiohttp, "ClientSession", _no_http)
+    monkeypatch.setattr(rag_memory, "EMBEDDINGS_ENABLED", True)
 
     try:
         _run(mgr._embed_pending_all(batch_size=2))
@@ -222,6 +225,7 @@ def _stub_simple_embed(monkeypatch):
         return _unit_vec(abs(hash(str(text))) % 10_000)
 
     monkeypatch.setattr(RAGMemoryManager, "_embed", _embed_stub)
+    monkeypatch.setattr(rag_memory, "EMBEDDINGS_ENABLED", True)
 
 
 def test_store_web_results_does_not_store_doubled_title(tmp_path, monkeypatch):
@@ -347,6 +351,7 @@ def test_rag_query_timeout_opens_short_circuit(tmp_path, monkeypatch):
         return _unit_vec(42)
 
     monkeypatch.setattr(mgr, "_embed", slow_embed)
+    monkeypatch.setattr(rag_memory, "EMBEDDINGS_ENABLED", True)
     monkeypatch.setattr(rag_memory, "RAG_QUERY_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(rag_memory, "RAG_QUERY_FAILURE_COOLDOWN_SECONDS", 5.0)
 

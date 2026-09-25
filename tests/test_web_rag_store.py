@@ -97,6 +97,7 @@ def _stub_embed(monkeypatch):
         return vec
 
     monkeypatch.setattr(RAGMemoryManager, "_embed", _embed_stub)
+    monkeypatch.setattr("rag_memory.EMBEDDINGS_ENABLED", True)
 
 
 def test_store_web_results_persists_with_correct_kind(tmp_path, monkeypatch):
@@ -325,6 +326,7 @@ def test_embed_chunks_long_content(tmp_path, monkeypatch):
 
     fake = _FakeSession()
     monkeypatch.setattr("aiohttp.ClientSession", lambda: fake)
+    monkeypatch.setattr("rag_memory.EMBEDDINGS_ENABLED", True)
 
     async def run():
         mgr = RAGMemoryManager(str(tmp_path))

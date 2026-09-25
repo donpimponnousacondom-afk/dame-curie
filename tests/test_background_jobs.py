@@ -7,12 +7,22 @@ fake Discord objects instead of a connection.
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import discord
 import pytest
 
+from control_defaults import SERVER_PROMPT_MAX_BYTES
 from bot import MaxwellBot
 from error_reporting import PUBLIC_ERROR_TEXT
+from turn_budget import (
+    TOOL_GROUPS_CONTEXT,
+    ForegroundTurn,
+    current_foreground_turn,
+    current_tool_groups,
+    reset_foreground_turn,
+    set_foreground_turn,
+)
 from jobs import (
     JOB_TURN,
     BackgroundJobManager,
@@ -36,9 +46,17 @@ class FakeThread:
         self.id = "thread-1"
         self.sent = []
         self.jump_url = "http://thread.local/t1"
+        self.native_result_owner = None
+        self.foreign_overwrites = 0
 
     async def send(self, text):
         self.sent.append(text)
+        if self.native_result_owner is not None and text.startswith("step "):
+            self.foreign_overwrites += 1
+            self.native_result_owner._last_native_followup_messages = [
+                {"role": "assistant", "content": "FOREIGN_ROUND"},
+                {"role": "user", "content": "FOREIGN_TOOL_RESULT"},
+            ]
         return None
 
 
@@ -320,18 +338,27 @@ class RunnerStubBot(StubBot):
         super().__init__(manager)
         self.slot_priority = None
         self.generated_with = {}
+        self.generated_messages = []
+        self.generated_prompts = []
+        self.generated_turns = []
+        self.catalog_groups = []
+        self.discover = False
 
     def _message_tool_platform(self, message):
         return "discord"
 
     def _tool_system_prompt(self, platform, message=None, content=None):
-        return ""
+        return "catalog: " + (", ".join(sorted(current_tool_groups() or [])) or "core")
 
     def _build_openai_tools(self, platform, message=None, content=None):
-        return []
+        groups = current_tool_groups()
+        assert groups is not None
+        self.catalog_groups.append(set(groups))
+        names = ["more_tools", "extra_tool"] if "identity" in groups else ["more_tools"]
+        return [{"type": "function", "function": {"name": name}} for name in names] if self.discover else []
 
     def _select_tool_protocol(self, openai_tools):
-        return False, []
+        return False, openai_tools
 
     async def _acquire_ai_slot(self, timeout, *, priority="background", key=""):
         self.slot_priority = priority
@@ -341,28 +368,62 @@ class RunnerStubBot(StubBot):
 
     async def _generate_response(self, messages, **kwargs):
         self.generated_with = dict(kwargs)
-        return "built it: http://example.local/site"
+        self.generated_messages = messages
+        self.generated_prompts.append(messages[0]["content"])
+        self.generated_turns.append(current_foreground_turn())
+        return "discover" if self.discover and len(self.generated_prompts) == 1 else "built it: http://example.local/site"
 
     def _native_calls_from(self, response):
-        return []
+        return [{"id": "discover_1", "type": "function", "function": {
+            "name": "more_tools", "arguments": '{"group":"identity"}',
+        }}] if response == "discover" else []
 
     def _recover_text_tool_calls(self, response):
         return [], response
 
     async def _dispatch_tool_calls(self, message, response, **kwargs):
+        self._last_native_followup_messages = []
+        if response == "discover":
+            current_tool_groups().add("identity")
+            call = kwargs["native_tool_calls"][0]
+            self._last_native_followup_messages = [
+                {"role": "assistant", "content": "", "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": "Expanded identity tools."},
+            ]
+            return "", ["Expanded identity tools."]
         return str(response), []
 
 
-def test_runner_delivers_final_reply_with_mention(tmp_path):
+@pytest.mark.parametrize("discover", [False, True])
+@pytest.mark.parametrize("descendant", [False, True])
+def test_runner_delivers_final_reply_with_mention(tmp_path, discover, descendant):
+    oversized_prompt = "x" * (SERVER_PROMPT_MAX_BYTES + 1)
+
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = RunnerStubBot(manager)
+        bot.discover = discover
+        bot.command_prefix = "?"
+        bot.memory.get_server_prompt = lambda server_id: oversized_prompt
         message = FakeMessage()
+        message.channel.thread.native_result_owner = bot
         job = manager.create(
             guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
         )
         manager.attach_runtime(job.id, message=message, channel=message.channel)
-        await run_background_job(bot, job.id)
+        turn = ForegroundTurn(32768, 12, asyncio.get_running_loop().time() + 600) if descendant else None
+        turn_token = set_foreground_turn(turn) if descendant else None
+        parent_groups = {"games"}
+        groups_token = TOOL_GROUPS_CONTEXT.set(parent_groups)
+        try:
+            await run_background_job(bot, job.id)
+            assert current_tool_groups() is parent_groups and parent_groups == {"games"}
+            assert current_foreground_turn() is turn
+            assert all(observed is turn for observed in bot.generated_turns)
+        finally:
+            TOOL_GROUPS_CONTEXT.reset(groups_token)
+            if turn_token is not None:
+                reset_foreground_turn(turn_token)
         return manager.get(job.id), message.channel, bot
 
     job, channel, bot = asyncio.run(scenario())
@@ -370,11 +431,27 @@ def test_runner_delivers_final_reply_with_mention(tmp_path):
     assert bot.slot_priority == "background"  # user turns outrank it
     assert bot.generated_with.get("disable_reasoning") is False  # full thinking
     assert bot.generated_with.get("max_tokens", 0) >= 32768  # extended output
+    system_prompt = bot.generated_messages[0]["content"]
+    assert "Stored server prompt omitted" in system_prompt
+    assert "?longprompt" in system_prompt
+    assert oversized_prompt not in system_prompt
+    assert bot.memory.get_server_prompt("333") == oversized_prompt
+    assert bot.catalog_groups == ([set(), {"identity"}] if discover else [set()])
+    assert channel.thread.foreign_overwrites == int(discover)
+    assert "catalog: core" in bot.generated_prompts[0]
+    if discover:
+        assert "catalog: identity" in bot.generated_prompts[1]
+        assert len(bot.generated_messages) == 4
+        assert bot.generated_messages[2]["tool_calls"][0]["id"] == "discover_1"
+        assert bot.generated_messages[3]["tool_call_id"] == "discover_1"
+        assert "FOREIGN_" not in json.dumps(bot.generated_messages)
+        assert [tool["function"]["name"] for tool in bot.generated_with["tools"]] == ["more_tools", "extra_tool"]
     assert any("<@111>" in text and job.id in text for text in channel.sent)
     assert any("http://example.local/site" in text for text in channel.sent)
 
 
-def test_runner_marks_error_and_notifies(tmp_path):
+@pytest.mark.parametrize("failure", ["generation", "catalog"])
+def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure):
     class BrokenBot(RunnerStubBot):
         async def _generate_response(self, messages, **kwargs):
             raise RuntimeError("provider down")
@@ -382,10 +459,19 @@ def test_runner_marks_error_and_notifies(tmp_path):
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = BrokenBot(manager)
+        if failure == "catalog":
+            monkeypatch.setattr(bot, "_build_openai_tools", Mock(side_effect=RuntimeError("catalog unavailable")))
         message = FakeMessage()
         job = manager.create(guild_id="g", channel_id="222", user_id="111", goal="x")
         manager.attach_runtime(job.id, message=message, channel=message.channel)
-        await run_background_job(bot, job.id)
+        parent_groups = {"games"}
+        token = TOOL_GROUPS_CONTEXT.set(parent_groups)
+        try:
+            await run_background_job(bot, job.id)
+            assert current_tool_groups() is parent_groups and parent_groups == {"games"}
+            assert not JOB_TURN.get()
+        finally:
+            TOOL_GROUPS_CONTEXT.reset(token)
         return manager.get(job.id), message.channel
 
     job, channel = asyncio.run(scenario())

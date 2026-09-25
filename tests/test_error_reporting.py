@@ -86,9 +86,9 @@ def test_reload_and_immutable_snapshot(tmp_path):
     }
 
 
-def test_full_body_exception_chain_and_provider_diagnostics(tmp_path):
+def test_bounded_body_exception_chain_and_provider_diagnostics(tmp_path):
     store = IncidentStore(tmp_path / "history.json")
-    body = "upstream explanation\n" * 12000 + "BODY-END"
+    body = "upstream explanation\n" * 30000 + "BODY-END"
     try:
         try:
             raise ValueError("inner transport explanation")
@@ -99,13 +99,17 @@ def test_full_body_exception_chain_and_provider_diagnostics(tmp_path):
         store.record("provider", "synthetic failure", exception=exception, details="boundary diagnostics")
     incident = store.get(0)
     report = incident.format_report()
-    assert body in incident.details
+    assert body not in incident.details
+    assert body[:1000] in incident.details
+    assert "BODY-END" in incident.details
+    assert "diagnostic capture truncated" in incident.details
+    assert len(incident.details) <= reporting._INCIDENT_TEXT_LIMIT
     assert "boundary diagnostics" in incident.details
     assert "status=502 request_id=request-preserved" in report
     assert "ValueError: inner transport explanation" in incident.traceback
     assert "RuntimeError: outer provider failed" in incident.traceback
     assert "direct cause" in incident.traceback
-    assert "test_full_body_exception_chain_and_provider_diagnostics" in report
+    assert "test_bounded_body_exception_chain_and_provider_diagnostics" in report
     assert "BODY-END" in IncidentStore(store.path).get(0).format_report()
 
 

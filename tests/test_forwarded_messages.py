@@ -2,6 +2,9 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from bot import MaxwellBot
 from utils import (
@@ -187,22 +190,56 @@ def _media_bot():
     return bot
 
 
-def test_extract_media_reads_forwarded_attachments():
+@pytest.mark.parametrize(
+    ("filename", "content_type", "declared_size", "payload", "accepted", "read_count"),
+    [
+        ("cat.png", "image/png", 4, b"\x89PNG", True, 1),
+        ("cat.png", "image/png", 1, b"\x89PNGX", False, 1),
+        (
+            "notes.txt",
+            "text/plain",
+            1,
+            b"x" * (512 * 1024 + 1),
+            False,
+            1,
+        ),
+        ("bundle.zip", "image/png", 4, b"\x89PNG", False, 0),
+    ],
+)
+def test_extract_media_reads_forwarded_attachments(
+    filename, content_type, declared_size, payload, accepted, read_count, monkeypatch
+):
     class _Att:
-        filename = "cat.png"
-        content_type = "image/png"
-        size = 4
-        url = "https://cdn.discordapp.com/cat.png"
-
         async def read(self):
-            return b"\x89PNG"
+            self.read_count += 1
+            return payload
 
+    if filename == "cat.png" and not accepted:
+        monkeypatch.setattr(
+            "bot.image_mime",
+            lambda *_args: pytest.fail("oversized image reached MIME detection"),
+        )
+    if filename == "notes.txt":
+        monkeypatch.setattr(
+            "bot._decode_readable_text",
+            lambda *_args: pytest.fail("oversized text reached decoding"),
+        )
     bot = _media_bot()
-    msg = _forwarded_message(snapshot=_snapshot(attachments=[_Att()]))
+    bot._max_media_bytes = lambda: 4
+    attachment = _Att()
+    attachment.filename = filename
+    attachment.content_type = content_type
+    attachment.size = declared_size
+    attachment.url = f"https://cdn.discordapp.com/{filename}"
+    attachment.read_count = 0
+    msg = _forwarded_message(snapshot=_snapshot(attachments=[attachment]))
     images, media = asyncio.run(MaxwellBot._extract_media(bot, msg))
-    assert images
-    assert media[0]["filename"] == "cat.png"
-    assert media[0]["source"] == "forward"
+    assert bool(images) is accepted
+    assert bool(media) is accepted
+    assert attachment.read_count == read_count
+    if accepted:
+        assert media[0]["filename"] == "cat.png"
+        assert media[0]["source"] == "forward"
 
 
 def test_extract_media_fetches_snapshot_attachment_without_read(monkeypatch):
@@ -245,7 +282,7 @@ def test_extract_media_fetches_snapshot_attachment_without_read(monkeypatch):
     assert media[0]["source"] == "forward"
 
 
-def test_linked_media_and_embeds_come_from_snapshots():
+def test_linked_media_and_embeds_come_from_snapshots(monkeypatch):
     bot = _media_bot()
     msg = _forwarded_message(
         snapshot=_snapshot(
@@ -258,6 +295,18 @@ def test_linked_media_and_embeds_come_from_snapshots():
     assert refs and refs[0][0].endswith("/x.png")
     embeds = MaxwellBot._payload_attr_list(msg, "embeds", 8)
     assert embeds and embeds[0].title == "preview"
+
+    archive_url = "https://cdn.example.com/x.zip"
+    monkeypatch.setattr("bot._is_safe_url", lambda _url: True)
+    bot._fetch_public_payload = AsyncMock(
+        return_value=(archive_url, "image/png", b"\x89PNG")
+    )
+    bot._is_gif_page_url = lambda _url: False
+    downloaded = asyncio.run(
+        MaxwellBot._download_embed_media(bot, archive_url, "x.zip", 4, 1)
+    )
+    assert downloaded is None
+    bot._fetch_public_payload.assert_awaited_once_with(archive_url, 4)
 
 
 def test_reply_media_id_sees_snapshot_media_on_parent():

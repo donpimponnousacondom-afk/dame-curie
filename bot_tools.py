@@ -33,6 +33,9 @@ import base64
 import uuid
 import discord
 from discord import Activity, File, Message, Status
+from tool_policy import tool_authorized
+from tool_schemas import TOOL_DISCOVERY_GROUPS
+from turn_budget import current_tool_groups
 from tools import Tool
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident, redact_sensitive_text, register_secrets
 from image_media import ImageMediaError, image_mime, normalize_image
@@ -1267,7 +1270,7 @@ class ImageGeneratorTool(Tool):
         return (
             "Generate an AI image or edit/use supplied images as references. "
             "For an edit, describe the changes to make; provide an image URL or allowed local path, "
-            "or up to four references. If omitted, images attached to the user's message are used. "
+            "or up to four references. If image is None, attachments are used; image='' generates from scratch. "
             "The optional model parameter selects an exact configured ID. Optional quality overrides "
             "IMAGE_GEN_QUALITY. By default, generate/edit and save a local/public image WITHOUT posting it. "
             "Present it using send_file(path=..., caption=...) or an image-preview link. Set auto_send=true "
@@ -1324,8 +1327,8 @@ class ImageGeneratorTool(Tool):
         # Local path — only from the dirs Dame Curie itself writes images to.
         try:
             img_dir, _ = _public_image_target(self.bot)
-            allowed = [os.path.abspath(img_dir), os.path.abspath("temp")]
-            path = os.path.abspath(ref)
+            allowed = [os.path.realpath(img_dir), os.path.realpath("temp")]
+            path = os.path.realpath(ref)
             if not any(
                 path == root or path.startswith(root + os.sep) for root in allowed
             ):
@@ -1378,7 +1381,7 @@ class ImageGeneratorTool(Tool):
                     for part in re.split(r",\s*(?=https?://|/)", line)
                     if part.strip()
                 ]
-        if not refs:
+        if image is None:
             refs = self._attached_images(message)
 
         images = []
@@ -1409,7 +1412,7 @@ class ImageGeneratorTool(Tool):
             return "", (
                 "Error: IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
             )
-        selected_model = default_model if requested_model is None else requested_model
+        selected_model = default_model if requested_model in (None, "") else requested_model
         model_id = selected_model if isinstance(selected_model, str) else ""
         model_error = (
             ""
@@ -1432,7 +1435,12 @@ class ImageGeneratorTool(Tool):
         if not prompt:
             return "Error: prompt parameter is required"
         cfg = self.bot.config
-        if getattr(cfg, "IMAGE_GEN_PROTOCOL", "images") != "images":
+        config_error = getattr(cfg, "IMAGE_GEN_CONFIG_ERROR", "")
+        if config_error:
+            selected_model, error = "", f"Error: image generation is disabled: {config_error}"
+        elif getattr(cfg, "ENABLE_IMAGE_GEN", True) is False:
+            selected_model, error = "", "Error: image generation is disabled (ENABLE_IMAGE_GEN=false)"
+        elif getattr(cfg, "IMAGE_GEN_PROTOCOL", "images") != "images":
             selected_model, error = "", "Error: unsupported IMAGE_GEN_PROTOCOL; only images is supported"
         else:
             selected_model, error = self._select_image_model(model)
@@ -1451,10 +1459,7 @@ class ImageGeneratorTool(Tool):
             getattr(cfg, "IMAGE_GEN_API_KEY", "") or "",
             selected_model,
             prompt,
-            quality=(
-                getattr(cfg, "IMAGE_GEN_QUALITY", "low")
-                if quality is None else quality
-            ),
+            quality=quality or getattr(cfg, "IMAGE_GEN_QUALITY", "low") or "low",
             timeout_s=int(getattr(cfg, "IMAGE_GEN_TIMEOUT", 300)),
             images=images,
             auto_send=auto_send,
@@ -4801,25 +4806,24 @@ class NoResponseTool(Tool):
 
 
 class MoreToolsTool(Tool):
-    """No-op leftover. The full catalog is attached on every turn.
-
-    Older prompts told the model to call this to unlock tools mid-turn.
-    Keeping the full catalog visible avoids a discovery hop before image edits
-    and other tool calls. Kept registered so a stale call does not error.
-    """
+    """Expand one explicitly named tool group for the next model call."""
 
     def get_description(self):
+        groups = ", ".join(TOOL_DISCOVERY_GROUPS)
         return (
-            "No-op. You already have every tool this turn. Call the one you "
-            "need directly — this does not unlock anything."
+            "Add one tool group to this turn's next model call. Choose a group: "
+            f"{groups}. The returned tool schemas and instructions will be available "
+            "after this call; call again for another group."
         )
 
-    async def execute(self, message: Message, need: str | None = None, **kwargs) -> str:
-        logger.info("more_tools: no-op (catalog is already full, need=%r)", str(need or "")[:120])
-        return (
-            "You already have the full tool catalog this turn. "
-            "Call the tool you need directly — more_tools does not unlock anything."
-        )
+    async def execute(self, message: Message, group: str, **kwargs) -> str:
+        groups = current_tool_groups()
+        if groups is None:
+            return "Tool discovery is only available during an active response turn."
+        if group not in TOOL_DISCOVERY_GROUPS:
+            return f"Unknown tool group: {group}"
+        groups.add(group)
+        return f"Expanded the {group} tool group for the next model call."
 
 
 def _shell_workspace() -> Path:
@@ -5143,7 +5147,8 @@ class ShellTool(Tool):
             "(comma-separated paths under /home/dame-curie)."
         )
         return (
-            "Run bash -lc directly inside the bot container (workdir /home/dame-curie). "
+            "Admins and shell-whitelisted users only. Run Bash without startup files "
+            "inside the bot container (workdir /home/dame-curie, minimal environment). "
             "Author files locally; the independent publisher mirrors them. "
             "Do not start local website/API servers or administer remote publication. "
             "Params: command (required), files (optional paths under /home/dame-curie "
@@ -5216,9 +5221,14 @@ class ShellTool(Tool):
         async with self._execution_lock, contextlib.AsyncExitStack() as scope:
             diagnostics = scope.enter_context(ShellDiagnosticCapture(sanitized))
             proc = await asyncio.create_subprocess_exec(
-                "bash", "-lc", sanitized,
+                "bash", "--noprofile", "--norc", "-c", sanitized,
                 cwd="/home/dame-curie",
-                env={**os.environ, "HOME": "/home/dame-curie"},
+                env={
+                    "HOME": "/home/dame-curie",
+                    "PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LANG": "C.UTF-8",
+                    "PYTHONUNBUFFERED": "1",
+                },
                 start_new_session=True,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
@@ -5451,6 +5461,8 @@ class ShellTool(Tool):
         files: str | None = None,
         **kwargs,
     ) -> str:
+        if not tool_authorized(self.bot, message, "shell"):
+            return "Error: shell is restricted to admins and shell-whitelisted users."
         normalized = self._normalize_command(self._command_arg(command, **kwargs))
         if not normalized:
             return "Error: command is required (tool-call markup was detected or command was empty)"
@@ -7676,7 +7688,7 @@ class UpdateBasePersonalityTool(Tool):
 
     def get_description(self) -> str:
         return (
-            "Rewrite global base_personality (tone/do-don'ts in every prompt). "
+            "Admin-only: rewrite global base_personality (tone/do-don'ts in every prompt). "
             "Base Knowledge in code is not editable. Params: text (100-2000 chars)."
         )
 
@@ -7686,6 +7698,8 @@ class UpdateBasePersonalityTool(Tool):
         text: str | None = None,
         **kwargs,
     ) -> str:
+        if not tool_authorized(self.bot, message, "update_base_personality"):
+            return "Error: personality rewrites are restricted to admins."
         if not text or not str(text).strip():
             return "Error: 'text' is required and cannot be empty."
         text = str(text).strip()
@@ -7732,7 +7746,7 @@ class UpdateServerPromptTool(Tool):
 
     def get_description(self) -> str:
         return (
-            "Rewrite or clear the per-server custom prompt (same as `!prompt`). "
+            f"Admin-only: rewrite or clear the per-server custom prompt (same as `{getattr(self.bot, 'command_prefix', '!')}prompt`). "
             "Params: server_id (snowflake or 'DM'), text (empty or '__CLEAR__' "
             "to clear)."
         )
@@ -7744,6 +7758,8 @@ class UpdateServerPromptTool(Tool):
         text: str | None = None,
         **kwargs,
     ) -> str:
+        if not tool_authorized(self.bot, message, "update_server_prompt"):
+            return "Error: server-prompt rewrites are restricted to admins."
         if not server_id or not str(server_id).strip():
             return "Error: 'server_id' is required (numeric snowflake or 'DM')."
         server_id = str(server_id).strip()

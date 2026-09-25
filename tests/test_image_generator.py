@@ -34,7 +34,7 @@ def test_native_generations_and_edits_use_one_configured_endpoint(monkeypatch):
     monkeypatch.setattr("bot_tools._get_shared_session", AsyncMock(return_value=session))
     monkeypatch.setattr("bot_tools._persist_public_image", MagicMock(return_value=("/synthetic/image.png", "")))
 
-    generated = asyncio.run(tool.execute(message, prompt="a fox"))
+    generated = asyncio.run(tool.execute(message, prompt="a fox", model="", quality=""))
     edited = asyncio.run(tool.execute(message, prompt="make it blue", image=REFERENCE_URI))
 
     assert "generated, NOT sent" in generated
@@ -44,6 +44,8 @@ def test_native_generations_and_edits_use_one_configured_endpoint(monkeypatch):
         "https://images.example.invalid/v1/images/edits",
     ]
     assert [call.kwargs["json"]["prompt"] for call in session.post.call_args_list] == ["a fox", "make it blue"]
+    assert all(call.kwargs["json"]["model"] == "synthetic-image-a" for call in session.post.call_args_list)
+    assert all(call.kwargs["json"]["quality"] == "high" for call in session.post.call_args_list)
     assert session.post.call_args_list[1].kwargs["json"]["images"] == [{"image_url": REFERENCE_URI}]
     assert all(call.kwargs["headers"] == {"Content-Type": "application/json"} for call in session.post.call_args_list)
     session.get.assert_not_called()

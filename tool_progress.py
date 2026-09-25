@@ -596,7 +596,8 @@ class ToolProgress:
 
         The caller skips its first reply chunk when this returns True, so
         the edit or fallback send must settle before the turn can finish.
-        Cancellation schedules cosmetic progress deletion and propagates.
+        An uncertain cancelled edit is never deleted: Discord may have
+        applied it before cancellation reached this task.
         """
         if self._stopped or not self._posted:
             return False
@@ -609,15 +610,10 @@ class ToolProgress:
         if self._deferred_task and not self._deferred_task.done():
             self._deferred_task.cancel()
             self._deferred_task = None
-        try:
-            await self._deliver_final(posted, content, on_delivered=on_delivered)
-        except asyncio.CancelledError:
-            _fire_and_forget(self._bg_delete(posted))
-            raise
-        return True
+        return await self._deliver_final(posted, content, on_delivered=on_delivered)
 
-    async def _deliver_final(self, posted: Any, content: str, *, on_delivered=None) -> None:
-        """Edit the posted reply, falling back to a send if the edit fails."""
+    async def _deliver_final(self, posted: Any, content: str, *, on_delivered=None) -> bool:
+        """Report whether an edit or fallback send actually settled."""
         try:
             await posted.edit(content=content)
         except Exception as e:  # noqa: BLE001
@@ -629,18 +625,29 @@ class ToolProgress:
         else:
             if on_delivered is not None:
                 on_delivered(posted)
-            return
+            return True
         channel = getattr(self._msg, "channel", None)
         if channel is None:
             logger.error("Transition fallback impossible: no channel; reply dropped")
-            return
+            _fire_and_forget(self._bg_delete(posted))
+            return False
         try:
             sent = await channel.send(content)
+        except asyncio.CancelledError:
+            _fire_and_forget(self._bg_delete(posted))
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("Transition fallback send failed; reply dropped: %s", e)
-        else:
-            if on_delivered is not None:
-                on_delivered(sent)
+            _fire_and_forget(self._bg_delete(posted))
+            return False
+        if sent is None:
+            logger.error("Transition fallback send returned no message; reply unconfirmed")
+            _fire_and_forget(self._bg_delete(posted))
+            return False
+        if on_delivered is not None:
+            on_delivered(sent)
+        _fire_and_forget(self._bg_delete(posted))
+        return True
 
 
 def make_progress(message: Any) -> ToolProgress:

@@ -316,8 +316,8 @@ def test_dispatcher_redacts_image_result_without_changing_model_result(encoded, 
     breaker = SimpleNamespace(
         is_open=lambda tool_name: False, record_success=MagicMock(), record_failure=MagicMock(),
     )
-    bot = SimpleNamespace(tools={tool_name: tool}, _tool_breaker=breaker)
-    message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=42))
+    bot = SimpleNamespace(tools={tool_name: tool}, _tool_breaker=breaker, _is_admin=lambda actor_id: actor_id == 17)
+    message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=42), author=SimpleNamespace(id=17))
     trace = AsyncMock()
     monkeypatch.setattr(bot_module, "record_reasoning", trace)
     caplog.set_level(logging.INFO, logger="bot")

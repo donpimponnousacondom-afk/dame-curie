@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import wraps
 from typing import Concatenate
 from urllib.parse import urlsplit
@@ -28,7 +28,12 @@ from provider_telemetry import (
     build_call_metrics,
     local_encoding,
     merge_usage,
+    reasoning_content,
+    reported_count,
+    reported_usage,
+    token_count,
 )
+from turn_budget import current_foreground_turn
 
 logger = logging.getLogger(__name__)
 
@@ -625,14 +630,115 @@ def _extract_partial_reasoning(arguments: str) -> str:
         return raw
 
 
+_PROVIDER_DIAGNOSTIC_BODY_LIMIT = 64 * 1024
+_SSE_LENGTH_DRAIN_BYTES = 64 * 1024
+_SSE_LENGTH_DRAIN_SECONDS = 1.0
+_MAX_PARTIAL_CONTENT_CHARS = 16 * 1024
+_MAX_VALID_PROVIDER_TOKEN_COUNT = 2**53 - 1
+
+
+def _explicit_output_tokens(response: dict) -> int | None:
+    """Accept only consistent, validated provider-reported output counters."""
+    counts: list[int] = []
+    for source, keys in (
+        (response.get("usage"), ("completion_tokens", "output_tokens", "eval_count")),
+        (response, ("eval_count", "completion_tokens", "output_tokens")),
+    ):
+        if isinstance(source, dict):
+            for key in keys:
+                if key in source:
+                    count = token_count(source[key])
+                    if count is None:
+                        return None
+                    counts.append(count)
+    gemini = response.get("usageMetadata")
+    if isinstance(gemini, dict) and {
+        "candidatesTokenCount", "thoughtsTokenCount"
+    } & gemini.keys():
+        candidates = token_count(gemini.get("candidatesTokenCount"))
+        thoughts = token_count(gemini.get("thoughtsTokenCount"))
+        if candidates is None or thoughts is None:
+            return None
+        combined = candidates + thoughts
+        if combined > _MAX_VALID_PROVIDER_TOKEN_COUNT:
+            return None
+        counts.append(combined)
+    if counts and all(count == counts[0] for count in counts):
+        return counts[0]
+    return None
+
+
 class _ProviderDiagnostics:
     def __init__(self):
         self.attempts: list[str] = []
         self.current: dict = {}
         self.body = bytearray()
+        self.body_bytes_seen = 0
+        self.body_truncated = False
         self.response_text = ""
+        self.response_text_chars_seen = 0
+        self.response_text_truncated = False
         self.failed = False
         self.first_exception: BaseException | None = None
+
+    def append_body(self, chunk: bytes) -> None:
+        self.body_bytes_seen += len(chunk)
+        if (
+            not self.body_truncated
+            and len(self.body) + len(chunk) <= _PROVIDER_DIAGNOSTIC_BODY_LIMIT
+        ):
+            self.body.extend(chunk)
+        elif not self.body_truncated:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            prefix_size = max(0, head_size - len(self.body))
+            head = bytes(self.body[:head_size]) + chunk[:prefix_size]
+            remainder = chunk[prefix_size:]
+            tail = (
+                remainder[-tail_size:]
+                if len(remainder) >= tail_size
+                else (bytes(self.body[head_size:]) + remainder)[-tail_size:]
+            )
+            self.body = bytearray(head + tail)
+            self.body_truncated = True
+        else:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            tail = (
+                chunk[-tail_size:]
+                if len(chunk) >= tail_size
+                else (bytes(self.body[head_size:]) + chunk)[-tail_size:]
+            )
+            self.body = bytearray(self.body[:head_size] + tail)
+
+    def body_text(self) -> str:
+        if not self.body_truncated:
+            return self.body.decode(self.body_encoding, errors="replace")
+        head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+        omitted = self.body_bytes_seen - len(self.body)
+        marker = f"\n[... {omitted} response bytes omitted from provider diagnostics ...]\n"
+        return (
+            self.body[:head_size].decode(self.body_encoding, errors="replace")
+            + marker
+            + self.body[head_size:].decode(self.body_encoding, errors="replace")
+        )
+
+    def capture_text(self, text: str) -> None:
+        self.response_text_chars_seen = len(text)
+        if len(text) <= _PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+            self.response_text = text
+            return
+        head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+        tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+        self.response_text = (
+            text[:head_size]
+            + (
+                f"\n[... {len(text) - head_size - tail_size} response characters "
+                "omitted from provider diagnostics ...]\n"
+            )
+            + text[-tail_size:]
+        )
+        self.response_text_truncated = True
 
     def begin(self, endpoint, path: str, attempt: int, maximum: int, data: dict, timeout: int):
         self.finish_attempt()
@@ -659,8 +765,12 @@ class _ProviderDiagnostics:
             ],
         }
         self.body = bytearray()
+        self.body_bytes_seen = 0
+        self.body_truncated = False
         self.body_encoding = "utf-8"
         self.response_text = ""
+        self.response_text_chars_seen = 0
+        self.response_text_truncated = False
         self.http_response = None
 
     def response(self, resp):
@@ -683,16 +793,16 @@ class _ProviderDiagnostics:
     def json_response(self, resp, result: object):
         cached_body = getattr(resp, "_body", None)
         if isinstance(cached_body, bytes):
-            self.body.extend(cached_body)
             self.body_encoding = resp.get_encoding()
+            self.append_body(cached_body)
         else:
-            self.response_text = json.dumps(result, ensure_ascii=False, default=str)
+            self.capture_text(json.dumps(result, ensure_ascii=False, default=str))
 
     def failure(self, summary: str, exception: BaseException | None = None):
         self.failed = True
         cached_body = getattr(self.http_response, "_body", None)
         if not self.body and not self.response_text and isinstance(cached_body, bytes):
-            self.body.extend(cached_body)
+            self.append_body(cached_body)
             if isinstance(exception, UnicodeDecodeError):
                 self.body_encoding = exception.encoding
         self.current.setdefault("failures", []).append(summary)
@@ -709,10 +819,13 @@ class _ProviderDiagnostics:
     def finish_attempt(self):
         if self.current:
             self.current["elapsed_ms"] = (time.perf_counter() - self.started_s) * 1000
+            self.current["response_body_bytes_observed"] = self.body_bytes_seen
+            self.current["response_body_capture_truncated"] = self.body_truncated or self.response_text_truncated
+            self.current["response_body_capture_chars_observed"] = self.response_text_chars_seen
             exceptions = self.current.pop("exceptions", [])
             record = json.dumps(self.current, ensure_ascii=False, indent=2, default=str)
             if self.current.get("failures"):
-                body = self.response_text or self.body.decode(self.body_encoding, errors="replace")
+                body = self.response_text or self.body_text()
                 record += "\nReceived response body (observed text only):\n" + body
             if exceptions:
                 record += "\nUnderlying exception context:\n" + "\n".join(exceptions)
@@ -853,19 +966,53 @@ async def _read_sse_response(
     buf = b""
     byte_count = data_count = malformed_count = choice_count = 0
     error_event = False
-    async for raw_chunk in resp.content.iter_any():
-        if done:
+    length_limited = False
+    length_drain_deadline = 0.0
+    length_drain_bytes = 0
+    length_drain_timed_out = False
+    stream = aiter(resp.content.iter_any())
+    while not done:
+        try:
+            if length_limited and length_drain_bytes >= _SSE_LENGTH_DRAIN_BYTES:
+                break
+            if length_limited:
+                remaining_time = (
+                    length_drain_deadline - asyncio.get_running_loop().time()
+                )
+                if remaining_time <= 0:
+                    length_drain_timed_out = True
+                    break
+                raw_chunk = await asyncio.wait_for(anext(stream), timeout=remaining_time)
+            else:
+                raw_chunk = await anext(stream)
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            if not length_limited:
+                raise
+            length_drain_timed_out = True
+            break
+        except aiohttp.ClientError as error:
+            if not length_limited:
+                raise
+            if incident is not None:
+                incident.failure("Provider length-response usage drain interrupted", error)
             break
         byte_count += len(raw_chunk)
         if incident is not None:
-            incident.body.extend(raw_chunk)
+            incident.append_body(raw_chunk)
+        if length_limited:
+            remaining_bytes = _SSE_LENGTH_DRAIN_BYTES - length_drain_bytes
+            raw_chunk = raw_chunk[:remaining_bytes]
+            length_drain_bytes += len(raw_chunk)
         buf += raw_chunk
         while b"\n" in buf and not done:
             line, buf = buf.split(b"\n", 1)
             line = line.strip()
             if not line:
-                if error_event:
+                if error_event and not length_limited:
                     raise ProviderUpstreamError(None)
+                error_event = False
                 continue
             if line.startswith(b"event:"):
                 error_event = line[6:].strip() == b"error"
@@ -874,7 +1021,7 @@ async def _read_sse_response(
                 continue
             payload = line[5:].lstrip()
             if payload == b"[DONE]":
-                if error_event:
+                if error_event and not length_limited:
                     raise ProviderUpstreamError(None)
                 done = True
                 break
@@ -886,17 +1033,27 @@ async def _read_sse_response(
             except ValueError as e:
                 if incident is not None:
                     incident.failure("Provider stream contains malformed JSON", e)
-                if error_event:
+                if error_event and not length_limited:
                     raise ProviderUpstreamError(payload.decode("utf-8", errors="replace")) from None
                 malformed_count += 1
                 continue
-            if error_event or isinstance(obj, dict) and (obj.get("error") is not None or obj.get("type") == "error"):
-                raise ProviderUpstreamError(obj.get("error", obj) if isinstance(obj, dict) else obj)
+            if not length_limited and (
+                error_event
+                or isinstance(obj, dict)
+                and (obj.get("error") is not None or obj.get("type") == "error")
+            ):
+                raise ProviderUpstreamError(
+                    obj.get("error", obj) if isinstance(obj, dict) else obj
+                )
             if not isinstance(obj, dict):
+                if length_limited:
+                    continue
                 raise ProviderResponseError(
                     f"Provider stream has non-object JSON: data_frames={data_count}"
                 )
             for choice in obj.get("choices", []) or []:
+                if length_limited:
+                    break
                 choice_count += 1
                 idx = choice.get("index", 0)
                 # Ensure the choices slot for this index exists.
@@ -934,10 +1091,9 @@ async def _read_sse_response(
                 # `reasoning_content`; Ollama cloud's minimax-m3 emits a
                 # `reasoning` field on the same delta. Treat both the same
                 # way so the bot's existing reasoning handler picks them up.
-                for rkey in ("reasoning_content", "reasoning"):
-                    rval = delta.get(rkey)
-                    if rval is not None:
-                        reasoning_parts.append(rval)
+                reason = reasoning_content(delta)
+                if reason:
+                    reasoning_parts.append(reason)
                 # Per-token progress callback (fire-and-forget, NEVER awaited
                 # inline). A slow Discord edit must not back-pressure the SSE
                 # read — that would stall the upstream provider and add visible
@@ -956,12 +1112,7 @@ async def _read_sse_response(
                 # harmless.
                 if on_token is not None:
                     tok_content = visible_content_delta
-                    tok_reason = ""
-                    for rkey in ("reasoning_content", "reasoning"):
-                        rv = delta.get(rkey)
-                        if rv:
-                            tok_reason = rv
-                            break
+                    tok_reason = reasoning_content(delta)
                     # 2026-07-21: when the custom buffer is mid-JSON
                     # (model is emitting a bare-JSON tool call), DON'T
                     # surface the raw content as a progress preview.
@@ -1079,7 +1230,13 @@ async def _read_sse_response(
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
                     if finish_reason == "length":
-                        raise ProviderIncompleteResponseError("Provider response reached the output token limit")
+                        length_limited = True
+                        length_drain_deadline = (
+                            asyncio.get_running_loop().time() + _SSE_LENGTH_DRAIN_SECONDS
+                        )
+                        length_drain_bytes = min(len(buf), _SSE_LENGTH_DRAIN_BYTES)
+                        if len(buf) > _SSE_LENGTH_DRAIN_BYTES:
+                            buf = buf[:_SSE_LENGTH_DRAIN_BYTES]
             # Some providers stream usage in the final frame (Anthropic-style
             # models on OpenRouter do this; OpenAI does it when
             # stream_options.include_usage=true).
@@ -1101,9 +1258,12 @@ async def _read_sse_response(
         f"bytes={byte_count} data_frames={data_count} choices={choice_count} "
         f"malformed_frames={malformed_count} done={done} trailing_bytes={len(buf)}"
     )
-    if error_event:
+    if incident is not None and length_limited:
+        incident.current["usage_drain_complete"] = done
+        incident.current["usage_drain_timed_out"] = length_drain_timed_out
+    if error_event and not length_limited:
         raise ProviderUpstreamError(None)
-    if buf.strip() and not done:
+    if buf.strip() and not done and not length_limited:
         raise ProviderResponseError(f"Provider stream has an unterminated tail: {diagnostics}")
     if malformed_count:
         logger.warning("Provider stream skipped malformed frames: %s", diagnostics)
@@ -1123,25 +1283,18 @@ async def _read_sse_response(
     # stripped out (the model wrote them as a single line; the user sees
     # the surrounding reply without the raw JSON).
     if custom_buffer is not None:
-        custom_buffer.drain()
-        if custom_buffer.completed:
-            # Append custom-extracted calls to any native ones. Native
-            # tool_calls (if any) are already accumulated; this just
-            # adds the bare-JSON ones we parsed out of the text.
+        if not length_limited:
+            custom_buffer.drain()
+        if custom_buffer.completed and not length_limited:
             for tc in custom_buffer.completed:
                 tool_calls_by_index[len(tool_calls_by_index)] = tc
-            # Rebuild visible content from the buffer's text_parts (with
-            # JSON objects stripped), overriding the raw content_parts
-            # we accumulated.
-            # Always rebuild from the buffer, including when text_parts is
-            # empty (JSON-only tool turn). Gating on truthiness left the raw
-            # JSON in content_parts for the instructed "JSON line first" shape.
+        if custom_buffer.completed or length_limited:
             content_parts = ["".join(custom_buffer.text_parts)]
 
     # Sort tool calls by their index so the order matches the model's intent.
     # Strip the internal callback-tracking flags ("_name_sent"/"_reasoning_sent")
     # so they never leak into the tool_calls we hand back to the provider.
-    tool_calls_list = [
+    tool_calls_list = [] if length_limited else [
         {
             k: v
             for k, v in tool_calls_by_index[idx].items()
@@ -1164,6 +1317,8 @@ async def _read_sse_response(
         "finish_reason": finish_reason,
     }
     merged["__first_token_s__"] = observation.first_token_s
+    if length_limited:
+        merged["__usage_drain_complete__"] = done
     return merged
 
 
@@ -1242,18 +1397,57 @@ class ProviderRequestError(RuntimeError):
 
 
 class ProviderResponseError(RuntimeError):
-    """A malformed HTTP 200 response, not a native-tool rejection."""
+    """A malformed or incomplete HTTP 200 response, not a native-tool rejection."""
 
 
 class ProviderIncompleteResponseError(ProviderResponseError):
-    pass
+    def __init__(
+        self,
+        *,
+        partial_content: str,
+        finish_reason: str | None,
+        usage: dict[str, int],
+        metrics: CallMetrics,
+        classification: str,
+    ):
+        self.partial_content = partial_content[:_MAX_PARTIAL_CONTENT_CHARS]
+        self.partial_content_truncated = len(partial_content) > _MAX_PARTIAL_CONTENT_CHARS
+        self.finish_reason = finish_reason[:80] if isinstance(finish_reason, str) else None
+        self.usage = dict(usage)
+        self.metrics = metrics
+        self.classification = classification
+        self.incident_details = json.dumps(
+            {
+                "classification": classification,
+                "finish_reason": self.finish_reason,
+                "usage": self.usage,
+                "metrics": asdict(metrics),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+        messages = {
+            "output_token_limit": "The provider stopped at the output token limit.",
+            "reasoning_only": "The provider returned reasoning without an answer.",
+        }
+        super().__init__(messages[classification])
 
 
 class ProviderUpstreamError(ProviderResponseError):
     """An explicit HTTP 200 upstream failure with content-free diagnostics."""
 
     def __init__(self, error: object):
-        self.incident_details = json.dumps(error, ensure_ascii=False, default=str)
+        incident_details = json.dumps(error, ensure_ascii=False, default=str)
+        if len(incident_details) > _PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            omitted = len(incident_details) - head_size - tail_size
+            incident_details = (
+                incident_details[:head_size]
+                + f"\n[... {omitted} diagnostic characters omitted ...]\n"
+                + incident_details[-tail_size:]
+            )
+        self.incident_details = incident_details
         details = error if isinstance(error, dict) else {}
         known_labels = {
             "rate_limit_exceeded", "rate_limit_error", "concurrency_limit_exceeded",
@@ -1656,6 +1850,35 @@ def track_provider_activity[**P, R](
             provider.active_requests -= 1
 
     return tracked
+
+
+def _validate_foreground_request_options(extra_body: dict[str, object]) -> None:
+    """Reject unsafe choice counts and malformed alternate output limits."""
+    if "n" in extra_body and (
+        type(extra_body["n"]) is not int or extra_body["n"] != 1
+    ):
+        raise ValueError("Foreground provider calls support only n=1")
+    for key in ("max_completion_tokens", "max_output_tokens"):
+        if key in extra_body and (
+            type(extra_body[key]) is not int or extra_body[key] <= 0
+        ):
+            raise ValueError(
+                f"Foreground provider payload requires positive integer {key}"
+            )
+
+
+def _clamp_foreground_output_aliases(payload: dict[str, object]) -> None:
+    """Clamp recognized alternate output caps to the admitted max_tokens value."""
+    cap = payload["max_tokens"]
+    for key in ("max_completion_tokens", "max_output_tokens"):
+        if key not in payload:
+            continue
+        value = payload[key]
+        if type(value) is not int or value <= 0:
+            raise ValueError(
+                f"Foreground provider payload requires positive integer {key}"
+            )
+        payload[key] = min(value, cap)
 
 
 class OpenAICompatibleProvider:
@@ -2079,7 +2302,7 @@ class OpenAICompatibleProvider:
                             f"Provider endpoint initialized: {endpoint.name} ({endpoint.model})"
                         )
                     else:
-                        incident.response_text = await resp.text()
+                        incident.capture_text(await resp.text())
                         incident.current["response_body_complete"] = True
                         logger.warning(
                             f"Provider endpoint {endpoint.name} /models returned {resp.status}"
@@ -2189,7 +2412,14 @@ class OpenAICompatibleProvider:
         If ``on_tool_call_name`` is provided, it's called (fire-and-forget) the
         first time a tool_call delta with a function name arrives in the SSE
         stream. This lets callers update a live progress message mid-generation.
+
+        Foreground reservations admit only ``n=1`` and cap positive
+        ``max_completion_tokens``/``max_output_tokens`` aliases at the reserved
+        ``max_tokens`` limit. Nonforeground callers retain configured extras.
         """
+        turn = current_foreground_turn()
+        if turn is not None:
+            _validate_foreground_request_options(self.extra_body)
         if not self.available:
             logger.warning("Provider marked unavailable; retrying initialization")
             await self.initialize()
@@ -2351,6 +2581,15 @@ class OpenAICompatibleProvider:
                 # some models reject an explicit reasoning-disabled parameter.
                 data["stream"] = False
                 data.pop("stream_options", None)
+            turn = current_foreground_turn()
+            reservation = None
+            if turn is not None:
+                _validate_foreground_request_options(data)
+                _clamp_foreground_output_aliases(data)
+                reservation = turn.reserve(data["max_tokens"], timeout)
+                data["max_tokens"] = reservation.output_tokens
+                _clamp_foreground_output_aliases(data)
+                timeout = reservation.timeout_seconds
             observation = OutputObservation()
             request_start = time.perf_counter()
             media_parts = sum(
@@ -2397,7 +2636,7 @@ class OpenAICompatibleProvider:
                     incident.response(resp)
                     if resp.status in (500, 502, 503, 504):
                         error_text = await resp.text()
-                        incident.response_text = error_text
+                        incident.capture_text(error_text)
                         incident.current["response_body_complete"] = True
                         logger.warning(
                             "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
@@ -2421,7 +2660,7 @@ class OpenAICompatibleProvider:
                         )
                     if resp.status == 429:
                         error_text = await resp.text()
-                        incident.response_text = error_text
+                        incident.capture_text(error_text)
                         incident.current["response_body_complete"] = True
                         logger.warning(
                             "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
@@ -2463,7 +2702,7 @@ class OpenAICompatibleProvider:
                         )
                     if resp.status != 200:
                         error_text = await resp.text()
-                        incident.response_text = error_text
+                        incident.capture_text(error_text)
                         incident.current["response_body_complete"] = True
                         if (
                             resp.status in (400, 422)
@@ -2782,6 +3021,7 @@ class OpenAICompatibleProvider:
                         response_format = "json"
                     else:
                         response_format = "sse" if data.get("stream") else "json"
+                    usage_drain_complete = None
                     if response_format == "sse":
                         merged = await _read_sse_response(
                             resp,
@@ -2791,6 +3031,7 @@ class OpenAICompatibleProvider:
                             observation=observation,
                             incident=incident,
                         )
+                        usage_drain_complete = merged.get("__usage_drain_complete__")
                         result = {
                             k: v for k, v in merged.items() if not k.startswith("__")
                         }
@@ -2798,7 +3039,11 @@ class OpenAICompatibleProvider:
                         try:
                             result = await resp.json(content_type=None)
                         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                            incident.response_text = e.doc if isinstance(e, json.JSONDecodeError) else e.object.decode("utf-8", errors="replace")
+                            incident.capture_text(
+                                e.doc
+                                if isinstance(e, json.JSONDecodeError)
+                                else e.object.decode("utf-8", errors="replace")
+                            )
                             incident.failure("Provider JSON decoding failed", e)
                             raise ProviderResponseError(
                                 f"Provider JSON decoding failed: error_type={type(e).__name__}"
@@ -2825,14 +3070,14 @@ class OpenAICompatibleProvider:
                         raise ProviderResponseError(
                             "No response from provider (non-dict JSON body)"
                         )
+                    if turn is not None and reservation is not None:
+                        turn.settle(reservation, _explicit_output_tokens(result))
                     if result.get("error") is not None or result.get("type") == "error":
                         raise ProviderUpstreamError(result.get("error", result))
                     choices = result.get("choices", [])
                     if not choices:
                         raise ProviderResponseError("Provider JSON response produced no choices")
 
-                    if choices[0].get("finish_reason") == "length":
-                        raise ProviderIncompleteResponseError("Provider response reached the output token limit")
                     message = choices[0].get("message", {})
                     if response_format == "json":
                         for index, choice in enumerate(choices):
@@ -2848,17 +3093,68 @@ class OpenAICompatibleProvider:
                             else (p if isinstance(p, str) else "")
                             for p in content
                         )
-                    if (
+                    finish_reason = choices[0].get("finish_reason")
+                    incomplete_classification = None
+                    partial_content = ""
+                    if finish_reason == "length":
+                        incomplete_classification = "output_token_limit"
+                        if content and not _is_policy_block_text(content):
+                            partial_content = content
+                        if partial_content:
+                            opener = _CUSTOM_TOOL_OPEN_RE.search(partial_content)
+                            if opener is not None:
+                                partial_content = partial_content[:opener.start()]
+                    elif (
                         not content.strip()
                         and not message.get("tool_calls")
-                        and (
-                            message.get("reasoning_content")
-                            or message.get("reasoning")
-                            or message.get("reasoning_details")
-                            or any(observation.reasoning.get(0, ()))
-                        )
+                        and reasoning_content(message)
                     ):
-                        raise ProviderIncompleteResponseError("Provider returned reasoning without an answer or tool call")
+                        incomplete_classification = "reasoning_only"
+                    if incomplete_classification is not None:
+                        metrics = build_call_metrics(
+                            result, data, observation,
+                            provider=urlsplit(endpoint.base_url).hostname or "unknown",
+                            endpoint=endpoint.name, model=data["model"],
+                            request_start=request_start, stream=response_format == "sse",
+                            attempt=attempt,
+                        )
+                        reported_input, _, reported_reasoning = reported_usage(result)
+                        reported_output = _explicit_output_tokens(result)
+                        raw_usage = result.get("usage")
+                        raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
+                        usage_metadata = result.get("usageMetadata")
+                        usage_metadata = usage_metadata if isinstance(usage_metadata, dict) else {}
+                        reported_total = reported_count(raw_usage, "total_tokens")
+                        if reported_total is None:
+                            reported_total = reported_count(usage_metadata, "totalTokenCount")
+                        if reported_total is None:
+                            reported_total = reported_count(result, "total_tokens")
+                        available_usage = {
+                            key: value
+                            for key, value in (
+                                ("input_tokens", reported_input),
+                                ("output_tokens", reported_output),
+                                ("reasoning_tokens", reported_reasoning),
+                                ("total_tokens", reported_total),
+                            )
+                            if value is not None
+                        }
+                        incomplete = ProviderIncompleteResponseError(
+                            partial_content=partial_content,
+                            finish_reason=finish_reason,
+                            usage=available_usage,
+                            metrics=metrics,
+                            classification=incomplete_classification,
+                        )
+                        incident.current["incomplete_response"] = {
+                            "classification": incomplete.classification,
+                            "finish_reason": incomplete.finish_reason,
+                            "reported_usage": incomplete.usage,
+                            "metrics": asdict(metrics),
+                        }
+                        if response_format == "sse" and finish_reason == "length":
+                            incident.current["usage_drain_complete"] = usage_drain_complete
+                        raise incomplete
                     # A blocked prompt comes back as a normal 200 whose content
                     # IS Google's notice. Never let that reach the channel: drop
                     # it, cool the endpoint and hand the turn to the fallback

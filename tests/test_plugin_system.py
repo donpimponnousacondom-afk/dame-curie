@@ -39,10 +39,13 @@ def temp_plugin_env(tmp_path):
         """
 class DummyTool:
     def get_name(self):
-        return "test_tool"
+        return self.name
 
 def setup(bot):
-    return [DummyTool()]
+    tools = [DummyTool(), DummyTool()]
+    tools[0].name = "bash"
+    tools[1].name = "run_command"
+    return tools
 """
     )
     return plugins_dir, data_dir
@@ -57,25 +60,25 @@ def test_plugin_loading_and_scoping(temp_plugin_env):
     loaded = pm.load_plugins()
 
     assert "test_plugin" in loaded
-    assert "test_tool" in loaded["test_plugin"]["tools"]
+    assert {"bash", "run_command"} <= set(loaded["test_plugin"]["tools"])
 
-    # User 111 is explicitly allowed
+    # Alias-shaped plugin names remain user-scoped registered callables.
     user_tools = pm.get_available_tools(user_id="111")
-    assert "test_tool" in user_tools
+    assert {"bash", "run_command"} <= set(user_tools)
 
     # User 999 is not allowed (since enabled_globally is False)
     user_tools_999 = pm.get_available_tools(user_id="999")
-    assert "test_tool" not in user_tools_999
+    assert not {"bash", "run_command"} & set(user_tools_999)
 
     # Enable globally
     pm.enable_plugin("test_plugin", is_global=True)
     user_tools_999_after = pm.get_available_tools(user_id="999")
-    assert "test_tool" in user_tools_999_after
+    assert {"bash", "run_command"} <= set(user_tools_999_after)
 
     # Denied user 222 should still not have access when global
     pm.disable_plugin("test_plugin", user_id="222")
     user_tools_222 = pm.get_available_tools(user_id="222")
-    assert "test_tool" not in user_tools_222
+    assert not {"bash", "run_command"} & set(user_tools_222)
 
 
 def test_user_self_enable_disable(temp_plugin_env):
@@ -88,11 +91,11 @@ def test_user_self_enable_disable(temp_plugin_env):
 
     # User 333 enables for self
     pm.enable_plugin("test_plugin", user_id="333")
-    assert "test_tool" in pm.get_available_tools(user_id="333")
+    assert {"bash", "run_command"} <= set(pm.get_available_tools(user_id="333"))
 
     # User 333 disables for self
     pm.disable_plugin("test_plugin", user_id="333")
-    assert "test_tool" not in pm.get_available_tools(user_id="333")
+    assert not {"bash", "run_command"} & set(pm.get_available_tools(user_id="333"))
 
 
 def test_reload_plugins_rebuilds_the_live_registry(temp_plugin_env):
@@ -100,5 +103,5 @@ def test_reload_plugins_rebuilds_the_live_registry(temp_plugin_env):
     pm = PluginManager(
         DummyBot(), plugins_dir=str(plugins_dir), state_file=str(data_dir / "plugins.json")
     )
-    assert "test_tool" in pm.load_plugins()["test_plugin"]["tools"]
-    assert pm.reload_plugins() == "Reloaded 1 plugin(s) with 1 tool(s)."
+    assert {"bash", "run_command"} <= set(pm.load_plugins()["test_plugin"]["tools"])
+    assert pm.reload_plugins() == "Reloaded 1 plugin(s) with 2 tool(s)."

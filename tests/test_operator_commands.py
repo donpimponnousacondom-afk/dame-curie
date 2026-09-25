@@ -167,10 +167,13 @@ def test_large_reports_are_complete_utf8_attachments_in_bounded_parts(operator_c
     bot, message, dm, store = operator_case
     body = "BEGIN\n" + "🕊" * 2_000_010 + "\nEND @everyone ```"
     store.record("large", "complete report", details=body)
-    expected = store.get(0).format_report()
+    incident = store.get(0)
+    assert len(incident.details) <= error_reporting._INCIDENT_TEXT_LIMIT
+    assert "diagnostic capture truncated" in incident.details
+    expected = incident.format_report()
     asyncio.run(handle_error_command(bot, message, "0"))
     assert not message.channel.sent
-    assert len(dm.sent) == 3
+    assert len(dm.sent) == 1
     combined = "".join(item["file_bytes"].decode("utf-8") for item in dm.sent)
     assert combined == expected
     for item in dm.sent:
@@ -514,12 +517,19 @@ def test_plugin_failure_projects_only_typed_result(operator_case):
 
 def test_help_is_bounded_and_lists_operator_commands(operator_case):
     bot, message, dm, store = operator_case
-    message.content = "!help"
+    bot.command_prefix = "?"
+    message.content = "?help"
     asyncio.run(MaxwellBot._handle_command(bot, message))
     assert all(len(item["content"]) <= 2000 for item in message.channel.sent)
     combined = "".join(item["content"] for item in message.channel.sent)
-    assert "!error 0..9" in combined and "!forward N" in combined
+    assert "?error 0..9" in combined and "?forward N" in combined
     assert FOOTER_MARKER not in combined
+
+    message.channel.sent.clear()
+    message.content = "?job"
+    bot.bg_jobs = SimpleNamespace(get=lambda _job_id: None)
+    asyncio.run(MaxwellBot._handle_command(bot, message))
+    assert message.channel.sent[0]["content"] == "usage: `?job <id>` or `?job cancel <id>`"
 
 
 def test_job_status_does_not_echo_stored_failure_progress(operator_case):

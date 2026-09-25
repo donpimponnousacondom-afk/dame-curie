@@ -41,6 +41,7 @@ def mention_bot():
         "_content_without_self_mention",
         "_solo_channel_for",
         "_solo_blocks",
+        "_channel_allowed",
     ):
         setattr(bot, name, getattr(MaxwellBot, name).__get__(bot))
     return bot

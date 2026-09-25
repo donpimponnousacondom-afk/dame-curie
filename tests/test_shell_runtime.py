@@ -19,6 +19,9 @@ def isolated_environment(monkeypatch):
 
 def test_exec_uses_outer_bot_container(monkeypatch):
     shell = ShellTool(bot=None)
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-provider-secret")
+    monkeypatch.setenv("DISCORD_TOKEN", "synthetic-discord-secret")
+    monkeypatch.setenv("BASH_ENV", "/synthetic/must-not-source")
 
     async def run():
         stdout = asyncio.StreamReader()
@@ -30,8 +33,17 @@ def test_exec_uses_outer_bot_container(monkeypatch):
         spawn = AsyncMock(return_value=process)
         monkeypatch.setattr(bot_tools.asyncio, "create_subprocess_exec", spawn)
         assert await shell._run_shell_command("printf ok") == (b"ok", b"", 0)
-        assert spawn.call_args.args == ("bash", "-lc", "printf ok")
+        assert spawn.call_args.args == ("bash", "--noprofile", "--norc", "-c", "printf ok")
         assert spawn.call_args.kwargs["cwd"] == "/home/dame-curie"
         assert spawn.call_args.kwargs["start_new_session"] is True
+        environment = spawn.call_args.kwargs["env"]
+        assert environment == {
+            "HOME": "/home/dame-curie",
+            "PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG": "C.UTF-8",
+            "PYTHONUNBUFFERED": "1",
+        }
+        assert "synthetic-provider-secret" not in environment.values()
+        assert "synthetic-discord-secret" not in environment.values()
 
     asyncio.run(run())

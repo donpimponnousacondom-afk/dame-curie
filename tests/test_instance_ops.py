@@ -173,6 +173,7 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
     events = Mock()
     app = SimpleNamespace(path=Path("/synthetic/dame-curie"), inventory=events.inventory, compose=events.compose,
                           env={"DAME_CURIE_STAGING": "false"})
+    app.staging_enabled = ops.Instance.staging_enabled.__get__(app)
     account = object()
     service_account = Mock(return_value=account)
     constructor = Mock(return_value=app)

@@ -455,7 +455,7 @@ def test_reconstruction_checks_helper_identity(tmp_path):
     _, _, _, record = make_pair(tmp_path)
     root = tmp_path / "restored"
     (root / APPROVED).parent.mkdir(parents=True)
-    result = run_reconstruction(root, record, identity="other")
+    result = run_reconstruction(root, record, identity="dame-curie-prod")
     assert result.returncode != 0
     assert b"identity mismatch" in result.stderr
     assert not (root / APPROVED).is_symlink()

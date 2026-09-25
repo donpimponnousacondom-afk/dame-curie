@@ -50,7 +50,9 @@ def test_protocols_do_not_ask_for_a_placeholder_send():
     for text in (TOOL_PROTOCOL.lower(), LEAN_TOOL_PROTOCOL.lower()):
         assert "same batch as the acknowledgement" not in text
         assert "content='on it" not in text
-        assert "more_tools" not in text
+    assert "some tools are hidden until requested" in TOOL_PROTOCOL.lower()
+    assert "call only tools listed" in TOOL_PROTOCOL.lower()
+    assert "more_tools(group=...) first" in TOOL_PROTOCOL.lower()
 
 
 def test_lean_protocol_forbids_claiming_unverified_work():
@@ -61,5 +63,7 @@ def test_lean_protocol_forbids_claiming_unverified_work():
 
 def test_protocol_tells_him_to_pick_his_own_chess_moves():
     text = TOOL_PROTOCOL.lower()
+    assert "if chess_move is not listed" in text
+    assert "more_tools(group='games') first" in text
     assert "you play your own moves" in text
     assert "nothing plays for you" in text

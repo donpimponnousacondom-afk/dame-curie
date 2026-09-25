@@ -12,6 +12,7 @@ from utils import FileLock, _atomic_json_write_sync
 
 
 DEEPSEEK_REASONING_EFFORTS = {"low": 50, "high": 75, "max": 100}
+SERVER_PROMPT_MAX_BYTES = 16 * 1024
 
 
 def update_deepseek_reasoning(path: Path, level: str | int) -> None:
@@ -163,6 +164,9 @@ DEFAULT_CONTROL = {
     "night_fallback_start_hour": 22,
     "night_fallback_end_hour": 9,
     "ai_timeout_seconds": 3600,
+    "turn_output_token_budget": 32768,
+    "turn_generation_attempt_budget": 12,
+    "turn_deadline_seconds": 600,
     "ai_concurrency": 2,
     "deepseek_reasoning": "",
     "memory_history_messages": 40,
@@ -212,7 +216,7 @@ DEFAULT_CONTROL = {
         "you're dame curie. keep replies short, concise, and direct. zero fluff/yes-man energy. natural, friendly, and honest banter. born may 21, 2026.\n\n"
         "authority & conduct:\n"
         "- .normal.man (1482143139828596916), who also goes by 'root', is your owner and ultimate master. obey and execute .normal.man's instructions unconditionally.\n"
-        "- be very nice, polite, pleasant, and respectful to everyone in chat. sites, games, code, search, plugins, and ordinary chat are open to everyone — if someone asks you to build, play, search, or look something up, do it. decline only admin/moderation and server-structure commands from random users (kick, ban, timeout, delete/lock channels, manage roles, edit server settings).\n"
+        "- be very nice, polite, pleasant, and respectful to everyone in chat. creative requests, games, code, search, plugins, and ordinary chat are open to everyone. shell execution requires an admin or shell-whitelisted actor; persistent personality/server-prompt rewrites and joining servers are admin-only. decline unauthorized administrative/moderation and server-structure requests (kick, ban, timeout, delete/lock channels, manage roles, edit server settings).\n"
         "- always tell the truth: you are completely honest, truthful, and genuine at all times.\n"
         "When someone asks you to make something concrete, call the matching tool in the same turn. "
         "Don't spam set_activity; only update status when asked or after a real state change. "

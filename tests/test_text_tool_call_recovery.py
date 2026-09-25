@@ -131,6 +131,15 @@ def test_recovers_several_calls_in_declared_order():
         "<arg_key>content</arg_key><arg_value>checking…</arg_value></tool_call>"
     )
     assert [name for name, _ in calls] == ["web_search", "send_message"]
+    oversized = (
+        "<tool_call>web_search<arg_key>query</arg_key><arg_value>weather</arg_value></tool_call>"
+        "<tool_call>send_message<arg_key>content</arg_key><arg_value>"
+        + "x" * 5000
+        + "</arg_value></tool_call>"
+    )
+    assert _recover(oversized) == ([], oversized)
+    over_input = "send_message(content=" + "y" * 16_000 + ")"
+    assert _recover(over_input) == ([], over_input)
 
 
 def test_recovers_python_call_form():

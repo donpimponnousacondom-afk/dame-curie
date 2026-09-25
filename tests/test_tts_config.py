@@ -143,7 +143,7 @@ def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path
 
 
 def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path):
-    """Fish TTS must POST to fish.audio/v1/tts with the right shape and write
+    """The Fish provider must POST its OpenAI-shaped speech request and write
     the response bytes to output_path."""
     from bot_tools import _synthesize_fish_tts
 
@@ -191,12 +191,12 @@ def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path):
 
     asyncio.run(run())
 
-    assert captured["url"] == "https://api.fish.audio/v1/tts"
+    assert captured["url"] == "https://api.ppq.ai/v1/audio/speech"
     assert captured["headers"]["Authorization"] == "Bearer sk-fish-test"
-    assert captured["headers"]["model"] == "s2.1-pro-free"
-    assert captured["json"]["text"] == "hello fish"
-    assert captured["json"]["reference_id"] == "abc123"
-    assert captured["json"]["format"] == "mp3"
+    assert captured["json"]["model"] == "s2.1-pro-free"
+    assert captured["json"]["input"] == "hello fish"
+    assert captured["json"]["voice"] == "abc123"
+    assert captured["json"]["language"] == "en"
     assert out.read_bytes().startswith(b"\xff\xfb")
     assert len(out.read_bytes()) == 202
 

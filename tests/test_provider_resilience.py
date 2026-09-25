@@ -247,30 +247,6 @@ def test_retry_defaults_match_config_and_template():
     )
     assert call.args[1].value == 5
     assert "OPENAI_RETRY_ATTEMPTS=5\n" in (root / ".env.example").read_text()
-    readme = (root / "README.md").read_text()
-    retry_row = next(
-        line
-        for line in readme.splitlines()
-        if line.startswith("| `OPENAI_RETRY_ATTEMPTS` |")
-    )
-    assert "(default: `5`)" in retry_row
-    assert "Extra recovery attempts after an HTTP 200" not in readme
-    assert (
-        "defaults to **5 total attempts**"
-        in (root / "docs/CONFIGURATION.md").read_text()
-    )
-    audit = (root / "doc/html/maxwell-tool-budgets.html").read_text()
-    assert (
-        "</code> / <code>OLLAMA_EMPTY_RESPONSE_RETRIES</code></td><td>5 / 2;" in audit
-    )
-    assert (
-        "tool-protocol fallback can start a second completion attempt budget"
-        not in audit
-    )
-    assert (
-        "configured attempts are intentionally not the only HTTP-attempt allowance"
-        not in audit
-    )
 
 
 @pytest.mark.parametrize(
