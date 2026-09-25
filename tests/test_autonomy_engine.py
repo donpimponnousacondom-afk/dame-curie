@@ -886,6 +886,21 @@ def test_research_tools_blocked_from_autonomy(tmp_path):
     for name in AUTONOMY_RESEARCH_TOOLS:
         assert engine._autonomy_tool_allowed(name) is False
     assert engine._autonomy_tool_allowed("react") is True
+    # R2-07: the gate is the shared actor policy under the tick's own synthetic
+    # actor, so a privileged tool that actor cannot execute is not offered to
+    # the planner either -- and no separate autonomy permission list exists.
+    for name in (
+        "shell",
+        "join_server",
+        "update_base_personality",
+        "update_server_prompt",
+    ):
+        assert engine._autonomy_tool_allowed(name) is False
+    admin_bot = _bot_with_user(tmp_path, control={"tools_enabled": True})
+    admin_bot._is_admin = lambda user_id: str(user_id) == "autonomy"
+    admin_engine = AutonomyEngine(admin_bot)
+    assert admin_engine._autonomy_tool_allowed("shell") is True
+    assert admin_engine._autonomy_tool_allowed("update_server_prompt") is True
 
 
 def test_goal_age_uses_last_progress_not_last_acted(tmp_path):

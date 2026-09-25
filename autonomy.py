@@ -59,6 +59,7 @@ from error_reporting import capture_incident
 from control_defaults import (
     DEFAULT_CONTROL,
 )  # noqa: E402
+from tool_policy import tool_authorized  # noqa: E402
 from utils import (  # noqa: E402
     JsonStateStore,
     _atomic_json_write_sync,
@@ -1296,13 +1297,22 @@ class AutonomyEngine:
         the admin disabled them in the dashboard. Don't remove this gate.
         Hard safety denials from AUTONOMY_DISABLED_TOOLS (including research
         tools) are enforced first.
+
+        The tick's actor is the synthetic author id ``autonomy``, exactly as
+        ``_exec_run_tool`` builds it, so the shared actor policy decides here
+        too: a privileged tool autonomy is not authorized to execute is not
+        advertised to the planner, not validated and not gated as available.
         """
         if name in AUTONOMY_DISABLED_TOOLS:
             return False
         control = getattr(self.bot, "_control", None) or {}
         if not control.get("tools_enabled", True):
             return False
-        return name not in set(control.get("disabled_tools", []) or [])
+        disabled = name in set(control.get("disabled_tools", []) or [])
+        actor = SimpleNamespace(id="autonomy")
+        return not disabled and tool_authorized(
+            self.bot, SimpleNamespace(author=actor), name
+        )
 
     # -- lifecycle (idempotent) --
 
@@ -3147,7 +3157,11 @@ class AutonomyEngine:
             if json_str is None and candidates:
                 json_str = candidates[0][1]
         if json_str is None:
-            logger.warning(f"Autonomy planner returned no JSON. Raw: {text[:500]}")
+            logger.warning(
+                "Autonomy planner returned no JSON (%s chars, no object/candidate); "
+                "raw output withheld",
+                len(text),
+            )
             return [
                 {"kind": "do_nothing", "reason": "no JSON in LLM response"}
             ], validation_failures
@@ -3156,7 +3170,10 @@ class AutonomyEngine:
             parsed = json.loads(json_str)
         except json.JSONDecodeError as e:
             logger.warning(
-                f"Autonomy planner JSON parse failed: {e}. Raw: {json_str[:500]}"
+                "Autonomy planner JSON parse failed: %s (candidate %s chars); "
+                "raw output withheld",
+                e,
+                len(json_str),
             )
             return [
                 {"kind": "do_nothing", "reason": "invalid JSON from planner"}

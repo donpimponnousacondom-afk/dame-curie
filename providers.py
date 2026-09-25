@@ -33,7 +33,7 @@ from provider_telemetry import (
     reported_usage,
     token_count,
 )
-from turn_budget import current_foreground_turn
+from turn_budget import TurnBudgetExceeded, current_foreground_turn
 
 logger = logging.getLogger(__name__)
 
@@ -2586,7 +2586,11 @@ class OpenAICompatibleProvider:
             if turn is not None:
                 _validate_foreground_request_options(data)
                 _clamp_foreground_output_aliases(data)
-                reservation = turn.reserve(data["max_tokens"], timeout)
+                try:
+                    reservation = turn.reserve(data["max_tokens"], timeout)
+                except TurnBudgetExceeded as e:
+                    incident.capture("Provider turn budget exhausted after upstream failures", e)
+                    raise
                 data["max_tokens"] = reservation.output_tokens
                 _clamp_foreground_output_aliases(data)
                 timeout = reservation.timeout_seconds
@@ -3343,6 +3347,21 @@ class OpenAICompatibleProvider:
                 incident.capture("Provider transport or response failure", failure)
                 raise failure from e
             finally:
+                if (
+                    turn is not None
+                    and reservation is not None
+                    and not reservation.settled
+                    and (
+                        incident.http_response is None
+                        or incident.http_response.status != 200
+                        or (
+                            incident.body_bytes_seen == 0
+                            and incident.response_text_chars_seen == 0
+                            and not getattr(incident.http_response, "_body", None)
+                        )
+                    )
+                ):
+                    turn.settle(reservation, 0)
                 active_exception = sys.exception()
                 if active_exception is not attempt_exception and isinstance(active_exception, asyncio.CancelledError) and incident.current:
                     incident.capture("Provider failures before request cancellation")

@@ -749,6 +749,14 @@ class DiracSmokeRuntime:
                     record.failure = failure
                 elif task is None:
                     self._stop_requested = True
+                    logger.error(
+                        "Dirac smoke request %s stopped polling: its owned input "
+                        "settlement is unconfirmed and there was no registered task "
+                        "to settle (%s)",
+                        request_id,
+                        record.status,
+                    )
+                    self._record_runtime_state("stop_unconfirmed")
                 record.write(record_path)
                 if confirmed:
                     self._stuck_receipt = None

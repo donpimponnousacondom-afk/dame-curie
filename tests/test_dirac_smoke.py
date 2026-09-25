@@ -19,6 +19,7 @@ import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import discord
@@ -1246,7 +1247,10 @@ def test_a_turn_past_its_deadline_is_cancelled_without_touching_other_turns(tmp_
     asyncio.run(scenario())
 
 
-def test_an_input_that_expires_while_queued_never_runs(tmp_path):
+@pytest.mark.parametrize("settlement", ["registered", "taskless"])
+def test_an_input_that_expires_while_queued_never_runs(
+    tmp_path, monkeypatch, caplog, settlement
+):
     async def scenario():
         settings, bot, runtime = await _ready(tmp_path)
         ran = []
@@ -1277,7 +1281,18 @@ def test_an_input_that_expires_while_queued_never_runs(tmp_path):
             await asyncio.sleep(0)
             if not bot._reply_queue.active(channel):
                 break
-        bot.dispatch_failure = "registered"
+        if settlement == "registered":
+            bot.dispatch_failure = "registered"
+        else:
+            # The queue must register a task for the confirmed case; an ordinary
+            # dispatch_failure always queues, so raise before the queue is reached.
+            monkeypatch.setattr(
+                bot,
+                "_on_message_impl",
+                AsyncMock(
+                    side_effect=RuntimeError("synthetic failure before any queue registration")
+                ),
+            )
         failed = _submit(settings, task="fail after the queue registers a task")
         failed_record = await _wait_for_record(settings, failed.request_id)
         for _ in range(100):
@@ -1287,15 +1302,34 @@ def test_an_input_that_expires_while_queued_never_runs(tmp_path):
             failed_record = _record_of(settings, failed.request_id)
         assert failed_record.status == "failed"
         assert "RuntimeError" in failed_record.failure
-        assert "unconfirmed" not in failed_record.failure
-        assert failed_record.returned is False
-        assert failed_record.delivered_ids == []
-        assert not any("fail after the queue" in item for item in ran)
-        bot.dispatch_failure = ""
-        bot.turn = bot._default_turn
-        next_request = _submit(settings, task="run after pre-start cancellation")
-        assert (await _wait_for_record(settings, next_request.request_id)).status == "completed"
-        assert ran == ["blocker"]
+        if settlement == "registered":
+            # A registered task settles confirmed: not an unconfirmed stop, and
+            # the runtime keeps processing the next request.
+            assert "unconfirmed" not in failed_record.failure
+            assert failed_record.returned is False
+            assert failed_record.delivered_ids == []
+            assert not any("fail after the queue" in item for item in ran)
+            bot.dispatch_failure = ""
+            bot.turn = bot._default_turn
+            next_request = _submit(settings, task="run after pre-start cancellation")
+            assert (await _wait_for_record(settings, next_request.request_id)).status == "completed"
+            assert ran == ["blocker"]
+        else:
+            # Nothing was ever registered, so settlement cannot be confirmed: the
+            # poller stops fail-closed, says so, and processes nothing further.
+            assert "owned input settlement is unconfirmed" in failed_record.failure
+            assert "no registered task to settle" in caplog.text
+            state = read_json_object(runtime_state_path(settings), "runtime state")
+            assert state["status"] == "stop_unconfirmed"
+            assert state["observed_at"]
+            poll = runtime._poll
+            assert poll is not None
+            await poll
+            assert runtime._stop_requested is True
+            later = _submit(settings, task="not processed after the fail-closed stop")
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert not status_path(settings, later.request_id).exists()
         await runtime.stop()
         await bot._reply_queue.close()
 

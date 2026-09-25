@@ -222,9 +222,18 @@ def test_retried_http_failures_recover_in_one_incident(status, captured, retry_s
     provider = provider_for([
         Response(first.encode(), status), Response(second.encode(), status), success(),
     ], retry_attempts=3)
-    result = asyncio.run(provider.generate_response(MESSAGES))
+    provider.max_tokens = 16384
+    turn = ForegroundTurn(32768, 12, time.monotonic() + 600)
+    token = set_foreground_turn(turn)
+    try:
+        result = asyncio.run(provider.generate_response(MESSAGES))
+    finally:
+        reset_foreground_turn(token)
     assert result == "ok"
     assert len(provider._session.requests) == 3
+    assert [request[1]["max_tokens"] for request in provider._session.requests] == [16384] * 3
+    assert turn.attempts == 3
+    assert turn.output_remaining == 16384
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20]
     assert len(captured) == 1
     assert captured[0]["exception"] is None
@@ -259,6 +268,22 @@ def test_terminal_transient_failures_preserve_budget_and_exception(captured, ret
     assert captured[0]["exception"] is caught.value
     assert "first server explanation" in caught.value.incident_details
     assert "last server explanation" in caught.value.incident_details
+
+    provider = provider_for([
+        Response(b"first refusal", 503), Response(b"second refusal", 503),
+    ], retry_attempts=3)
+    turn = ForegroundTurn(32768, 2, time.monotonic() + 600)
+    token = set_foreground_turn(turn)
+    try:
+        with pytest.raises(RuntimeError, match="provider-attempt allowance exhausted") as budget_exit:
+            asyncio.run(provider.generate_response(MESSAGES))
+    finally:
+        reset_foreground_turn(token)
+    assert len(provider._session.requests) == turn.attempts == 2
+    assert turn.output_remaining == 32768
+    assert "first refusal" in budget_exit.value.incident_details
+    assert "second refusal" in budget_exit.value.incident_details
+    assert captured[-1]["exception"] is budget_exit.value
 
 
 def test_http400_fallback_retains_both_endpoint_attempts(captured, retry_sleep):
@@ -560,8 +585,15 @@ def test_skipped_bad_sse_frame_records_recovered_incident_not_fabricated_error(c
 def test_transport_failure_preserves_real_exception_trace_and_safe_wrapper(error, captured, caplog, retry_sleep):
     error.__cause__ = OSError("underlying synthetic OS detail")
     provider = provider_for([Response(error=error)], retry_attempts=1)
-    with pytest.raises(RuntimeError) as caught:
-        asyncio.run(provider.generate_response(MESSAGES, timeout=17))
+    turn = ForegroundTurn(8192, 12, time.monotonic() + 600)
+    token = set_foreground_turn(turn)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(provider.generate_response(MESSAGES, timeout=17))
+    finally:
+        reset_foreground_turn(token)
+    assert turn.attempts == 1
+    assert turn.output_remaining == 8192
     assert caught.value.__cause__ is error
     assert str(error) in caught.value.incident_details
     assert "underlying synthetic OS detail" in caught.value.incident_details
@@ -895,8 +927,15 @@ def test_midstream_network_error_retains_received_body_and_trace(captured):
             raise aiohttp.ClientPayloadError("synthetic stream connection reset")
 
     provider = provider_for([BrokenStream(headers={"Content-Type": "text/event-stream"})], retry_attempts=1)
-    with pytest.raises(RuntimeError) as caught:
-        asyncio.run(provider.generate_response(MESSAGES))
+    turn = ForegroundTurn(8192, 12, time.monotonic() + 600)
+    token = set_foreground_turn(turn)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(provider.generate_response(MESSAGES))
+    finally:
+        reset_foreground_turn(token)
+    assert turn.attempts == 1
+    assert turn.output_remaining == 0
     assert partial.decode() not in caught.value.incident_details
     assert "response bytes omitted from provider diagnostics" in caught.value.incident_details
     assert "STREAM_CAPTURE_TAIL" in caught.value.incident_details
