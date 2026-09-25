@@ -242,9 +242,19 @@ def test_disabled_tiers_are_excluded_from_the_split():
 
 
 def test_the_plan_never_promises_more_than_the_prompt_can_hold():
-    bot = _bot(_Memory(), {"prompt_context_budget": 40000})
-    plan = MaxwellBot._context_budget_plan(bot, _message(), LONG_TURN, ["x" * 5000])
+    bot = _bot(_Memory(), {"prompt_context_budget": 96000})
+    base = MaxwellBot._context_budget_plan(bot, _message(), LONG_TURN, ["x" * 5000])
+    plan = MaxwellBot._context_budget_plan(
+        bot,
+        _message(),
+        LONG_TURN,
+        ["x" * 5000],
+        schema_chars=14000,
+        newest_tool_group_chars=24000,
+    )
+    base_total = sum(t.budget for t in base.tiers.values())
     total = sum(t.budget for t in plan.tiers.values())
+    assert base_total - total == 38000
     assert total <= MaxwellBot._prompt_budget_chars(bot)
 
 

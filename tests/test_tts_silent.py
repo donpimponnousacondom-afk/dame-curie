@@ -714,49 +714,74 @@ def test_tool_prompt_native_mode_no_xml_instructions():
 def test_prompt_budget_trims_large_background_blocks():
     bot = SimpleNamespace(
         _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
-        _control={"prompt_context_budget": 10000},
+        _control={"prompt_context_budget": 96000},
     )
     core = {"role": "system", "content": "core"}
     contract = {"role": "system", "content": "## Tool contract\n" + "c" * 300}
     catalog = {"role": "system", "content": "## Available tools\n" + "t" * 300}
     server = {"role": "system", "content": "Server-specific instructions:\n" + "s" * 300}
     filler = {"role": "system", "content": "Unprotected system filler " + "u" * 20000}
+    history = "<previous_conversation>\n" + "".join(
+        f"history {index} " + "h" * 140 + "\n" for index in range(350)
+    ) + "</previous_conversation>"
+    paired_call = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "paired-result",
+                "type": "function",
+                "function": {"name": "send_message", "arguments": "{}"},
+            }
+        ],
+    }
+    paired_result = {
+        "role": "tool",
+        "tool_call_id": "paired-result",
+        "content": "r" * 24000,
+    }
     messages = [
         core,
         {"role": "system", "content": "RAG summary mentions ## Available tools\nCustom tool protocol: " + "x" * 50000},
         contract,
         catalog,
-        {"role": "user", "content": "<previous_conversation>\n## Available tools\nCustom tool protocol:\n" + "p" * 1000},
-        {"role": "user", "content": "[RESPOND TO THIS]\nlatest"},
         filler,
         server,
+        {"role": "user", "content": history},
+        {"role": "user", "content": "[RESPOND TO THIS]\nlatest"},
+        paired_call,
+        paired_result,
     ]
+    schemas = [{"type": "function", "function": {"name": "all_tools", "description": "z" * 14000}}]
 
-    trimmed = MaxwellBot._apply_prompt_budget(bot, messages)
-
-    assert sum(MaxwellBot._message_content_chars(m) for m in trimmed) <= 10000
-    assert "prompt budget trimmed" in trimmed[1]["content"]
-    assert all(
-        "prompt budget trimmed" in item["content"]
-        and len(item["content"]) < len(filler["content"])
-        for item in trimmed
-        if str(item.get("content") or "").startswith("Unprotected system filler")
+    trimmed = MaxwellBot._apply_prompt_budget(bot, messages, schemas)
+    transcript = next(
+        item["content"] for item in trimmed
+        if str(item.get("content") or "").startswith("<previous_conversation>\n")
     )
+
+    assert sum(MaxwellBot._message_content_chars(m) for m in trimmed) + len(
+        json.dumps(schemas, ensure_ascii=False, separators=(",", ":"))
+    ) <= 72000
+    assert "history 0" not in transcript
+    assert "history 349" in transcript
+    assert "</previous_conversation>" in transcript
+    assert paired_call in trimmed
+    assert paired_result in trimmed
+    assert paired_call["tool_calls"][0]["id"] == paired_result["tool_call_id"]
+    assert any(item.get("content") == "[RESPOND TO THIS]\nlatest" for item in trimmed)
     assert catalog in trimmed
-    assert catalog["content"] == "## Available tools\n" + "t" * 300
     assert contract in trimmed
     assert server in trimmed
-    assert any(item.get("content") == "[RESPOND TO THIS]\nlatest" for item in trimmed)
-    assert not any(
-        str(item.get("content") or "").startswith("<previous_conversation>\n")
-        for item in trimmed
+    assert "prompt budget trimmed" in next(
+        item["content"] for item in trimmed
+        if str(item.get("content") or "").startswith("Unprotected system filler")
     )
     assert contract["content"] == "## Tool contract\n" + "c" * 300
     assert server["content"] == "Server-specific instructions:\n" + "s" * 300
 
     too_large = [
         core,
-        {"role": "system", "content": "## Available tools\n" + "t" * 12000},
+        {"role": "system", "content": "## Available tools\n" + "t" * 80000},
         {"role": "user", "content": "[RESPOND TO THIS]\nlatest"},
     ]
     with pytest.raises(PromptBudgetExceeded):

@@ -295,24 +295,31 @@ def test_longprompt_export_is_utf8_byte_exact_short_and_mention_safe(longprompt_
     assert not allowed_mentions.replied_user
 
 
+@pytest.mark.parametrize("command", ["prompt", "longprompt"])
 @pytest.mark.parametrize(
     ("prompt", "exported"),
     [
+        ("x" * bot_module.SERVER_PROMPT_MAX_BYTES, True),
+        ("é" * (bot_module.SERVER_PROMPT_MAX_BYTES // 2 + 1), True),
         ("x" * bot_module.TEXT_ATTACHMENT_MAX_BYTES, True),
         ("é" * (bot_module.TEXT_ATTACHMENT_MAX_BYTES // 2 + 1), False),
     ],
-    ids=["ascii-at-export-limit", "unicode-over-export-limit"],
+    ids=["at-context-limit", "unicode-over-context-limit", "ascii-at-export-limit", "unicode-over-export-limit"],
 )
 def test_longprompt_export_enforces_utf8_byte_limit_without_truncation(
-    longprompt_case, prompt, exported
+    longprompt_case, prompt, exported, command
 ):
     bot, message, memory = longprompt_case
     memory.get_server_prompt.return_value = prompt
+    message.content = f"{bot.command_prefix}{command}"
 
     asyncio.run(MaxwellBot._handle_command(bot, message))
 
     memory.get_server_prompt.assert_called_once_with("31")
     memory.set_server_prompt.assert_not_called()
+    assert ("omitted from model context" in message.channel.sent[0]["content"]) == (
+        len(prompt.encode("utf-8")) > bot_module.SERVER_PROMPT_MAX_BYTES
+    )
     if exported:
         assert message.channel.sent[0]["filename"] == "prompt.txt"
         assert message.channel.sent[0]["file_bytes"] == prompt.encode("utf-8")

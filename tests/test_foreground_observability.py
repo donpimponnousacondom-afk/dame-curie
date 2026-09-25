@@ -11,12 +11,13 @@ import discord
 import pytest
 
 from bot import MaxwellBot, TokenBudgetTracker
-from bot_tools import SendFileTool, SendMessageTool
+from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from dirac_runtime import _NoticeInput
 from provider_telemetry import CallMetrics
 from providers import ProviderIncompleteResponseError, ProviderResult
 from turn_budget import TurnBudgetExceeded, current_foreground_turn
 from response_observability import DeliveryMeasurements, FOOTER_MARKER, RunningBuild
+from tool_schemas import CORE_TOOL_NAMES, TOOL_DISCOVERY_GROUPS, TOOL_PARAMETERS, build_openai_tools
 
 
 class Channel:
@@ -252,13 +253,16 @@ def test_notice_update_builds_with_actor_and_refreshed_poster_snapshot(
     assert len(notice.channel.sent) == 1
 
 
-def configure_dispatch(bot):
+def configure_dispatch(bot, *, expand_catalog=False):
     tool = SendMessageTool(bot)
+    more_tools = MoreToolsTool(bot) if expand_catalog else None
 
     async def dispatch(
         message, response, *, native_tool_calls=None, response_metrics=None, **kwargs
     ):
         results = []
+        paired_calls = []
+        paired_results = []
         for call in native_tool_calls or []:
             function = call["function"]
             if function["name"] == "send_message":
@@ -268,8 +272,22 @@ def configure_dispatch(bot):
                     **json.loads(function["arguments"]),
                 )
                 results.append("Tool send_message: " + result)
+            elif function["name"] == "more_tools" and more_tools is not None:
+                arguments = json.loads(function["arguments"])
+                result = await more_tools.execute(message, **arguments)
+                result = "Tool more_tools: " + ("synthetic paired result " * 1000 if not paired_results else result)
+                results.append(result)
+                paired_calls.append(call)
+                paired_results.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": result}
+                )
             else:
                 results.append("Tool web_search: synthetic result")
+        if paired_calls:
+            bot._last_native_followup_messages = [
+                {"role": "assistant", "content": str(response), "tool_calls": paired_calls},
+                *paired_results,
+            ]
         return str(response), results, []
 
     bot._dispatch_tool_calls = AsyncMock(side_effect=dispatch)
@@ -353,19 +371,54 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
     "mode",
     [
         "plain", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
-        "incomplete_partial", "reasoning_only", "incomplete_empty", "output_exhausted",
+        "expanded_catalog_fallback",
+        "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty", "output_exhausted",
         "attempts_exhausted",
         "deadline", "upstream_timeout", "cancelled",
     ],
 )
 def test_real_foreground_handler_preserves_producing_call(
-    foreground_bot, measured_call, mode
+    foreground_bot, measured_call, mode, monkeypatch
 ):
     async def scenario():
         bot, message = foreground_bot, Message()
         first = measured_call
         second = replace(first, call_id="B", model="model-B", ttft_ms=777)
-        configure_dispatch(bot)
+        if mode == "expanded_catalog_fallback":
+            descriptions = {
+                name: name for name in CORE_TOOL_NAMES.union(*TOOL_DISCOVERY_GROUPS.values())
+                if name in TOOL_PARAMETERS
+            }
+            bot.tools = {
+                name: SimpleNamespace(get_description=lambda name=name: descriptions[name])
+                for name in descriptions
+            }
+            bare_chars = len(json.dumps(build_openai_tools(bot.tools), ensure_ascii=False, separators=(",", ":")))
+            padding = max(0, (56000 - bare_chars + len(bot.tools) - 1) // len(bot.tools))
+            for name in descriptions:
+                descriptions[name] += " " + "synthetic".ljust(padding, "x")
+            bot._control["prompt_context_budget"] = 96000
+            bot._build_openai_tools = MethodType(MaxwellBot._build_openai_tools, bot)
+            bot._select_tool_protocol = MethodType(MaxwellBot._select_tool_protocol, bot)
+            bot._native_tools_enabled = MethodType(MaxwellBot._native_tools_enabled, bot)
+            bot._is_admin = lambda user_id: True
+            bot._shell_whitelist = set()
+            bot._reply_parent = lambda current: None
+            personality = "Protected personality sentinel\n## Tool contract\nKeep this personality."
+            server = "Server-specific instructions: ## Tool contract\nKeep this server instruction."
+            bot._build_messages = AsyncMock(side_effect=lambda *args, **kwargs: [
+                {"role": "system", "content": personality},
+                {"role": "system", "content": server},
+                {"role": "system", "content": MaxwellBot._tool_system_prompt(bot, message=message)},
+                {"role": "user", "content": "Protected live input sentinel"},
+            ])
+            budget_spy = Mock(wraps=MaxwellBot._apply_prompt_budget)
+            monkeypatch.setattr(MaxwellBot, "_apply_prompt_budget", budget_spy)
+        configure_dispatch(bot, expand_catalog=mode == "expanded_catalog_fallback")
+        flushed_turns = []
+        bot._flush_deferred_context_extraction.side_effect = (
+            lambda channel: flushed_turns.append(current_foreground_turn())
+        )
         if mode == "deadline":
             bot._control["turn_deadline_seconds"] = 1
             bot._generate_response = Mock(
@@ -386,12 +439,12 @@ def test_real_foreground_handler_preserves_producing_call(
         elif mode == "cancelled":
             bot._generate_response = AsyncMock(side_effect=asyncio.CancelledError())
         elif mode in {
-            "incomplete", "incomplete_partial", "reasoning_only", "incomplete_empty"
+            "incomplete", "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty"
         }:
             partial = (
-                " ".join(f"segment-{index:04d}" for index in range(1200))
+                " ".join(f"segment-{index:04d}" for index in range(2000 if mode == "incomplete_truncated" else 1200))
                 + " UNDELIVERED-TAIL"
-                if mode in {"incomplete", "incomplete_partial"}
+                if mode in {"incomplete", "incomplete_partial", "incomplete_truncated"}
                 else "private reasoning sentinel"
                 if mode == "reasoning_only"
                 else " \n "
@@ -449,6 +502,23 @@ def test_real_foreground_handler_preserves_producing_call(
                     wraps=bot._recover_text_tool_calls
                 )
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "expanded_catalog_fallback":
+            calls = [
+                {
+                    "id": f"expand-{group}",
+                    "type": "function",
+                    "function": {
+                        "name": "more_tools",
+                        "arguments": json.dumps({"reasoning": "Inspect this tool group.", "group": group}),
+                    },
+                }
+                for group in TOOL_DISCOVERY_GROUPS if group != "plugins"
+            ]
+            responses = [
+                ProviderResult("expand the catalog", tool_calls=calls, metrics=first),
+                ProviderResult("fallback completed", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
         else:
             responses = [
                 ProviderResult(
@@ -465,8 +535,9 @@ def test_real_foreground_handler_preserves_producing_call(
             assert not message.channel.sent
         else:
             await MaxwellBot._handle_message(bot, message)
+        assert flushed_turns == [None]
         if mode in {
-            "incomplete", "incomplete_partial", "followup_incomplete",
+            "incomplete", "incomplete_partial", "incomplete_truncated", "followup_incomplete",
             "reasoning_only", "incomplete_empty", "output_exhausted",
             "attempts_exhausted", "deadline", "upstream_timeout", "cancelled",
         }:
@@ -484,11 +555,12 @@ def test_real_foreground_handler_preserves_producing_call(
             assert "100" not in bot._active_requests
             assert "100" not in bot._active_request_user
             assert bot._end_inflight_context.called
-            if mode in {"incomplete", "incomplete_partial"}:
+            if mode in {"incomplete", "incomplete_partial", "incomplete_truncated"}:
                 assert bot._token_tracker._prompt_tokens == 123
                 assert bot._token_tracker._completion_tokens == 50
                 assert bot._token_tracker._total_tokens == 0
-                assert incomplete.partial_content == partial
+                assert incomplete.partial_content == partial[:16 * 1024]
+                assert incomplete.partial_content_truncated == (mode == "incomplete_truncated")
                 assert incomplete.finish_reason == "length"
                 assert message.channel.sent[0].content.startswith(
                     "INCOMPLETE RESPONSE:"
@@ -525,6 +597,11 @@ def test_real_foreground_handler_preserves_producing_call(
                         "UNDELIVERED-TAIL" in item["content"]
                         for item in assistant_memory
                     )
+                elif mode == "incomplete_truncated":
+                    assert "visible partial text was also truncated" in message.channel.sent[0].content
+                    assert len(message.channel.sent) > 1
+                    assert all("UNDELIVERED-TAIL" not in sent.content for sent in message.channel.sent)
+                    assert "visible partial text was also truncated" in assistant_events[0].args[2]
                 else:
                     sent = message.channel.sent[0]
                     assert len(message.channel.sent) == 1
@@ -594,6 +671,55 @@ def test_real_foreground_handler_preserves_producing_call(
                     "foreground turn deadline" not in sent.content.lower()
                     for sent in message.channel.sent
                 )
+            return
+        if mode == "expanded_catalog_fallback":
+            assert bot._generate_response.await_count == 2
+            assert bot._dispatch_tool_calls.await_count == 2
+            budget_calls = budget_spy.call_args_list
+            expanded_tools = max((call.args[2] for call in budget_calls), key=len)
+            core_tools = budget_calls[-1].args[2]
+            expanded_schema_chars = len(json.dumps(expanded_tools, ensure_ascii=False, separators=(",", ":")))
+            assert 55000 <= expanded_schema_chars < 60000
+            assert any(
+                call.args[2] == expanded_tools and any(item.get("role") == "tool" for item in call.args[1])
+                for call in budget_calls
+            )
+            assert {
+                tool["function"]["name"] for tool in core_tools
+            } == CORE_TOOL_NAMES.intersection(bot.tools)
+            assert MaxwellBot._prompt_budget_chars(bot) == 72000
+            followup_call = bot._generate_response.call_args_list[1]
+            followup_messages = followup_call.args[0]
+            followup_tools = followup_call.kwargs["tools"]
+            assert {
+                tool["function"]["name"] for tool in followup_tools
+            } == CORE_TOOL_NAMES.intersection(bot.tools)
+            followup_chars = len(json.dumps(followup_tools, ensure_ascii=False, separators=(",", ":"))) + sum(
+                MaxwellBot._message_content_chars(item) for item in followup_messages
+            )
+            assert followup_chars <= MaxwellBot._prompt_budget_chars(bot)
+            assert followup_messages[0]["content"] == personality
+            assert followup_messages[1]["content"] == server
+            assert followup_messages[2]["content"].startswith("## Tools\n")
+            assert "send_message" in followup_messages[2]["content"]
+            assert "inbox_list" not in followup_messages[2]["content"]
+            assert followup_messages[3]["content"] == "Protected live input sentinel"
+            assistant_calls = next(
+                item for item in followup_messages if item.get("role") == "assistant"
+            )
+            paired_results = [
+                item for item in followup_messages if item.get("role") == "tool"
+            ]
+            assert {call["id"] for call in assistant_calls["tool_calls"]} == {
+                item["tool_call_id"] for item in paired_results
+            }
+            assert max(len(item["content"]) for item in paired_results) >= 20000
+            assert sum(MaxwellBot._message_content_chars(item) for item in [assistant_calls, *paired_results]) <= 24000
+            assert bot._generate_response.call_args.kwargs["tools"] == followup_tools
+            assert len(message.channel.sent) == 1
+            assert bot._delivery_measurements.lookup(
+                "100", str(message.channel.sent[0].id)
+            )[1] is second
             return
         assert bot._generate_response.await_count == len(responses)
         assert message.channel.sent

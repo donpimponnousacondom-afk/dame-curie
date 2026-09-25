@@ -305,7 +305,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
 def test_no_response_blocks_later_send_message():
     """no_response must be exclusive — a later send_message in the same
     batch gets rejected with an error the model can see."""
-    from bot import MaxwellBot
+    from bot import MaxwellBot, _tool_results_need_followup
 
     sent = []
 
@@ -370,6 +370,42 @@ def test_no_response_blocks_later_send_message():
 
     # Only the no_response actually fired; the send_message was rejected
     assert sent == ["NO_RESPONSE"]
+
+    oversized_calls = [
+        raw_tool_calls[0],
+        {
+            "id": "call_oversized",
+            "type": "function",
+            "function": {
+                "name": "send_message",
+                "arguments": '{"reasoning":"' + "x" * 16_000 + '","content":"hi"}',
+            },
+        },
+    ]
+    _, refused, images = asyncio.run(
+        MaxwellBot._process_native_tool_calls(
+            bot, message, "", oversized_calls, include_images=True
+        )
+    )
+    assert sent == ["NO_RESPONSE"]
+    assert images == []
+    assert len(refused) == 2
+    assert refused[0].startswith("Tool no_response: Error - batch refused")
+    assert refused[1].startswith(
+        "Tool send_message: Error - arguments exceed the 16,000-byte limit"
+    )
+    assert all(len(line) < 200 for line in refused)
+    assert _tool_results_need_followup(refused) is True
+    replay = bot._last_native_followup_messages
+    assert [call["id"] for call in replay[0]["tool_calls"]] == ["call_nr", "call_oversized"]
+    assert [call["function"]["arguments"] for call in replay[0]["tool_calls"]] == [
+        "{}", "{}"
+    ]
+    assert [result["tool_call_id"] for result in replay[1:]] == [
+        "call_nr", "call_oversized"
+    ]
+    assert [result["content"] for result in replay[1:]] == refused
+    assert "x" * 16_000 not in str(replay)
 
 
 def test_two_send_messages_in_a_row_both_fire_in_order():

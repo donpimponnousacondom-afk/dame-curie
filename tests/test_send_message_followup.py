@@ -174,4 +174,13 @@ def test_no_response_stays_terminal():
 
 
 def test_error_still_forces_followup():
-    assert _tool_results_need_followup(["Tool shell: Error - boom"]) is True
+    for error in (
+        "Tool shell: Error - boom",
+        "Tool hd_image: Error - unknown tool 'hd_image'",
+        "Tool react: Error - permission actor is not authorized for this tool",
+        "Tool no_response: Error - unavailable",
+    ):
+        assert _tool_results_need_followup([error]) is True
+        assert _tool_results_need_followup(
+            ["Tool send_message: __MESSAGE_SENT__\ndone", error]
+        ) is True

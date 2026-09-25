@@ -402,14 +402,46 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     for call in oversized_calls:
         with pytest.raises(ValueError):
             normalize_native_tool_calls([call])
+        with pytest.raises(ValueError):
+            normalize_native_tool_calls([call], allow_oversized_arguments=True)
     with pytest.raises(ValueError):
         normalize_native_tool_calls([{"function": {"name": "create_site", "arguments": wide}}])
-    batch_argument = json.dumps({"value": "é" * 6_000}, ensure_ascii=False)
+    oversized = normalize_native_tool_calls(
+        [{"id": "oversized-id", "function": {"name": "create_site", "arguments": wide}}],
+        allow_oversized_arguments=True,
+    )[0]
+    assert oversized["id"] == "oversized-id"
+    assert oversized["raw_name"] == "create_site"
+    assert oversized["arguments"] == {}
+    assert oversized["oversized_arguments"] is True
+    assert oversized["raw"] is None
     with pytest.raises(ValueError):
-        normalize_native_tool_calls([
-            {"id": str(index), "function": {"name": "x", "arguments": batch_argument}}
-            for index in range(3)
-        ])
+        normalize_native_tool_calls(
+            [{"function": {"name": "create_site", "arguments": wide + "!"}}],
+            allow_oversized_arguments=True,
+        )
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(
+            [{"function": {"name": "create_site", "arguments": wide[:-1] + ',"bad":NaN}'}}],
+            allow_oversized_arguments=True,
+        )
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(
+            [
+                {"id": "duplicate", "function": {"name": "create_site", "arguments": wide}},
+                {"id": "duplicate", "function": {"name": "create_site", "arguments": "{}"}},
+            ],
+            allow_oversized_arguments=True,
+        )
+    batch_argument = json.dumps({"value": "é" * 6_000}, ensure_ascii=False)
+    oversized_batch = [
+        {"id": str(index), "function": {"name": "x", "arguments": batch_argument}}
+        for index in range(3)
+    ]
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(oversized_batch)
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(oversized_batch, allow_oversized_arguments=True)
     with pytest.raises(ValueError):
         normalize_native_tool_calls([{"function": {"name": "x", "arguments": {"nested": {1: "bad"}}}}])
 

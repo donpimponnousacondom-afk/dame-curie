@@ -1063,10 +1063,12 @@ def _parse_native_argument_json(
     return parsed
 
 
-def _decode_native_tool_arguments(raw_args: object) -> tuple[dict[str, object], int]:
-    """Strictly decode one bounded JSON-object argument payload."""
+def _decode_native_tool_arguments(
+    raw_args: object, *, allow_oversized: bool = False
+) -> tuple[dict[str, object], int, bool]:
+    """Strictly decode one JSON-object argument payload within its mode's bound."""
     if raw_args is None:
-        return {}, 0
+        return {}, 0, False
     if isinstance(raw_args, dict):
         if not _native_argument_values_are_json_safe(raw_args):
             raise ValueError("Malformed native tool-call batch")
@@ -1080,13 +1082,14 @@ def _decode_native_tool_arguments(raw_args: object) -> tuple[dict[str, object], 
         current = raw_args.strip().lstrip("\ufeff")
     else:
         raise ValueError("Malformed native tool-call batch")
-    if argument_bytes > _NATIVE_MAX_ARGUMENT_BYTES or (
+    oversized = argument_bytes > _NATIVE_MAX_ARGUMENT_BYTES
+    if (oversized and not allow_oversized) or (
         isinstance(raw_args, dict)
         and not _native_argument_depth_is_bounded(encoded)
     ):
         raise ValueError("Malformed or oversized native tool-call batch")
     if isinstance(current, str) and not current:
-        return {}, argument_bytes
+        return {}, argument_bytes, oversized
 
     decoder = json.JSONDecoder()
     for _ in range(3):
@@ -1108,12 +1111,14 @@ def _decode_native_tool_arguments(raw_args: object) -> tuple[dict[str, object], 
             continue
         if not _native_argument_values_are_json_safe(current):
             raise ValueError("Malformed native tool-call batch")
-        return dict(current), argument_bytes
+        return dict(current), argument_bytes, oversized
     raise ValueError("Malformed or oversized native tool-call batch")
 
 
-def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
-    """Validate and normalize a complete bounded provider tool-call batch."""
+def normalize_native_tool_calls(
+    raw_calls: list | None, *, allow_oversized_arguments: bool = False
+) -> list[dict[str, Any]]:
+    """Validate and normalize a complete provider tool-call batch."""
     if raw_calls is None:
         return []
     if not isinstance(raw_calls, list) or len(raw_calls) > _NATIVE_MAX_CALLS:
@@ -1139,7 +1144,9 @@ def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
         if not name:
             raise ValueError("Malformed native tool-call batch")
         raw_args = fn.get("arguments", call.get("arguments", {}))
-        args, argument_bytes = _decode_native_tool_arguments(raw_args)
+        args, argument_bytes, oversized_arguments = _decode_native_tool_arguments(
+            raw_args, allow_oversized=allow_oversized_arguments
+        )
         batch_argument_bytes += argument_bytes
         if batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
             raise ValueError("Oversized native tool-call batch")
@@ -1167,8 +1174,9 @@ def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
                 "id": call_id,
                 "name": name,
                 "raw_name": original_name,
-                "arguments": args,
-                "raw": call,
+                "arguments": args if not oversized_arguments else {},
+                "oversized_arguments": oversized_arguments,
+                "raw": call if not oversized_arguments else None,
             }
         )
     return normalized

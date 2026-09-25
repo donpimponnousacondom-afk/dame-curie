@@ -1849,8 +1849,9 @@ def _format_incomplete_response(error: ProviderIncompleteResponseError) -> str:
         if partial:
             return (
                 "INCOMPLETE RESPONSE: The provider stopped at the output-token limit. "
-                "No tool calls from this response were executed.\n\n"
-                f"{partial}"
+                "No tool calls from this response were executed."
+                + (" The visible partial text was also truncated." if error.partial_content_truncated else "")
+                + f"\n\n{partial}"
             )
         return (
             "The provider stopped at the output-token limit before producing a usable answer. "
@@ -2150,7 +2151,11 @@ def _tool_results_need_followup(tool_results: list[str]) -> bool:
     for result in tool_results:
         # Check for error prefixes, not just the substring "Error" anywhere
         # (prevents false positives like "Error handling in Python" search results)
-        if result.startswith(("Error:", "Error ")) or "\nError:" in result:
+        if (
+            result.startswith(("Error:", "Error "))
+            or "\nError:" in result
+            or re.match(r"^Tool [^:\n]+: Error(?::|\s|$)", result)
+        ):
             return True
         if image_or_caption_delivered(result):
             continue
@@ -6600,7 +6605,7 @@ class MaxwellBot(commands.Bot):
                     elif len(payload := current.encode("utf-8")) > TEXT_ATTACHMENT_MAX_BYTES:
                         await message.channel.send(
                             f"Prompt exceeds {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB export limit; "
-                            f"unchanged. Replace via `{self.command_prefix}longprompt` with a bounded UTF-8 .txt file.",
+                            f"omitted from model context, unchanged. Replace via `{self.command_prefix}longprompt`.",
                             allowed_mentions=mentions,
                         )
                     elif len(payload) <= 1800:
@@ -6613,7 +6618,12 @@ class MaxwellBot(commands.Bot):
                             discord.File(buffer, filename="prompt.txt")
                         ) as prompt_file:
                             await message.channel.send(
-                                "Current server prompt attached.",
+                                (
+                                    "Current server prompt attached."
+                                    if len(payload) <= SERVER_PROMPT_MAX_BYTES
+                                    else f"Stored prompt attached. Over {SERVER_PROMPT_MAX_BYTES // 1024} KiB: "
+                                    f"omitted from model context. Replace via `{self.command_prefix}longprompt`."
+                                ),
                                 file=prompt_file,
                                 allowed_mentions=mentions,
                             )
@@ -6651,7 +6661,7 @@ class MaxwellBot(commands.Bot):
                     elif len(payload := current.encode("utf-8")) > TEXT_ATTACHMENT_MAX_BYTES:
                         await message.channel.send(
                             f"Prompt exceeds {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB export limit; "
-                            f"unchanged. Replace via `{self.command_prefix}longprompt` with a bounded UTF-8 .txt file.",
+                            f"omitted from model context, unchanged. Replace via `{self.command_prefix}longprompt`.",
                             allowed_mentions=mentions,
                         )
                     else:
@@ -6659,7 +6669,12 @@ class MaxwellBot(commands.Bot):
                             discord.File(buffer, filename="prompt.txt")
                         ) as prompt_file:
                             await message.channel.send(
-                                "Current server prompt attached.",
+                                (
+                                    "Current server prompt attached."
+                                    if len(payload) <= SERVER_PROMPT_MAX_BYTES
+                                    else f"Stored prompt attached. Over {SERVER_PROMPT_MAX_BYTES // 1024} KiB: "
+                                    f"omitted from model context. Replace via `{self.command_prefix}longprompt`."
+                                ),
                                 file=prompt_file,
                                 allowed_mentions=mentions,
                             )
@@ -12416,6 +12431,7 @@ class MaxwellBot(commands.Bot):
                 await turn.cleanup()
             finally:
                 reset_foreground_turn(token)
+                self._flush_deferred_context_extraction(str(message.channel.id))
         if timed_out and self._control.get("error_replies", True):
             with notice_send():
                 await message.channel.send(
@@ -13231,9 +13247,9 @@ class MaxwellBot(commands.Bot):
                         self, platform, message=message, content=content
                     )
                     for item in messages:
-                        if item.get("role") == "system" and "## Tool contract" in str(
+                        if item.get("role") == "system" and str(
                             item.get("content") or ""
-                        ):
+                        ).startswith(("## Tools\n", "## Available tools\n")):
                             item["content"] = refreshed_tool_prompt
                             break
                     custom_indices = [
@@ -13253,9 +13269,53 @@ class MaxwellBot(commands.Bot):
                     else:
                         for index in reversed(custom_indices):
                             del messages[index]
-                    messages = MaxwellBot._apply_prompt_budget(
-                        self, messages, provider_tools
-                    )
+                    expanded_groups = current_tool_groups()
+                    try:
+                        messages = MaxwellBot._apply_prompt_budget(
+                            self, messages, provider_tools
+                        )
+                    except PromptBudgetExceeded:
+                        if not expanded_groups:
+                            raise
+                        expanded_groups.clear()
+                        visible_tool_names = tuple(
+                            sorted(self._turn_tool_names(platform, message, content))
+                        )
+                        openai_tools = self._build_openai_tools(
+                            platform, message=message, content=content
+                        )
+                        custom_tool_calls, provider_tools = self._select_tool_protocol(
+                            openai_tools
+                        )
+                        refreshed_tool_prompt = MaxwellBot._tool_system_prompt(
+                            self, platform, message=message, content=content
+                        )
+                        for item in messages:
+                            if item.get("role") == "system" and str(
+                                item.get("content") or ""
+                            ).startswith(("## Tools\n", "## Available tools\n")):
+                                item["content"] = refreshed_tool_prompt
+                                break
+                        custom_indices = [
+                            index
+                            for index, item in enumerate(messages)
+                            if item.get("role") == "system"
+                            and str(item.get("content") or "").startswith(
+                                "Custom tool protocol:"
+                            )
+                        ]
+                        if custom_tool_calls:
+                            custom_text = custom_tool_prompt(list(visible_tool_names))
+                            if custom_indices:
+                                messages[custom_indices[0]]["content"] = custom_text
+                            else:
+                                messages.insert(2, {"role": "system", "content": custom_text})
+                        else:
+                            for index in reversed(custom_indices):
+                                del messages[index]
+                        messages = MaxwellBot._apply_prompt_budget(
+                            self, messages, provider_tools
+                        )
                 if not tool_results:
                     break
                 if not _tool_results_need_followup(tool_results):
@@ -13286,11 +13346,57 @@ class MaxwellBot(commands.Bot):
                 # whole rounds so an assistant turn is never separated from
                 # the role=tool messages holding its tool_call_ids.
                 conversation_tail = trim_tool_tail(conversation_tail)
-                result_messages = MaxwellBot._apply_prompt_budget(
-                    self,
-                    [dict(item) for item in messages] + list(conversation_tail),
-                    provider_tools,
-                )
+                expanded_groups = current_tool_groups()
+                try:
+                    result_messages = MaxwellBot._apply_prompt_budget(
+                        self,
+                        [dict(item) for item in messages] + list(conversation_tail),
+                        provider_tools,
+                    )
+                except PromptBudgetExceeded:
+                    if not expanded_groups:
+                        raise
+                    expanded_groups.clear()
+                    visible_tool_names = tuple(
+                        sorted(self._turn_tool_names(platform, message, content))
+                    )
+                    openai_tools = self._build_openai_tools(
+                        platform, message=message, content=content
+                    )
+                    custom_tool_calls, provider_tools = self._select_tool_protocol(
+                        openai_tools
+                    )
+                    refreshed_tool_prompt = MaxwellBot._tool_system_prompt(
+                        self, platform, message=message, content=content
+                    )
+                    for item in messages:
+                        if item.get("role") == "system" and str(
+                            item.get("content") or ""
+                        ).startswith(("## Tools\n", "## Available tools\n")):
+                            item["content"] = refreshed_tool_prompt
+                            break
+                    custom_indices = [
+                        index
+                        for index, item in enumerate(messages)
+                        if item.get("role") == "system"
+                        and str(item.get("content") or "").startswith(
+                            "Custom tool protocol:"
+                        )
+                    ]
+                    if custom_tool_calls:
+                        custom_text = custom_tool_prompt(list(visible_tool_names))
+                        if custom_indices:
+                            messages[custom_indices[0]]["content"] = custom_text
+                        else:
+                            messages.insert(2, {"role": "system", "content": custom_text})
+                    else:
+                        for index in reversed(custom_indices):
+                            del messages[index]
+                    result_messages = MaxwellBot._apply_prompt_budget(
+                        self,
+                        [dict(item) for item in messages] + list(conversation_tail),
+                        provider_tools,
+                    )
                 await self._acquire_ai_slot(
                     timeout=ai_timeout, priority="user", key=channel_id
                 )
@@ -13705,10 +13811,6 @@ class MaxwellBot(commands.Bot):
             # here so autonomy can avoid re-engaging a conversation it already
             # answered (the "bot sees its own old reply and posts again" loop).
             self._replying_channels.discard(channel_id)
-            # The context watcher was held back while this turn ran (to avoid
-            # flooding watcher calls / contending for AI slots). Run it now on
-            # the latest deferred message for this room.
-            self._flush_deferred_context_extraction(channel_id)
             if normal_reply_sent:
                 self._last_bot_reply[channel_id] = time.time()
                 if author is not None and not getattr(author, "bot", False):
@@ -13789,6 +13891,7 @@ class MaxwellBot(commands.Bot):
             "dalle": "image_generator",
             "flux": "image_generator",
             "image": "image_generator",
+            "hd_image": "image_generator",
             "msg": "send_message",
             "message": "send_message",
             "dm": "send_message",
@@ -14052,9 +14155,52 @@ class MaxwellBot(commands.Bot):
         disabled = set(self._control.get("disabled_tools", []) or [])
         platform = self._message_tool_platform(message)
         compatible = self._compatible_tool_names(platform)
-        calls = normalize_native_tool_calls(raw_tool_calls)
+        calls = normalize_native_tool_calls(
+            raw_tool_calls, allow_oversized_arguments=True
+        )
         if not calls:
             return (cleaned, [], []) if include_images else (cleaned, [])
+        if any(call["oversized_arguments"] for call in calls):
+            refusal_lines = [
+                f"Tool {call['raw_name']}: Error - "
+                + (
+                    "arguments exceed the 16,000-byte limit"
+                    if call["oversized_arguments"]
+                    else "batch refused because another call exceeded the 16,000-byte argument limit"
+                )
+                + "; no calls in this batch were executed."
+                for call in calls
+            ]
+            self._last_native_followup_messages = [
+                {
+                    "role": "assistant",
+                    "content": cleaned if cleaned else None,
+                    "tool_calls": [
+                        {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": call["raw_name"],
+                                "arguments": "{}",
+                            },
+                        }
+                        for call in calls
+                    ],
+                },
+                *(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": refusal,
+                    }
+                    for call, refusal in zip(calls, refusal_lines)
+                ),
+            ]
+            return (
+                (cleaned, refusal_lines, [])
+                if include_images
+                else (cleaned, refusal_lines)
+            )
         eligible_names = MaxwellBot._turn_tool_names(self, platform, message)
         builtin_names = set(getattr(self, "tools", {}) or {})
         turn_tools = MaxwellBot._tools_for_turn(self, platform, message)
@@ -14451,7 +14597,7 @@ class MaxwellBot(commands.Bot):
         # distinct decoded payloads across the foreground turn.
         _IMG_RE = re.compile(r"__IMAGE_B64__([A-Za-z0-9+/=\s]+)__END_IMAGE_B64__")
         _AUDIO_RE = re.compile(r"__AUDIO_B64__([A-Za-z0-9+/=\s]+)__END_AUDIO_B64__")
-        _MAX_TOOL_RESULT_CHARS = 32_000
+        _MAX_TOOL_RESULT_CHARS = 24_000
         turn = current_foreground_turn()
         local_media_keys: set[str] = set()
         local_media_bytes = 0
@@ -14463,7 +14609,8 @@ class MaxwellBot(commands.Bot):
                 decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
                 key = hashlib.sha256(raw.encode("ascii")).hexdigest()
                 admitted = (
-                    turn.admit_media(key, decoded_bytes)
+                    key not in local_media_keys
+                    and (turn.admit_media(key, decoded_bytes) or key in turn.media_keys)
                     if turn is not None
                     else key not in local_media_keys
                     and len(local_media_keys) < 12
@@ -14480,7 +14627,8 @@ class MaxwellBot(commands.Bot):
                 decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
                 key = hashlib.sha256(raw.encode("ascii")).hexdigest()
                 admitted = (
-                    turn.admit_media(key, decoded_bytes)
+                    key not in local_media_keys
+                    and (turn.admit_media(key, decoded_bytes) or key in turn.media_keys)
                     if turn is not None
                     else key not in local_media_keys
                     and len(local_media_keys) < 12
@@ -14715,9 +14863,8 @@ class MaxwellBot(commands.Bot):
     def _lean_chat_turn(self, message, content: str | None = None) -> bool:
         """Gated catalogs are gone: every turn sees every registered tool.
 
-        The unified image tool is visible on ordinary chat as well as direct
-        requests, so reference edits do not depend on a discovery hop. The
-        control flag is ignored on purpose.
+        The tool catalog is selected from the current request and expansion
+        state; this compatibility method no longer gates ordinary chat.
         """
         return False
 
@@ -15185,6 +15332,8 @@ class MaxwellBot(commands.Bot):
         user_message: str,
         system_parts: list[str],
         extra_chars: int = 0,
+        schema_chars: int = 0,
+        newest_tool_group_chars: int = 0,
     ) -> BudgetPlan:
         """Divide the prompt's memory characters across the memory tiers.
 
@@ -15203,6 +15352,8 @@ class MaxwellBot(commands.Bot):
             sum(len(p) for p in system_parts)
             + extra_chars
             + len(JAILBREAK_PROMPT)
+            + schema_chars
+            + newest_tool_group_chars
             + 4000  # live user turn, media summary, music context
         )
         total = max(0, MaxwellBot._prompt_budget_chars(self) - overhead)
@@ -15327,17 +15478,25 @@ class MaxwellBot(commands.Bot):
                 removed = out[tail_start : tail_start + len(group)]
                 total -= sum(MaxwellBot._message_content_chars(m) for m in removed)
                 del out[tail_start : tail_start + len(group)]
-            for index, item in enumerate(out):
+            for item in out:
                 content = item.get("content")
                 if (
                     total > budget
                     and item.get("role") == "user"
                     and isinstance(content, str)
                     and content.startswith("<previous_conversation>\n")
-                    and id(item) not in protected_messages
                 ):
-                    total -= MaxwellBot._message_content_chars(item)
-                    del out[index]
+                    lines = content.splitlines(keepends=True)
+                    original_chars = len(content)
+                    while total > budget and len(lines) > 3:
+                        total -= len(lines.pop(1))
+                    item["content"] = "".join(lines)
+                    discarded_chars = original_chars - len(item["content"])
+                    if discarded_chars:
+                        logger.info(
+                            "Prompt budget discarded %s oldest transcript characters",
+                            discarded_chars,
+                        )
                     break
 
         for index in range(len(out) - 1, -1, -1):
@@ -15497,8 +15656,22 @@ class MaxwellBot(commands.Bot):
         # here: its budget is computed further down from what is genuinely
         # left, so anything a lookup tier does not use flows to the running
         # conversation, which is the tier worth protecting.
+        planned_tools = MaxwellBot._build_openai_tools(
+            self, "discord", message=message, content=user_message
+        )
+        schema_chars = (
+            len(json.dumps(planned_tools, ensure_ascii=False, separators=(",", ":")))
+            if planned_tools
+            else 0
+        )
         ctx_plan = MaxwellBot._context_budget_plan(
-            self, message, user_message, system_parts, len(tool_prompt)
+            self,
+            message,
+            user_message,
+            system_parts,
+            len(tool_prompt),
+            schema_chars,
+            24000 if tool_prompt else 0,
         )
         # Characters a lookup tier declined to spend, offered to the tiers that
         # come after it. Without this, a turn with no web results and no
