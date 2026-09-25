@@ -4,6 +4,8 @@ A Discord bot undergoing the approved Discord-only V2 redesign. The existing V1 
 
 **Redesign source integration/review is in progress, not deployment acceptance.** The isolated V2 foundation was provisioned earlier; its deployed runtime has not been re-observed for this documentation round. The coordinator owns reconciliation after reviewed source integration. Lifecycle helpers are not discovery commands; do not run an installer, application or test suite from old instructions.
 
+**Release freeze, 2026-09-25:** root requested adversarial-audit review and an agreed remediation plan before further releases. See [Status](docs/STATUS.md). The archive-removal commit is cleanup, not application or deployment acceptance.
+
 ## Approved source contract
 
 - Compose retains only `bot`, `ollama` and `ollama-pull`, with no published ports. Dashboard/API/OAuth/Caddy, the web image, local website/KV servers, six `site_*` tools, nested shell infrastructure, X/Telegram and companion/GF are removed from the target design. No replacement server or PM2 deployment.
@@ -27,4 +29,4 @@ With `DAME_CURIE_STAGING` omitted or `true`, wrapper `up`/`start`/`restart` vali
 
 Project name and provisioned V2 service user: **dame-curie**, with its own private rootless Docker engine. Re-resolve that account and socket before every newly authorized runtime operation. The intentional short URL component `dame` is retained; it does not select a publisher destination. Project Python is **3.14**; the host's system Python is not the project environment.
 
-Inherited documentation is quarantined under `legacy/`; it is not an installation guide or current authority. Temporary cut-off evidence lives in `phase-II_v2/`. No upstream/other-project lookup is needed to work here.
+The obsolete `legacy/` source/documentation archive was removed under root's explicit 2026-09-25 instruction. Historical citations describe earlier trees; do not restore or follow those instructions. Temporary V2 evidence remains in `phase-II_v2/` until its useful content is reconciled into current documentation. No upstream/other-project lookup is needed to work here.

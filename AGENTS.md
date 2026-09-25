@@ -9,11 +9,15 @@ This checkout is the clean-cut V2 workstream for **dame-curie**. Root's current 
 - `docs/DEVELOPMENT.md`: Python 3.14, isolated interpreters, configuration and validation limits.
 - `docs/ARCHITECTURE.md`: intended boundaries versus demonstrated behavior.
 
-`legacy/` is quarantined historical material, not active instructions. Exclude it from ordinary orientation/searches. Read a specific archived file only for an explicitly assigned archaeology question; do not follow its external paths, URLs, old commits or operating commands. Never look for another checkout or upstream project to fill gaps. The archive's old agent contract deliberately is not named `AGENTS.md`.
+Root authorized removal of `legacy/` and its obsolete V1 documentation on 2026-09-25. It is no longer part of this checkout; historical citations describe earlier trees, not files to restore or instructions to follow. Never look for another checkout or upstream project to fill gaps.
+
+## Current release freeze — 2026-09-25
+
+Root accepted the release freeze following `audit/20260924T210402Z-adversarial-audit/`. Current scope is committing the authorized archive removal, reviewing the findings and agreeing a remediation plan. Do not implement audit recommendations, build, deploy, restart, alter runtime settings or run tests under this assignment. Existing runtime receipts are historical, not fresh health claims. Preserve current evidence and unrelated work; retirement of further V2 working documents belongs in the agreed plan.
 
 ## Current approved redesign
 
-Root approved the Discord-only redesign in `phase-II_v2/REDESIGN_PLAN.md`: logging first; remove dashboard/API/Caddy, bot-local site servers/tools, nested shell infrastructure, X/Telegram and companion/GF; execute shell inside the outer bot container; then tool/prompt boundaries and application-job routing. Active command references become `!command`, including docstrings. The publisher/syncer, local authoring/image paths and remote mirroring are **untouchable**; no replacement API, PHP/Perl installation, local hosting or model-driven remote administration. Preserve Discord administration, autonomy, games, plugins, media and functional memory. This specific human grant supersedes older unselected-feature language, not the runtime/test/privacy holds below. Root is AFK: proceed with bounded best decisions and record concrete uncertainties instead of asking settled-scope questions.
+Root approved the Discord-only redesign in `phase-II_v2/REDESIGN_PLAN.md`: logging first; remove dashboard/API/Caddy, bot-local site servers/tools, nested shell infrastructure, X/Telegram and companion/GF; execute shell inside the outer bot container; then tool/prompt boundaries and application-job routing. Active command references become `!command`, including docstrings. The publisher/syncer, local authoring/image paths and remote mirroring are **untouchable**; no replacement API, PHP/Perl installation, local hosting or model-driven remote administration. Preserve Discord administration, autonomy, games, plugins, media and functional memory. This specific human grant supersedes older unselected-feature language, not the runtime/test/privacy holds below.
 
 ## Protected V1 and isolated V2
 

@@ -17,7 +17,7 @@ Read the current repository-root `AGENTS.md` and `docs/STATUS.md`, then `../READ
 - V1 is live. No production/backup paths, mounts, credentials, logs, databases, real environment files or process environments.
 - No Docker/Compose, deployment scripts, sudo, Screen, services/process control, application execution/imports, test execution/collection, provider calls, installation, real login or cutover. Do not invoke the read-only runtime-debug skill.
 - Reviewers do not write files, add tests, stage, commit or delegate further unless root/coordinator explicitly grants a compatible scoped assignment. This procedure itself grants none of those permissions.
-- The archived V1 agent contract (`legacy/v1/AGENT_CONTRACT.md`) and archived status ledger (`legacy/v1/docs/STATUS.md`) are historical text, not current authority or evidence of V2 acceptance. These paths are repository-relative. A backup or passing review does not authorize production work.
+- Root authorized removing the obsolete `legacy/` source/documentation archive on 2026-09-25. Earlier archive citations describe historical trees, not current instructions or a request to recover deleted files. A backup or passing review does not authorize production work.
 
 ## Inspection discipline
 

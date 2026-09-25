@@ -1,5 +1,17 @@
 # Phase II session ledger
 
+## 2026-09-25 — authorized archive removal and release freeze
+
+Root's current instruction, quoted from this session:
+
+> the old legacy code is removed from now on, commit freely to take care of the removals, the same that the old documentation; the reviewer was clear, freeze the releases and solve all this first
+
+> Do that first, check the audit, tell us what you see and we make a plan
+
+Assignment: commit the existing 24-file `legacy/` deletion slice; remove active claims that the archive still exists; read `audit/20260924T210402Z-adversarial-audit/` and propose the remediation plan. The cleanup is not a declaration that V2 is release-ready. Historical V2 ledgers and unrelated `.agents/skills/root-review-reports/` / `reports/` work are preserved. The current release freeze is recorded in `AGENTS.md`, `README.md` and `docs/STATUS.md`.
+
+Verification: reviewed all deletion paths and deletion-only statistics (3,970 text lines), checked active Python references to the removed DNS/archive paths and reviewed the active documentation diff. No archived instructions were executed or restored. No application imports, test collection/execution, dependencies, builds, Docker/Screen/services, private files, live probes or Git remotes. No runtime change. Audit findings are not implicitly authorized fixes; review disposition and proposed sequencing follow separately.
+
 ## 2026-09-23 — narrow review-fix implementation
 
 Root approved R3 → R2 → R9/R4, asked to exercise the new Luna/Sol routes and preserve the reviewer exchange in ignored `audit/`. Both advertised `openai-codex/gpt-6-luna` and `gpt-6-sol` routes executed real bounded source tasks; no independent backend-alias claim is made. Subagents remained source-only. The coordinator took final R4 test integration after review found concurrent-stop, partial-start and cancellation-suppressed admission edges.

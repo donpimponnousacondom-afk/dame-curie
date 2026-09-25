@@ -1,6 +1,12 @@
 # dame-curie status
 
-## Current temporary Dirac release — bounded tool logging, 2026-09-24
+## Release freeze and audit intake — 2026-09-25
+
+**Releases are frozen by root's current instruction.** Review `audit/20260924T210402Z-adversarial-audit/` and agree the remediation plan before implementing its recommendations. No build, deployment, restart, private/runtime inspection or test execution is authorized by this source/documentation assignment. The last recorded deployment below has not been re-observed today.
+
+Root explicitly authorized committing all 24 pending `legacy/` deletions: obsolete V1 guides/assets and two archived DNS provisioners, 3,970 text lines. Active references now state that the archive is removed. Historical V2 evidence remains dated evidence, not current operating instructions; further documentation retirement awaits reconciliation. Application source, active publisher files and unrelated user work are unchanged. The current grant is quoted in `../phase-II_v2/SESSION_LOG.md`.
+
+## Last recorded temporary Dirac release — bounded tool logging, 2026-09-24
 
 **Dirac is running `6859025`: tool completion logs contain only name/character count, and the operator viewer supports `logs --fresh`.** A 100,311-byte shell-result log line had exceeded the viewer's 64 KiB framing limit and permanently tripped its redaction-continuity safeguard. The fix removes that unbounded producer dump, not the safeguard or the full tool result delivered to the model.
 
