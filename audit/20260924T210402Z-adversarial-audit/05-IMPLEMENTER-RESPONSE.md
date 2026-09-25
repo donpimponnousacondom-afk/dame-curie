@@ -126,99 +126,99 @@ QA used the established Python3.14.4 image with network disabled, no private mou
 
 ## Finding C-14 — Reasoning-only terminal policy
 
-- **Disposition:** deferred — selected behavior, caller verification pending.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Keep reasoning-only output terminal with a clear notice. Do not pay for automatic retry/recovery or reveal reasoning. Root's broad remediation grant allowed this cost policy; no older private reasoning setting is rewritten by it.
-- **Verification performed:** P plus source review; initial/follow-up final delivery coverage pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Reasoning-only output is terminal with a clear notice, without promoting private reasoning into visible text or paying for automatic retry/recovery. No older private reasoning setting is rewritten by this cost policy.
+- **Verification performed:** Independent provider/caller source review and existing initial/follow-up cases in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live provider or delivery acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-15 — Truthful, idempotent history omission
 
-- **Disposition:** deferred — history integration owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Preserve already-bounded omission summaries instead of repeatedly recounting a truncated intermediate as the original result. Keep native groups intact while shrinking.
-- **Verification performed:** independent history review; existing custom/tool-tail cases adapted, integrated execution pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Already-bounded omission summaries are retained rather than recounting truncated intermediates as original results; native call/result groups stay intact during shrinkage.
+- **Verification performed:** Independent history review; existing custom/tool-tail/native cases included in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live history replay claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-16 — Schema-inclusive protected prompt budget
 
-- **Disposition:** deferred — core integration owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Count native schemas and serialized tool arguments/metadata in prompt input. Protect identity and tool protocol, preserve native pairing, and fail visibly if the protected core cannot fit. Review caught an early scan break that allowed earlier system contracts to be clipped; source correction and precise protected-block classification are under final review.
-- **Verification performed:** `review-core-tool-contracts.md`; existing prompt-budget/native cases awaiting execution.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Prompt input budget is96000 characters by default, including serialized native schemas and tool-call metadata/arguments;36k is the separate history-tail bound. Dedicated identity/native and custom tool contracts, including the `## Available tools\n` custom prefix, are protected; excess protected input fails visibly instead of silently clipping it. Prefix classification is not provenance-based: a system RAG block beginning with that exact prefix can also be protected.
+- **Verification performed:** `review-core-tool-contracts.md` found the earlier custom-prefix gap; `micro-custom-prompt.md` checked its source correction and existing-case extension. QA56 green657 and QA60 full-safe3984 plus28 subtests cover the integrated prompt/native cases. `06-TOOL-INVENTORY.md` reports fixture-specific schema characters, not tokens or a live prompt.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-17 — Progressive tool discovery
 
-- **Disposition:** deferred — core and coordinator jobs owners.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Default core15 plus explicit groups, actor/config/platform eligibility and idempotent per-turn catalog rebuilding. Each background job has its own catalog set without resetting inherited spend. Exact eligible plugin names must precede legacy aliases, including `tool_`-prefixed names; forbidden background recursion must not be re-advertised. Full registered capability retention and actual schema-size measurement still need final evidence.
-- **Verification performed:** J proves scoped job refresh/reset and source rechecks cover coupling. Real core/plugin/custom/native selections and post-discovery size measurements pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Default eligible core catalog is15 tools for the measured synthetic admin actor; named groups expand task-locally on following rounds. Background jobs have separate catalog scope without resetting inherited foreground spend; schemas and prompts refresh together. Exact eligible plugin names, including `tool_` names, take precedence over legacy aliases even before plugin-group discovery, while builtin collisions, actor/config/platform gates and background-spawn exclusion remain enforced. Discovery hiding is not execution authorization.
+- **Verification performed:** Independent core and plugin-precedence reviews, integrated corrections and QA56 green657/QA60 full-safe3984 plus28 subtests. QA61/65 real-builder synthetic measurements:70 builtins plus4 checkers tools, admin core15 versus full74, with core14413 and full54608 serialized schema characters; actor/gate/plugin-specific numbers and limits in `06-TOOL-INVENTORY.md`. No live-profile or tool-execution acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-18 — Bounded text recovery
 
-- **Disposition:** deferred — core/history owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Bound recovery input, argument sizes and call count before synchronous parsing/dispatch. Reject the whole recovered batch above eight calls; do not execute its first eight and discard the rest. Independent review found that old slicing still survived one path; correction remains unaccepted.
-- **Verification performed:** source review; existing `tests/test_text_tool_call_recovery.py` and native cases pending integrated execution.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Recovery bounds input, argument size and call count before synchronous parsing/dispatch; batches above eight calls are rejected whole, not partially executed. Strict native argument admission also rejects malformed/nonfinite JSON before effects.
+- **Verification performed:** Independent core source review found earlier slice/nonfinite gaps; integrated corrections and existing recovery/native cases covered by QA56 green657 and QA60 full-safe3984 plus28 subtests. No live provider text-recovery claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-19 — Media admission across rounds
 
-- **Disposition:** deferred — core/media owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Bound/dedupe newly admitted media without slicing base64 or repeatedly reattaching the full retained set. Check actual returned attachment bytes before decode/use and reject archive/MIME contradictions. SDK `.read()` still buffers before post-read rejection; no hard peak-memory/streaming-ingress guarantee is claimed.
-- **Verification performed:** existing forwarded/media cases adapted; independent source observations, integrated execution pending. See I-03 for the explicit read-memory limit.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source for bounded admission; isolated verification complete; temporary acceptance pending, with explicit ingress limit.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** New media is bounded/deduplicated without slicing base64 or repeatedly reattaching the retained set. Returned attachment bytes are checked before decode/use; archive/MIME contradictions are refused. SDK `.read()` still fully allocates before post-read rejection: no hard peak-memory or streaming-ingress guarantee. See I-03; the20MiB setting does not add `.7z` extraction support or prove V1 10MiB parity.
+- **Verification performed:** Independent source observations and existing forwarded/media cases in QA61's201-pass fixture subset and QA60 full-safe3984 plus28 subtests. No live attachment acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-20 — Persisted tool-result metadata
 
-- **Disposition:** deferred — core owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Cap persisted result/argument metadata truthfully. Review found raw embedded-media markers were persisted before replay stripping; whole-media omission must replace clipped base64 fragments in storage.
-- **Verification performed:** moving-source review; final storage/media selection pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Persisted argument and result metadata are bounded; framed image/audio payloads and data URIs are replaced with whole-media type/size labels before result head/tail capping. This sanitizes the stored copy, not the execution result used for media extraction and delivery.
+- **Verification performed:** `review-core-tool-contracts.md` identified the earlier raw-result gap; `micro-result-media.md` confirmed the corrected source and existing stored-result assertions. QA56 green657 and QA60 full-safe3984 plus28 subtests cover integrated cases; no live media-delivery claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-21 — Dead expansion flag and misleading prompts
 
-- **Disposition:** deferred — core/tool-prompt owner.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Replace the ineffective Message expansion flag with actual task-local discovery state. Hidden workflow/inbox/game instructions must discover their group first, rather than demand unavailable tools immediately. Background prompts/catalogs exclude recursive spawning.
-- **Verification performed:** independent source review; real native/custom prompt parity cases pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Ineffective Message expansion state is replaced by task-local discovery. Hidden workflow/inbox/game instructions first direct group discovery rather than demand unavailable tools; background prompts and catalogs exclude recursive spawning.
+- **Verification performed:** Independent core source review and existing native/custom prompt and discovery cases in QA56 green657 and QA60 full-safe3984 plus28 subtests; QA61/65 synthetic catalogs measured group changes. No live semantic/tool-use acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-22 — Server-prompt integrity
 
-- **Disposition:** deferred — core prompt owner/coordinator jobs.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** New16KiB writes are bounded before storage; oversized legacy prompts remain stored but are omitted whole from foreground/background model context with a configured-prefix diagnostic. No clipping of canonical identity/tool contracts to make room; export limits remain explicit.
-- **Verification performed:** J covers background omission and preservation; real foreground/protected-core cases pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** New writes are limited to16KiB UTF-8 before storage. Oversized legacy prompts stay stored but are omitted whole from foreground/background model context with a configured-prefix diagnostic; canonical identity/tool contracts are not silently clipped for room. Readback and export have their separate bounds.
+- **Verification performed:** Background source/fixture review, independent protected-prompt recheck and existing foreground/background prompt cases in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live prompt-delivery acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-23 — Shell authorization and environment
 
-- **Disposition:** deferred — final integrated source commit/recheck.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Shared actor policy permits admins or the existing string-ID shell whitelist; unknown actors fail closed. Direct execution and advertisement both gate privilege. Bash has explicit cwd, no profile/rc startup and a minimal environment. This is not same-UID filesystem secret isolation. Exact plugin/builtin/alias precedence is part of the remaining integration review.
-- **Verification performed:** independent authorization review and synthetic shell/gate subsets; full current integration pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source for actor/advertisement gating and subprocess environment; isolated verification complete; temporary acceptance pending, not secret isolation.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Shared policy permits admins or existing string-ID shell whitelist; unknown actors fail closed. Direct execution and advertised catalog gate privilege. Bash uses explicit cwd, no profile/rc startup and a minimal environment. Same-UID filesystem access remains possible; this is not a secret sandbox. Exact eligible plugin names retain precedence over aliases subject to builtin and actor/platform gates.
+- **Verification performed:** Independent authorization/core/plugin reviews and existing shell/gate cases in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live shell execution or private isolation claim.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-24 — Persistent rewrite authorization
 
-- **Disposition:** deferred — final integrated source commit.
-- **Commit(s):** pending integrated source commit.
-- **What changed / why not:** Persistent personality/server-prompt mutation is admin-gated at execution and in advertised capabilities; missing actor fails closed. Removing the old taint-confirmation mechanism did not authorize arbitrary users to persist prompts.
-- **Verification performed:** independent source review and existing mutation/gate cases; exact full-tree result pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Persistent personality/server-prompt writes are admin-gated both at execution and advertisement; missing actor fails closed. Removal of taint confirmation does not grant arbitrary users persistent rewrite access.
+- **Verification performed:** Independent authorization review and existing mutation/gate cases in QA56 green657 and QA60 full-safe3984 plus28 subtests. No live administration acceptance.
+- **Deployment effect:** candidate built, not deployed as of this editing pass.
 
 ## Finding C-25 — Image availability detection
 
-- **Disposition:** deferred — image/core integration.
-- **Commit(s):** pending integrated source/documentation commit.
-- **What changed / why not:** Auto advertisement requires valid native image configuration, explicit endpoint and nonempty exact model-description map containing the selected model. Explicit blank API key remains distinct from missing required endpoint/model data. Templates document the image settings; invalid forced-on still remains unavailable.
-- **Verification performed:** synthetic image/config/schema subsets and independent source review; final integrated candidate pending.
-- **Deployment effect:** none.
+- **Disposition:** fixed in source; isolated verification complete; temporary acceptance pending; canonical activation still held.
+- **Commit(s):** source `d198c37ee038e57e7cca4183b60eef0eaef6f1fc`.
+- **What changed / why not:** Auto advertisement requires valid native image protocol, explicit endpoint and a nonempty exact model-description map containing the selected model. An explicitly blank API key remains distinct from absent required endpoint/model data. Invalid forced-on configuration still does not expose the capability; templates document image settings. No canonical private profile was migrated or enabled.
+- **Verification performed:** Independent image/config review and existing synthetic image/config/schema cases in QA60 full-safe3984 plus28 subtests. QA64 guarded constructor passed inside the actual candidate image with image generation disabled; it is not an image-capability or provider request.
+- **Deployment effect:** candidate built, not deployed as of this editing pass; canonical activation held.
 
 ## Finding C-26 — Image path resolution and edits
 
