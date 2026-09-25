@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -45,7 +46,7 @@ def test_runtime_health_uses_a_non_record_filename(tmp_path):
     assert state not in settings.status_dir.glob("*.json")
 
 
-def test_missing_result_and_unavailable_health_are_unknown(tmp_path, capsys):
+def test_missing_result_and_unavailable_health_are_unknown(tmp_path, capsys, monkeypatch):
     settings = _settings(tmp_path)
     request = build_request(request_id="a" * 32, task="synthetic")
     create_json_exclusive(request_path(settings, request.request_id), request.as_json())
@@ -65,6 +66,12 @@ def test_missing_result_and_unavailable_health_are_unknown(tmp_path, capsys):
     assert pending[0]["request_id"] == request.request_id
     assert pending[0]["acceptance"] == "no_record"
     assert pending[0]["worker_liveness"] == "unknown"
+
+    withdrawn = request_path(settings, request.request_id)
+    withdrawn.unlink()
+    monkeypatch.setattr("scripts.dirac_smoke.request_files", Mock(return_value=[withdrawn]))
+    assert main(["--config", str(settings.config_path), "pending"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
 
     assert main(["--config", str(settings.config_path), "health"]) == 0
     health = json.loads(capsys.readouterr().out)

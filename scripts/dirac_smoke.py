@@ -133,7 +133,10 @@ def _pending(settings: SmokeSettings) -> int:
     for path in request_files(settings):
         if status_path(settings, path.stem).exists():
             continue
-        queued_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        try:
+            queued_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        except FileNotFoundError:
+            continue
         rows.append(
             {
                 "request_id": path.stem,
