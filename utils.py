@@ -1006,7 +1006,7 @@ def render_discord_context_text(
     if created is not None:
 #        ts = created.strftime("%Y-%m-%d %H:%M:%S UTC")
         ts = created.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
-        text = f"[at {ts}] {text}" if text else f"[at {ts}]"
+        text = f"[{ts}] {text}" if text else f"[{ts}]"
 
     if annotations:
         text = f"{text}\n{annotations}"

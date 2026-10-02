@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from bot_tools import (
     SendMessageTool,
     resolve_send_reply_target,
@@ -84,11 +86,45 @@ def test_send_message_partial_failure_keeps_sent_marker():
     asyncio.run(run())
 
 
-def test_score_reply_candidate_uses_quote_or_name():
-    assert score_reply_candidate("nah", content="nah") == 100
-    assert score_reply_candidate("nah", content="banana") == 0
-    assert score_reply_candidate("alice", author="Alice") >= 75
-    assert score_reply_candidate("what?", content="what?") == 100
+@pytest.mark.parametrize(
+    ("hint", "author", "content", "expected"),
+    [
+        ("nah", "", "nah", 100),
+        ("nah", "", "banana", 0),
+        ("alice", "Alice", "", 75),
+        ("what?", "", "what?", 100),
+        ("nah", "", "[at 2026-10-02 12:34:56 UTC] nah", 100),
+        ("nah", "", "[2026-10-02 12:34:56 UTC] nah", 100),
+        ("what?", "", "[at 2026-10-02 12:34:56 CEST] what?", 100),
+        ("what?", "", "[2026-10-02 12:34:56 CEST] what?", 100),
+        ("what?", "", "[at 2026-10-02 12:34:56 +0530] what?", 100),
+        ("what?", "", "[2026-10-02 12:34:56 UTC+05:30] what?", 100),
+        ("[note] what?", "", "[note] what?", 100),
+        ("[at dinner] what?", "", "[at dinner] what?", 100),
+        ("[2026-10-02] what?", "", "[2026-10-02] what?", 100),
+        (
+            "[2026-13-02 12:34:56 UTC] what?",
+            "",
+            "[2026-13-02 12:34:56 UTC] what?",
+            100,
+        ),
+        (
+            "[at 2026-10-02 25:34:56 UTC] what?",
+            "",
+            "[at 2026-10-02 25:34:56 UTC] what?",
+            100,
+        ),
+        (
+            "[2026-10-02 12:34:56 UTC note] what?",
+            "",
+            "[2026-10-02 12:34:56 UTC note] what?",
+            100,
+        ),
+        ("[note] what?", "", "[2026-10-02 12:34:56 UTC] [note] what?", 100),
+    ],
+)
+def test_score_reply_candidate_uses_quote_or_name(hint, author, content, expected):
+    assert score_reply_candidate(hint, author=author, content=content) == expected
 
 
 class _HistChannel:
@@ -139,7 +175,11 @@ def test_send_message_reply_to_quote_not_id():
     asyncio.run(run())
 
 
-def test_send_message_memory_fallback_fetches_once():
+@pytest.mark.parametrize(
+    "stored_content",
+    ["nah", "[at 2026-10-02 12:34:56 UTC] nah", "[2026-10-02 12:34:56 UTC] nah"],
+)
+def test_send_message_memory_fallback_fetches_once(stored_content):
     class MemChannel:
         def __init__(self):
             self.id = 99
@@ -160,7 +200,7 @@ def test_send_message_memory_fallback_fetches_once():
                 {"message_id": str(i), "author": "spam", "content": f"noise {i}"}
                 for i in range(200, 400)
             ]
-            rows.append({"message_id": "2", "author": "Alice", "content": "nah"})
+            rows.append({"message_id": "2", "author": "Alice", "content": stored_content})
             return rows
 
     async def run():

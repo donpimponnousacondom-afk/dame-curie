@@ -4324,7 +4324,12 @@ def score_reply_candidate(hint: str, *, author: str = "", content: str = "") -> 
         return 0
     author_n = normalize_reply_hint(author)
     content_n = normalize_reply_hint(content)
-    content_n = re.sub(r"^\[at [^\]]+\]\s*", "", content_n)
+    content_n = re.sub(
+        r"^\[(?:at )?[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]) "
+        r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] [a-z0-9_+:/-]+\]\s*",
+        "",
+        content_n,
+    )
     if "(" in author_n:
         author_n = author_n.split("(", 1)[0].strip()
     score = 0
