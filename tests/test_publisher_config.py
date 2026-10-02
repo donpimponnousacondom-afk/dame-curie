@@ -42,6 +42,9 @@ class PublisherConfigTests(unittest.TestCase):
         self.assertEqual(self.config.port, 22)
         self.assertEqual(self.config.rescan_seconds, 60)
         self.assertEqual(self.config.private_paths, ())
+        self.assertEqual(self.config.marker_namespace, "dame-curie")
+        self.path.write_text(self.path.read_text() + '\nmarker_namespace = "curie"\n')
+        self.assertEqual(load_config(self.path).marker_namespace, "curie")
 
     def test_private_file_and_staging_permissions_are_required(self):
         self.path.chmod(0o644)
@@ -71,6 +74,9 @@ class PublisherConfigTests(unittest.TestCase):
             replace(self.config, site_root="/synthetic/../sites"),
             replace(self.config, host="-oProxyCommand=anything"),
             replace(self.config, user="publisher;exit"),
+            replace(self.config, marker_namespace=""),
+            replace(self.config, marker_namespace="../curie"),
+            replace(self.config, marker_namespace="curie\n--anything"),
         ):
             with self.subTest(config=changed):
                 with self.assertRaises(PublisherError):
@@ -88,8 +94,7 @@ class PublisherConfigTests(unittest.TestCase):
             validate(self.config, self.path)
 
     def test_ownership_lock_and_binding_survive_reload(self):
-        state = State(self.config)
-        try:
+        with contextlib.closing(State(self.config)) as state:
             with self.assertRaises(BlockingIOError):
                 State(self.config)
             site = state.add_site("café '$;")
@@ -97,17 +102,36 @@ class PublisherConfigTests(unittest.TestCase):
             state.source_identity = (1, 2)
             state.roots = [[3, 4], [5, 6]]
             state.save()
-        finally:
-            state.close()
-        state = State(self.config)
-        try:
+        with contextlib.closing(State(self.config)) as state:
             self.assertEqual(state.sites["café '$;"].token, token)
             self.assertEqual(state.source_identity, (1, 2))
             self.assertEqual(state.roots, [[3, 4], [5, 6]])
-        finally:
-            state.close()
-        with self.assertRaises(PublisherError):
-            State(replace(self.config, host="other.example.invalid"))
+            self.assertEqual(state.marker_namespace, "dame-curie")
+        legacy = replace(self.config, marker_namespace="curie")
+        for changed in (
+            replace(self.config, host="other.example.invalid"),
+            replace(self.config, source=self.root / "migrated-public"),
+            legacy,
+        ):
+            with self.subTest(config=changed), self.assertRaisesRegex(PublisherError, "ownership configuration changed"):
+                State(changed)
+        data = json.loads(state.path.read_text())
+        self.assertEqual(data.pop("marker_namespace"), "dame-curie")
+        state.path.write_text(json.dumps(data))
+        with contextlib.closing(State(self.config)) as reloaded:
+            self.assertEqual(reloaded.sites["café '$;"].token, token)
+        with self.assertRaisesRegex(PublisherError, "ownership configuration changed"):
+            State(legacy)
+        data["marker_namespace"] = "curie"
+        state.path.write_text(json.dumps(data))
+        with self.assertRaisesRegex(PublisherError, "ownership configuration changed"):
+            State(self.config)
+        with contextlib.closing(State(legacy)) as reloaded:
+            self.assertEqual(reloaded.marker_namespace, "curie")
+            self.assertEqual(reloaded.sites["café '$;"].token, token)
+            self.assertEqual(reloaded.roots, [[3, 4], [5, 6]])
+            reloaded.save()
+        self.assertEqual(json.loads(state.path.read_text())["marker_namespace"], "curie")
 
     def test_control_socket_state_path_cannot_expand_outside_private_directory(self):
         for name in ('state-${HOME}', 'state-%h', 'state\nother'):

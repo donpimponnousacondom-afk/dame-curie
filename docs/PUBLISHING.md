@@ -4,7 +4,7 @@ How local authored files become remote static files. The publisher is an indepen
 process that mirrors a local directory tree outward over SSH/rsync. It is not a
 deployment mechanism, not a runtime sync, and not something the model administers.
 
-This is the durable guide for both instances, **not a publisher/private/remote operating grant**. Current closure work leaves publisher code, configuration, services and destinations untouched. The old phase record is recoverable through `git show eb188ac:phase-II_v2/DIRAC_PUBLISHING.md`; the protected template's historical citation is left unchanged, not treated as a live documentation link.
+This is the durable guide for both instances, **not a publisher/private/remote operating grant**. Source handoff support is not proof of migrated state or activated services. The old phase record is recoverable through `git show eb188ac:phase-II_v2/DIRAC_PUBLISHING.md`; the protected template's historical citation is left unchanged, not treated as a live documentation link.
 
 ## Authoring
 
@@ -60,7 +60,8 @@ SSH and remote-ownership protections remain in force.
    explicit operation.
 
 Ownership is enforced with a private marker `.dame-curie-publisher-owner` inside each
-claimed site directory. Do not create, edit or delete it. A remote directory that exists
+claimed site directory, or `.curie-publisher-owner` with the explicit legacy namespace.
+Do not create, edit or delete it. A remote directory that exists
 but is not owned is **refused**, never adopted, so a hand-made directory at a site name
 will block that site rather than be overwritten.
 
@@ -78,6 +79,7 @@ running user, and must not sit inside `source`, `staging` or `state`. Templates:
 | `host`, `user`, `port` | Remote endpoint. `StrictHostKeyChecking=yes` is unconditional; the host key must already be in `known_hosts`. |
 | `site_root`, `image_root` | Remote destinations, disjoint from each other in both directions. Neither may be `/`. |
 | `private_paths` | Local subtrees to never publish. Optional. |
+| `marker_namespace` | `"dame-curie"` by default; only explicit `"curie"` selects V1 owner/claim names. Pinned in ownership state. |
 | `rescan_seconds`, `settle_seconds`, `timeout_seconds` | Watch cadence and transfer timeout. Optional. |
 
 The publisher needs a `python3` **and** an `rsync` on the remote host. It invokes the
@@ -85,9 +87,9 @@ remote `python3 -I -S -c` as its rsync transfer guard; that is not the remote ho
 Python application.
 
 Instances are isolated by directory, not by code: use disjoint `source`, `staging` and `state` and distinct remote `site_root`/`image_root`. The SSH host/user/port or key may be shared under an explicit grant; that does not separate destinations.
-`state.py` refuses to start if any of those differs from the saved state, so an existing
-instance cannot be repointed without clearing its state directory — but on a **fresh**
-state directory the configured destination is adopted and pinned as-is, with no check
+Ownership state pins the source path/device/inode, remote target tuple/root identities,
+and marker namespace. A configuration mismatch is refused, not an invitation to clear
+state. A **fresh** state directory pins the configured destination as-is, with no check
 that it belongs to this project. Verify the destination before the first write.
 
 The isolation between instances is not uniform, and the difference matters:
@@ -108,6 +110,34 @@ The isolation between instances is not uniform, and the difference matters:
   `site_root` can still create *new* directories there, because a claim succeeds for any
   name that does not already exist. Names it never claimed are never removed by it, but
   they will be served.
+
+## Claim-preserving V1 handoff — coordinator only
+
+For the Queen's existing remote claims, set `marker_namespace = "curie"` explicitly.
+This selects `.curie-publisher-owner` and `.curie-publisher-claim-<token>` without
+renaming, replacing, chowning or adopting remote markers. There is no namespace search
+or fallback. Default V2 exclusions remain; the selected namespace's internal owner/claim
+names are also excluded locally and its owner marker is protected during rsync deletion.
+SSH host-key verification, remote UID/mode/link checks, token bytes, directory identity
+checks and atomic claim/removal rules are unchanged. Local service UIDs do not determine
+the remote SSH UID.
+
+Keep both publishers quiesced while preparing the complete new local source tree and
+preserving the old installed publisher/config/state for recovery. The coordinator must
+verify the unchanged Queen SSH tuple/trust material, distinct destinations, remote root
+and site identities, and existing marker ownership/token bindings before activation.
+Privately project the Queen's saved state, changing only `source`, its verified
+`source_identity`, and explicit `marker_namespace = "curie"`; retain version, target,
+remote roots, every site's identity/token/deleting flag, and all other state. Do not
+clear state, borrow Dirac state, or reset tokens. Local private files/directories still
+need the new process user's existing required ownership/modes; this is not permission
+to alter remote ownership or broaden access.
+
+A state file without `marker_namespace` means `"dame-curie"`, preserving existing V2
+behavior; it cannot silently enter legacy mode. The explicit projection is required
+for V1 state, not automatic rebinding. Source preparation, parent-run isolated tests,
+remote verification and bounded publication acceptance are separate gates; this guide
+is not an execution or activation receipt.
 
 ## Dirac-specific layout and retained limits
 
@@ -153,7 +183,8 @@ credentials or file contents.
 | --- | --- |
 | `private file permissions refused` / `private directory permissions refused` | Config, key, `known_hosts`, `staging` or `state` is not mode 0600/0700, is a symlink/hardlink, or is owned by another account. |
 | `private configuration changed` | The TOML was replaced or altered while being read. |
-| `ownership configuration changed` | `host`/`user`/`port`/`site_root`/`image_root` no longer match the saved state. |
+| `ownership configuration changed` | Source path, remote target tuple or marker namespace no longer matches the saved state. |
+| `publisher marker namespace refused` | `marker_namespace` is neither `"dame-curie"` nor `"curie"`. |
 | `remote filesystem root refused` / `remote roots overlap` | `site_root` and `image_root` overlap or nest, or one of them is `/`. |
 | `SSH host refused` / `SSH user refused` | The value fails the strict host/user pattern. |
 | `SSH credential path expansion refused` | A `%`, `${` or newline in the key, `known_hosts` or `state` path. |

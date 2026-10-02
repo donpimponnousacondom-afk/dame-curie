@@ -13,7 +13,9 @@ class Mirror:
         self.state = state
         self.transport = transport
         self.staging = Staging(config.staging)
-        self.scanner = Scanner(config.source, self.staging.blobs, config.private_paths)
+        self.scanner = Scanner(
+            config.source, self.staging.blobs, config.private_paths, marker_namespace=config.marker_namespace,
+        )
         self.published: dict[str, Snapshot] = {}
 
     def reconcile(self) -> None:

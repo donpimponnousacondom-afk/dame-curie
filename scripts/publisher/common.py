@@ -22,9 +22,11 @@ class RemoteFailure(PublisherError):
     pass
 
 
-def eligible(name: str, *, top_level: bool = True) -> bool:
+def eligible(name: str, *, top_level: bool = True, marker_namespace: str = "dame-curie") -> bool:
     return not (
         name in EXCLUDED or name.startswith(".dame-curie-publisher-claim-")
+        or name == f".{marker_namespace}-publisher-owner"
+        or name.startswith(f".{marker_namespace}-publisher-claim-")
         or top_level and name.startswith(".")
     )
 

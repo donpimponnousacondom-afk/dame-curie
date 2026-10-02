@@ -10,7 +10,6 @@ from contextlib import ExitStack, contextmanager
 from pathlib import PurePosixPath
 
 
-MARKER = ".dame-curie-publisher-owner"
 FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 RENAME_NOREPLACE = 1
 
@@ -51,9 +50,9 @@ def owner_bytes(fd, token):
 
 
 @contextmanager
-def owner_file(fd, create=False):
+def owner_file(fd, namespace, create=False):
     flags = os.O_RDWR | os.O_CREAT if create else os.O_RDONLY
-    marker_fd = os.open(MARKER, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=fd)
+    marker_fd = os.open(f".{namespace}-publisher-owner", flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=fd)
     try:
         value = os.fstat(marker_fd)
         if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
@@ -64,8 +63,8 @@ def owner_file(fd, create=False):
         os.close(marker_fd)
 
 
-def marker(fd, token):
-    with owner_file(fd) as marker_fd:
+def marker(fd, token, namespace):
+    with owner_file(fd, namespace) as marker_fd:
         if os.read(marker_fd, 512) != owner_bytes(fd, token):
             raise Refused()
 
@@ -79,15 +78,15 @@ def child_directory(root, name, expected):
     return fd
 
 
-def claim_name(token):
+def claim_name(token, namespace):
     if str(uuid.UUID(token)) != token:
         raise Refused()
-    return ".dame-curie-publisher-claim-" + token
+    return f".{namespace}-publisher-claim-" + token
 
 
 @contextmanager
-def preparation(root, token, create):
-    name = claim_name(token)
+def preparation(root, token, namespace, create):
+    name = claim_name(token, namespace)
     if create:
         try:
             os.mkdir(name, 0o700, dir_fd=root)
@@ -96,16 +95,16 @@ def preparation(root, token, create):
     fd = os.open(name, FLAGS, dir_fd=root)
     try:
         value = os.fstat(fd)
-        if value.st_uid != os.getuid() or value.st_mode & 0o077 or set(os.listdir(fd)) - {MARKER}:
+        if value.st_uid != os.getuid() or value.st_mode & 0o077 or set(os.listdir(fd)) - {f".{namespace}-publisher-owner"}:
             raise Refused()
         yield name, fd
     finally:
         os.close(fd)
 
 
-def prepare_marker(fd, token):
+def prepare_marker(fd, token, namespace):
     payload = owner_bytes(fd, token)
-    with owner_file(fd, create=True) as marker_fd:
+    with owner_file(fd, namespace, create=True) as marker_fd:
         if not payload.startswith(os.read(marker_fd, 512)):
             raise Refused()
         os.ftruncate(marker_fd, 0)
@@ -127,17 +126,18 @@ def rename_noreplace(root, source, destination):
         raise OSError(ctypes.get_errno(), "atomic site claim refused")
 
 
-def cleanup_claim(root, token):
+def cleanup_claim(root, token, namespace):
     try:
-        os.stat(claim_name(token), dir_fd=root, follow_symlinks=False)
+        os.stat(claim_name(token, namespace), dir_fd=root, follow_symlinks=False)
     except FileNotFoundError:
         return
-    with preparation(root, token, create=False) as (name, fd):
-        if MARKER in os.listdir(fd):
-            with owner_file(fd) as marker_fd:
+    marker_name = f".{namespace}-publisher-owner"
+    with preparation(root, token, namespace, create=False) as (name, fd):
+        if marker_name in os.listdir(fd):
+            with owner_file(fd, namespace) as marker_fd:
                 if not owner_bytes(fd, token).startswith(os.read(marker_fd, 512)):
                     raise Refused()
-            os.unlink(MARKER, dir_fd=fd)
+            os.unlink(marker_name, dir_fd=fd)
         value = os.stat(name, dir_fd=root, follow_symlinks=False)
         if [value.st_dev, value.st_ino] != identity(fd):
             raise Refused()
@@ -147,13 +147,14 @@ def cleanup_claim(root, token):
 
 def claim(root, request):
     name, token = request["name"], request["token"]
+    namespace = request["marker_namespace"]
     valid_name(name)
     with ExitStack() as stack:
         try:
             fd = child_directory(root, name, request["site_identity"])
         except FileNotFoundError:
-            hidden, prepared = stack.enter_context(preparation(root, token, create=True))
-            prepare_marker(prepared, token)
+            hidden, prepared = stack.enter_context(preparation(root, token, namespace, create=True))
+            prepare_marker(prepared, token, namespace)
             value = os.stat(hidden, dir_fd=root, follow_symlinks=False)
             if [value.st_dev, value.st_ino] != identity(prepared):
                 raise Refused()
@@ -163,18 +164,19 @@ def claim(root, request):
                 pass
             fd = child_directory(root, name, [])
         stack.callback(os.close, fd)
-        marker(fd, token)
+        marker(fd, token, namespace)
         os.fchmod(fd, 0o755)
         os.fsync(fd)
         os.fsync(root)
-        cleanup_claim(root, token)
+        cleanup_claim(root, token, namespace)
         return {"site_identity": identity(fd)}
 
 
 def remove(root, request):
-    name = request["name"]
+    name, namespace = request["name"], request["marker_namespace"]
+    marker_name = f".{namespace}-publisher-owner"
     valid_name(name)
-    cleanup_claim(root, request["token"])
+    cleanup_claim(root, request["token"], namespace)
     try:
         fd = child_directory(root, name, request["site_identity"])
     except (FileNotFoundError, NotADirectoryError) as error:
@@ -187,20 +189,20 @@ def remove(root, request):
             pass
         else:
             try:
-                marker(fd, request["token"])
+                marker(fd, request["token"], namespace)
             except (FileNotFoundError, Refused):
                 if request["site_identity"]:
                     raise
                 return {}
             for child in names:
-                if child == MARKER:
+                if child == marker_name:
                     continue
                 value = os.stat(child, dir_fd=fd, follow_symlinks=False)
                 if stat.S_ISDIR(value.st_mode):
                     shutil.rmtree(child, dir_fd=fd)
                 else:
                     os.unlink(child, dir_fd=fd)
-            os.unlink(MARKER, dir_fd=fd)
+            os.unlink(marker_name, dir_fd=fd)
             os.fsync(fd)
         current = os.stat(name, dir_fd=root, follow_symlinks=False)
         if [current.st_dev, current.st_ino] != identity(fd):
@@ -213,6 +215,9 @@ def remove(root, request):
 
 
 def run(request, rsync_args=()):
+    namespace = request["marker_namespace"]
+    if namespace not in ("dame-curie", "curie"):
+        raise Refused()
     with ExitStack() as stack:
         sites = stack.enter_context(root_directory(request["site_root"]))
         images = stack.enter_context(root_directory(request["image_root"]))
@@ -234,7 +239,7 @@ def run(request, rsync_args=()):
             if action == "site":
                 destination = child_directory(sites, request["name"], request["site_identity"])
                 stack.callback(os.close, destination)
-                marker(destination, request["token"])
+                marker(destination, request["token"], namespace)
             os.fchdir(destination)
             os.execvp("rsync", ["rsync", *rsync_args])
         else:

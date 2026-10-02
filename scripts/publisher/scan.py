@@ -63,16 +63,20 @@ class Snapshot:
 
 
 class Scanner:
-    def __init__(self, source: Path, blobs: BlobStore, private_paths: tuple[Path, ...] = ()):
+    def __init__(
+        self, source: Path, blobs: BlobStore, private_paths: tuple[Path, ...] = (),
+        *, marker_namespace: str = "dame-curie",
+    ):
         self.source = source
         self.blobs = blobs
         self.private_paths = private_paths
+        self.marker_namespace = marker_namespace
 
     def allowed(self, path: Path) -> bool:
         absolute = self.source / path
-        return eligible(path.name, top_level=path.parent == Path(".")) and not any(
-            absolute.is_relative_to(private) for private in self.private_paths
-        )
+        return eligible(
+            path.name, top_level=path.parent == Path("."), marker_namespace=self.marker_namespace,
+        ) and not any(absolute.is_relative_to(private) for private in self.private_paths)
 
     def file(self, parent: int, path: Path, value: os.stat_result, result: Snapshot, copy: bool) -> None:
         if value.st_nlink != 1:

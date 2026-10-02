@@ -107,10 +107,18 @@ class PublisherWatchTests(unittest.TestCase):
     def test_excluded_data_directory_is_not_recursively_watched(self):
         private = self.config.source / "_data"
         private.mkdir()
-        self.watcher.rebuild()
-        self.watcher.wait(0)
-        (private / "synthetic-private").write_bytes(b"not observed")
-        self.assertFalse(self.watcher.wait(0.02))
+        for namespace in ("dame-curie", "curie"):
+            self.scanner.marker_namespace = namespace
+            claim = self.config.source / "site" / f".{namespace}-publisher-claim-synthetic"
+            claim.mkdir(parents=True)
+            with self.subTest(namespace=namespace):
+                self.watcher.rebuild()
+                self.watcher.wait(0)
+                self.assertNotIn(claim.relative_to(self.config.source), self.watcher.paths.values())
+                self.assertNotIn(Path("_data"), self.watcher.paths.values())
+                (private / "synthetic-private").write_bytes(b"not observed")
+                (claim / "synthetic-private").write_bytes(b"not observed")
+                self.assertFalse(self.watcher.wait(0.02))
 
     def test_transient_disappearance_during_rebuild_keeps_old_watches_and_retries(self):
         site = self.config.source / 'site'

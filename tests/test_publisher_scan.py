@@ -58,10 +58,20 @@ class PublisherScanTests(unittest.TestCase):
         (self.source / "site/link").symlink_to(private)
         (self.source / "site/linkdir").symlink_to(self.root, target_is_directory=True)
         os.mkfifo(self.source / "site/pipe")
-        with patch("scripts.publisher.scan.os.open", wraps=os.open) as opened:
-            self.assertEqual(set(self.scanner.scan().files), {Path("site/index.html")})
-        excluded = {*files, *directories, "blocked", "outside", "link", "linkdir", "pipe"}
-        self.assertTrue(excluded.isdisjoint(Path(call.args[0]).name for call in opened.call_args_list))
+        legacy_files = {Path("site/.curie-publisher-owner"), Path("site/.curie-publisher-claim-synthetic/legacy-child")}
+        for path in legacy_files:
+            self.put(str(path), b"legacy internal name")
+        for namespace in ("dame-curie", "curie"):
+            self.scanner.marker_namespace = namespace
+            expected = {Path("site/index.html")}
+            excluded = {*files, *directories, "blocked", "outside", "link", "linkdir", "pipe"}
+            if namespace == "dame-curie":
+                expected.update(legacy_files)
+            else:
+                excluded.update({".curie-publisher-owner", ".curie-publisher-claim-synthetic", "legacy-child"})
+            with self.subTest(namespace=namespace), patch("scripts.publisher.scan.os.open", wraps=os.open) as opened:
+                self.assertEqual(set(self.scanner.scan().files), expected)
+                self.assertTrue(excluded.isdisjoint(Path(call.args[0]).name for call in opened.call_args_list))
 
     def test_public_data_config_and_other_ordinary_site_names_are_mirrored(self):
         names = {"data", "config", "credentials", "secrets", "node_modules", "venv", "registry.json", "public.db", "public.key"}
