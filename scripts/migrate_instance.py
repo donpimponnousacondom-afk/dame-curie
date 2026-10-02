@@ -13,6 +13,11 @@ from contextlib import ExitStack
 INSTANCE_ROOT = Path("/srv")
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
 INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
+RAG_DATABASE_NAMES = {
+    "maxwell_rag.db": "dame-curie-rag.db",
+    "maxwell_rag.db-wal": "dame-curie-rag.db-wal",
+    "maxwell_rag.db-shm": "dame-curie-rag.db-shm",
+}
 
 
 def checked_path(path: Path) -> Path:
@@ -56,31 +61,49 @@ def default_personality() -> str:
     raise ValueError("canonical default personality not found")
 
 
-def migration_json(data: Path) -> tuple[dict, str, dict]:
+def migration_json(data: Path, source_prompts: Path | None = None) -> tuple[dict, str, dict]:
     control = mapping(data / "bot_control.json")
     personality = control.pop("base_personality", None)
-    if personality is None:
-        personality = default_personality()
+    if source_prompts is None:
+        if personality is None:
+            personality = default_personality()
+        servers = mapping(data / "prompts.json")
+    else:
+        prompt_root = source_prompts
+        personality_path = checked_path(prompt_root / "personality.txt")
+        servers_path = checked_path(prompt_root / "servers.json")
+        if not personality_path.is_file() or not servers_path.is_file():
+            raise ValueError("source prompts must contain personality.txt and servers.json")
+        personality = personality_path.read_text(encoding="utf-8")
+        servers = mapping(servers_path)
     if not isinstance(personality, str) or not personality.strip():
         raise ValueError("base personality must be nonempty text")
-    servers = mapping(data / "prompts.json")
     if not all(isinstance(v, str) for v in servers.values()):
         raise ValueError("server prompts must map IDs to strings")
     return control, personality, servers
 
 
-def copy_inventory(source: Path, paths: list[Path], target: Path) -> None:
+def copy_inventory(source: Path, paths: list[Path], target: Path, *, map_rag_database: bool = False) -> None:
+    if map_rag_database:
+        names = {path.name for path in paths if path.parent == source}
+        if names.intersection(RAG_DATABASE_NAMES) and names.intersection(RAG_DATABASE_NAMES.values()):
+            raise ValueError("source contains both legacy and canonical RAG database files")
     for path in paths:
-        dest = target / path.relative_to(source)
+        relative = path.relative_to(source)
+        if map_rag_database and path.parent == source:
+            relative = relative.with_name(RAG_DATABASE_NAMES.get(relative.name, relative.name))
+        dest = target / relative
         if path.is_dir():
             dest.mkdir()
         else:
             shutil.copyfile(path, dest, follow_symlinks=False)
+            mode = stat.S_IMODE(dest.stat().st_mode)
+            dest.chmod(mode | (path.stat().st_mode & 0o111))
 
 
 def populate(stages: list[Path], sources: list[Path], inventories: list[list[Path]], converted: tuple) -> None:
-    for source, paths, stage in zip(sources, inventories, stages):
-        copy_inventory(source, paths, stage)
+    for index, (source, paths, stage) in enumerate(zip(sources, inventories, stages)):
+        copy_inventory(source, paths, stage, map_rag_database=index == 0)
     control, personality, servers = converted
     data, _, _, prompts = stages
     (data / "prompts.json").unlink(missing_ok=True)
@@ -89,7 +112,9 @@ def populate(stages: list[Path], sources: list[Path], inventories: list[list[Pat
     (prompts / "servers.json").write_text(json.dumps(servers, indent=2) + "\n")
 
 
-def migrate(instance: str, data: Path, sites: Path, shell: Path, *, stopped: bool) -> None:
+def migrate(
+    instance: str, data: Path, sites: Path, shell: Path, *, stopped: bool, source_prompts: Path | None = None
+) -> None:
     if not stopped:
         raise ValueError("--stopped acknowledgement is required")
     if not INSTANCE.fullmatch(instance) or len(instance) > 30:
@@ -98,6 +123,14 @@ def migrate(instance: str, data: Path, sites: Path, shell: Path, *, stopped: boo
     sources = [checked_path(path) for path in (data, sites, shell)]
     if any(target.is_relative_to(p) or p.is_relative_to(target) for p in sources):
         raise ValueError("source and target must not overlap")
+    if source_prompts is not None:
+        source_prompts = checked_path(source_prompts)
+        if not source_prompts.is_dir():
+            raise ValueError("source prompts must be an existing directory")
+        if target.is_relative_to(source_prompts) or source_prompts.is_relative_to(target):
+            raise ValueError("source prompts and target must not overlap")
+        if any(source_prompts.is_relative_to(p) or p.is_relative_to(source_prompts) for p in sources):
+            raise ValueError("source prompts must be separate from migration sources")
     roots = [target / "data", target / "sites", target / "shell", target / "config" / "prompts"]
     for root in roots:
         checked_path(root)
@@ -107,7 +140,7 @@ def migrate(instance: str, data: Path, sites: Path, shell: Path, *, stopped: boo
     if not config.is_file():
         raise ValueError("operator must prepare target config/bot.env separately")
     inventories = [inventory(source) for source in sources]
-    converted = migration_json(data)
+    converted = migration_json(data, source_prompts)
     with ExitStack() as stack:
         stages = [Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=".migration-", dir=root))) for root in roots]
         populate(stages, sources, inventories, converted)
@@ -134,10 +167,18 @@ def main() -> None:
     parser.add_argument("--data", required=True, type=Path)
     parser.add_argument("--sites", required=True, type=Path)
     parser.add_argument("--shell", required=True, type=Path)
+    parser.add_argument("--source-prompts", type=Path, help="external source config/prompts directory")
     parser.add_argument("--stopped", action="store_true", help="all source writers and target daemon are stopped")
     args = parser.parse_args()
     try:
-        migrate(args.instance, args.data, args.sites, args.shell, stopped=args.stopped)
+        migrate(
+            args.instance,
+            args.data,
+            args.sites,
+            args.shell,
+            stopped=args.stopped,
+            source_prompts=args.source_prompts,
+        )
     except (OSError, ValueError, UnicodeError):
         parser.exit(1, "Migration refused or failed; source untouched. Check inputs and target permissions.\n")
     print("State migrated; source unchanged. Target account/provider configuration was not read or copied.")
