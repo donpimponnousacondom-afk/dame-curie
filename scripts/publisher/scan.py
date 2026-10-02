@@ -1,6 +1,5 @@
 import hashlib
 import os
-import re
 import stat
 import tempfile
 from dataclasses import dataclass, field
@@ -8,37 +7,13 @@ from functools import partial
 from pathlib import Path
 
 from .common import (
-    CREDENTIAL_MARKERS, DIRECTORY_FLAGS, FILE_FLAGS, ScanIncomplete,
+    DIRECTORY_FLAGS, FILE_FLAGS, ScanIncomplete,
     directory, eligible, fingerprint, identity,
 )
 
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 CHUNK_SIZE = 1024 * 1024
-SCREEN_TAIL = 512
-ASSIGNMENT = re.compile(
-    rb"(?i)(?:\b(?:aws_secret_access_key|discord_token|openai_api_key|openrouter_api_key|api_key|private_key)"
-    rb"[\"']?[ \t]*[:=][ \t]*|authorization[\"']?[ \t]*:[ \t]*)"
-)
-SAFE_VALUES = (
-    b"[redacted]", b"[removed]", b"<redacted>", b"os.getenv(", b"os.environ[",
-    b"os.environ.get(", b"process.env.", b"${", b"getenv(",
-)
-
-
-def credential_material(block: bytes, final: bool) -> bool:
-    lowered = block.lower()
-    limit = len(block) if final else len(block) - SCREEN_TAIL
-    found = any(marker.lower() in lowered for marker in CREDENTIAL_MARKERS)
-    for match in ASSIGNMENT.finditer(lowered):
-        if match.start() >= limit:
-            break
-        value = lowered[match.end():match.end() + SCREEN_TAIL].lstrip(b" \t\"'`")
-        if value.startswith(b"bearer "):
-            value = value[7:].lstrip(b" \t")
-        if value and not value.startswith(SAFE_VALUES) and value[:1] not in b"\r\n,)}":
-            found = True
-    return found
 
 
 class BlobStore:
@@ -48,15 +23,8 @@ class BlobStore:
 
     def capture(self, fd: int, before: os.stat_result) -> str:
         digest = hashlib.sha256()
-        tail = b""
         while block := os.read(fd, CHUNK_SIZE):
             digest.update(block)
-            screened = tail + block
-            if credential_material(screened, final=False):
-                raise ScanIncomplete("credential tripwire refused scan")
-            tail = screened[-SCREEN_TAIL:]
-        if credential_material(tail, final=True):
-            raise ScanIncomplete("credential tripwire refused scan")
         if fingerprint(os.fstat(fd)) != fingerprint(before):
             raise ScanIncomplete("source changed during scan")
         name = digest.hexdigest()

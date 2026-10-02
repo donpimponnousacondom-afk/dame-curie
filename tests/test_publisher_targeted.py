@@ -45,8 +45,10 @@ class PublisherTargetedTests(unittest.TestCase):
 
     def test_selected_scope_does_not_read_other_sites(self):
         self.put("site/index.html", b"publishable")
-        self.put("other/private.txt", b"DISCORD_TOKEN=synthetic-refused-literal")
-        self.mirror.reconcile_site("site")
+        self.put("other/private.txt", b"outside selected scope")
+        with patch("scripts.publisher.scan.os.open", wraps=os.open) as opened:
+            self.mirror.reconcile_site("site")
+        self.assertTrue({"other", "private.txt"}.isdisjoint(Path(call.args[0]).name for call in opened.call_args_list))
         self.assertEqual((self.remote / "site/index.html").read_bytes(), b"publishable")
         self.assertFalse((self.remote / "other").exists())
         self.assertEqual(self.actions(), ["probe", "claim", "site"])
@@ -145,9 +147,11 @@ class PublisherTargetedTests(unittest.TestCase):
         page = self.put("site/index.html")
         self.mirror.reconcile_site("site")
         shutil.rmtree(page.parent)
-        page.parent.write_bytes(b"DISCORD_TOKEN=synthetic-private-value")
+        page.parent.write_bytes(b"top-level file is not a site")
         self.transport.commands.clear()
-        self.mirror.reconcile_site("site")
+        with patch("scripts.publisher.scan.os.read", side_effect=AssertionError("replacement read")) as read:
+            self.mirror.reconcile_site("site")
+        read.assert_not_called()
         self.assertEqual(self.transport.commands, [])
         self.assertTrue((self.remote / "site/index.html").exists())
 
@@ -203,15 +207,20 @@ class PublisherTargetedTests(unittest.TestCase):
         self.assertFalse((images / "orphan.txt").exists())
         self.assertTrue(all("--delete-delay" not in argv for argv in self.transport.commands))
 
-    def test_selected_scan_still_rejects_credential_content_and_hardlinks(self):
-        path = self.put("site/file.txt", b"DISCORD_TOKEN=synthetic-refused-literal")
-        with self.assertRaises(ScanIncomplete):
-            self.mirror.reconcile_site("site")
+    def test_selected_scan_keeps_exact_bytes_and_refuses_hardlinks_before_read(self):
+        content = b"DISCORD_TOKEN=synthetic-literal\nAuthorization: Bearer $OPENROUTER_API_KEY\n"
+        path = self.put("site/file.txt", content)
+        self.mirror.reconcile_site("site")
+        self.assertEqual((self.remote / "site/file.txt").read_bytes(), content)
         path.write_bytes(b"ordinary")
         os.link(path, self.root / "alias")
-        with self.assertRaises(ScanIncomplete):
-            self.mirror.reconcile_site("site")
+        self.transport.commands.clear()
+        with patch.object(self.mirror.staging.blobs, "capture", side_effect=AssertionError("hardlink read")) as capture:
+            with self.assertRaisesRegex(ScanIncomplete, "hardlinked source refused"):
+                self.mirror.reconcile_site("site")
+        capture.assert_not_called()
         self.assertEqual(self.transport.commands, [])
+        self.assertEqual((self.remote / "site/file.txt").read_bytes(), content)
 
     def test_selected_scan_validates_second_pass(self):
         page = self.put("site/index.html", b"before")

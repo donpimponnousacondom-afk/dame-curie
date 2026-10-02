@@ -43,6 +43,11 @@ Never published: loose top-level files, first-level dotfiles, `_data`, `_build`,
 `private_paths` entry. A dotfile *inside* a site directory **is** published — only
 first-level dotfiles are excluded. That is how a per-site `.htaccess` can be shipped.
 
+Publisher file contents are transported unchanged, without credential-pattern inspection
+or content-based publication refusal. Root removed that filter on 2026-09-30 after an
+API-documentation example blocked publication. Explicit path exclusions and filesystem,
+SSH and remote-ownership protections remain in force.
+
 ## The two rules that explain most surprises
 
 1. **The publisher owns the whole site directory.** Anything present remotely inside a
@@ -152,7 +157,6 @@ credentials or file contents.
 | `remote filesystem root refused` / `remote roots overlap` | `site_root` and `image_root` overlap or nest, or one of them is `/`. |
 | `SSH host refused` / `SSH user refused` | The value fails the strict host/user pattern. |
 | `SSH credential path expansion refused` | A `%`, `${` or newline in the key, `known_hosts` or `state` path. |
-| `credential tripwire refused scan` | A source file matches a credential pattern or PEM header. Blocks **all** publishing until removed. |
 | `hardlinked source refused` | A source file has `st_nlink != 1`. |
 | `source root replacement refused` | The authoring root was moved or replaced under the running publisher. |
 | `remote operation refused or failed` | Any remote-side refusal or transport failure, including a root identity mismatch or an unowned directory at a site name. |

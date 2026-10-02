@@ -6,11 +6,6 @@ from pathlib import Path
 
 MARKER = ".dame-curie-publisher-owner"
 EXCLUDED = frozenset({"_data", "_build", ".env", ".git", MARKER, ".publisher-link"})
-CREDENTIAL_MARKERS = (
-    b"-----BEGIN PRIVATE KEY-----", b"-----BEGIN RSA PRIVATE KEY-----",
-    b"-----BEGIN EC PRIVATE KEY-----", b"-----BEGIN OPENSSH PRIVATE KEY-----",
-    b"-----BEGIN DSA PRIVATE KEY-----", b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
-)
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
