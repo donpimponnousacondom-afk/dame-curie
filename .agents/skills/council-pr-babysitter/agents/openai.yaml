@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dame Curie PR babysitter"
+  short_description: "Independent Luna/Sol reviews and current-head PR monitoring"
+  default_prompt: "Use the project-local council-pr-babysitter skill to have Luna/max and GPT-6.1 Sol/high independently review and watch the current Dame Curie PR. The parent verifies findings, fixes confirmed problems and publishes the final-head digest."

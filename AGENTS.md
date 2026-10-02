@@ -6,6 +6,18 @@ Root's current instructions override repository guidance. This is the Discord-on
 
 Read `docs/STATUS.md` for source/artifact/runtime facts, `TODO.md` for remaining work, `docs/OPERATIONS.md` for account/engine and recovery boundaries, and `docs/DEVELOPMENT.md` / `docs/ARCHITECTURE.md` for validation and source contracts. README is the small current documentation index. Never inspect another checkout or upstream project to fill gaps.
 
+## Current assignment — final production transition, 2026-10-02
+
+Root delegated completion of the Queen's V1-to-V2 transition, isolated automated testing and bounded real inference, necessary source/worktree integration, production cutover and reviewed repository PRs. This is the final release, not another Phase-II scout. The coordinator makes ordinary engineering decisions and resolves defects; ask root only for genuinely necessary human intervention or a reserved policy decision. This current grant supersedes the earlier temporary-only hold, not the security-policy boundary below.
+
+- **Never start V1, its old shell or its old stack, including for rollback.** Keep the stopped source and recovery state until V2 operation and isolated restore checks pass. Recover/retry V2 without reviving V1.
+- Isolate Queen memory/context from Dirac and live test writes. Dirac is disposable and may be used only as an isolated temporary acceptance identity. Do not migrate its persona, memories, credentials or remote destinations to the Queen.
+- Prepare and verify V2 without the Queen's Discord auth. Install that auth **only at the final cutover step**, after source, artifact, migration, provider and recovery gates. Preserve the Queen's supported shell tools and authored state, including classified state outside the old HOME mount.
+- Coordinator authority includes required private state projection, rootless build/lifecycle, embedding model transfer and publisher handoff, followed by narrowly scoped retirement only after success and verified recovery. It does not authorize secret disclosure, broad permissions, unrelated services, new publication policy or restarting V1.
+- Source children receive bounded files/worktrees and no private/runtime access unless separately and explicitly delegated a compliant envelope. Keep Python3.14, existing-test adaptation and isolated QA rules below.
+- Root authorized preparing/publishing task-branch PRs to the verified Dame Curie repository. Never force-push, push to main or merge without a separate explicit grant. Preserve unrelated `reports/` and `root-review-reports` work.
+- Standing PR protocol: use [.agents/skills/council-pr-babysitter/SKILL.md](.agents/skills/council-pr-babysitter/SKILL.md). The coordinator owns fixes/publication; independent **Luna/max and Sol/high** review each pinned PR head and monitor complete current-head CI. Both review final deltas; neither races edits or treats CI alone as correctness. This project-local skill was imported from root's explicitly authorized Codex skill folder; its Council observations are historical, not runtime authority here.
+
 ## Closed assignment and authority — 2026-09-25
 
 Root authorized complete local audit remediation, independent review, coherent local commits, credential-free isolated QA and bounded automated acceptance in the prepared **temporary Dirac** channel. The later assignment narrowed corrections to `audit/20260924T210402Z-audit/08-ROUND2-REPORT.md` section5 and requires actual documentation consolidation/retirement this round. Root renamed the audit directory; preserve original report contents rather than rewriting them to match the new path.
@@ -25,7 +37,13 @@ The consolidated design is in `docs/ARCHITECTURE.md`: remove dashboard/API/web h
 - V2 account: **`dame-curie`**, with its designated private rootless engine. Protected V1 account: **`maxwell-curie`**. Never substitute another account, a default/rootful engine or a guessed socket after failure. Re-resolve account/socket/engine before newly authorized runtime work.
 - Canonical Dame: **1545541390392369165**; temporary Dirac: **1504398705539944560**; root/.normal.man: **1482143139828596916**. Do not infer trust from other inherited IDs.
 - Separate users/engines do not prove separate mounts, credentials, data, ports or remote destinations. Multi-instance replication remains unaccepted. Same-UID shell access to writable controls is admin-equivalent where ordinary permissions allow it, not a separate sandbox.
-- Canonical staging defaults to validated no-op `up`/`start`/`restart`. Canonical image-profile reconciliation and activation remain held; a temporary receipt does not clear them.
+- Canonical staging defaults to validated no-op `up`/`start`/`restart`. Final activation requires the current assignment's artifact, profile, data and recovery gates; an old temporary receipt does not clear them.
+
+## Security-policy decisions belong to root
+
+Ask root **before** introducing, expanding, removing or replacing security policy unless the current assignment explicitly authorizes that exact change. This includes content filters, credential-pattern detection, redaction, publication refusals, path exclusions and access restrictions. Explain the concrete behavior and operational impact; do not silently decide what root may publish or execute. Existing code is not proof that root approved its policy: flag inherited restrictions during relevant review and ask rather than automatically preserving, strengthening or removing them. Unapproved security-policy changes are subject to rejection and reversion.
+
+The 2026-09-30 publisher incident is the regression example: harmless API documentation containing `Authorization: Bearer $OPENROUTER_API_KEY` triggered an inherited credential regexp and repeatedly stopped publication. Root explicitly authorized removing publisher content-based credential detection, not weakening SSH verification, destination ownership or filesystem protections. Keep that content filter removed; do not reintroduce it under another name or heuristic without root's explicit approval. Separate path/privacy redaction is not blanket permission for content filtering. V1 is out of scope for further work unless root explicitly reauthorizes it.
 
 ## Default boundaries
 

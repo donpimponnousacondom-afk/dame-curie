@@ -27,6 +27,12 @@ Root's closure assignment permits the coordinator to run the established frozen 
 
 Guarded constructor probes may import the **actual candidate image** only inside the same no-network/no-private-state envelope. Source QA, copied-input/provenance checks, image construction, Discord identity, model delivery and broader feature acceptance are distinct gates. A baked source label alone does not prove image contents; a successful constructor is not a login or live-feature test.
 
+## Independent PR review and monitoring
+
+Every implementation PR uses the project-local [PR babysitter skill](../.agents/skills/council-pr-babysitter/SKILL.md): independent `gpt-6-luna` at `max` and `gpt-6.1-sol` at `high`, through verified DSH routes. Give both the same pinned base/head, scope and measured evidence; keep initial findings independent. The coordinator validates findings, fixes routine defects, owns commits/publication and requests both final-head reviews. Reviewers do not edit the shared checkout or gain private/runtime authority.
+
+Read complete current-head CI status, including distinct push and pull-request runs, and unresolved review threads before readiness. Publish the authorized SHA-bound digest; do not present a comment as independent GitHub approval or claim a completed agent still watches. Without a published PR, record that only local review occurred. Preserve push/merge and security-policy boundaries; bring root only an actual need for human intervention or a reserved decision.
+
 ## Builds and dependency limits
 
 `scripts/build_for_human.sh` is an app-image build actuator using a committed Git archive and selected V2 private engine. It does not deploy, but still requires build/runtime authority. `install.sh` installs checkout dependencies/configuration; it neither provisions nor activates the bot and supplies no host-Python/PM2 deployment permission. Do not execute either for discovery or `--help` during source-only work.
