@@ -164,7 +164,6 @@ DEFAULT_CONTROL = {
     "night_fallback_start_hour": 22,
     "night_fallback_end_hour": 9,
     "ai_timeout_seconds": 3600,
-    "turn_output_token_budget": 32768,
     "turn_generation_attempt_budget": 12,
     "turn_deadline_seconds": 600,
     "ai_concurrency": 2,
