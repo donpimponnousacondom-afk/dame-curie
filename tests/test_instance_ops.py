@@ -405,8 +405,10 @@ def test_inventory_rejects_conflicting_instance_labels():
         ops.select_owned([own], "dame-curie", "dame-curie")
 
 
-@pytest.fixture
-def actual_archive(tmp_path):
+@pytest.fixture(
+    params=[0o700, 0o750, 0o755, 0o7777], ids=["0700", "0750", "0755", "masked"]
+)
+def actual_archive(tmp_path, request):
     source = tmp_path / "fixture-source"
     for root in ops.ROOTS:
         (source / root).mkdir(parents=True)
@@ -420,6 +422,8 @@ def actual_archive(tmp_path):
     with sqlite3.connect(db) as connection:
         connection.execute("CREATE TABLE fixture (value TEXT)")
         connection.execute("INSERT INTO fixture VALUES ('offline sample')")
+    for relative in (*ops.ROOTS, "config/prompts"):
+        (source / relative).chmod(request.param)
     program = ops.ARCHIVE_PROGRAM.replace('Path("/instance")', f"Path({str(source)!r})")
     result = subprocess.run([sys.executable, "-c", program, "dame-curie"], capture_output=True)
     assert result.returncode == 0, result.stderr.decode()
@@ -427,7 +431,8 @@ def actual_archive(tmp_path):
     return source, result.stdout
 
 
-def test_actual_archive_and_restore_roundtrip(tmp_path, actual_archive):
+@pytest.mark.parametrize("restore_umask", [0o022, 0o077], ids=["umask-022", "umask-077"])
+def test_actual_archive_and_restore_roundtrip(tmp_path, actual_archive, restore_umask):
     source, content = actual_archive
     with tarfile.open(fileobj=io.BytesIO(content)) as archive:
         ops.validate_archive(archive, "dame-curie")
@@ -437,10 +442,24 @@ def test_actual_archive_and_restore_roundtrip(tmp_path, actual_archive):
         assert all(member.uid == os.getuid() and member.gid == os.getgid() for member in archive.getmembers())
     target = tmp_path / "fixture-restored"
     target.mkdir()
+    for root in ops.ROOTS:
+        (target / root).mkdir(mode=0o700)
     program = ops.RESTORE_PROGRAM.replace('"/instance"', repr(str(target)))
-    result = subprocess.run([sys.executable, "-c", program], input=content, capture_output=True)
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        input=content,
+        capture_output=True,
+        umask=restore_umask,
+    )
     assert result.returncode == 0, result.stderr.decode()
     assert result.stdout == result.stderr == b""
+    for relative in (*ops.ROOTS, "config/prompts"):
+        restored = (target / relative).stat()
+        assert stat.S_IMODE(restored.st_mode) == (
+            stat.S_IMODE((source / relative).stat().st_mode) & 0o755
+        )
+        assert restored.st_uid == os.getuid()
+        assert restored.st_gid == os.getgid()
     for relative in ("config/prompts/personality.txt", "sites/index.html", "shell/payload.bin", "data/fixture.db"):
         assert (target / relative).read_bytes() == (source / relative).read_bytes()
         assert (target / relative).stat().st_uid == os.getuid()

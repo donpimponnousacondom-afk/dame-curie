@@ -41,6 +41,8 @@ for kind in ("uid", "gid"):
     maps[kind] = [tuple(map(int, line.split())) for line in Path("/proc/self/" + kind + "_map").read_text().splitlines()]
 def owned_filter(member, destination):
     result = tarfile.data_filter(member, destination)
+    if member.isdir():
+        result.mode = member.mode & 0o755
     for kind in ("uid", "gid"):
         value = getattr(member, kind)
         if not any(start <= value < start + count for start, outside, count in maps[kind]):
