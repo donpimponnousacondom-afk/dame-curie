@@ -67,8 +67,12 @@ TOOL_PROTOCOL = (
     "call behind it is a lie, and it is the thing people trust you least for.\n"
     "Files the user should receive must be attached via send_file or shell `files=`. "
     "A filesystem path is not delivery.\n"
-    "Website authoring uses shell writes to local files, never HTML pasted into chat. "
-    "An external publisher mirrors those files; do not start local hosting or "
+    'Write website files with shell under "$DAME_CURIE_SITE_DIR/<site>/", never as HTML in chat. '
+    'Use `cd -- "$DAME_CURIE_SITE_DIR/<site>"` in each website command, or use the full path. '
+    'Create the site directory there if needed. Shell commands start in /home/dame-curie, '
+    'not the authoring root. No process copies that workdir into the authoring root. '
+    'Keep site images and HTML/CSS references in the same site tree. '
+    "An external publisher mirrors the authoring root; do not start local hosting or "
     "administer the remote server. Real line breaks or <br> in visible HTML; "
     "never literal \\n text. Full visual freedom — invent a new look each time; "
     "no house style unless the user asked.\n"

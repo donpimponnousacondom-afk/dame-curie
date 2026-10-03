@@ -17,6 +17,13 @@ to author files locally and never to administer remote publication.
   `"$DAME_CURIE_SITE_DIR"` (the container value; `config.py` defaults it to `public/bot`
   outside a container).
 - On the host the same tree is `<instance root>/sites`.
+- No process copies `/state/shell` into `/state/sites`. A site directory under the
+  shell workdir is not a publication source.
+- For each website command, use `cd -- "$DAME_CURIE_SITE_DIR/<site>"` or the full
+  path. Create that directory first if needed. Each shell call starts in `HOME`;
+  a previous `cd` does not persist.
+- Keep site images in that site tree. Check the HTML/CSS references against files
+  in the authoring root. A successful write under `HOME` is not publication proof.
 
 ```
 /state/sites/<site>/...        one first-level directory per site

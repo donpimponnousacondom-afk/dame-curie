@@ -5084,7 +5084,12 @@ class ShellTool(Tool):
         return (
             "Admins and shell-whitelisted users only. Run Bash without startup files "
             "inside the bot container (workdir /home/dame-curie, minimal environment). "
-            "Author files locally; the independent publisher mirrors them. "
+            'Write website files under "$DAME_CURIE_SITE_DIR/<site>/". '
+            'Start each website command with `cd -- "$DAME_CURIE_SITE_DIR/<site>"`, '
+            'or use that full path. Create the site directory there if needed. '
+            'The independent publisher mirrors this root, not the shell workdir. '
+            'Files under /home/dame-curie are not copied to the authoring root. '
+            'Keep site images under the same site directory and check HTML/CSS references there. '
             "Do not start local website/API servers or administer remote publication. "
             "Params: command (required), files (optional paths under /home/dame-curie "
             "to attach to the channel). "
