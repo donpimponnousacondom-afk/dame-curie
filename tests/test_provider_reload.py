@@ -86,15 +86,17 @@ class _ObservingSession(FakeSession):
         self.provider = provider
         self.observed = []
 
-    def post(self, url, json=None, timeout=None, headers=None):
+    def post(self, url, json=None, timeout=None, headers=None, allow_redirects=None):
+        assert allow_redirects is False
         self.observed.append(self.provider.active_requests)
-        return super().post(url, json=json, timeout=timeout, headers=headers)
+        return super().post(url, json=json, timeout=timeout, headers=headers, allow_redirects=allow_redirects)
 
 
 class _ExplodingSession(FakeSession):
     """Transport that fails outright instead of returning an HTTP status."""
 
-    def post(self, url, json=None, timeout=None, headers=None):
+    def post(self, url, json=None, timeout=None, headers=None, allow_redirects=None):
+        assert allow_redirects is False
         raise RuntimeError("synthetic transport failure")
 
 

@@ -1904,7 +1904,7 @@ class OpenAICompatibleProvider:
                         logger.warning(
                             f"Provider endpoint {endpoint.name} /models returned {resp.status}"
                         )
-            except (aiohttp.ClientError, OSError) as e:
+            except (aiohttp.ClientError, OSError, UnicodeDecodeError) as e:
                 incident.failure("Provider initialization failed", e)
                 incident.capture("Provider initialization failed", e)
                 logger.error(
@@ -2401,7 +2401,7 @@ class OpenAICompatibleProvider:
                     continue
                 incident.capture("Provider response failure", e)
                 raise
-            except (aiohttp.ClientError, OSError) as e:
+            except (aiohttp.ClientError, OSError, UnicodeDecodeError) as e:
                 incident.failure("Provider transport or response failure", e)
                 last_error = e
                 if await self._retry_after_attempt(
