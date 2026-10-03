@@ -5,7 +5,7 @@ from pathlib import Path
 import runpy
 import shutil
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -93,7 +93,13 @@ def test_constructor_and_each_payload_defensively_copy_nested_body():
     assert provider._headers() == {"X-Primary-Only": "original"}
 
 
-def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider, caplog):
+@pytest.mark.parametrize("metadata_size", [0, 90000])
+def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider, caplog, metadata_size):
+    provider.extra_body["opaque"] = "opaque-credential-marker"
+    provider.extra_body["prompt"] = "configured-prompt-marker"
+    provider.extra_body["response_format"] = {"schema": {"description": "schema-content-marker" * 5000}}
+    if metadata_size:
+        provider.extra_body["🙂" * metadata_size] = "opaque-credential-marker"
     caplog.set_level("INFO", logger="providers")
     monkeypatch.setattr("providers.asyncio.sleep", AsyncMock())
     provider.available = True
@@ -101,15 +107,19 @@ def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider, caplo
     original_post = session.post
     sent_headers = []
 
-    def post(url, json=None, timeout=None, headers=None):
+    def post(url, json=None, timeout=None, headers=None, allow_redirects=None):
+        assert allow_redirects is False
         sent_headers.append(deepcopy(headers))
         snapshots = [record.getMessage() for record in caplog.records if record.getMessage().startswith("Provider request settings")]
         assert len(snapshots) == len(sent_headers)
-        assert '"max_tokens": 64000' in snapshots[-1]
+        assert '"max_tokens": {"type": "int", "count": null}' in snapshots[-1]
         assert '"temperature"' not in snapshots[-1]
-        assert "synthetic-primary-key" not in snapshots[-1]
-        assert "private-prompt-marker" not in snapshots[-1]
-        response = original_post(url, json=json, timeout=timeout, headers=headers)
+        for private in ("synthetic-primary-key", "private-prompt-marker", "opaque-credential-marker", "configured-prompt-marker", "schema-content-marker"):
+            assert private not in snapshots[-1]
+        assert all(len(line.encode("utf-8")) < 65536 for line in snapshots[-1].splitlines())
+        assert len(snapshots[-1]) < 66000
+        assert ("metadata characters omitted" in snapshots[-1]) is bool(metadata_size)
+        response = original_post(url, json=json, timeout=timeout, headers=headers, allow_redirects=allow_redirects)
         json["custom"]["labels"].append("transport-mutation")
         headers["X-Primary-Only"] = "transport-mutation"
         return response
@@ -140,10 +150,26 @@ def test_custom_authorization_retained_without_configured_key():
     assert provider._headers() == {"authorization": "synthetic-custom-auth"}
 
 
-def test_headers_do_not_leak_to_fallback_or_vision(provider):
+@pytest.mark.parametrize("path", ["models", "chat/completions"])
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_headers_do_not_leak_to_fallback_or_vision(provider, path, status):
     assert provider._headers()["X-Primary-Only"] == "synthetic-header"
     with pytest.raises(ValueError, match="Endpoint conflicts"):
         provider._headers(ProviderEndpoint("other", "https://other.test/v1", "other"))
+    response = FakeErrorResponse(status, "redirect refused")
+    response.headers = {"Location": "https://other.test/redirected"}
+    boundary = Mock(return_value=response)
+    provider._session = SimpleNamespace(closed=False, get=boundary, post=boundary)
+    if path == "models":
+        assert asyncio.run(provider.initialize()) is False
+    else:
+        provider.available = True
+        with pytest.raises(RuntimeError, match=f"Provider API error: {status}: redirect refused"):
+            asyncio.run(provider.generate_response([]))
+    assert boundary.call_count == 1
+    assert boundary.call_args.args == (f"https://primary.example.test/v1/{path}",)
+    assert boundary.call_args.kwargs["allow_redirects"] is False
+    assert boundary.call_args.kwargs["headers"]["Authorization"] == "Bearer synthetic-primary-key"
 
 
 @pytest.fixture

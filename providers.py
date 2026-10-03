@@ -762,15 +762,26 @@ class _ProviderDiagnostics:
                 for message in data.get("messages", [])
             ],
         }
+        metadata = redact_sensitive_text(json.dumps({
+            "source": "configured-profile", "endpoint": endpoint.name,
+            "url": self.current["url"], "model": self.current["model"],
+            "parameter_count": len(self.current["parameters"]),
+            "parameters": {
+                key: {"type": type(value).__name__, "count": len(value) if isinstance(value, (str, list, dict)) else None}
+                for key, value in self.current["parameters"].items()
+            },
+        }, ensure_ascii=False))
+        if len(metadata) > _PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            metadata = (
+                metadata[:head_size]
+                + f"\n[... {len(metadata) - head_size - tail_size} metadata characters omitted ...]\n"
+                + metadata[-tail_size:]
+            )
         logger.info(
-            "Provider request settings source=configured-profile endpoint=%s url=%s model=%s parameters=%s",
-            endpoint.name,
-            redact_sensitive_text(self.current["url"]),
-            redact_sensitive_text(str(self.current["model"])),
-            redact_sensitive_text(json.dumps(
-                {key: value for key, value in self.current["parameters"].items() if key != "tools"},
-                ensure_ascii=False,
-            )),
+            "Provider request settings %s",
+            "\n".join(metadata[index:index + 4096] for index in range(0, len(metadata), 4096)),
         )
         self.body = bytearray()
         self.body_bytes_seen = 0
@@ -1879,6 +1890,7 @@ class OpenAICompatibleProvider:
                     f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}models",
                     timeout=aiohttp.ClientTimeout(total=10),
                     headers=self._headers(endpoint),
+                    allow_redirects=False,
                 ) as resp:
                     incident.response(resp)
                     if resp.status == 200:
@@ -2128,6 +2140,7 @@ class OpenAICompatibleProvider:
                     json=data,
                     timeout=aiohttp.ClientTimeout(total=timeout, connect=10),
                     headers=self._headers(endpoint),
+                    allow_redirects=False,
                 ) as resp:
                     headers_ms = (time.perf_counter() - request_start) * 1000
                     incident.response(resp)
