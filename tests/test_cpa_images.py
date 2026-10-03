@@ -394,7 +394,8 @@ def test_native_remote_reference_retains_byte_limit(native_image, monkeypatch):
 
 
 @pytest.mark.parametrize("options", [{}, {"response_format": "b64_json", "output_format": "png", "n": 1}])
-def test_real_native_transport_accepts_configured_loopback_endpoint(native_image, monkeypatch, options):
+@pytest.mark.parametrize("status", [200, 301, 302, 303, 307, 308])
+def test_real_native_transport_accepts_configured_loopback_endpoint(native_image, monkeypatch, options, status):
     case = native_image
     case.tool.bot.config.IMAGE_GEN_QUALITY = None
     case.tool.bot.config.IMAGE_GEN_EXTRA_BODY = options
@@ -404,11 +405,11 @@ def test_real_native_transport_accepts_configured_loopback_endpoint(native_image
 
     async def respond(reader, writer):
         headers = await reader.readuntil(b"\r\n\r\n")
-        length = next(int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
-                      if line.lower().startswith(b"content-length:"))
-        received.append((headers, json.loads(await reader.readexactly(length))))
+        length = next((int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
+                       if line.lower().startswith(b"content-length:")), 0)
+        received.append((headers, json.loads(await reader.readexactly(length)) if length else None))
         body = json.dumps({"data": [{"b64_json": base64.b64encode(PNG).decode()}]}).encode()
-        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        writer.write(f"HTTP/1.1 {status} Synthetic\r\nLocation: /unconfigured-target\r\nContent-Type: application/json\r\nContent-Length: ".encode()
                      + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
         await writer.drain()
         writer.close()
@@ -425,7 +426,7 @@ def test_real_native_transport_accepts_configured_loopback_endpoint(native_image
         return result
 
     result = asyncio.run(generate())
-    assert not result.startswith("Error")
+    assert result.startswith("Error") is (status != 200)
     assert len(received) == 1
     headers, payload = received[0]
     assert headers.startswith(b"POST /v1/images/generations?region=private HTTP/1.1\r\n")
@@ -433,4 +434,4 @@ def test_real_native_transport_accepts_configured_loopback_endpoint(native_image
     assert b"synthetic-chat" not in headers
     assert payload == {"model": "synthetic-image-a", "prompt": "synthetic local image", **options}
     assert options == original
-    case.message.channel.send.assert_awaited_once()
+    assert case.message.channel.send.await_count == (1 if status == 200 else 0)

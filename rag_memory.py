@@ -1262,6 +1262,7 @@ class RAGMemoryManager:
                             json=payload,
                             headers=self.embed_headers,
                             timeout=aiohttp.ClientTimeout(total=EMBED_HTTP_TIMEOUT_SECONDS),
+                            allow_redirects=False,
                         ) as resp:
                             if resp.status != 200:
                                 self._trip_embed_breaker(f"HTTP {resp.status}")

@@ -139,9 +139,10 @@ async def _probe_chat(cfg) -> tuple[str, str]:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=10),
+                allow_redirects=False,
             ) as resp:
-                if resp.status < 400:
+                if 200 <= resp.status < 300:
                     return "ok", f"HTTP {resp.status} from {redact_sensitive_text(url)}"
                 return "bad", f"HTTP {resp.status} from {redact_sensitive_text(url)}"
     except Exception as e:
@@ -165,6 +166,7 @@ async def _probe_embeddings(cfg) -> tuple[str, str]:
                 json={"model": cfg.EMBED_MODEL, "input": "maxwell doctor probe"},
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=15),
+                allow_redirects=False,
             ) as resp:
                 if resp.status == 200:
                     validate_embedding_response(await resp.json(), cfg.EMBED_DIM)

@@ -23,7 +23,7 @@ import os
 import sys
 from http.client import HTTPException
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from dotenv import dotenv_values
 
@@ -34,6 +34,14 @@ DISABLED = {"0", "false", "no", "off"}
 BASE_URL_KEYS = ("DAME_CURIE_EMBED_BASE_URL", "EMBED_BASE_URL")
 MODEL_KEYS = ("DAME_CURIE_EMBED_MODEL", "EMBED_MODEL")
 API_KEY_KEYS = ("DAME_CURIE_EMBED_API_KEY", "EMBED_API_KEY")
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self, req: Request, fp: object, code: int, msg: str, headers: object, newurl: str,
+    ) -> None:
+        """Keep a readiness response from selecting another endpoint or method."""
+        return None
 
 
 def effective_environment(path: str) -> dict[str, str]:
@@ -134,7 +142,7 @@ def check_embeddings(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     request = Request(url, data=json.dumps(payload).encode(), headers=headers)
-    with urlopen(request, timeout=180) as response:
+    with build_opener(NoRedirectHandler()).open(request, timeout=180) as response:
         vectors = extract_vectors(json.load(response))
     if len(vectors) != 1:
         raise ValueError(f"readiness requires exactly one {dimension}-dimensional vector")

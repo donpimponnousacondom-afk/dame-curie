@@ -295,7 +295,7 @@ async def _synthesize_fish_tts(
     session = await _get_shared_session()
     async with session.post(
         "https://api.ppq.ai/v1/audio/speech", json=payload, headers=headers,
-        timeout=aiohttp.ClientTimeout(total=45),
+        timeout=aiohttp.ClientTimeout(total=45), allow_redirects=False,
     ) as resp:
         if resp.status != 200:
             body = await resp.text()
@@ -7004,12 +7004,13 @@ class TtsTool(Tool):
         cfg = self.bot.config
         engine = getattr(cfg, "TTS_ENGINE", "")
         if engine not in {"local", "fish", "riva", "gtts"}:
-            raise ValueError("TTS_ENGINE must explicitly select local/fish/riva/gtts")
+            raise ValueError("TTS_ENGINE must explicitly select local/fish/riva")
+        if engine == "gtts":
+            raise ValueError("TTS_ENGINE=gtts is unsupported: the SDK sends unconfigured language, speed and routing defaults")
         configured_voice = {
             "fish": getattr(cfg, "TTS_FISH_REFERENCE_ID", ""),
             "riva": getattr(cfg, "TTS_RIVA_VOICE", ""),
             "local": getattr(cfg, "TTS_LOCAL_VOICE", None),
-            "gtts": None,
         }[engine]
         if voice not in (None, "", configured_voice):
             raise ValueError("TTS voice must match the configured engine profile")
@@ -7075,13 +7076,6 @@ class TtsTool(Tool):
                     subprocess.run, command, check=True, timeout=30,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
-            else:
-                from gtts import gTTS
-
-                def run_gtts():
-                    gTTS(text=text).save(filename)
-
-                await asyncio.wait_for(asyncio.to_thread(run_gtts), timeout=30)
 
             async def make_voice_ogg(source: str) -> str:
                 proc = await asyncio.create_subprocess_exec(

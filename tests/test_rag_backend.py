@@ -738,6 +738,8 @@ def doctor_config(enabled=True):
         ({"embeddings": [[float("nan")] * 8]}, 200, "warn"),
         ({"embeddings": [[0.0] * 8]}, 200, "warn"),
         ({"secret": "private error text"}, 503, "warn"),
+        ({"embeddings": [vector()]}, 302, "warn"),
+        ({"embeddings": [vector()]}, 307, "warn"),
         (ValueError("private error text"), 200, "warn"),
     ],
 )
@@ -755,6 +757,8 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     assert kwargs["json"]["model"] == "configured-model"
     assert kwargs["headers"]["Authorization"] == "Bearer synthetic-key"
     assert kwargs["json"] == {"model": "configured-model", "input": "maxwell doctor probe"}
+    assert kwargs["allow_redirects"] is False
+    assert len(transport.calls) == 1
     transport = install_transport(monkeypatch, Reply({}, status))
     transport.get = transport.post
     cfg = SimpleNamespace(
@@ -764,11 +768,13 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     )
     original_headers = dict(cfg.OPENAI_EXTRA_HEADERS)
     state, detail = asyncio.run(doctor._probe_chat(cfg))
-    assert state == ("ok" if status < 400 else "bad")
+    assert state == ("ok" if 200 <= status < 300 else "bad")
     assert transport.calls[0][0] == "https://chat.invalid/v1/models?region=private#section"
     expected_headers = {"X-Tenant": "configured"}
     expected_headers.update({"Authorization": f"Bearer {api_key}"} if api_key else {"authorization": "unused-key"})
     assert transport.calls[0][1]["headers"] == expected_headers
+    assert transport.calls[0][1]["allow_redirects"] is False
+    assert len(transport.calls) == 1
     assert cfg.OPENAI_EXTRA_HEADERS == original_headers
 
 

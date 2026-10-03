@@ -66,8 +66,6 @@ def test_tts_english_riva_default_unchanged(monkeypatch):
 
 def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    # Fish is now the highest-priority provider; unset its key too so the
-    # test exercises the gTTS fallback (matches the test's intent).
     monkeypatch.delenv("FISH_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     calls = []
@@ -117,18 +115,16 @@ def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path
     )
 
     async def run():
-        result = await TtsTool(
-            SimpleNamespace(config=SimpleNamespace(TTS_ENGINE="gtts", NVIDIA_API_KEY=""))
-        ).execute(message, text="hola mundo")
-        assert result == "__TTS_SENT__"
+        with pytest.raises(ValueError, match="gtts is unsupported.*unconfigured"):
+            await TtsTool(
+                SimpleNamespace(config=SimpleNamespace(TTS_ENGINE="gtts", NVIDIA_API_KEY=""))
+            ).execute(message, text="hola mundo")
 
     asyncio.run(run())
 
-    assert calls == ["hola mundo"]
-    assert len(sent) == 1
-    assert Path(sent[0]).is_absolute()
-    assert Path(sent[0]).name.startswith("tts_") and sent[0].endswith(".ogg")
-    assert not Path(sent[0]).parent.exists()
+    assert calls == []
+    assert sent == []
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize("fmt", [None, "", "mp3", "wav"])
@@ -155,7 +151,8 @@ def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path, fmt):
             return False
 
     class FakeSession:
-        def post(self, url, json=None, headers=None, timeout=None):
+        def post(self, url, json=None, headers=None, timeout=None, allow_redirects=True):
+            captured["allow_redirects"] = allow_redirects
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
@@ -182,6 +179,7 @@ def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path, fmt):
     asyncio.run(run())
 
     assert captured["url"] == "https://api.ppq.ai/v1/audio/speech"
+    assert captured["allow_redirects"] is False
     assert captured["headers"]["Authorization"] == "Bearer sk-fish-test"
     assert captured["json"]["model"] == "s2.1-pro-free"
     assert captured["json"]["input"] == "hello fish"
@@ -194,12 +192,15 @@ def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path, fmt):
     assert len(out.read_bytes()) == 202
 
 
-def test_fish_tts_returns_none_on_api_error(monkeypatch):
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308, 401])
+def test_fish_tts_returns_none_on_api_error(monkeypatch, code):
     """A rejection remains visible instead of selecting another provider."""
     from bot_tools import _synthesize_fish_tts
 
+    calls = []
+
     class FakeResponse:
-        status = 401
+        status = code
 
         async def read(self):
             return b""
@@ -215,6 +216,8 @@ def test_fish_tts_returns_none_on_api_error(monkeypatch):
 
     class FakeSession:
         def post(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            assert kwargs["allow_redirects"] is False
             return FakeResponse()
 
     async def fake_get_session():
@@ -223,13 +226,14 @@ def test_fish_tts_returns_none_on_api_error(monkeypatch):
     monkeypatch.setattr("bot_tools._get_shared_session", fake_get_session)
 
     async def run():
-        with pytest.raises(RuntimeError, match="401.*unauthorized"):
+        with pytest.raises(RuntimeError, match=f"{code}.*unauthorized"):
             await _synthesize_fish_tts(
                 "x", "/tmp/should_not_exist.mp3", api_key="synthetic-key",
                 model="s2.1-pro-free", reference_id="configured-voice",
             )
 
     asyncio.run(run())
+    assert len(calls) == 1
 
 
 def test_fish_tts_returns_none_when_key_missing():

@@ -274,18 +274,16 @@ class Config:
         lambda: _has_module("discord.ext.voice_recv") and _has_module("nacl"),
         needs="discord-ext-voice-recv + PyNaCl",
     )
-    # TTS works through any one of: Fish (key), NVIDIA Riva (key), gTTS
-    # (package), espeak (binary). Off only when none of them exist.
+    # TTS requires Fish/Riva credentials or a local espeak binary.
     ENABLE_TTS = _feature_env(
         "ENABLE_TTS",
         lambda: bool(
             os.getenv("FISH_API_KEY", "").strip()
             or os.getenv("NVIDIA_API_KEY", "").strip()
-            or _has_module("gtts")
             or _has_binary("espeak-ng")
             or _has_binary("espeak")
         ),
-        needs="a TTS engine (espeak-ng, gTTS, or a Fish/NVIDIA key)",
+        needs="a supported TTS engine (espeak-ng or a Fish/NVIDIA key)",
     )
     # Playing TTS into a voice channel additionally needs ffmpeg.
     ENABLE_TTS_VC = _feature_env(
@@ -479,9 +477,9 @@ class Config:
                 "in .env if you did not mean to grant that."
             )
         # TTS engine sanity check
-        if cls.TTS_ENGINE not in {"local", "riva", "gtts", "fish"}:
+        if cls.TTS_ENGINE not in {"local", "riva", "fish"}:
             _log.warning(
-                "TTS_ENGINE=%r must explicitly select local/riva/gtts/fish; TTS requests will fail.",
+                "TTS_ENGINE=%r must explicitly select local/riva/fish; TTS requests will fail.",
                 cls.TTS_ENGINE,
             )
 

@@ -181,7 +181,7 @@ def test_execute_riva_succeeds_with_read_only_cwd(
     assert list(tts_runtime.cwd.iterdir()) == []
 
 
-@pytest.mark.parametrize("engine", ["riva", "", "auto", "invalid", "fish"])
+@pytest.mark.parametrize("engine", ["riva", "", "auto", "invalid", "fish", "gtts"])
 def test_execute_gtts_fallback_uses_private_temp_path(
     tts_runtime, tts_media, tts_message, engine
 ):
@@ -224,6 +224,7 @@ def test_execute_fish_uses_real_helper_and_preserves_voice(
     tts_runtime.riva.assert_not_called()
     tts_runtime.gtts.assert_not_called()
     assert session.post.call_args.args[0] == "https://api.ppq.ai/v1/audio/speech"
+    assert session.post.call_args.kwargs["allow_redirects"] is False
     assert session.post.call_args.kwargs["json"] == {
         "model": "synthetic-model",
         "input": "[excited] synthetic",
@@ -245,9 +246,11 @@ def test_execute_failed_provider_cleans_partial_audio(
 
     tts_runtime.save.side_effect = failed_save
     tts_runtime.tool.bot.config.TTS_ENGINE = "gtts"
-    with pytest.raises(RuntimeError, match="synthetic gTTS failure"):
+    with pytest.raises(ValueError, match="gtts is unsupported.*unconfigured"):
         asyncio.run(tts_runtime.tool.execute(tts_message.message, text="synthetic"))
     tts_runtime.riva.assert_not_called()
+    tts_runtime.gtts.assert_not_called()
+    tts_runtime.save.assert_not_called()
     tts_message.send.assert_not_awaited()
     assert tts_media.sources == []
     assert list(tts_runtime.scratch.iterdir()) == []

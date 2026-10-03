@@ -48,6 +48,8 @@ def embeddings_server():
             )
             state["headers"].append(dict(self.headers))
             self.send_response(state["status"])
+            if 300 <= state["status"] < 400:
+                self.send_header("Location", "/unconfigured-target")
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             body = (
@@ -170,13 +172,18 @@ def test_readiness_rejects_unusable_embeddings(embeddings_server, vectors):
         )
 
 
-def test_readiness_fails_closed_on_endpoint_error(embeddings_server):
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308, 500])
+def test_readiness_fails_closed_on_endpoint_error(embeddings_server, status):
     url, state = embeddings_server
-    state["status"] = 500
-    with pytest.raises(HTTPError):
+    state["status"] = status
+    with pytest.raises(HTTPError) as error:
         runpy.run_path(str(CHECKER))["check_embeddings"](
             url, "qwen3-embedding:0.6b", 1024
         )
+    assert error.value.code == status
+    assert state["requests"] == [
+        ("/api/embed", {"model": "qwen3-embedding:0.6b", "input": "readiness"}),
+    ]
 
 
 @pytest.mark.parametrize("setting", ["false", "0", "no", "OFF", '"false" # disabled'])
@@ -186,7 +193,7 @@ def test_readiness_main_skips_http_for_explicit_disabled_rag(
     isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": setting})
     monkeypatch.setenv("ENABLE_RAG", "true")
     transport = Mock(side_effect=AssertionError("disabled readiness attempted HTTP"))
-    monkeypatch.setattr("urllib.request.urlopen", transport)
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", transport)
     run_readiness()
     transport.assert_not_called()
 
@@ -289,7 +296,7 @@ def test_readiness_main_requires_an_explicit_external_endpoint(
     if value == "":
         monkeypatch.setenv(setting.removeprefix("DAME_CURIE_"), "configured-alias")
     transport = Mock(side_effect=AssertionError("readiness used an inferred endpoint"))
-    monkeypatch.setattr("urllib.request.urlopen", transport)
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", transport)
     with pytest.raises(SystemExit) as exit_info:
         run_readiness()
     assert exit_info.value.code == 1
@@ -361,7 +368,7 @@ def test_readiness_cli_keeps_unexpected_errors_visible(tmp_path, monkeypatch):
     monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
     monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/embed")
     monkeypatch.setattr(
-        "urllib.request.urlopen", Mock(side_effect=RuntimeError("unexpected"))
+        "urllib.request.OpenerDirector.open", Mock(side_effect=RuntimeError("unexpected"))
     )
     with pytest.raises(RuntimeError, match="unexpected"):
         run_readiness()

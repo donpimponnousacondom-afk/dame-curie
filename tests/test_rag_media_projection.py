@@ -231,10 +231,12 @@ def test_partial_success_is_not_cached_when_later_chunk_cannot_fit(memory, trans
         json.JSONDecodeError("invalid JSON", "invalid", 0),
     ],
 )
-def test_unrecognized_400_does_not_trigger_split_retries(memory, transport, payload):
-    transport.respond = lambda chunk: Reply(payload, 400)
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308, 400])
+def test_unrecognized_400_does_not_trigger_split_retries(memory, transport, payload, status):
+    transport.respond = lambda chunk: Reply(payload, status)
     assert asyncio.run(memory._embed("Synthetic text.")) is None
     assert len(transport.calls) == 1
+    assert transport.calls[0][1]["allow_redirects"] is False
     assert memory._embed_endpoint_down_until > 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
 
