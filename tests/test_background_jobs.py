@@ -15,6 +15,8 @@ import pytest
 from control_defaults import SERVER_PROMPT_MAX_BYTES
 from bot import MaxwellBot
 from error_reporting import PUBLIC_ERROR_TEXT
+from job_routing import JobProvider, parse_background_request
+from tool_schemas import TOOL_PARAMETERS
 from turn_budget import (
     TOOL_GROUPS_CONTEXT,
     ForegroundTurn,
@@ -191,9 +193,15 @@ class FakeDMMessage(FakeMessage):
 
 def test_budgets_default_to_extended_headroom():
     budgets = resolve_job_budgets({}, FakeConfig())
-    assert budgets["max_tokens"] == 32768  # max(16384*2, 32768)
+    assert "max_tokens" not in budgets
     assert budgets["timeout_seconds"] == 7200
     assert budgets["max_iters"] == 100
+    turn = ForegroundTurn.from_controls({"turn_output_token_budget": 1})
+    assert turn.attempt_limit == 12
+    assert 590 < turn.remaining_seconds <= 600
+    assert turn.reserve_attempt(45) == 45
+    assert turn.attempts == 1
+    assert not hasattr(turn, "output_remaining")
 
 
 def test_budgets_clamp_to_hard_caps():
@@ -201,13 +209,13 @@ def test_budgets_clamp_to_hard_caps():
         {"bg_max_tokens": 999999, "bg_timeout_seconds": 99999, "bg_max_iters": 9999},
         FakeConfig(),
     )
-    assert budgets == {"max_tokens": 131072, "timeout_seconds": 14400, "max_iters": 200}
+    assert budgets == {"timeout_seconds": 14400, "max_iters": 200}
 
 
 def test_budgets_zero_means_default(monkeypatch):
-    monkeypatch.delenv("BG_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("BG_MAX_TOKENS", "131072")
     budgets = resolve_job_budgets({"bg_max_tokens": 0}, FakeConfig())
-    assert budgets["max_tokens"] == 32768
+    assert "max_tokens" not in budgets
 
 
 def test_budgets_env_override(monkeypatch):
@@ -223,6 +231,15 @@ def test_manager_caps_per_user_then_global(tmp_path):
     manager = BackgroundJobManager(
         data_path=str(tmp_path / "jobs.json"), max_jobs=2, max_per_user=1
     )
+    assert parse_background_request("build a page") == ("build a page", JobProvider.MAIN, None)
+    assert parse_background_request("-- build a page") == ("build a page", JobProvider.MAIN, None)
+    for selector in ("--provider main -- goal", "--provider aux -- goal", "--model other -- goal"):
+        with pytest.raises(ValueError, match="active provider configuration"):
+            parse_background_request(selector)
+    for selectors in ({"provider": "aux"}, {"model": "other"}):
+        with pytest.raises(ValueError, match="active provider configuration"):
+            manager.create(guild_id="g", channel_id="c", user_id="u1", goal="one", **selectors)
+    assert not {"provider", "model"} & TOOL_PARAMETERS["spawn_background"]["properties"].keys()
     manager.create(guild_id="g", channel_id="c", user_id="u1", goal="one")
     with pytest.raises(RuntimeError, match="ALREADY_RUNNING"):
         manager.create(guild_id="g", channel_id="c", user_id="u1", goal="two")
@@ -267,7 +284,8 @@ def test_manager_restart_cancels_inflight(tmp_path):
 # spawn tool
 
 
-def test_spawn_tool_acks_and_tracks_job(tmp_path):
+@pytest.mark.parametrize("selectors", [{}, {"provider": "main"}, {"provider": "aux"}, {"model": "other"}])
+def test_spawn_tool_acks_and_tracks_job(tmp_path, selectors):
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         tool = SpawnBackgroundTool(StubBot(manager))
@@ -282,18 +300,24 @@ def test_spawn_tool_acks_and_tracks_job(tmp_path):
         real = jobs_mod.run_background_job
         jobs_mod.run_background_job = fake_runner
         try:
-            result = await tool.execute(message, goal="a portfolio site")
+            result = await tool.execute(message, goal="a portfolio site", **selectors)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
         finally:
             jobs_mod.run_background_job = real
-        assert "Background job `" in result
-        assert manager.active_count() == 1
-        assert launched["jid"] is not None
+        if selectors:
+            assert "provider/model selection is not available to tools" in result
+            assert manager.active_count() == 0
+            assert launched == {}
+        else:
+            assert "Background job `" in result
+            assert manager.active_count() == 1
+            assert launched["jid"] is not None
         return result
 
     result = asyncio.run(scenario())
-    assert "send_message" in result  # ack instruction for the live turn
+    if not selectors:
+        assert "send_message" in result
 
 
 def test_spawn_tool_refuses_recursion(tmp_path):
@@ -424,7 +448,7 @@ def test_runner_delivers_final_reply_with_mention(
             guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
         )
         manager.attach_runtime(job.id, message=message, channel=message.channel)
-        turn = ForegroundTurn(32768, 12, asyncio.get_running_loop().time() + 600) if descendant else None
+        turn = ForegroundTurn(12, asyncio.get_running_loop().time() + 600) if descendant else None
         turn_token = set_foreground_turn(turn) if descendant else None
         parent_groups = {"games"}
         groups_token = TOOL_GROUPS_CONTEXT.set(parent_groups)
@@ -442,8 +466,7 @@ def test_runner_delivers_final_reply_with_mention(
     job, channel, bot = asyncio.run(scenario())
     assert job.status == "done"
     assert bot.slot_priority == "background"  # user turns outrank it
-    assert bot.generated_with.get("disable_reasoning") is False  # full thinking
-    assert bot.generated_with.get("max_tokens", 0) >= 32768  # extended output
+    assert not {"disable_reasoning", "max_tokens", "temperature", "model", "prefer_fallback"} & bot.generated_with.keys()
     assert bot.dispatch_events == ["started", "settled", "completed"] * (2 if discover else 1)
     if not descendant:
         assert 600 < bot.generated_with["timeout"] <= 7200
@@ -493,13 +516,13 @@ def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discove
             monkeypatch.setattr(bot, "_build_openai_tools", Mock(side_effect=RuntimeError("catalog unavailable")))
         message = FakeMessage()
         job = manager.create(
-            guild_id="g", channel_id="222", user_id="111", goal="x", provider="aux",
+            guild_id="g", channel_id="222", user_id="111", goal="x",
         )
         manager.attach_runtime(job.id, message=message, channel=message.channel)
         parent_groups = {"games"}
         token = TOOL_GROUPS_CONTEXT.set(parent_groups)
         turn = ForegroundTurn(
-            32768, 12, asyncio.get_running_loop().time() + (0.05 if failure == "deadline" else -1),
+            12, asyncio.get_running_loop().time() + (0.05 if failure == "deadline" else -1),
         )
         turn_token = set_foreground_turn(turn) if failure in {"deadline", "expired"} else None
         try:
@@ -512,12 +535,13 @@ def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discove
             if turn_token is not None:
                 assert current_foreground_turn() is turn
                 assert all(observed is turn for observed in bot.generated_turns)
-                assert (turn.output_remaining, turn.attempts) == (32768, 0)
+                assert turn.attempts == 0
         finally:
             TOOL_GROUPS_CONTEXT.reset(token)
             if turn_token is not None:
                 reset_foreground_turn(turn_token)
-        assert provider.close.await_count == int(failure in {"generation", "deadline"})
+        provider.close.assert_not_awaited()
+        bot._create_background_provider.assert_not_called()
         return manager.get(job.id), message.channel, bot
 
     job, channel, bot = asyncio.run(scenario())

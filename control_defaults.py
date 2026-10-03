@@ -5,25 +5,7 @@ Bot and prompt storage import from here so defaults never drift.
 """
 
 
-import json
-from pathlib import Path
-
-from utils import FileLock, _atomic_json_write_sync
-
-
-DEEPSEEK_REASONING_EFFORTS = {"low": 50, "high": 75, "max": 100}
 SERVER_PROMPT_MAX_BYTES = 16 * 1024
-
-
-def update_deepseek_reasoning(path: Path, level: str | int) -> None:
-    if level not in (*DEEPSEEK_REASONING_EFFORTS, "off", "") and not (type(level) is int and 1 <= level <= 100):
-        raise ValueError("DeepSeek reasoning must be an integer 1–100, low, high, max, off, or blank")
-    with FileLock(path):
-        control = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        if not isinstance(control, dict):
-            raise TypeError("Control file must contain a JSON object")
-        control["deepseek_reasoning"] = level
-        _atomic_json_write_sync(path, control)
 
 
 def parse_bool(value, default: bool = False) -> bool:
@@ -156,18 +138,10 @@ DEFAULT_CONTROL = {
     # Operators who want the bot to always be available can set
     # the enable_sleep control to False.
     "enable_sleep": True,
-    # ─── nightly fallback model ─────────────────────────────────────────
-    # During local 22:00–09:00 hours, start requests on the configured
-    # OPENAI_FALLBACK_* endpoint/model instead of putting Maxwell to sleep.
-    # If no fallback is configured, the primary provider is used normally.
-    "enable_night_fallback": True,
-    "night_fallback_start_hour": 22,
-    "night_fallback_end_hour": 9,
     "ai_timeout_seconds": 3600,
     "turn_generation_attempt_budget": 12,
     "turn_deadline_seconds": 600,
     "ai_concurrency": 2,
-    "deepseek_reasoning": "",
     "memory_history_messages": 40,
     "memory_context_budget": 48000,
     "tool_history_messages": 8,
@@ -176,11 +150,6 @@ DEFAULT_CONTROL = {
     "tool_iteration_timeout_seconds": 3600,
     "max_response_chars": 4000,
     # ─── background sub-agent jobs (jobs.py) ────────────────────────────
-    # Extended budgets for detached background work. Live turns stay tight;
-    # jobs get the big headroom (more thinking, more output, more timeout).
-    # 0/blank = fall back to env (BG_MAX_TOKENS / BG_TIMEOUT_SECONDS /
-    # BG_MAX_ITERS) and then to the built-in generous defaults.
-    "bg_max_tokens": 0,
     "bg_timeout_seconds": 0,
     "bg_max_iters": 0,
     # Prefer OpenAI-style native tool_calls when the provider supports them.
@@ -227,7 +196,6 @@ DEFAULT_CONTROL = {
     "vc_max_seconds": 18,
     "vc_preroll_seconds": 0.25,
     "vc_ai_timeout_seconds": 45,
-    "vc_ai_max_tokens": 1000,
     "vc_memory_history_messages": 2,
     "vc_cross_context_enabled": False,
     "vc_max_response_chars": 2000,
@@ -242,19 +210,6 @@ DEFAULT_CONTROL = {
     "vc_debug": True,
     "autonomy_enabled": False,
     "autonomy_interval_seconds": 300,
-    "autonomy_base_url": "",  # "" = use main provider's base_url
-    "autonomy_api_key": "",  # "" = use main provider's key
-    "autonomy_model": "",  # "" = use main provider's model
-    "autonomy_disable_reasoning": False,
-    # Auxiliary background agents (REM, context-cleanup, context-watcher).
-    # "" = fall back to the autonomy config, then the main provider, so a
-    # control.json without aux overrides keeps the old shared-endpoint
-    # behaviour. Set these to route the context-manager brains to a
-    # separate model/endpoint from the autonomy tick loop.
-    "aux_base_url": "",  # "" = use autonomy (then main) base_url
-    "aux_api_key": "",  # "" = use autonomy (then main) key
-    "aux_model": "",  # "" = use autonomy (then main) model
-    "aux_disable_reasoning": True,  # False for endpoints that reject the reasoning param
     "autonomy_min_post_gap_seconds": 0,  # deprecated — no longer enforced, kept for compat
     # Legacy single-purpose cooldown. Superseded by autonomy_floor_* below, which
     # subsumes it; kept because it's honored as a FLOOR on the new cooldown, so an

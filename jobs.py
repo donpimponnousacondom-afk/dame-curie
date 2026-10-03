@@ -8,7 +8,7 @@ The fix: the model calls ``spawn_background`` (or a user runs ``!bg``).
 The live turn ends with a one-line ack naming the job id, and the work runs
 detached in :func:`run_background_job`. An independently issued ``!bg`` uses
 its configured job limits; a model-spawned job still shares its originating
-foreground turn's remaining provider-output, attempt and deadline budget.
+foreground turn's remaining attempt and deadline budget.
 Detaching work does not reset that budget.
 When the job finishes it mentions the requester in the origin channel with
 the result data. Progress lands in a ``build: <goal>`` thread — in the origin
@@ -41,11 +41,11 @@ from typing import TYPE_CHECKING, Any
 
 from control_defaults import SERVER_PROMPT_MAX_BYTES
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident
-from job_routing import JobProvider, resolve_job_endpoint
+from job_routing import JobProvider
 from tools import Tool
 from turn_budget import TOOL_GROUPS_CONTEXT, TurnBudgetExceeded, current_foreground_turn
 from response_observability import TURN_INPUT, prepare_delivery, record_delivery
-from utils import _safe_int, _spawn_background
+from utils import _spawn_background
 
 if TYPE_CHECKING:
     from discord import Message
@@ -58,9 +58,6 @@ logger = logging.getLogger(__name__)
 JOB_ID_BYTES = 4
 
 # Independent-job limits; model-spawned descendants also retain their foreground budget.
-# Env/control overrides: bg_max_tokens / bg_timeout_seconds / bg_max_iters.
-BG_MAX_TOKENS_DEFAULT_FLOOR = 32768
-BG_MAX_TOKENS_HARD_CAP = 131072
 BG_TIMEOUT_DEFAULT = 7200
 BG_TIMEOUT_HARD_CAP = 14400
 BG_ITERS_DEFAULT = 100
@@ -84,19 +81,12 @@ JOB_TURN: ContextVar[bool] = ContextVar("job_turn", default=False)
 
 
 def resolve_job_budgets(control: Any, config: Any) -> dict[str, int]:
-    """Extended thinking/output/timeout budgets for background jobs.
+    """Local timeout and iteration budgets for background jobs.
 
     Precedence per key: control override > env > default. Every value is
     clamped to its hard cap so a typo cannot book a 24h call.
     """
     control = control or {}
-    live_max_tokens = (
-        _safe_int(getattr(config, "OPENAI_MAX_TOKENS", 16384) or 16384, 16384)
-        if config is not None
-        else 16384
-    )
-    default_tokens = max(live_max_tokens * 2, BG_MAX_TOKENS_DEFAULT_FLOOR)
-
     def _pick(control_key: str, env_key: str, default: int, cap: int) -> int:
         raw = (control or {}).get(control_key, None)
         if raw is None:
@@ -115,9 +105,6 @@ def resolve_job_budgets(control: Any, config: Any) -> dict[str, int]:
         return max(1, min(int(value), cap))
 
     return {
-        "max_tokens": _pick(
-            "bg_max_tokens", "BG_MAX_TOKENS", default_tokens, BG_MAX_TOKENS_HARD_CAP
-        ),
         "timeout_seconds": _pick(
             "bg_timeout_seconds", "BG_TIMEOUT_SECONDS", BG_TIMEOUT_DEFAULT, BG_TIMEOUT_HARD_CAP
         ),
@@ -265,10 +252,8 @@ class BackgroundJobManager:
         model: str | None = None,
     ) -> BackgroundJob:
         provider = JobProvider(provider)
-        if model is not None:
-            model = model.strip()
-            if not model:
-                raise ValueError("model override must not be blank; omit it to use the configured model")
+        if provider != JobProvider.MAIN or model is not None:
+            raise ValueError("background jobs use the active provider configuration; edit provider/model there")
         goal = str(goal or "").strip()[:2000]
         if not goal:
             raise ValueError("need a goal for the background job")
@@ -389,18 +374,16 @@ class SpawnBackgroundTool(Tool):
             "Start a BACKGROUND job for a long task (site build, big research, "
             "multi-step work) and END this turn. The job runs detached and pings "
             "the user when done, so the channel stays free. It shares this foreground "
-            "turn's remaining provider-output, attempt and deadline budget; spawning "
+            "turn's remaining attempt and deadline budget; spawning "
             "does not replenish them. Params: goal (what to build/do, required), context (extra "
-            "spec, optional), provider (main/autonomy/aux, default main), model "
-            "(optional primary-model override; configured fallback models "
-            "may answer instead). Profiles use trusted configuration, never URLs or keys. "
+            "spec, optional). Uses the configured provider and model. "
             "After calling, reply with send_message: ONE short ack line naming the "
             "job id and requested profile/model — nothing else, no other tools."
         )
 
     async def execute(
         self, message: Any, goal: str | None = None, context: str | None = None,
-        provider: str = "main", model: str | None = None, **kwargs: Any,
+        **kwargs: Any,
     ) -> str:
         if JOB_TURN.get():
             return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
@@ -417,17 +400,14 @@ class SpawnBackgroundTool(Tool):
         channel = getattr(message, "channel", None)
         guild = getattr(message, "guild", None)
         try:
-            profile = JobProvider(provider)
-            if profile != JobProvider.MAIN or model is not None:
-                resolve_job_endpoint(profile, bot._control, bot.config)
+            if "provider" in kwargs or "model" in kwargs:
+                raise ValueError("provider/model selection is not available to tools; use the provider configuration")
             job = manager.create(
                 guild_id=getattr(guild, "id", "") or "",
                 channel_id=getattr(channel, "id", "") or "",
                 user_id=getattr(author, "id", "") or "",
                 goal=raw_goal,
                 context=str(context or kwargs.get("details") or "")[:4000],
-                provider=profile,
-                model=model,
             )
         except (ValueError, RuntimeError) as exc:
             text = str(exc)
@@ -581,7 +561,6 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         return
 
     budgets = resolve_job_budgets(getattr(bot, "_control", {}) or {}, getattr(bot, "config", None))
-    max_tokens = int(budgets["max_tokens"])
     timeout = int(budgets["timeout_seconds"])
     max_iters = int(budgets["max_iters"])
 
@@ -628,8 +607,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         if not await _post_thread(
             thread,
             f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
-            f"{job.requested_route}. An explicit model override applies only to primary; configured fallback models may answer.\n"
-            f"Job limits: {max_tokens} tokens/call, {timeout}s timeout, {max_iters} steps. "
+            f"{job.requested_route}.\n"
+            f"Job limits: {timeout}s timeout, {max_iters} steps. "
             "An originating foreground budget, if any, still applies. Progress lands here.",
             context=job_context,
         ):
@@ -673,7 +652,6 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     deadline = time.monotonic() + float(timeout)
     turn = current_foreground_turn()
     timeout_scope = asyncio.timeout_at(turn.deadline if turn is not None else None)
-    job_provider = None
     effective_route = ""
     # Inside the job's own task, so every tool subtask it spawns inherits the
     # value and refuses to spawn another job. The live turn that started this
@@ -724,29 +702,14 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 try:
                     if step == 0:
                         messages = background_messages(bot, job, orig_message, platform)
-                        if job.provider != JobProvider.MAIN or job.model is not None:
-                            job_provider = bot._create_background_provider(job.provider)
                     else:
                         messages[0] = background_messages(bot, job, orig_message, platform)[0]
-                    if job_provider is None:
-                        response = await bot._generate_response(
-                            messages,
-                            timeout=min(timeout, remaining),
-                            max_tokens=max_tokens,
-                            tools=provider_tools,
-                            custom_tool_calls=custom_tool_calls,
-                            disable_reasoning=False,
-                        )
-                    else:
-                        response = await job_provider.generate_response(
-                            messages,
-                            timeout=min(timeout, remaining),
-                            max_tokens=max_tokens,
-                            tools=provider_tools,
-                            custom_tool_calls=custom_tool_calls,
-                            model=job.model,
-                            prefer_fallback=job.provider == JobProvider.MAIN and bot._night_fallback_active(),
-                        )
+                    response = await bot._generate_response(
+                        messages,
+                        timeout=min(timeout, remaining),
+                        tools=provider_tools,
+                        custom_tool_calls=custom_tool_calls,
+                    )
                     response_metrics = getattr(response, "metrics", None)
                     succeeded = True
                 except Exception as exc:
@@ -854,11 +817,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     finally:
         TOOL_GROUPS_CONTEXT.reset(tool_groups_token)
         JOB_TURN.reset(job_turn_token)
-        try:
-            if job_provider is not None:
-                await job_provider.close()
-        finally:
-            manager.cleanup_runtime(job.id)
+        manager.cleanup_runtime(job.id)
 
     if terminal_failure is not None or not succeeded:
         await _fail(failure_text or final_text or "the model never returned anything.", terminal_failure, partial=final_text)

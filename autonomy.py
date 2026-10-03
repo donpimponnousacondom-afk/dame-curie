@@ -3046,8 +3046,6 @@ class AutonomyEngine:
                 ai_provider = await ai_provider()  # type: ignore
             else:
                 ai_provider = cast(Any, getattr(self.bot, "ai_provider", None))
-            if not callable(getattr(ai_provider, "generate_response", None)):
-                ai_provider = cast(Any, getattr(self.bot, "ai_provider", None))
             if (
                 ai_provider is not None
                 and getattr(ai_provider, "available", None) == False  # noqa: E712
@@ -3058,33 +3056,10 @@ class AutonomyEngine:
             # tick and must not take turns against every live room.
             await self.bot._acquire_ai_slot(timeout=timeout, key="autonomy")
             try:
-                # Pass the configured autonomy model as override so even the main
-                # provider runs a different model if autonomy_model is set.
-                control = getattr(self.bot, "_control", None) or {}
-                autonomy_model = str(control.get("autonomy_model", "") or "")
-                # Honor autonomy_disable_reasoning per-call so it takes effect even
-                # when reusing the main provider (no autonomy_base_url). The
-                # provider lets a per-call False override the endpoint default.
-                autonomy_disable_reasoning = bool(
-                    control.get("autonomy_disable_reasoning", False)
-                )
-                night_kwargs = {}
-                night_kwargs_resolver = getattr(
-                    self.bot, "_night_fallback_kwargs", None
-                )
-                if callable(night_kwargs_resolver):
-                    night_kwargs = night_kwargs_resolver(ai_provider)
                 assert ai_provider is not None  # narrowed by callable check above
                 raw_response = await ai_provider.generate_response(
                     messages,
                     timeout=timeout,
-                    model=autonomy_model or None,
-                    # Autonomy only generates a short JSON plan; cap max_tokens so
-                    # we don't blow past an autonomy model's output limit (e.g.
-                    # minimax-m3 caps at 131072) and waste quota/tokens.
-                    max_tokens=8192,
-                    disable_reasoning=autonomy_disable_reasoning,
-                    **night_kwargs,
                 )
             finally:
                 await self.bot._release_ai_slot()

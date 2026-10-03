@@ -344,10 +344,8 @@ from control_defaults import (  # noqa: E402
     DEAD_CONTROL_KEYS,
     DEFAULT_CONTROL,
     SERVER_PROMPT_MAX_BYTES,
-    DEEPSEEK_REASONING_EFFORTS,
     KNOWN_TOOLS,
     parse_bool,
-    update_deepseek_reasoning,
 )
 import guild_onboarding  # noqa: E402
 from inbox import (  # noqa: E402
@@ -361,7 +359,6 @@ from providers import (  # noqa: E402
     ProviderEmptyResponseError,
     ProviderIncompleteResponseError,
     ProviderUsageExhaustedError,
-    deepseek_reasoning_transport,
 )
 from rag_memory import RAGMemoryManager, RemEventLog, _parse_iso  # noqa: E402
 from job_routing import JobProvider, create_job_provider, parse_background_request, resolve_job_endpoint  # noqa: E402
@@ -2893,304 +2890,68 @@ class MaxwellBot(commands.Bot):
             api_key=config.OPENAI_API_KEY,
             extra_headers=config.OPENAI_EXTRA_HEADERS,
             extra_body=config.OPENAI_EXTRA_BODY,
-            reasoning_control=lambda: self._control.get("deepseek_reasoning", ""),
-            disable_reasoning=config.OPENAI_DISABLE_REASONING,
-            fallback_base_url=config.OPENAI_FALLBACK_BASE_URL,
-            fallback_model=config.OPENAI_FALLBACK_MODEL,
-            fallback_api_key=config.OPENAI_FALLBACK_API_KEY,
-            fallback_disable_reasoning=config.OPENAI_FALLBACK_DISABLE_REASONING,
             retry_attempts=config.OPENAI_RETRY_ATTEMPTS,
             empty_response_retries=getattr(config, "OPENAI_EMPTY_RESPONSE_RETRIES", None),
-            endpoint_cooldown_seconds=getattr(config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
             enable_audio_input=_owner_audio_input_enabled(self),
-            vision_base_url=config.OPENAI_VISION_BASE_URL,
-            vision_model=config.OPENAI_VISION_MODEL,
-            vision_api_key=config.OPENAI_VISION_API_KEY,
-            vision_disable_reasoning=config.OPENAI_VISION_DISABLE_REASONING,
         )
-
-    def _is_in_night_fallback_window(self) -> bool:
-        """Return whether local time is inside the nightly fallback window."""
-        try:
-            control = getattr(self, "_control", None) or {}
-            if not parse_bool(control.get("enable_night_fallback"), True):
-                return False
-            start = max(
-                0, min(23, _safe_int(control.get("night_fallback_start_hour"), 22))
-            )
-            end = max(0, min(23, _safe_int(control.get("night_fallback_end_hour"), 9)))
-            hour = time.localtime().tm_hour
-            if start == end:
-                return False
-            if start < end:
-                return start <= hour < end
-            return hour >= start or hour < end
-        except Exception:
-            return False
-
-    def _night_fallback_active(self) -> bool:
-        """Return whether the configured fallback should serve this request."""
-        if not self._is_in_night_fallback_window():
-            return False
-        config = getattr(self, "config", None)
-        return bool(
-            str(getattr(config, "OPENAI_FALLBACK_BASE_URL", "") or "").strip()
-            and str(getattr(config, "OPENAI_FALLBACK_MODEL", "") or "").strip()
-        )
-
-    def _night_fallback_kwargs(self, provider=None) -> dict[str, bool]:
-        """Return provider kwargs for the main provider's night routing."""
-        main_provider = getattr(self, "ai_provider", None)
-        if provider is not None and provider is not main_provider:
-            return {}
-        return {"prefer_fallback": True} if self._night_fallback_active() else {}
 
     async def _generate_response(self, messages: list[dict], **kwargs):
-        """Generate through the main provider, preferring fallback at night."""
-        for key, value in self._night_fallback_kwargs().items():
-            kwargs.setdefault(key, value)
+        """Generate through the configured main provider."""
         return await self.ai_provider.generate_response(messages, **kwargs)
 
-    def _create_background_provider(self, profile: JobProvider) -> OpenAICompatibleProvider:
-        """Give an explicitly routed job its own transport, never a cached role."""
-        return create_job_provider(
-            profile, self._control, self.config,
-            enable_audio_input=_owner_audio_input_enabled(self),
-            reasoning_control=self.ai_provider.reasoning_control,
-        )
-
-    async def _get_autonomy_provider(self):
-        """Return a provider for the autonomy loop.
-
-        If autonomy_base_url / autonomy_model are configured, build (and cache) a
-        separate OpenAICompatibleProvider. Otherwise — or on any construction/init failure —
-        fall back to the main ai_provider. NEVER raise: the autonomy tick must not
-        crash because of provider construction.
-
-        Init is awaited on a fresh build (so the first tick doesn't race the
-        /models probe) and re-probed whenever the cached provider is unavailable
-        (so a transient init failure self-heals on a later tick instead of
-        soft-skipping forever). If the dedicated provider can't initialize, the
-        main ai_provider is returned for that tick so autonomy keeps running on a
-        healthy endpoint; the cached provider is retained so a later tick
-        re-probes and self-heals. Cache hits stay instant — the await only runs
-        when construction or a re-probe is needed.
-        """
-        try:
-            control = self._control or {}
-            # Runtime control wins; env (self.config.AUTONOMY_*) is the default
-            # so a fresh install without a control.json override still routes
-            # autonomy at the configured dedicated provider (e.g. NVIDIA NIM).
-            base_url = (
-                str(control.get("autonomy_base_url", "") or "").strip()
-                or self.config.AUTONOMY_BASE_URL
+    async def _get_autonomy_provider(self) -> OpenAICompatibleProvider:
+        """Use the configured autonomy profile without substituting another route."""
+        if not (self.config.AUTONOMY_BASE_URL or self.config.AUTONOMY_MODEL or self.config.AUTONOMY_API_KEY):
+            if self.autonomy_provider is not None:
+                retire_provider(self, self.autonomy_provider)
+            self.autonomy_provider = None
+            self._autonomy_provider_sig = ""
+            return self.ai_provider
+        endpoint = resolve_job_endpoint(JobProvider.AUTONOMY, self.config)
+        sig = (endpoint.base_url, endpoint.model, endpoint.api_key)
+        provider = self.autonomy_provider if sig == self._autonomy_provider_sig else None
+        if provider is None:
+            provider = create_job_provider(
+                JobProvider.AUTONOMY, self.config,
+                enable_audio_input=_owner_audio_input_enabled(self),
             )
-            api_key = (
-                str(control.get("autonomy_api_key", "") or "").strip()
-                or self.config.AUTONOMY_API_KEY
-            )
-            model = (
-                str(control.get("autonomy_model", "") or "").strip()
-                or self.config.AUTONOMY_MODEL
-            )
-            if "autonomy_disable_reasoning" in control:
-                disable_reasoning = bool(
-                    control.get("autonomy_disable_reasoning", False)
-                )
-            else:
-                disable_reasoning = bool(self.config.AUTONOMY_DISABLE_REASONING)
-            # No separate autonomy endpoint configured -> use main provider. This
-            # also covers the both-empty case; if only a model differs (no
-            # base_url) we reuse the main provider instance and pass model= per
-            # request at call time.
-            if not base_url:
-                old = self.autonomy_provider
-                if old is not None:
-                    retire_provider(self, old)
-                self.autonomy_provider = None
-                self._autonomy_provider_sig = ""
-                return self.ai_provider
-            sig = f"{base_url}|{api_key}|{model}|dr={_safe_int(disable_reasoning, 0)}"
-            cached = (
-                self.autonomy_provider if sig == self._autonomy_provider_sig else None
-            )
-            if cached is not None and getattr(cached, "available", False):
-                return cached
-            # Autonomy only generates short JSON plans — don't inherit the main
-            # bot's large max_tokens, which can exceed the autonomy model's
-            # output cap (e.g. minimax-m3 caps at 131072). Cap conservatively.
-            autonomy_max_tokens = min(
-                _safe_int(self.config.OPENAI_MAX_TOKENS or 200000, 200000), 8192
-            )
-            if cached is None:
-                provider = OpenAICompatibleProvider(
-                    base_url=base_url,
-                    model=model or self.config.OPENAI_MODEL,
-                    max_tokens=autonomy_max_tokens,
-                    temperature=self.config.OPENAI_TEMPERATURE,
-                    top_p=self.config.OPENAI_TOP_P,
-                    top_k=self.config.OPENAI_TOP_K,
-                    api_key=api_key,
-                    disable_reasoning=disable_reasoning,
-                    # Inherit the main provider's fallback endpoint so a dedicated
-                    # autonomy endpoint doesn't lose fallback resilience. No-op
-                    # when OPENAI_FALLBACK_* is unset (empty -> no fallback).
-                    fallback_base_url=self.config.OPENAI_FALLBACK_BASE_URL,
-                    fallback_model=self.config.OPENAI_FALLBACK_MODEL,
-                    fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
-                    fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
-                    retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
-                    endpoint_cooldown_seconds=getattr(self.config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
-                    empty_response_retries=getattr(
-                        self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
-                    ),
-                    enable_audio_input=_owner_audio_input_enabled(self),
-                )
-            else:
-                provider = cached
-            old = self.autonomy_provider
-            if old is not None and old is not provider:
-                retire_provider(self, old)
+            if self.autonomy_provider is not None:
+                retire_provider(self, self.autonomy_provider)
             self.autonomy_provider = provider
             self._autonomy_provider_sig = sig
-            # Publish before awaiting init so concurrent callers share one tracked client.
-            try:
-                await provider.initialize()
-            except Exception as e:
-                logger.warning(f"Autonomy provider initialize() failed: {e}")
-            # If the dedicated provider couldn't initialize (primary + fallback
-            # both down), fall back to the main ai_provider for this tick so
-            # autonomy keeps running instead of soft-skipping forever. The cached
-            # (unavailable) provider is retained so a later tick re-probes
-            # initialize() and self-heals.
-            if not getattr(provider, "available", False):
-                logger.warning(
-                    "Autonomy provider unavailable, falling back to main ai_provider for this tick"
-                )
-                return self.ai_provider
-            return provider
-        except Exception as e:
-            logger.warning(f"_get_autonomy_provider failed, falling back to main: {e}")
+            await provider.initialize()
+        elif not provider.available:
+            await provider.initialize()
+        if not provider.available:
+            raise RuntimeError("Configured autonomy provider is unavailable")
+        return provider
+
+    async def _get_aux_provider(self) -> OpenAICompatibleProvider:
+        """Use the configured auxiliary profile without borrowing autonomy settings."""
+        if not (self.config.AUX_BASE_URL or self.config.AUX_MODEL or self.config.AUX_API_KEY):
+            if self.aux_provider is not None:
+                retire_provider(self, self.aux_provider)
+            self.aux_provider = None
+            self._aux_provider_sig = ""
             return self.ai_provider
-
-    async def _get_aux_provider(self):
-        """Return a provider for the auxiliary background agents (REM,
-        context-cleanup, context-watcher).
-
-        Resolution order: aux_* control keys -> AUX_* env -> autonomy_*
-        control keys -> AUTONOMY_* env -> main ai_provider. This lets an
-        operator run the context-manager brains on a different (e.g.
-        cheaper/faster) model than the autonomy tick loop, while a fresh
-        install with no AUX_* config behaves exactly as before (all
-        background agents shared the autonomy endpoint).
-
-        Like ``_get_autonomy_provider``: build+cache a dedicated
-        OpenAICompatibleProvider keyed on the resolved (base_url, api_key, model,
-        disable_reasoning) signature so config churn doesn't leak
-        ClientSessions; re-probe initialize() when the cached provider is
-        unavailable so a transient failure self-heals; never raise (a
-        background tick must not crash over provider resolution).
-        """
-        try:
-            control = self._control or {}
-            base_url = (
-                str(control.get("aux_base_url", "") or "").strip()
-                or self.config.AUX_BASE_URL
+        endpoint = resolve_job_endpoint(JobProvider.AUX, self.config)
+        sig = (endpoint.base_url, endpoint.model, endpoint.api_key)
+        provider = self.aux_provider if sig == self._aux_provider_sig else None
+        if provider is None:
+            provider = create_job_provider(
+                JobProvider.AUX, self.config,
+                enable_audio_input=_owner_audio_input_enabled(self),
             )
-            api_key = (
-                str(control.get("aux_api_key", "") or "").strip()
-                or self.config.AUX_API_KEY
-            )
-            model = (
-                str(control.get("aux_model", "") or "").strip() or self.config.AUX_MODEL
-            )
-            if "aux_disable_reasoning" in control:
-                disable_reasoning = bool(control.get("aux_disable_reasoning", True))
-            else:
-                disable_reasoning = bool(self.config.AUX_DISABLE_REASONING)
-            # No dedicated aux endpoint configured -> resolve down to the
-            # autonomy provider (which itself falls back to the main
-            # provider). This preserves the pre-separation behaviour where
-            # REM/context-cleanup/context-watcher all shared autonomy's
-            # endpoint, and a per-call model override is still passed at
-            # call time below.
-            if not base_url:
-                old = self.aux_provider
-                if old is not None:
-                    retire_provider(self, old)
-                self.aux_provider = None
-                self._aux_provider_sig = ""
-                # Fall through to autonomy so the model/base_url cascade is
-                # consistent for every caller without duplicating it here.
-                return await self._get_autonomy_provider()
-            sig = f"{base_url}|{api_key}|{model}|dr={_safe_int(disable_reasoning, 0)}"
-            cached = self.aux_provider if sig == self._aux_provider_sig else None
-            if cached is not None and getattr(cached, "available", False):
-                return cached
-            # Aux agents produce short JSON plans/audits — cap conservatively
-            # so we don't exceed the model's output limit.
-            aux_max_tokens = min(
-                _safe_int(self.config.OPENAI_MAX_TOKENS or 200000, 200000), 8192
-            )
-            if cached is None:
-                provider = OpenAICompatibleProvider(
-                    base_url=base_url,
-                    model=model or self.config.OPENAI_MODEL,
-                    max_tokens=aux_max_tokens,
-                    temperature=0.2,
-                    top_p=self.config.OPENAI_TOP_P,
-                    top_k=self.config.OPENAI_TOP_K,
-                    api_key=api_key,
-                    disable_reasoning=disable_reasoning,
-                    fallback_base_url=self.config.OPENAI_FALLBACK_BASE_URL,
-                    fallback_model=self.config.OPENAI_FALLBACK_MODEL,
-                    fallback_api_key=self.config.OPENAI_FALLBACK_API_KEY,
-                    fallback_disable_reasoning=self.config.OPENAI_FALLBACK_DISABLE_REASONING,
-                    retry_attempts=self.config.OPENAI_RETRY_ATTEMPTS,
-                    endpoint_cooldown_seconds=getattr(self.config, "OPENAI_ENDPOINT_COOLDOWN_SECONDS", None),
-                    empty_response_retries=getattr(
-                        self.config, "OPENAI_EMPTY_RESPONSE_RETRIES", None
-                    ),
-                    enable_audio_input=_owner_audio_input_enabled(self),
-                )
-            else:
-                provider = cached
-            old = self.aux_provider
-            if old is not None and old is not provider:
-                retire_provider(self, old)
+            if self.aux_provider is not None:
+                retire_provider(self, self.aux_provider)
             self.aux_provider = provider
             self._aux_provider_sig = sig
-            try:
-                await provider.initialize()
-            except Exception as e:
-                logger.warning(f"Aux provider initialize() failed: {e}")
-            if not getattr(provider, "available", False):
-                logger.warning(
-                    "Aux provider unavailable, falling back to main ai_provider for this tick"
-                )
-                return self.ai_provider
-            return provider
-        except Exception as e:
-            logger.warning(f"_get_aux_provider failed, falling back to main: {e}")
-            return self.ai_provider
-
-    def _get_aux_model(self) -> str | None:
-        """Resolve the per-call model override for aux background agents.
-
-        Order: aux_model control key -> AUX_MODEL env -> autonomy_model
-        control key -> AUTONOMY_MODEL env -> None (use the resolved
-        provider's own model). Returning None lets a caller that fell
-        back to the main ai_provider still pass model=None and use the
-        provider default.
-        """
-        control = self._control or {}
-        return (
-            str(control.get("aux_model", "") or "").strip()
-            or self.config.AUX_MODEL
-            or str(control.get("autonomy_model", "") or "").strip()
-            or self.config.AUTONOMY_MODEL
-            or None
-        )
+            await provider.initialize()
+        elif not provider.available:
+            await provider.initialize()
+        if not provider.available:
+            raise RuntimeError("Configured auxiliary provider is unavailable")
+        return provider
 
     def _setup_memory(self):
         self.memory = RAGMemoryManager(
@@ -3211,13 +2972,8 @@ class MaxwellBot(commands.Bot):
                     "TRANSCRIPT:\n" + transcript + "\n\n"
                     'Return JSON: {"facts": ["fact 1", "fact 2", ...]}'
                 )
-                # generate_response is async + streaming-friendly; pass
-                # max_tokens=1200 to bound the summary length.
                 resp = await self._generate_response(
                     [{"role": "user", "content": prompt}],
-                    max_tokens=1200,
-                    temperature=0.2,
-                    disable_reasoning=True,
                 )
                 text = str(resp) if resp else ""
                 import json as _json
@@ -6307,10 +6063,6 @@ class MaxwellBot(commands.Bot):
                 resp = await self._generate_response(
                     messages,
                     timeout=8,
-                    max_tokens=8,
-                    temperature=0.0,
-                    disable_reasoning=True,
-                    fast_fallback=True,
                 )
             finally:
                 await self._release_ai_slot()
@@ -6524,19 +6276,15 @@ class MaxwellBot(commands.Bot):
                         last[channel_id] = now
                         await message.channel.send("nothing to stop")
             elif cmd == "bg":
-                # Manual background job: !bg GOAL or !bg --provider aux --model MODEL -- GOAL.
                 if not (args or "").strip():
                     await message.channel.send(
-                        f"usage: `{self.command_prefix}bg GOAL` or "
-                        f"`{self.command_prefix}bg --provider main|autonomy|aux --model MODEL -- GOAL`"
+                        f"usage: `{self.command_prefix}bg GOAL` (uses the active provider configuration)"
                     )
                 else:
                     try:
                         _goal, _provider, _model = parse_background_request(
                             args, prefix=self.command_prefix
                         )
-                        if _provider != JobProvider.MAIN or _model is not None:
-                            resolve_job_endpoint(_provider, self._control, self.config)
                         _job = self.bg_jobs.create(
                             guild_id=message.guild.id if message.guild else "DM",
                             channel_id=channel_id,
@@ -7033,7 +6781,7 @@ class MaxwellBot(commands.Bot):
             elif cmd == "solo":
                 await self._handle_solo_command(message, args)
             elif cmd in {"reasoning", "effort"}:
-                await self._handle_reasoning_command(message, args, numeric=cmd == "effort")
+                await self._handle_reasoning_command(message, args)
             elif cmd == "footer":
                 await self._handle_footer_command(message, args)
             elif cmd == "debug":
@@ -7065,8 +6813,7 @@ class MaxwellBot(commands.Bot):
                     f"`{self.command_prefix}guide [goal]` / `{self.command_prefix}guided-goal [goal]` - create a thread and ask 5 clarifying questions before building (use when request is vague)\n"
                     f"`{self.command_prefix}help` - show this list\n"
                     f"`{self.command_prefix}footer on|off|format <text>|status` - response footer (admin to change)\n"
-                    f"`{self.command_prefix}reasoning [low|high|max|off]` - DeepSeek V4.1 reasoning (admin to change)\n"
-                    f"`{self.command_prefix}effort [1..100]` - report/set exact numeric effort on OpenRouter (admin to change)\n"
+                    f"`{self.command_prefix}reasoning` / `{self.command_prefix}effort` - provider configuration guidance (no settings changed)\n"
                     f"`{self.command_prefix}debug` - loaded model/provider and measured bot reply (admin; reply to select)\n"
                     f"`{self.command_prefix}version` - frozen running build\n"
                     f"`{self.command_prefix}stop` - stop active response in this channel\n"
@@ -7269,71 +7016,21 @@ class MaxwellBot(commands.Bot):
             with contextlib.suppress(discord.Forbidden):
                 await send_public_error(self, message.channel)
 
-    async def _handle_reasoning_command(self, message, args, numeric: bool = False):
+    async def _handle_reasoning_command(self, message, args):
         action = (args or "").strip().lower()
         reporting = action in {"", "status"}
-        provider = self.ai_provider
-        transport = deepseek_reasoning_transport(provider.base_url, provider.model)
-        code_block = False
         if not reporting and not self._is_admin(message.author.id):
             text = "not authorized"
-        elif not transport:
-            text = (
-                "These controls require a recognized DeepSeek Flash transport on "
-                "OpenRouter or the official DeepSeek API. Current model unchanged; "
-                "no control saved. Previously stored DeepSeek preferences are not "
-                "applied to this primary model; configured provider request options "
-                "remain unchanged."
-            )
         else:
-            code_block = True
-            presets = {str(value): key for key, value in DEEPSEEK_REASONING_EFFORTS.items()}
-            if numeric and transport == "openrouter":
-                level = int(action) if action.isascii() and action.isdecimal() else ""
-                valid = type(level) is int and 1 <= level <= 100
-            else:
-                level = presets.get(action, "") if numeric else action
-                valid = level in {*DEEPSEEK_REASONING_EFFORTS, "off"}
-            if not reporting and valid:
-                await asyncio.to_thread(
-                    update_deepseek_reasoning,
-                    Path(self.config.DATA_DIR) / "bot_control.json",
-                    level,
-                )
-                self._load_control(force=True)
-            effective = provider.deepseek_reasoning_level(provider._endpoints[0])
-            requested = self._control.get("deepseek_reasoning", "") or "configured baseline"
-            effort = effective if type(effective) is int else DEEPSEEK_REASONING_EFFORTS.get(effective)
-            wire_effort = "none" if effective == "off" else effective
-            wire = (
-                f"reasoning.enabled={str(effective != 'off').lower()}, reasoning.effort={wire_effort}"
-                if transport == "openrouter"
-                else f"thinking.type={'disabled' if effective == 'off' else 'enabled'}, reasoning_effort={wire_effort}"
-            )
             text = (
-                f"DeepSeek V4.1 Flash ({transport}), primary model\n"
-                f"Requested: {requested}; effective reasoning: {effective}\n"
+                "Reasoning and effort are configured only in the active provider configuration. "
+                "Edit its request options there; these commands no longer write bot_control.json. "
+                "No setting changed."
             )
-            effort_format = (
-                " (sent unchanged as an integer)" if type(effective) is int else
-                " reference preset (sent as a string tier)"
-            )
-            text += f"Effort: {effort}/100{effort_format}\n" if effort is not None else "Effort: inactive\n"
-            text += f"Wire: {wire}\nPer-call overrides (including auxiliary disable) take precedence; other models/fallback unchanged."
-            if numeric:
-                text += (
-                    "\nOpenRouter: every integer 1..100 is sent unchanged; never rounded or replaced with a tier after rejection."
-                    if transport == "openrouter" else
-                    "\nDirect API presets: 50=low, 75=high, 100=max; other values are unsupported and never rounded."
-                )
-            if not reporting and not valid:
-                text = "Unsupported setting; unchanged.\n" + text
-                if not numeric:
-                    text += f"\nUsage: {self.command_prefix}reasoning [low|high|max|off]"
         await send_command_response(
             self, message.channel, text,
             allowed_mentions=discord.AllowedMentions.none(),
-            code_block=code_block, unmeasured=False,
+            unmeasured=False,
         )
 
     async def _handle_footer_command(self, message, args):
@@ -7918,10 +7615,6 @@ class MaxwellBot(commands.Bot):
                 120,
             ),
         )
-        vc_max_tokens = max(
-            24,
-            min(_safe_int(self._control.get("vc_ai_max_tokens", 90) or 90, 90), 2000),
-        )
         # Use the global AI slot (instead of only private VC semaphore) so noisy VC
         # does not starve text replies, autonomy, REM etc. Keep a local bound too.
         await self._acquire_ai_slot(
@@ -7935,10 +7628,6 @@ class MaxwellBot(commands.Bot):
                     messages,
                     media=[],
                     timeout=vc_timeout,
-                    max_tokens=vc_max_tokens,
-                    temperature=0.6,
-                    disable_reasoning=True,
-                    fast_fallback=True,
                 )
         finally:
             await self._release_ai_slot()
@@ -8706,10 +8395,6 @@ class MaxwellBot(commands.Bot):
             resp = await self._generate_response(
                 messages,
                 timeout=45,
-                max_tokens=400,
-                temperature=0.2,
-                disable_reasoning=True,
-                fast_fallback=True,
             )
         finally:
             await self._release_ai_slot()
@@ -8993,38 +8678,16 @@ class MaxwellBot(commands.Bot):
             )
             await self._acquire_ai_slot(timeout=timeout, key="rem")
             try:
-                # REM uses the aux provider/model (the context-manager brain),
-                # which falls back to the autonomy provider then the main
-                # provider. This keeps REM on a separate model from the
-                # autonomy tick loop when AUX_* is configured, and behaves
-                # exactly as before (shared autonomy endpoint) when it isn't.
                 rem_provider = await self._get_aux_provider()
-                if not callable(
-                    getattr(rem_provider, "generate_response", None)
-                ) and not callable(
-                    getattr(rem_provider, "generate_chat_completion", None)
-                ):
-                    rem_provider = self.ai_provider
-                rem_model = self._get_aux_model() or self.config.OPENAI_REM_MODEL
                 run = await run_rem_once(
                     memory_manager=self.memory,
                     rem_log=self.rem_log,
                     provider=rem_provider,
                     data_dir=self.config.DATA_DIR,
-                    model=rem_model,
                     max_turns=self.rem_max_turns,
                     run_history=self.config.REM_RUN_HISTORY,
                     prompt_body=self.rem_prompt_body,
                     timeout=timeout,
-                    disable_reasoning=bool(
-                        self._control.get(
-                            "aux_disable_reasoning", self.config.AUX_DISABLE_REASONING
-                        )
-                    ),
-                    # REM produces a short audit, not free-form prose; cap
-                    # max_tokens like autonomy so we don't blow past the model's
-                    # output limit (default OPENAI_MAX_TOKENS=200000 risks a 400).
-                    max_tokens=8192,
                 )
             finally:
                 await self._release_ai_slot()
@@ -9949,33 +9612,13 @@ class MaxwellBot(commands.Bot):
                 key=f"extract:{getattr(getattr(message, 'channel', None), 'id', '') or ''}",
             )
             try:
-                # Context watcher uses the aux provider/model (the
-                # context-manager brain), separate from the autonomy tick
-                # loop. Falls back to the autonomy provider then the main
-                # provider if aux isn't configured. Never raises out of
-                # provider resolution.
                 context_provider = await self._get_aux_provider()
-                if not callable(
-                    getattr(context_provider, "generate_response", None)
-                ) and not callable(
-                    getattr(context_provider, "generate_chat_completion", None)
-                ):
-                    context_provider = self.ai_provider
-                context_model = self._get_aux_model()
                 raw = await context_provider.generate_response(
                     [
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": user},
                     ],
                     timeout=extract_timeout,
-                    model=context_model,
-                    temperature=0.2,
-                    disable_reasoning=bool(
-                        self._control.get(
-                            "aux_disable_reasoning", self.config.AUX_DISABLE_REASONING
-                        )
-                    ),
-                    **self._night_fallback_kwargs(context_provider),
                 )
             finally:
                 await self._release_ai_slot()
@@ -12499,10 +12142,6 @@ class MaxwellBot(commands.Bot):
                 7200,
             ),
         )
-        max_out_tokens = getattr(self.config, "OPENAI_MAX_TOKENS", 16384) or 16384
-        if self._is_short_live_turn(message, content):
-            # Banter does not need a 16k output budget.
-            max_out_tokens = min(int(max_out_tokens), 4096)
         try:
             # MESSAGE_CREATE can precede Discord's unfurl by a few hundred
             # milliseconds. Refresh once before extracting so a direct ping
@@ -13126,7 +12765,6 @@ class MaxwellBot(commands.Bot):
                     messages,
                     media=active_media,
                     timeout=ai_timeout,
-                    max_tokens=max_out_tokens,
                     tools=provider_tools,
                     on_tool_call_name=_on_tool_call_name,
                     on_token=_on_token,
@@ -13456,7 +13094,6 @@ class MaxwellBot(commands.Bot):
                             images=followup_images,
                             media=iter_media,
                             timeout=ai_timeout,
-                            max_tokens=max_out_tokens,
                             tools=provider_tools,
                             on_tool_call_name=_on_followup_tool_call_name,
                             on_token=_on_followup_token,

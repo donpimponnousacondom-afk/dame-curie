@@ -74,10 +74,7 @@ def test_context_watcher_overrides_shared_main_policy(aux_policy, night_fallback
 
     bot.ai_provider.generate_response.assert_awaited_once()
     kwargs = bot.ai_provider.generate_response.await_args.kwargs
-    assert kwargs["temperature"] == 0.2
-    assert kwargs["disable_reasoning"] is expected_disabled
-    assert kwargs["model"] is None
-    assert kwargs.get("prefer_fallback", False) is night_fallback
+    assert kwargs == {"timeout": 60}
     assert bot.ai_provider.temperature == 0.6
     assert bot.ai_provider.disable_reasoning is False
     bot._release_ai_slot.assert_awaited_once()
@@ -104,10 +101,7 @@ def test_ltm_summary_overrides_shared_main_policy(monkeypatch, shared_bot, night
     assert facts == ["root prefers Python"]
     bot.ai_provider.generate_response.assert_awaited_once()
     kwargs = bot.ai_provider.generate_response.await_args.kwargs
-    assert kwargs["temperature"] == 0.2
-    assert kwargs["disable_reasoning"] is True
-    assert kwargs["max_tokens"] == 1200
-    assert kwargs.get("prefer_fallback", False) is night_fallback
+    assert kwargs == {}
     assert bot.ai_provider.temperature == 0.6
     assert bot.ai_provider.disable_reasoning is False
 
@@ -133,9 +127,7 @@ def test_rem_guard_forwards_aux_policy_on_shared_main(monkeypatch, aux_policy):
     runner.assert_awaited_once()
     kwargs = runner.await_args.kwargs
     assert kwargs["provider"] is bot.ai_provider
-    assert kwargs["disable_reasoning"] is expected_disabled
-    assert kwargs["model"] == "rem-model"
-    assert kwargs["max_tokens"] == 8192
+    assert not {"disable_reasoning", "model", "max_tokens", "temperature"} & kwargs.keys()
     assert bot._rem_running is False
     bot._release_ai_slot.assert_awaited_once()
     bot.ai_provider.generate_response.assert_not_awaited()

@@ -423,13 +423,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
             "context": _str(
                 "Extra spec for the job: requirements, style, constraints. Optional."
             ),
-            "provider": _str(
-                "Trusted configured provider profile; aux/autonomy require their own endpoint and model. Defaults to main.",
-                enum=["main", "autonomy", "aux"], default="main",
-            ),
-            "model": _str(
-                "Optional primary-model override; configured fallback models remain unchanged and may answer instead. No endpoint or credentials.",
-            ),
         },
         ["goal"],
         additional=False,
