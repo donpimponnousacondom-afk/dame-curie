@@ -41,6 +41,10 @@ def test_transcribe_riva_wav_sync_parses_results(monkeypatch, tmp_path):
     class FakeService:
         def offline_recognize(self, audio_bytes, config):
             assert audio_bytes == b"\x00\x00\x00\x00"
+            assert config.language_code == "es-ES"
+            assert config.sample_rate_hertz == 48000
+            assert config.audio_channel_count == 1
+            assert not {"max_alternatives", "enable_automatic_punctuation", "verbatim_transcripts"} & vars(config).keys()
             return SimpleNamespace(
                 results=[
                     SimpleNamespace(
@@ -49,7 +53,9 @@ def test_transcribe_riva_wav_sync_parses_results(monkeypatch, tmp_path):
                 ]
             )
 
-    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    monkeypatch.setattr(botmod.Config, "NVIDIA_API_KEY", "nvapi-test")
+    monkeypatch.setattr(botmod.Config, "ASR_RIVA_FUNCTION_ID", "synthetic-asr-function")
+    monkeypatch.setattr(botmod.Config, "ASR_RIVA_LANGUAGE", "es-ES")
     monkeypatch.setitem(__import__("sys").modules, "wave", FakeWave)
     monkeypatch.setattr(botmod, "_riva_asr_service_cached", lambda *a, **k: FakeService())
     monkeypatch.setattr(
@@ -59,6 +65,13 @@ def test_transcribe_riva_wav_sync_parses_results(monkeypatch, tmp_path):
     )
     text = botmod._transcribe_riva_wav_sync(str(wav_path))
     assert text == "hey Maxwell"
+    monkeypatch.setattr(botmod.Config, "ASR_RIVA_FUNCTION_ID", "")
+    with pytest.raises(RuntimeError, match="ASR_RIVA_FUNCTION_ID is not configured"):
+        botmod._transcribe_riva_wav_sync(str(wav_path))
+    monkeypatch.setattr(botmod.Config, "ASR_RIVA_FUNCTION_ID", "synthetic-asr-function")
+    monkeypatch.setattr(botmod.Config, "ASR_RIVA_LANGUAGE", "")
+    with pytest.raises(RuntimeError, match="ASR_RIVA_LANGUAGE is not configured"):
+        botmod._transcribe_riva_wav_sync(str(wav_path))
 
 
 def test_transcribe_vc_wav_returns_empty_on_error(monkeypatch):

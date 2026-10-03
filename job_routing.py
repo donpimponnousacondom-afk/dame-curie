@@ -20,7 +20,7 @@ def parse_background_request(text: str, *, prefix: str = "!") -> tuple[str, JobP
     text = text.strip()
     if text and text.split(maxsplit=1)[0] in {"--provider", "--model"}:
         raise ValueError(f"{prefix}bg uses the active provider configuration; edit provider/model there, then use {prefix}bg GOAL")
-    if text == "--" or text.startswith("-- "):
+    if text and text.split(maxsplit=1)[0] == "--":
         text = text[2:].strip()
     return text, JobProvider.MAIN, None
 

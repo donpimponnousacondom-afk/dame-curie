@@ -228,12 +228,9 @@ def test_dynamic_schema_exposes_every_configured_model_without_mutating_shared_s
     original = deepcopy(TOOL_PARAMETERS["image_generator"]["properties"])
     first = build_openai_tools({"image_generator": tool}, max_description_chars=64)[0]["function"]
     second = build_openai_tools({"image_generator": tool}, max_description_chars=64)[0]["function"]
-    model_property = first["parameters"]["properties"]["model"]
-    assert model_property["enum"] == list(tool.bot.config.IMAGE_GEN_MODELS)
-    for model, description in tool.bot.config.IMAGE_GEN_MODELS.items():
-        assert model in model_property["description"]
-        assert description in model_property["description"]
-    assert second["parameters"]["properties"]["model"] == model_property
+    assert not {"model", "quality"} & first["parameters"]["properties"].keys()
+    assert second["parameters"]["properties"] == first["parameters"]["properties"]
+    assert not {"voice", "language"} & TOOL_PARAMETERS["tts"]["properties"].keys()
     image_description = first["parameters"]["properties"]["image"]["description"]
     assert "empty string" in image_description and "empty JSON list" in image_description
     assert TOOL_PARAMETERS["image_generator"]["properties"] == original
@@ -245,7 +242,6 @@ def test_dynamic_schema_exposes_every_configured_model_without_mutating_shared_s
     bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
     guidance = MaxwellBot._tool_system_prompt(bot)
     assert "image_generator" in guidance
-    assert "default is synthetic-image-0:" in guidance
-    for model, description in tool.bot.config.IMAGE_GEN_MODELS.items():
-        assert model in guidance
-        assert description in guidance
+    for model in tool.bot.config.IMAGE_GEN_MODELS:
+        if model != tool.bot.config.IMAGE_GEN_MODEL:
+            assert model not in guidance

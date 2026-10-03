@@ -108,12 +108,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
                 "JSON list or comma-separated refs (max 4). Omit to use message attachments. "
                 "Pass an empty string or empty JSON list to generate from scratch without attachments."
             ),
-            "model": _str(
-                "Optional exact configured model ID; defaults to IMAGE_GEN_MODEL."
-            ),
-            "quality": _str(
-                "Optional quality override; defaults to IMAGE_GEN_QUALITY."
-            ),
             "auto_send": {
                 "type": "boolean",
                 "default": False,
@@ -546,10 +540,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "tts": _obj(
         {
             "text": _str("Text to speak"),
-            "language": _str("Language name or code (e.g. english, spanish)"),
-            "voice": _str(
-                "TTS voice name (tiktok, mommy, or espanol/spanish). Omit for the default voice."
-            ),
         },
         ["text"],
     ),
@@ -800,37 +790,6 @@ REASONING_PARAM: dict[str, Any] = {
 }
 
 
-def _image_generator_properties(
-    tool: object, properties: dict[str, dict[str, object]]
-) -> dict[str, dict[str, object]]:
-    """Copy the image model and quality fields with live configuration values."""
-    cfg = getattr(getattr(tool, "bot", None), "config", None)
-    model_map = getattr(cfg, "IMAGE_GEN_MODELS", {}) or {}
-    default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
-    model_property = dict(properties["model"])
-    if isinstance(model_map, dict) and model_map:
-        model_property["enum"] = list(model_map)
-        model_property["description"] = (
-            "Select an exact configured model ID. Omit to use IMAGE_GEN_MODEL. "
-            "Configured models and operator descriptions:\n"
-            + "\n".join(
-                f"- {model_id}: {description}"
-                for model_id, description in model_map.items()
-            )
-        )
-        if default_model in model_map:
-            model_property["default"] = default_model
-    else:
-        model_property["description"] = (
-            "No image models are configured; set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL."
-        )
-    properties["model"] = model_property
-    quality_property = dict(properties["quality"])
-    quality_property["default"] = getattr(cfg, "IMAGE_GEN_QUALITY", "low")
-    properties["quality"] = quality_property
-    return properties
-
-
 def build_openai_tools(
     tools: dict[str, Any],
     *,
@@ -886,11 +845,8 @@ def build_openai_tools(
                 "additionalProperties": True,
             }
         params = dict(declared)
-        # Extend a per-call copy so dynamic model choices never mutate TOOL_PARAMETERS.
         raw_props = params.get("properties")
         props = dict(raw_props) if isinstance(raw_props, dict) else {}
-        if name == "image_generator":
-            props = _image_generator_properties(tool, props)
         props.setdefault("reasoning", REASONING_PARAM)
         params["properties"] = props
         # reasoning is ALWAYS required — no exceptions, no "terse on a trivial

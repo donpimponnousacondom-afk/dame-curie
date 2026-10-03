@@ -662,17 +662,16 @@ async def _synthesize_local_tts_wav(text: str, output_path: str) -> str | None:
     if not espeak:
         return None
     raw_path = output_path + ".local.wav"
-    voice = os.environ.get("TTS_LOCAL_VOICE", "en-us")
-    speed = os.environ.get("TTS_LOCAL_SPEED", "185")
-    pitch = os.environ.get("TTS_LOCAL_PITCH", "45")
+    voice = Config.TTS_LOCAL_VOICE
+    speed = Config.TTS_LOCAL_SPEED
+    pitch = Config.TTS_LOCAL_PITCH
+    options = []
+    for flag, value in (("-v", voice), ("-s", speed), ("-p", pitch)):
+        if value is not None:
+            options.extend((flag, value))
     proc = await asyncio.create_subprocess_exec(
         espeak,
-        "-v",
-        voice,
-        "-s",
-        speed,
-        "-p",
-        pitch,
+        *options,
         "-w",
         raw_path,
         "--",
@@ -731,152 +730,69 @@ async def _synthesize_local_tts_wav(text: str, output_path: str) -> str | None:
     return output_path
 
 
-async def _synthesize_tts_wav(
-    text: str, output_path: str, *, prefer_local: bool = False, voice: str | None = None
-) -> str:
-    if prefer_local or os.environ.get("TTS_ENGINE", "").lower() in {
-        "local",
-        "espeak",
-        "espeak-ng",
-    }:
+async def _synthesize_tts_wav(text: str, output_path: str) -> str:
+    engine = Config.TTS_ENGINE
+    if engine == "local":
         local = await _synthesize_local_tts_wav(text, output_path)
-        if local:
-            return local
-        if os.environ.get("TTS_ENGINE", "").lower() in {"local", "espeak", "espeak-ng"}:
-            logger.warning("Configured local TTS failed; falling back to remote TTS")
+        if not local:
+            raise RuntimeError("Configured local TTS failed")
+        return local
+    if engine == "riva":
+        import wave
 
-    fish_api_key = os.environ.get("FISH_API_KEY", "").strip()
-    if fish_api_key:
-        try:
-            from bot_tools import _fish_reference_id, _synthesize_fish_tts
+        import riva.client
+        from riva.client.proto import riva_audio_pb2
 
-            fish_model = os.environ.get("TTS_FISH_MODEL", "s2.1-pro-free")
-            fish_ref = _fish_reference_id(voice)
-            fish_fmt = os.environ.get("TTS_FISH_FORMAT", "mp3")
-            mp3_path = output_path + ".fish.mp3"
-            fish_out = await _synthesize_fish_tts(
+        if not all((Config.NVIDIA_API_KEY, Config.TTS_RIVA_FUNCTION_ID, Config.TTS_RIVA_VOICE, Config.TTS_RIVA_LANGUAGE)):
+            raise ValueError("Riva TTS requires NVIDIA_API_KEY, TTS_RIVA_FUNCTION_ID, TTS_RIVA_VOICE and TTS_RIVA_LANGUAGE")
+        auth = riva.client.Auth(
+            uri="grpc.nvcf.nvidia.com:443",
+            use_ssl=True,
+            metadata_args=[
+                ["function-id", Config.TTS_RIVA_FUNCTION_ID],
+                ["authorization", f"Bearer {Config.NVIDIA_API_KEY}"],
+            ],
+            options=[
+                ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+                ("grpc.max_send_message_length", 64 * 1024 * 1024),
+            ],
+        )
+        service = riva.client.SpeechSynthesisService(auth)
+        response = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: service.synthesize(
+                text=text,
+                voice_name=Config.TTS_RIVA_VOICE,
+                language_code=Config.TTS_RIVA_LANGUAGE,
+                sample_rate_hz=48000,
+                encoding=riva_audio_pb2.AudioEncoding.LINEAR_PCM,
+            ),
+        )
+        with wave.open(output_path, "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(48000)
+            f.writeframesraw(response.audio)
+        return output_path
+    if engine not in {"fish", "gtts"}:
+        raise ValueError("TTS_ENGINE must explicitly select fish, riva, gtts or local")
+    mp3_path = output_path + ".mp3"
+    try:
+        if engine == "fish":
+            from bot_tools import _synthesize_fish_tts
+
+            await _synthesize_fish_tts(
                 text,
                 mp3_path,
-                api_key=fish_api_key,
-                model=fish_model,
-                reference_id=fish_ref,
-                fmt=fish_fmt,
+                api_key=Config.FISH_API_KEY,
+                model=Config.TTS_FISH_MODEL,
+                reference_id=Config.TTS_FISH_REFERENCE_ID,
+                fmt=Config.TTS_FISH_FORMAT,
             )
-            if fish_out:
-                proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    fish_out,
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-c:a",
-                    "pcm_s16le",
-                    output_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    _stdout, _stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=30
-                    )
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    raise RuntimeError("Fish TTS ffmpeg conversion timed out") from None
-                finally:
-                    with contextlib.suppress(OSError):
-                        os.unlink(mp3_path)
-                if proc.returncode == 0 and os.path.exists(output_path):
-                    logger.info(
-                        "Fish VC TTS synthesized audio model=%r ref=%s voice=%s",
-                        fish_model,
-                        bool(fish_ref),
-                        voice,
-                    )
-                    return output_path
-        except Exception as e:
-            logger.warning("Fish VC TTS failed: %s. Falling back.", e)
+        else:
+            from gtts import gTTS
 
-    nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "")
-    function_id = ""
-    if nvidia_api_key:
-        try:
-            import wave
-
-            import riva.client
-            from riva.client.proto import riva_audio_pb2
-
-            function_id = os.environ.get(
-                "TTS_RIVA_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969"
-            )
-            voice_name = os.environ.get(
-                "TTS_RIVA_VOICE", "Magpie-Multilingual.EN-US.Jason.Angry"
-            )
-            language_code = os.environ.get("TTS_RIVA_LANGUAGE", "en-US")
-            auth = riva.client.Auth(
-                uri="grpc.nvcf.nvidia.com:443",
-                use_ssl=True,
-                metadata_args=[
-                    ["function-id", function_id],
-                    ["authorization", f"Bearer {nvidia_api_key}"],
-                ],
-                options=cast(
-                    Any,
-                    [
-                        ("grpc.max_receive_message_length", 64 * 1024 * 1024),
-                        ("grpc.max_send_message_length", 64 * 1024 * 1024),
-                    ],
-                ),
-            )
-            service = riva.client.SpeechSynthesisService(auth)
-            response = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: service.synthesize(
-                    text=text,
-                    voice_name=voice_name,
-                    language_code=language_code,
-                    sample_rate_hz=48000,
-                    encoding=cast(Any, riva_audio_pb2).AudioEncoding.LINEAR_PCM,
-                ),
-            )
-            with wave.open(output_path, "wb") as f:
-                f.setnchannels(1)
-                f.setsampwidth(2)
-                f.setframerate(48000)
-                f.writeframesraw(response.audio)  # type: ignore[attr-defined]
-            if os.path.exists(output_path):
-                logger.info(
-                    "Riva VC TTS synthesized audio with function_id=%r voice=%r language=%r",
-                    function_id,
-                    voice_name,
-                    language_code,
-                )
-                return output_path
-        except Exception as e:
-            logger.warning(
-                "NVIDIA Riva TTS failed for VC playback function_id=%r: %s. Falling back to local TTS, then gTTS if needed.",
-                function_id,
-                e,
-            )
-            local = await _synthesize_local_tts_wav(text, output_path)
-            if local:
-                return local
-
-    from gtts import gTTS
-
-    mp3_path = output_path + ".mp3"
-
-    def run_gtts():
-        gTTS(text=text, lang="en").save(mp3_path)
-
-    try:
-        await asyncio.get_running_loop().run_in_executor(None, run_gtts)
+            await asyncio.to_thread(lambda: gTTS(text=text).save(mp3_path))
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-hide_banner",
@@ -897,7 +813,7 @@ async def _synthesize_tts_wav(
         )
         try:
             _stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError as _exc:
+        except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
             raise RuntimeError("TTS ffmpeg conversion timed out") from None
@@ -905,19 +821,10 @@ async def _synthesize_tts_wav(
             raise RuntimeError("Failed to synthesize TTS audio")
         return output_path
     finally:
-        # Always remove the intermediate mp3 so a non-temp output_path doesn't
-        # leak a permanent .mp3 sibling. The local-espeak path cleans its own
-        # raw file; this gTTS path previously left mp3_path behind forever.
-        try:
-            if os.path.exists(mp3_path):
-                os.unlink(mp3_path)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            os.unlink(mp3_path)
 
 
-# NVIDIA Parakeet CTC (en-US) on NVCF — same grpc.nvcf.nvidia.com path as Riva TTS.
-# Whisper is too slow for live VC; this is a dedicated ASR call (~sub-second).
-_ASR_RIVA_FUNCTION_ID_DEFAULT = "1598d209-5e27-4d3c-8079-4751568b1081"
 _riva_asr_service = None
 _riva_asr_auth_key = ""
 
@@ -956,14 +863,15 @@ def _transcribe_riva_wav_sync(wav_path: str) -> str:
     import riva.client
     from riva.client.proto import riva_audio_pb2
 
-    api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    api_key = Config.NVIDIA_API_KEY
     if not api_key:
         raise RuntimeError("NVIDIA_API_KEY is not configured")
-    function_id = (
-        os.environ.get("ASR_RIVA_FUNCTION_ID", "").strip()
-        or _ASR_RIVA_FUNCTION_ID_DEFAULT
-    )
-    language_code = os.environ.get("ASR_RIVA_LANGUAGE", "en-US").strip() or "en-US"
+    function_id = Config.ASR_RIVA_FUNCTION_ID
+    if not function_id:
+        raise RuntimeError("ASR_RIVA_FUNCTION_ID is not configured")
+    language_code = Config.ASR_RIVA_LANGUAGE
+    if not language_code:
+        raise RuntimeError("ASR_RIVA_LANGUAGE is not configured")
     with wave.open(wav_path, "rb") as wav_f:
         sample_rate = wav_f.getframerate()
         channels = wav_f.getnchannels()
@@ -975,9 +883,6 @@ def _transcribe_riva_wav_sync(wav_path: str) -> str:
         sample_rate_hertz=sample_rate,
         language_code=language_code,
         audio_channel_count=channels,
-        max_alternatives=1,
-        enable_automatic_punctuation=True,
-        verbatim_transcripts=False,
     )
     service = _riva_asr_service_cached(api_key, function_id)
     response = service.offline_recognize(audio_bytes, config)
@@ -7301,14 +7206,9 @@ class MaxwellBot(commands.Bot):
             try:
                 with tempfile.TemporaryDirectory(prefix="dame-curie-vc-") as tmp:
                     wav_path = str(Path(tmp) / "tts.wav")
-                    prefer_local_tts = str(
-                        self._control.get("vc_tts_engine", "fish")
-                    ).lower() in {"local", "espeak", "espeak-ng"}
                     await _synthesize_tts_wav(
                         rest[:400],
                         wav_path,
-                        prefer_local=prefer_local_tts,
-                        voice=str(self._control.get("vc_tts_voice", "") or ""),
                     )
                     key = self._vc_context_key(
                         message.guild,
@@ -7540,8 +7440,6 @@ class MaxwellBot(commands.Bot):
             "or anything that sounds weird read aloud.\n"
             "Reply directly to what they said. No reasoning, no "
             "chain-of-thought, no meta-commentary, no narrating what you're doing."
-            "\nOptional: start your reply with [voice=NAME] to pick your TTS voice "
-            "(choices: tiktok, mommy, espanol/spanish). Defaults to tiktok if you don't specify."
         )
         if self._control.get("vc_response_mode", "always") == "addressed":
             wakes = list(self._control.get("vc_wake_words", ["maxwell"]) or ["maxwell"])
@@ -7848,22 +7746,11 @@ class MaxwellBot(commands.Bot):
             with tempfile.TemporaryDirectory(prefix="dame-curie-vc-reply-") as tmp:
                 wav_path = str(Path(tmp) / "reply.wav")
                 t_tts = time.perf_counter()
-                prefer_local_tts = str(
-                    self._control.get("vc_tts_engine", "fish")
-                ).lower() in {"local", "espeak", "espeak-ng"}
-                # Maxwell can pick the Fish voice per-reply with a leading
-                # [voice=NAME] tag (tiktok|mommy). Strip it before synthesis;
-                # unknown names fall through to the vc_tts_voice control.
-                vc_voice = str(self._control.get("vc_tts_voice", "") or "")
-                vc_tag = re.match(r"^\s*\[voice=([A-Za-z0-9_-]+)\]\s*", response)
-                if vc_tag:
-                    vc_voice = vc_tag.group(1)
-                    response = response[vc_tag.end() :]
+                if re.match(r"^\s*\[voice=", response):
+                    raise ValueError("Voice selection must be set in the TTS configuration")
                 await _synthesize_tts_wav(
                     response,
                     wav_path,
-                    prefer_local=prefer_local_tts,
-                    voice=vc_voice,
                 )
                 t_tts_done = time.perf_counter()
                 if sink:
