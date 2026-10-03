@@ -79,11 +79,13 @@ class Session:
         self.responses = list(responses)
         self.requests = []
 
-    def post(self, url, *, json, timeout, headers):
+    def post(self, url, *, json, timeout, headers, allow_redirects):
+        assert allow_redirects is False
         self.requests.append((url, copy.deepcopy(json), timeout, dict(headers)))
         return self.responses.pop(0)
 
-    def get(self, url, *, timeout, headers):
+    def get(self, url, *, timeout, headers, allow_redirects):
+        assert allow_redirects is False
         self.requests.append((url, {}, timeout, dict(headers)))
         return self.responses.pop(0)
 
