@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from control_defaults import DEEPSEEK_REASONING_EFFORTS
-from error_reporting import capture_incident, register_secrets
+from error_reporting import capture_incident, redact_sensitive_text, register_secrets
 from image_media import normalize_image_part
 from provider_telemetry import (
     CallMetrics,
@@ -2731,7 +2731,7 @@ class OpenAICompatibleProvider:
                                 continue
                         if attempt >= max_attempts:
                             raise ProviderRequestError(
-                                f"Provider API error: {resp.status}"
+                                f"Provider API error: {resp.status}: {redact_sensitive_text(error_text)}"
                             )
                         logger.warning(
                             "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
@@ -3009,7 +3009,7 @@ class OpenAICompatibleProvider:
                             )
                             continue
                         raise ProviderRequestError(
-                            f"Provider API error: {resp.status}"
+                            f"Provider API error: {resp.status}: {redact_sensitive_text(error_text)}"
                         )
 
                     content_type = resp.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()

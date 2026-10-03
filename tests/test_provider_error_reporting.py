@@ -148,7 +148,8 @@ MESSAGES = [{"role": "user", "content": "synthetic private prompt not needed in 
 
 @pytest.mark.parametrize("number", [1, 37, 50, 75, 100])
 def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics(production_handler, caplog, number):
-    body = "reasoning.effort rejected as numeric; " + "FULL-UPSTREAM-DETAIL " * 1000 + "FINAL-SUPPORT-TAIL"
+    body = "reasoning.effort rejected as numeric; " + "FULL-UPSTREAM-DETAIL " * 1000 + "FINAL-SUPPORT-TAIL; credential=synthetic-effort-key"
+    visible_body = body.replace("synthetic-effort-key", "[REDACTED]")
     response = Response(body.encode(), 400, headers={"X-Request-ID": "synthetic-effort-request"})
     provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "deepseek/deepseek-v4.1-flash", 8192, 0.6,
@@ -157,50 +158,64 @@ def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics
     )
     provider.available = True
     provider._session = Session([response])
-    with pytest.raises(ProviderRequestError):
+    with pytest.raises(ProviderRequestError) as caught:
         asyncio.run(provider.generate_chat_completion(MESSAGES))
-    assert len(provider._session.requests) == 1
+    logging.getLogger("synthetic.outer").error(
+        "Provider request failed: %s", caught.value,
+        exc_info=(type(caught.value), caught.value, caught.value.__traceback__),
+    )
+    assert str(caught.value) == f"Provider API error: 400: {visible_body}"
+    assert len(provider._session.requests) == response.text_calls == 1
     payload = provider._session.requests[0][1]
     assert type(payload["reasoning"]["effort"]) is int
     assert payload["reasoning"] == {"enabled": True, "effort": number}
     assert payload["provider"] == {"only": ["deepseek"]}
     report = production_handler.get(0).format_report()
-    assert body in report and "synthetic-effort-request" in report
+    assert visible_body in report and "synthetic-effort-request" in report
     assert f'"effort": {number}' in report
-    assert "synthetic-effort-key" not in report and MESSAGES[0]["content"] not in report
-    assert body not in caplog.text
+    assert "synthetic-effort-key" not in report + caplog.text
+    assert MESSAGES[0]["content"] not in report + caplog.text
+    assert f"Provider API error: 400: {visible_body}" in caplog.text
+    assert production_handler.get(0).incident_id == caught.value.incident_id
     assert production_handler.get(1) is None
     assert provider.deepseek_reasoning_level(provider._endpoints[0]) == number
 
 
-def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, caplog):
-    body = "reason=" + "x" * 90_000 + "; missing reasoning_content in assistant continuation; END405"
+@pytest.mark.parametrize("retry_attempts", [1, 4])
+@pytest.mark.parametrize("body", [
+    "reason=" + "x" * 90_000 + "; missing reasoning_content in assistant continuation; END405",
+    '{"error":{"message":"unknown provider for model mimo-v2.6-pro","type":"invalid_request_error","code":"model_not_found","param":"model"}}',
+], ids=["bounded-body", "model-not-found"])
+def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, caplog, retry_attempts, body):
     response = Response(body.encode(), 400, headers={
         "X-Request-ID": "synthetic-request-400", "CF-Ray": "synthetic-ray",
         "Retry-After": "7", "Set-Cookie": "synthetic-response-cookie",
     })
     provider = provider_for(
-        [response], retry_attempts=4, api_key="synthetic-provider-key",
+        [response], retry_attempts=retry_attempts, api_key="synthetic-provider-key",
         extra_headers={"Cookie": "synthetic-request-cookie"},
         extra_body={"provider": {"only": ["synthetic-upstream"]}, "reasoning": {"effort": "high"}},
     )
+    original_options = copy.deepcopy(provider.extra_body)
     tools = [{"type": "function", "function": {"name": "synthetic_tool", "parameters": {"type": "object"}}}]
     with pytest.raises(ProviderRequestError) as caught:
         asyncio.run(provider.generate_chat_completion(MESSAGES, tools=tools, model="override-model"))
     error = caught.value
-    assert str(error) == "Provider API error: 400"
-    assert body not in str(error) + repr(error) + caplog.text
-    assert body not in error.incident_details
-    assert body[:100] in error.incident_details
-    assert "END405" in error.incident_details
-    assert "response characters omitted from provider diagnostics" in error.incident_details
+    assert str(error) == f"Provider API error: 400: {body}"
+    response_capture = error.incident_details.split("\nUnderlying exception context:\n", 1)[0]
+    if len(body) > providers._PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+        assert body not in response_capture
+        assert body[:100] in response_capture and "END405" in response_capture
+        assert "response characters omitted from provider diagnostics" in response_capture
+    else:
+        assert body in response_capture
     assert error.incident_id == "synthetic-incident-1"
     assert len(captured) == len(provider._session.requests) == 1
     report = captured[0]
     assert report["exception"] is error
     details = report["details"]
     for expected in (
-        '"status": 400', '"attempt": "1/4"', '"model": "override-model"',
+        '"status": 400', f'"attempt": "1/{retry_attempts}"', '"model": "override-model"',
         '"max_tokens": 8192', '"temperature": 0.6', '"effort": "high"',
         "synthetic-upstream", "synthetic_tool", "synthetic-request-400", "synthetic-ray",
         "https://primary.example.test/v1/chat/completions", "ProviderRequestError",
@@ -210,8 +225,17 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
         "Authorization", "Cookie", "synthetic-provider-key", "synthetic-request-cookie",
         "synthetic-response-cookie", MESSAGES[0]["content"],
     ):
-        assert excluded not in details
-    assert provider._session.requests[0][3]["Authorization"] == "Bearer synthetic-provider-key"
+        assert excluded not in details + str(error) + caplog.text
+    assert provider._session.requests[0][1] == {
+        **original_options, "model": "override-model", "messages": MESSAGES,
+        "temperature": 0.6, "top_p": 0.95, "top_k": 20, "max_tokens": 8192,
+        "stream": True, "stream_options": {"include_usage": True},
+        "tools": tools, "tool_choice": "auto",
+    }
+    assert provider.extra_body == original_options
+    assert provider._session.requests[0][3] == {
+        "Cookie": "synthetic-request-cookie", "Authorization": "Bearer synthetic-provider-key",
+    }
     assert response.text_calls == 1
 
 
@@ -858,7 +882,8 @@ def test_concurrent_calls_on_shared_provider_keep_diagnostics_separate(captured)
         assert f"request-{other}" not in error.incident_details
 
 
-def test_real_store_redacts_registered_key_and_common_credentials(private_store, caplog):
+@pytest.mark.parametrize("retry_attempts", [1, 4])
+def test_real_store_redacts_registered_key_and_common_credentials(private_store, caplog, retry_attempts):
     key = "synthetic-private-provider-credential-12345"
     body = (
         f"upstream echoed {key}\nAuthorization: Bearer other-header-secret\n"
@@ -866,9 +891,13 @@ def test_real_store_redacts_registered_key_and_common_credentials(private_store,
         "-----BEGIN PRIVATE KEY-----\nsynthetic-private-key-material\n-----END PRIVATE KEY-----\n"
         + "full useful explanation " + "x" * 405 + " EXACT FINAL UPSTREAM DETAIL"
     )
-    provider = provider_for([Response(body.encode(), 400)], api_key=key, retry_attempts=1)
+    response = Response(body.encode(), 400)
+    provider = provider_for([response], api_key=key, retry_attempts=retry_attempts)
     with pytest.raises(ProviderRequestError) as caught:
         asyncio.run(provider.generate_response(MESSAGES))
+    assert len(provider._session.requests) == response.text_calls == 1
+    assert str(caught.value).startswith("Provider API error: 400: upstream echoed [REDACTED]")
+    assert str(caught.value).endswith("full useful explanation " + "x" * 405 + " EXACT FINAL UPSTREAM DETAIL")
     incident = private_store.get(0)
     assert incident.incident_id == caught.value.incident_id
     assert private_store.get(1) is None
