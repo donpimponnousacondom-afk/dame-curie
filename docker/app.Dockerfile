@@ -7,9 +7,15 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl ffmpeg espeak-ng libopus0 libsodium23 \
     nodejs chromium stockfish fonts-dejavu-core acl \
+    bind9-dnsutils bind9-host bzip2 g++ git iputils-ping jq make nano \
+    net-tools netcat-traditional patch procps tesseract-ocr \
+    tesseract-ocr-eng tesseract-ocr-osd vim wget xz-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/requirements.lock /opt/dame-curie/requirements.lock
 RUN python -m pip install --no-cache-dir --no-deps -r /opt/dame-curie/requirements.lock
+COPY docker/shell-requirements.lock /opt/dame-curie/shell-requirements.lock
+RUN python -m pip wheel --no-cache-dir --no-deps \
+    --wheel-dir /opt/dame-curie/shell-wheelhouse -r /opt/dame-curie/shell-requirements.lock
 
 WORKDIR /app
 COPY autonomy.py autonomy_social.py bot.py bot_tools.py captcha_solver.py \
@@ -25,7 +31,8 @@ COPY plugins/checkers/__init__.py plugins/checkers/checkers_game.py plugins/chec
 COPY assets/tokenizers/ ./assets/tokenizers/
 COPY docker/check_embeddings.py /opt/dame-curie/check_embeddings.py
 RUN mkdir -p /app/temp /state/data /state/sites /state/shell /config/prompts \
-    && ln -sT /state/shell /home/dame-curie
+    && ln -sT /state/shell /home/dame-curie \
+    && ln -sT /state/shell /home/maxwell
 ENV HOME=/home/dame-curie
 
 ARG DAME_CURIE_BUILD_COMMIT=unknown

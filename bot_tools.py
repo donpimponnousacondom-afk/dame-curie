@@ -5230,7 +5230,7 @@ class ShellTool(Tool):
                 cwd="/home/dame-curie",
                 env={
                     "HOME": "/home/dame-curie",
-                    "PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "PATH": "/home/dame-curie/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "LANG": "C.UTF-8",
                     "PYTHONUNBUFFERED": "1",
                 },

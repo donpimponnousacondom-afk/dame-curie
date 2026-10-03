@@ -58,6 +58,22 @@ If set, `DAME_CURIE_CONTAINER_MODE=true` and `DAME_CURIE_INSTANCE_ID=dame-curie-
 
 Dirac uses the existing shared Ollama embedding service; it does not run its own Ollama/model-pull. The relay forwards only `POST /api/embed`, `POST /api/embeddings`, and `POST /v1/embeddings`; other paths/methods are rejected locally. This is an endpoint/method boundary, not independent same-UID or model-resource isolation: permitted embedding arguments remain client-controlled and no body-size quota was added. No canonical/V1/shared service mutation, model administration, publisher, remote destination, or activation follows from this contract.
 
+## V2 shell tools and authored-path compatibility
+
+The image retains the measured shell CLI packages, including ordinary Debian Git and its approved normal Perl dependencies, with `--no-install-recommends`. It builds the exact `docker/shell-requirements.lock` packages into `/opt/dame-curie/shell-wheelhouse`, without installing them into app Python or changing `docker/requirements.lock`. Shell tools retain NumPy 2.5.3 and setuptools 78.1.1 (`py-mini-racer` imports `pkg_resources`); app NumPy 2.5.2 and setuptools 84.0.0 remain unchanged. `phply` is a Python parser, not a PHP interpreter or hosting service. No removed hosting features or model-facing tool menu is restored.
+
+The coordinator prepares a fresh persistent shell venv inside the verified V2 image, with only the shell mount, no credentials/data mounts, network disabled and the bot entrypoint overridden. This is explicit preparation, not an image startup bootstrap:
+
+```sh
+/usr/local/bin/python3.14 -m venv --copies --system-site-packages /home/dame-curie/.venv
+/home/dame-curie/.venv/bin/python -m pip install --no-index --no-deps \
+  --find-links /opt/dame-curie/shell-wheelhouse -r /opt/dame-curie/shell-requirements.lock
+```
+
+Only shell-command subprocesses prepend `/home/dame-curie/.venv/bin` to their existing minimal PATH; the app interpreter, CMD and environment remain unchanged. This explicitly approved shell venv shares app site-packages while its pinned tools take precedence. Copies avoid the old absolute interpreter symlink rejected by restore. Do not transplant the old empty `.venv`, `.ssh`, Ubuntu `/usr` or incidental vendor/platform packages. The coordinator must verify native wheels, offline installation and backup/restore admissibility; source changes alone establish none of those results.
+
+Preserve authored scripts/docs byte-for-byte: image-internal `/home/maxwell` and `/home/dame-curie` both point to `/state/shell`. The former is authored-path compatibility with V2 shell state, not alternate data ownership, an old environment alias or a V1/host mount. File-tool confinement is unchanged; use canonical `/home/dame-curie` paths for attachments.
+
 ## Smoke requests and receipts
 
 The smoke harness is opt-in and scoped to the approved test channel or a bot-owned thread within it. The bot-authored notice names the test, says no human typed the request, mentions the bot and makes clear that permission actor and text author differ. Injection uses the configured real SDK user as permission actor; notice author remains the bot and is preserved as provenance. Normal bot enable/blacklist/allowlist/sleep gates still apply. Never impersonate a human gateway message or describe a smoke task as a human request.

@@ -39,7 +39,7 @@ def test_exec_uses_outer_bot_container(monkeypatch):
         environment = spawn.call_args.kwargs["env"]
         assert environment == {
             "HOME": "/home/dame-curie",
-            "PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": "/home/dame-curie/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG": "C.UTF-8",
             "PYTHONUNBUFFERED": "1",
         }
