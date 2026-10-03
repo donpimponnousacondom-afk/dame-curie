@@ -2142,6 +2142,7 @@ class OpenAICompatibleProvider:
                         incident.capture_text(error_text)
                         incident.current["response_body_complete"] = True
                         detail = redact_sensitive_text(incident.response_text)
+                        detail = "\n".join(detail[index:index + 4096] for index in range(0, len(detail), 4096))
                         if _is_usage_exhausted_error(resp.status, error_text):
                             raise ProviderUsageExhaustedError(
                                 f"Provider usage exhausted: HTTP {resp.status}: {detail}"
