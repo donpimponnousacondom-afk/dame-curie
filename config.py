@@ -30,6 +30,8 @@ from typing import ClassVar
 
 from dotenv.main import load_dotenv
 
+from provider_settings import parse_provider_settings
+
 APP_ROOT = Path(__file__).resolve().parent
 ENV_FILE = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
 INHERITED_ENVIRONMENT = dict(os.environ)
@@ -205,47 +207,7 @@ def _feature_env(
 class Config:
     DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", ""))
-    # No default model on purpose: a hardcoded one that your endpoint does
-    # not serve fails later, as an opaque 404 from the provider. Empty fails
-    # at startup with a sentence that says what to do.
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip()
-    OPENAI_REM_MODEL = os.getenv("OPENAI_REM_MODEL") or OPENAI_MODEL
-    # max_tokens = max *output* tokens per completion (not context window).
-    # minimax-m3 allows huge context but caps output ~131072; 8192 is a sane default.
-    OPENAI_MAX_TOKENS = _int_env(
-        "OPENAI_MAX_TOKENS", 16384, min_value=1, max_value=131072
-    )
-    OPENAI_TEMPERATURE = _float_env("OPENAI_TEMPERATURE", 0.6, min_value=0.0)
-    OPENAI_TOP_P = _float_env("OPENAI_TOP_P", 0.95, min_value=0.0, max_value=1.0)
-    OPENAI_TOP_K = _int_env("OPENAI_TOP_K", 20, min_value=0)
-    OPENAI_DISABLE_REASONING = _bool_env("OPENAI_DISABLE_REASONING", False)
-    OPENAI_EXTRA_HEADERS = _json_env("OPENAI_EXTRA_HEADERS", strict=True)
-    OPENAI_EXTRA_BODY = _json_env("OPENAI_EXTRA_BODY", strict=True)
-    OPENAI_FALLBACK_BASE_URL = os.getenv("OPENAI_FALLBACK_BASE_URL", "").strip()
-    OPENAI_FALLBACK_API_KEY = os.getenv("OPENAI_FALLBACK_API_KEY", "").strip()
-    OPENAI_FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "").strip()
-    OPENAI_FALLBACK_DISABLE_REASONING = _bool_env(
-        "OPENAI_FALLBACK_DISABLE_REASONING", True
-    )
-    # Optional vision/omni model for image/video (and audio, if enabled) turns.
-    # Text-only primaries like deepseek-v4-flash 400 on image_url; when this is
-    # set, media requests go here first. Blank base/key inherit the primary.
-    OPENAI_VISION_BASE_URL = os.getenv("OPENAI_VISION_BASE_URL", "").strip()
-    OPENAI_VISION_API_KEY = os.getenv("OPENAI_VISION_API_KEY", "").strip()
-    OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "").strip()
-    OPENAI_VISION_DISABLE_REASONING = _bool_env("OPENAI_VISION_DISABLE_REASONING", True)
-    OPENAI_RETRY_ATTEMPTS = _int_env(
-        "OPENAI_RETRY_ATTEMPTS", 5, min_value=1, max_value=10
-    )
-    # Up to this many remaining attempts can recover empty HTTP 200 content
-    # with a different endpoint and non-streaming request. The total attempt
-    # budget is not extended.
-    OPENAI_EMPTY_RESPONSE_RETRIES = _int_env(
-        "OPENAI_EMPTY_RESPONSE_RETRIES", 2, min_value=0, max_value=5
-    )
-    OPENAI_ENDPOINT_COOLDOWN_SECONDS = _float_env("OPENAI_ENDPOINT_COOLDOWN_SECONDS", 60.0)
+    locals().update(parse_provider_settings(os.environ, require_primary=False))
 
     # Toggle for "omni" (audio+vision capable) model input. On by default:
     # Gemini behind the current proxy transcribes wav/mp3; endpoints that
@@ -362,30 +324,6 @@ class Config:
     # TTS engine selection. local / riva / gtts / auto. Undocumented before
     # 2026-07-21 — used to fall through a chain in bot._synthesize_tts_wav.
     TTS_ENGINE = os.getenv("TTS_ENGINE", "auto").strip().lower()
-
-    # Vendor-neutral shared auth fallback when primary/AUTONOMY/AUX keys are unset.
-    OPENAI_COMPAT_API_KEY = os.getenv("OPENAI_COMPAT_API_KEY", "").strip()
-
-    AUTONOMY_BASE_URL = os.getenv("AUTONOMY_BASE_URL", "").strip()
-    AUTONOMY_API_KEY = os.getenv(
-        "AUTONOMY_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", "")
-    ).strip()
-    AUTONOMY_MODEL = os.getenv("AUTONOMY_MODEL", "").strip()
-    AUTONOMY_DISABLE_REASONING = _bool_env("AUTONOMY_DISABLE_REASONING", False)
-
-    # Auxiliary background agents (REM, context-cleanup, context-watcher).
-    # These are the "context manager" brains — separate from the autonomy
-    # tick loop so they can run on a different (e.g. cheaper/faster) model
-    # than autonomy. Defaults fall back to the autonomy config, which in
-    # turn falls back to the main OPENAI_* provider, so a fresh install
-    # with no AUX_* vars behaves exactly as before (all background agents
-    # shared one endpoint).
-    AUX_BASE_URL = os.getenv("AUX_BASE_URL", "").strip()
-    AUX_API_KEY = os.getenv(
-        "AUX_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", "")
-    ).strip()
-    AUX_MODEL = os.getenv("AUX_MODEL", "").strip()
-    AUX_DISABLE_REASONING = _bool_env("AUX_DISABLE_REASONING", True)
 
     # Live tool progress messages. OFF by default: a per-server `!progress on`
     # opts a server in, and DAME_CURIE_PROGRESS_MESSAGES=true enables it for every
@@ -514,7 +452,7 @@ class Config:
             raise ValueError(
                 "OPENAI_MODEL is required — set the model name your endpoint serves."
             )
-        if cls.OPENAI_MAX_TOKENS < 1:
+        if cls.OPENAI_MAX_TOKENS is not None and cls.OPENAI_MAX_TOKENS < 1:
             raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
         # Soft warnings — these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is

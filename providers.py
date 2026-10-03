@@ -5,7 +5,6 @@ import contextlib
 import copy
 import json
 import logging
-import os
 import re
 import sys
 import time
@@ -18,7 +17,6 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-from control_defaults import DEEPSEEK_REASONING_EFFORTS
 from error_reporting import capture_incident, redact_sensitive_text, register_secrets
 from image_media import normalize_image_part
 from provider_telemetry import (
@@ -746,7 +744,7 @@ class _ProviderDiagnostics:
         self.current = {
             "attempt": f"{attempt}/{maximum}",
             "endpoint": endpoint.name,
-            "url": f"{endpoint.base_url}/{path}",
+            "url": f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}{path}",
             "model": data.get("model", endpoint.model),
             "timeout_seconds": timeout,
             "parameters": copy.deepcopy({key: value for key, value in data.items() if key != "messages"}),
@@ -764,6 +762,16 @@ class _ProviderDiagnostics:
                 for message in data.get("messages", [])
             ],
         }
+        logger.info(
+            "Provider request settings source=configured-profile endpoint=%s url=%s model=%s parameters=%s",
+            endpoint.name,
+            redact_sensitive_text(self.current["url"]),
+            redact_sensitive_text(str(self.current["model"])),
+            redact_sensitive_text(json.dumps(
+                {key: value for key, value in self.current["parameters"].items() if key != "tools"},
+                ensure_ascii=False,
+            )),
+        )
         self.body = bytearray()
         self.body_bytes_seen = 0
         self.body_truncated = False
@@ -1710,131 +1718,21 @@ def _is_media_unsupported_error(status: int, error_text: str) -> bool:
     return False
 
 
-# "invalid temperature: only 0.6 is allowed for this model" (Console Go via
-# OpenRouter). Deterministic — retrying the same payload burns every attempt
-# and then falls back for no reason, so parse the demanded value and resend.
-_TEMPERATURE_CONSTRAINT_RE = re.compile(
-    r"temperature[^.]{0,80}?only\s+([0-9]*\.?[0-9]+)\s+is\s+allowed",
-    re.IGNORECASE,
-)
-_TEMPERATURE_RANGE_RE = re.compile(
-    r"temperature[^.]{0,80}?(?:must be|should be)[^.]{0,40}?"
-    r"(?:between|in)\s+\[?\s*([0-9]*\.?[0-9]+)\s*(?:,|and|-)\s*([0-9]*\.?[0-9]+)",
-    re.IGNORECASE,
-)
-
-
-def _required_temperature(status: int, error_text: str) -> float | None:
-    """Extract the temperature an endpoint demands from a 400 body."""
-    if status != 400:
-        return None
-    text = error_text or ""
-    if "temperature" not in text.lower():
-        return None
-    match = _TEMPERATURE_CONSTRAINT_RE.search(text)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
-    match = _TEMPERATURE_RANGE_RE.search(text)
-    if match:
-        try:
-            low, high = float(match.group(1)), float(match.group(2))
-        except ValueError:
-            return None
-        if low > high:
-            low, high = high, low
-        # Aim at the middle of the accepted band rather than an endpoint,
-        # which providers sometimes treat as exclusive.
-        return round((low + high) / 2, 3)
-    return None
-
-
-def _strip_media_parts(chat_messages: list[dict]) -> bool:
-    """Flatten multimodal content back to plain text. True if anything changed.
-
-    Last resort when every endpoint rejects the attachments: sending the text
-    alone beats dropping the user's message on the floor.
-    """
-    changed = False
-    for msg in chat_messages:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        texts = [
-            str(part.get("text", ""))
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        dropped = len(content) - len(texts)
-        merged = "\n".join(t for t in texts if t).strip()
-        if dropped > 0:
-            merged = (
-                f"{merged}\n[{dropped} attachment(s) omitted — "
-                "no available model could accept them]"
-            ).strip()
-        msg["content"] = merged
-        changed = True
-    return changed
-
-
 @dataclass(frozen=True)
 class ProviderEndpoint:
     name: str
     base_url: str
     model: str
     api_key: str = ""
-    disable_reasoning: bool = False
 
 
 def normalize_base_url(base_url: str) -> str:
-    """Normalize an OpenAI-compatible base URL to the API root.
-
-    Requests are built as ``{base_url}/chat/completions``, so the base has
-    to include the API path segment. A bare configured host can otherwise
-    return 404 for a missing "/v1". If the URL carries no path at all we add
-    the conventional one; a URL that already has a path (/v1, /v2, /api/v1,
-    ...) is left exactly as given.
-    """
-    base = (base_url or "").strip().rstrip("/")
-    if not base:
-        return base
-    _, _, rest = base.partition("://")
-    if not rest:  # no scheme: treat the whole thing as a host
-        rest = base
-    if "/" in rest:  # already carries a path — the operator's business
-        return base
-    return f"{base}/v1"
-
-
-def deepseek_reasoning_transport(base_url: str, model: str) -> str:
-    host = urlsplit(base_url).hostname or ""
-    
-    # Matches 'deepseek' followed anywhere by 'flash' (case-insensitive, handles slashes/hyphens/etc)
-    is_deepseek_flash = bool(re.search(r"deepseek.*flash", model, re.IGNORECASE))
-    
-    if not is_deepseek_flash:
-        return ""
-        
-    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
-        return "openrouter"
-    if host == "api.deepseek.com" or host.endswith(".deepseek.com"):
-        return "deepseek"
-        
-    return ""
-
-# Deprecated because is stupid
-def _deepseek_reasoning_transport(base_url: str, model: str) -> str:
-    
-    host = urlsplit(base_url).hostname
-    if host == "openrouter.ai" and model == "deepseek/deepseek-v4.1-flash":
-        return "openrouter"
-    if host == "api.deepseek.com" and model in {
-        "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
-    }:
-        return "deepseek"
-    return ""
+    if not isinstance(base_url, str) or not base_url or any(char.isspace() for char in base_url):
+        raise ValueError("base_url must be an http(s) URL without whitespace")
+    parts = urlsplit(base_url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.query or parts.fragment:
+        raise ValueError("base_url must be an http(s) API root without query or fragment")
+    return base_url
 
 
 def track_provider_activity[**P, R](
@@ -1852,35 +1750,6 @@ def track_provider_activity[**P, R](
     return tracked
 
 
-def _validate_foreground_request_options(extra_body: dict[str, object]) -> None:
-    """Reject unsafe choice counts and malformed alternate output limits."""
-    if "n" in extra_body and (
-        type(extra_body["n"]) is not int or extra_body["n"] != 1
-    ):
-        raise ValueError("Foreground provider calls support only n=1")
-    for key in ("max_completion_tokens", "max_output_tokens"):
-        if key in extra_body and (
-            type(extra_body[key]) is not int or extra_body[key] <= 0
-        ):
-            raise ValueError(
-                f"Foreground provider payload requires positive integer {key}"
-            )
-
-
-def _clamp_foreground_output_aliases(payload: dict[str, object]) -> None:
-    """Clamp recognized alternate output caps to the admitted max_tokens value."""
-    cap = payload["max_tokens"]
-    for key in ("max_completion_tokens", "max_output_tokens"):
-        if key not in payload:
-            continue
-        value = payload[key]
-        if type(value) is not int or value <= 0:
-            raise ValueError(
-                f"Foreground provider payload requires positive integer {key}"
-            )
-        payload[key] = min(value, cap)
-
-
 class OpenAICompatibleProvider:
     """OpenAI-compatible LLM Provider with multimodal support using /v1/chat/completions"""
 
@@ -1888,31 +1757,23 @@ class OpenAICompatibleProvider:
         self,
         base_url: str,
         model: str,
-        max_tokens: int,
-        temperature: float,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         api_key: str = "",
-        disable_reasoning: bool = False,
-        fallback_base_url: str = "",
-        fallback_model: str = "",
-        fallback_api_key: str = "",
-        fallback_disable_reasoning: bool = True,
         retry_attempts: int = 5,
         enable_audio_input: bool = False,
-        vision_base_url: str = "",
-        vision_model: str = "",
-        vision_api_key: str = "",
-        vision_disable_reasoning: bool = True,
-        empty_response_retries: int | None = None,
-        top_p: float = 0.95,
-        top_k: int = 20,
+        empty_response_retries: int = 2,
+        top_p: float | None = None,
+        top_k: int | None = None,
         extra_headers: dict[str, str] | None = None,
         extra_body: dict[str, object] | None = None,
-        reasoning_control: Callable[[], str | int] | None = None,
-        endpoint_cooldown_seconds: float | None = None,
     ):
         local_encoding()
         self.active_requests = 0
-        self.reasoning_control = reasoning_control
+        if extra_body is not None and not isinstance(extra_body, dict):
+            raise ValueError("OPENAI_EXTRA_BODY must be a JSON object")
+        if extra_headers is not None and not isinstance(extra_headers, dict):
+            raise ValueError("OPENAI_EXTRA_HEADERS must be a JSON object")
         self.extra_headers = dict(extra_headers or {})
         self.extra_body = copy.deepcopy(extra_body or {})
         self.base_url = normalize_base_url(base_url)
@@ -1921,341 +1782,71 @@ class OpenAICompatibleProvider:
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
-        self.api_key = api_key.strip()
-        register_secrets((self.api_key, fallback_api_key.strip(), vision_api_key.strip()))
-        self.retry_attempts = max(1, retry_attempts)
-        if empty_response_retries is None:
-            try:
-                empty_response_retries = int(
-                    os.getenv(
-                        "OPENAI_EMPTY_RESPONSE_RETRIES",
-                        str(DEFAULT_EMPTY_RESPONSE_RETRIES),
-                    )
-                    or DEFAULT_EMPTY_RESPONSE_RETRIES
-                )
-            except (TypeError, ValueError):
-                empty_response_retries = DEFAULT_EMPTY_RESPONSE_RETRIES
-        self.empty_response_retries = max(0, min(int(empty_response_retries), 5))
-        self.enable_audio_input = bool(enable_audio_input)
-        self._endpoints = [
-            ProviderEndpoint(
-                "primary", self.base_url, self.model, self.api_key, disable_reasoning
-            ),
-        ]
-        if fallback_base_url and fallback_model:
-            self._endpoints.append(
-                ProviderEndpoint(
-                    "fallback",
-                    normalize_base_url(fallback_base_url),
-                    fallback_model,
-                    fallback_api_key.strip(),
-                    fallback_disable_reasoning,
-                )
-            )
-        # Appended last so text routing can keep treating index 1 as fallback.
-        vision_model = (vision_model or "").strip()
-        if vision_model:
-            self._endpoints.append(
-                ProviderEndpoint(
-                    "vision",
-                    normalize_base_url(vision_base_url or self.base_url),
-                    vision_model,
-                    (vision_api_key or self.api_key).strip(),
-                    vision_disable_reasoning,
-                )
-            )
+        self.api_key = api_key
+        register_secrets((self.api_key,))
+        if type(retry_attempts) is not int or retry_attempts < 1:
+            raise ValueError("retry_attempts must be a positive integer")
+        if type(empty_response_retries) is not int or empty_response_retries < 0:
+            raise ValueError("empty_response_retries must be a non-negative integer")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("model must not be blank")
+        self.retry_attempts = retry_attempts
+        self.empty_response_retries = empty_response_retries
+        self.enable_audio_input = enable_audio_input
+        self._endpoints = [ProviderEndpoint("primary", self.base_url, self.model, self.api_key)]
+        self._headers()
+        self._request_payload(self._endpoints[0], [])
         self._session = None
         self.available = False
         self._last_usage: dict = {}
         self._last_tool_calls: list = []
         self._last_assistant_message: dict | None = None
-        # Per-endpoint learned max *output* token cap (name -> cap). Set when a
-        # 400 "maximum output tokens" is observed, and applied proactively on
-        # the next call to that endpoint so we don't waste a round-trip on the
-        # 400 again. Scoped per-endpoint (NOT on the shared instance) so one
-        # model's small output cap doesn't cripple other endpoints/concurrent
-        # requests that previously got mutated via self.max_tokens.
-        self._endpoint_output_caps: dict[str, int] = {}
-        # Same idea for models that accept exactly one temperature (Console Go
-        # rejects anything but 0.6 with a 400). Learned once, applied up front.
-        self._endpoint_temperatures: dict[str, float] = {}
-        self._stream_usage_unsupported: set[str] = set()
-        # Endpoints that have proven they cannot accept attachments (e.g. a
-        # text-only fallback like inclusionai/ling-3.0-flash 404ing with "No
-        # endpoints found that support image input"). Remembered across calls
-        # so every subsequent image turn skips them instead of re-paying for
-        # the same round-trip. Whether an endpoint's model is multimodal does
-        # not change between requests, so this never needs to expire.
-        self._media_incapable: set[str] = set()
-        # Per-endpoint rate-limit cooldown: name -> monotonic expiry. While an
-        # endpoint is cooling, _attempt_endpoint steers to an alternative (if
-        # any) so a rate-limited upstream isn't retried immediately.
-        self._endpoint_cooldown: dict[str, float] = {}
-        try:
-            self._cooldown_seconds = float(
-                os.getenv(
-                    "OPENAI_ENDPOINT_COOLDOWN_SECONDS",
-                    str(DEFAULT_ENDPOINT_COOLDOWN_SECONDS),
-                )
-                or DEFAULT_ENDPOINT_COOLDOWN_SECONDS
-            )
-        except (TypeError, ValueError):
-            self._cooldown_seconds = DEFAULT_ENDPOINT_COOLDOWN_SECONDS
-        if endpoint_cooldown_seconds is not None:
-            self._cooldown_seconds = endpoint_cooldown_seconds
 
-    def _headers(self, endpoint: ProviderEndpoint = None) -> dict[str, str]:
-        api_key = self.api_key if endpoint is None else endpoint.api_key
-        extras = self.extra_headers if endpoint is None or endpoint.name == "primary" else {}
-        headers = {
-            key: value for key, value in extras.items()
-            if not api_key or key.lower() != "authorization"
-        }
+    def _headers(self, endpoint: ProviderEndpoint | None = None) -> dict[str, str]:
+        if endpoint is not None and endpoint != self._endpoints[0]:
+            raise ValueError("Endpoint conflicts with configured provider profile")
+        api_key = self.api_key
+        headers = self.extra_headers.copy()
+        names = [key.lower() for key in headers]
+        if len(names) != len(set(names)):
+            raise ValueError("OPENAI_EXTRA_HEADERS contains conflicting header names")
+        if api_key and "authorization" in names:
+            raise ValueError("OPENAI_API_KEY conflicts with OPENAI_EXTRA_HEADERS Authorization")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
-
-    def _endpoint_named(self, name: str) -> ProviderEndpoint | None:
-        for ep in self._endpoints:
-            if ep.name == name:
-                return ep
-        return None
-
-    def _media_endpoint_order(self) -> list[ProviderEndpoint]:
-        """Vision first, then the rest. Text-only primaries 400 on image_url."""
-        vision = self._endpoint_named("vision")
-        ordered: list[ProviderEndpoint] = []
-        if vision is not None:
-            ordered.append(vision)
-        for ep in self._endpoints:
-            if ep not in ordered:
-                ordered.append(ep)
-        # Endpoints already known to reject attachments go last rather than
-        # being dropped: if they're all we have left, a doomed try still beats
-        # refusing to send anything.
-        return sorted(ordered, key=lambda ep: ep.name in self._media_incapable)
-
-    def _attempt_endpoint(
-        self,
-        attempt: int,
-        *,
-        fast_fallback: bool = False,
-        has_media: bool = False,
-        prefer_fallback: bool = False,
-    ) -> ProviderEndpoint:
-        primary = self._endpoint_named("primary") or self._endpoints[0]
-        fallback = self._endpoint_named("fallback")
-        vision = self._endpoint_named("vision")
-
-        if has_media and vision is not None:
-            # A fallback that has already proven text-only is not a media
-            # option; sending it an image_url just buys another 404.
-            if fallback is not None and fallback.name in self._media_incapable:
-                fallback = None
-            if prefer_fallback and fallback is not None:
-                natural = (
-                    fallback
-                    if (attempt == 1 if fast_fallback else attempt <= 2)
-                    else (vision or primary)
-                )
-            elif fast_fallback:
-                natural = vision if attempt == 1 else (fallback or vision)
-            else:
-                # Attempts 1-2: vision model; 3+: text fallback if configured.
-                natural = vision if attempt <= 2 else (fallback or vision)
-            if self._is_endpoint_cooling(natural.name):
-                candidates = (
-                    (fallback, vision, primary)
-                    if prefer_fallback
-                    else (vision, fallback, primary)
-                )
-                for ep in candidates:
-                    if ep is not None and not self._is_endpoint_cooling(ep.name):
-                        return ep
-            return natural
-
-        if fallback is None:
-            return primary
-        if prefer_fallback:
-            natural = (
-                fallback
-                if (attempt == 1 if fast_fallback else attempt <= 2)
-                else primary
-            )
-        elif fast_fallback:
-            natural = primary if attempt == 1 else fallback
-        else:
-            # Attempt 1 and 2: primary (main)
-            # Attempt 3 and beyond: fallback (second provider)
-            natural = primary if attempt <= 2 else fallback
-        # If the chosen endpoint is rate-limit cooling and a healthy alternative
-        # exists, skip straight to it. This turns a 429 on a shared upstream into
-        # an immediate fallback instead of a doomed same-endpoint retry.
-        # Skip the vision endpoint on text turns — it is reserved for media.
-        if self._is_endpoint_cooling(natural.name):
-            for ep in self._endpoints:
-                if ep.name == "vision":
-                    continue
-                if not self._is_endpoint_cooling(ep.name):
-                    return ep
-        return natural
-
-    def _is_endpoint_cooling(self, name: str) -> bool:
-        expiry = self._endpoint_cooldown.get(name)
-        if expiry is None:
-            return False
-        if time.monotonic() >= expiry:
-            self._endpoint_cooldown.pop(name, None)
-            return False
-        return True
-
-    def _cool_endpoint(self, name: str, reason: str = "rate-limited") -> None:
-        self._endpoint_cooldown[name] = time.monotonic() + self._cooldown_seconds
-        logger.warning(
-            "Provider endpoint %s %s; cooling for %.0fs (using alternative if available)",
-            name,
-            reason,
-            self._cooldown_seconds,
-        )
-
-    def deepseek_reasoning_level(
-        self,
-        endpoint: ProviderEndpoint,
-        model: str | None = None,
-        disable_reasoning: bool | None = None,
-    ) -> str | int:
-        numeric_effort = urlsplit(endpoint.base_url).hostname == "openrouter.ai"
-        body = self.extra_body if endpoint.name == "primary" else {}
-        reasoning = body.get("reasoning") or {}
-        thinking = body.get("thinking") or {}
-        level = reasoning.get("effort", body.get("reasoning_effort", "high"))
-        disabled = (
-            endpoint.disable_reasoning
-            or reasoning.get("enabled") is False
-            or thinking.get("type") == "disabled"
-            or level == "none"
-        )
-        if (
-            self.reasoning_control is not None
-            and endpoint.name == "primary"
-            and (model or endpoint.model) == self.model
-        ):
-            requested = self.reasoning_control()
-            if requested not in ("", "off", *DEEPSEEK_REASONING_EFFORTS) and not (
-                numeric_effort and type(requested) is int and 1 <= requested <= 100
-            ):
-                raise ValueError("DeepSeek reasoning control must be low, high, max, off, blank, or an OpenRouter integer 1–100")
-            if requested:
-                level = "high" if requested == "off" else requested
-                disabled = requested == "off"
-        if disable_reasoning is not None:
-            disabled = disable_reasoning
-        if disabled:
-            level = "off"
-        else:
-            aliases = {"none": "high"}
-            if urlsplit(endpoint.base_url).hostname == "api.deepseek.com":
-                aliases.update({"minimal": "low", "medium": "high", "xhigh": "high", "ultra": "max"})
-            level = aliases.get(level, level)
-            if level not in DEEPSEEK_REASONING_EFFORTS and not (
-                numeric_effort and type(level) is int and 1 <= level <= 100
-            ):
-                raise ValueError("DeepSeek reasoning supports low, high, max, or an OpenRouter integer 1–100")
-        return level
 
     def _request_payload(
         self,
         endpoint: ProviderEndpoint,
         chat_messages: list[dict],
         tools: list[dict] | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        disable_reasoning: bool | None = None,
     ) -> dict:
-        # Model override is honored ONLY on the primary endpoint. Fallback
-        # endpoints keep their configured model because the fallback is
-        # selected precisely because the primary model is unhealthy. If a
-        # caller passed a model override but we're routing to a fallback,
-        # log a debug line so it's visible why their model was swapped.
-        if model and endpoint.name != "primary" and model != endpoint.model:
-            logger.debug(
-                "Model override %r ignored on fallback endpoint %r (using %r)",
-                model,
-                endpoint.name,
-                endpoint.model,
-            )
-        effective_temperature = self.temperature if temperature is None else temperature
-        # An endpoint that already rejected our temperature gets its demanded
-        # value up front instead of another guaranteed 400.
-        forced_temperature = self._endpoint_temperatures.get(endpoint.name)
-        if forced_temperature is not None:
-            effective_temperature = forced_temperature
-        data = copy.deepcopy(self.extra_body) if endpoint.name == "primary" else {}
-        for key in ("tools", "tool_choice", "stream_options"):
-            data.pop(key, None)
-        data.update({
-            "model": (model or endpoint.model)
-            if endpoint.name == "primary"
-            else endpoint.model,
-            "messages": chat_messages,
-            "temperature": effective_temperature,
+        if endpoint != self._endpoints[0]:
+            raise ValueError("Endpoint conflicts with configured provider profile")
+        data = copy.deepcopy(self.extra_body)
+        configured = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
-            "stream": True,
-        })
-        if endpoint.name not in self._stream_usage_unsupported:
-            data["stream_options"] = {"include_usage": True}
-        # Always include max_tokens from config or override
-        effective_max = max_tokens if max_tokens is not None else self.max_tokens
-        # Proactively clamp to a previously-learned per-endpoint output cap so
-        # we don't waste a round-trip re-hitting the same 400. Per-endpoint so a
-        # small-cap model never lowers the cap for other endpoints.
-        learned_cap = self._endpoint_output_caps.get(endpoint.name)
-        if learned_cap and effective_max > learned_cap:
-            effective_max = learned_cap
-        data["max_tokens"] = effective_max
-        # Per-call disable_reasoning overrides the endpoint default; a caller
-        # that passes disable_reasoning=False can keep reasoning on a shared
-        # provider whose endpoint.disable_reasoning is True.
-        use_disable_reasoning = (
-            disable_reasoning
-            if disable_reasoning is not None
-            else endpoint.disable_reasoning
-        )
-        is_openrouter = urlsplit(endpoint.base_url).hostname == "openrouter.ai"
-        deepseek_transport = deepseek_reasoning_transport(endpoint.base_url, data["model"])
-        if deepseek_transport:
-            level = self.deepseek_reasoning_level(endpoint, data["model"], disable_reasoning)
-            data.pop("reasoning_effort", None)
-            data.pop("thinking", None)
-            reasoning = data.pop("reasoning", {})
-            if deepseek_transport == "openrouter":
-                reasoning.pop("max_tokens", None)
-                reasoning.update({"enabled": level != "off", "effort": "none" if level == "off" else level})
-                data["reasoning"] = reasoning
-            else:
-                data["thinking"] = {"type": "disabled" if level == "off" else "enabled"}
-                data["reasoning_effort"] = "none" if level == "off" else level
-        elif use_disable_reasoning:
-            if is_openrouter:
-                data.pop("reasoning_effort", None)
-                data.pop("thinking", None)
-                data["reasoning"] = {"enabled": False}
-            else:
-                data["reasoning_effort"] = "none"
-                data["reasoning"] = {"effort": "none"}
-                data["thinking"] = {"type": "disabled", "budget_tokens": 0}
-        elif not is_openrouter and "kimi-k2.7" in str(data.get("model") or "").lower():
-            # OpenCode Go's kimi-k2.7-code rejects reasoning_effort=none
-            # ("invalid thinking: only type=enabled is allowed") and, if we
-            # omit the thinking field, streams reasoning until max_tokens
-            # with an empty content delta. Pin thinking on so the visible
-            # reply actually arrives.
-            data["thinking"] = {"type": "enabled"}
-        if tools:
-            data["tools"] = tools
-            data["tool_choice"] = "auto"
+        }
+        for key, value in configured.items():
+            if value is not None:
+                if key in {"max_tokens", "top_k"} and type(value) is not int:
+                    raise ValueError(f"{key} must be an integer")
+                if key in {"temperature", "top_p"} and type(value) not in {int, float}:
+                    raise ValueError(f"{key} must be a number")
+                if key in data and (type(data[key]) is not type(value) or data[key] != value):
+                    raise ValueError(f"OPENAI_EXTRA_BODY conflicts with configured {key}")
+                data[key] = value
+        json.dumps(data, allow_nan=False)
+        for key, value in (("messages", chat_messages), ("tools", tools)):
+            if value is not None:
+                if key in data and data[key] != value:
+                    raise ValueError(f"OPENAI_EXTRA_BODY conflicts with runtime {key}")
+                data[key] = copy.deepcopy(value)
         return data
 
     async def _get_session(self):
@@ -2291,7 +1882,7 @@ class OpenAICompatibleProvider:
             attempt_exception = sys.exception()
             try:
                 async with session.get(
-                    f"{endpoint.base_url}/models",
+                    f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}models",
                     timeout=aiohttp.ClientTimeout(total=10),
                     headers=self._headers(endpoint),
                 ) as resp:
@@ -2307,7 +1898,7 @@ class OpenAICompatibleProvider:
                         logger.warning(
                             f"Provider endpoint {endpoint.name} /models returned {resp.status}"
                         )
-            except Exception as e:
+            except (aiohttp.ClientError, OSError) as e:
                 incident.failure("Provider initialization failed", e)
                 incident.capture("Provider initialization failed", e)
                 logger.error(
@@ -2332,8 +1923,7 @@ class OpenAICompatibleProvider:
         on_tool_call_name=None,
         on_token=None,
         custom_tool_calls: bool = False,
-        prefer_fallback: bool = False,
-        **kwargs,
+        tools: list[dict] | None = None,
     ) -> str:
         """Generate response. images is legacy b64 list, media is list of {b64, mime_type}.
 
@@ -2357,8 +1947,7 @@ class OpenAICompatibleProvider:
             on_tool_call_name=on_tool_call_name,
             on_token=on_token,
             custom_tool_calls=custom_tool_calls,
-            prefer_fallback=prefer_fallback,
-            **kwargs,
+            tools=tools,
         )
 
         tool_calls = message.get("tool_calls") or []
@@ -2396,30 +1985,17 @@ class OpenAICompatibleProvider:
         images: list[str] | None = None,
         media: list[dict] | None = None,
         tools: list[dict] | None = None,
-        model: str | None = None,
         timeout: int = 3600,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        disable_reasoning: bool | None = None,
-        fast_fallback: bool = False,
         on_tool_call_name=None,
         on_token=None,
         custom_tool_calls: bool = False,
-        prefer_fallback: bool = False,
     ) -> dict:
         """Generate an OpenAI-compatible assistant message, optionally with tools.
 
         If ``on_tool_call_name`` is provided, it's called (fire-and-forget) the
         first time a tool_call delta with a function name arrives in the SSE
         stream. This lets callers update a live progress message mid-generation.
-
-        Foreground reservations admit only ``n=1`` and cap positive
-        ``max_completion_tokens``/``max_output_tokens`` aliases at the reserved
-        ``max_tokens`` limit. Nonforeground callers retain configured extras.
         """
-        turn = current_foreground_turn()
-        if turn is not None:
-            _validate_foreground_request_options(self.extra_body)
         if not self.available:
             logger.warning("Provider marked unavailable; retrying initialization")
             await self.initialize()
@@ -2491,14 +2067,7 @@ class OpenAICompatibleProvider:
                             }
                         )
                     elif mime.startswith("video/"):
-                        # OpenCode Go / DeepSeek reject video_url ("unknown
-                        # variant"). Thumbnails and ffmpeg JPEG frames still
-                        # attach as image_url.
-                        logger.info(
-                            "Skipping video_url part (%s); sending image frames/thumbnails only",
-                            mime,
-                        )
-                        continue
+                        parts.append({"type": "video_url", "video_url": {"url": uri}})
                     else:
                         continue
                     attached += 1
@@ -2519,81 +2088,22 @@ class OpenAICompatibleProvider:
 
         session = await self._get_session()
         last_error = None
-        last_usage_error = None
         incident = _ProviderDiagnostics()
-        has_media = any(
-            part.get("type") in {"image_url", "input_audio", "video_url"}
-            for message in chat_messages
-            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
-        )
-        # Endpoints that rejected this call's media (text-only models 400 on
-        # image_url; OpenRouter 404s on input audio). Steer retries away so a
-        # GIF never dies on DeepSeek then Ling.
-        media_broken: set[str] = set()
-        # Endpoints that returned a deterministic non-2xx (bad model slug,
-        # unsupported params). Retrying them with the same payload just repeats
-        # the error, so they're excluded from the rest of this call.
-        dead: set[str] = set()
-        max_attempts = (
-            min(self.retry_attempts, 2)
-            if fast_fallback and len(self._endpoints) > 1
-            else self.retry_attempts
-        )
+        endpoint = self._endpoints[0]
+        payload = self._request_payload(endpoint, chat_messages, tools=tools)
+        max_attempts = self.retry_attempts
         attempt = 0
         empty_response_recoveries = 0
-        recovery_endpoint: ProviderEndpoint | None = None
         while attempt < max_attempts:
             attempt += 1
-            if recovery_endpoint is not None:
-                # Rotate empty-content recovery within the fixed attempt budget.
-                endpoint = recovery_endpoint
-                recovery_endpoint = None
-            else:
-                endpoint = self._attempt_endpoint(
-                    attempt,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
-                )
-            if endpoint.name in media_broken or endpoint.name in dead:
-                order = self._media_endpoint_order() if has_media else self._endpoints
-                usable = [
-                    e
-                    for e in order
-                    if e.name not in media_broken and e.name not in dead
-                ]
-                if usable:
-                    endpoint = usable[0]
-            data = self._request_payload(
-                endpoint,
-                chat_messages,
-                tools=tools,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                disable_reasoning=disable_reasoning,
-            )
-            if empty_response_recoveries:
-                # A blank streamed 200 can be caused by a flaky SSE gateway
-                # even when the provider is healthy. Use a normal JSON response
-                # for recovery so the stream assembler is no longer part of the
-                # failure path. Keep the caller's reasoning preference intact:
-                # some models reject an explicit reasoning-disabled parameter.
-                data["stream"] = False
-                data.pop("stream_options", None)
+            data = copy.deepcopy(payload)
             turn = current_foreground_turn()
-            reservation = None
             if turn is not None:
-                _validate_foreground_request_options(data)
-                _clamp_foreground_output_aliases(data)
                 try:
-                    reservation = turn.reserve(data["max_tokens"], timeout)
+                    timeout = turn.reserve_attempt(timeout)
                 except TurnBudgetExceeded as e:
                     incident.capture("Provider turn budget exhausted after upstream failures", e)
                     raise
-                data["max_tokens"] = reservation.output_tokens
-                _clamp_foreground_output_aliases(data)
-                timeout = reservation.timeout_seconds
             observation = OutputObservation()
             request_start = time.perf_counter()
             media_parts = sum(
@@ -2605,7 +2115,7 @@ class OpenAICompatibleProvider:
                 if isinstance(part, dict) and part.get("type") != "text"
             )
             logger.info(
-                "Provider timing start endpoint=%s model=%s attempt=%s/%s messages=%s media_parts=%s timeout=%s max_tokens=%s reasoning_disabled=%s tools=%s",
+                "Provider timing start endpoint=%s model=%s attempt=%s/%s messages=%s media_parts=%s timeout=%s max_tokens=%s tools=%s",
                 endpoint.name,
                 data.get("model"),
                 attempt,
@@ -2614,125 +2124,30 @@ class OpenAICompatibleProvider:
                 media_parts,
                 timeout,
                 data.get("max_tokens"),
-                data.get("reasoning_effort") == "none"
-                or data.get("reasoning", {}).get("enabled") is False
-                or (
-                    isinstance(data.get("thinking"), dict)
-                    and data["thinking"].get("type") == "disabled"
-                ),
                 len(data.get("tools") or []),
             )
             incident.begin(endpoint, "chat/completions", attempt, max_attempts, data, timeout)
-            incident.current["routing"] = {
-                "fast_fallback": fast_fallback, "prefer_fallback": prefer_fallback,
-                "has_media": has_media, "custom_tool_calls": custom_tool_calls,
-                "empty_response_recoveries": empty_response_recoveries,
-            }
             attempt_exception = sys.exception()
             try:
                 async with session.post(
-                    f"{endpoint.base_url}/chat/completions",
+                    f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}chat/completions",
                     json=data,
                     timeout=aiohttp.ClientTimeout(total=timeout, connect=10),
                     headers=self._headers(endpoint),
                 ) as resp:
                     headers_ms = (time.perf_counter() - request_start) * 1000
                     incident.response(resp)
-                    if resp.status in (500, 502, 503, 504):
-                        error_text = await resp.text()
-                        incident.capture_text(error_text)
-                        incident.current["response_body_complete"] = True
-                        logger.warning(
-                            "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
-                            endpoint.name,
-                            resp.status,
-                            headers_ms,
-                            len(error_text),
-                        )
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} transient HTTP {resp.status}",
-                            max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
-                        raise RuntimeError(
-                            f"Provider transient HTTP {resp.status} failure after retries"
-                        )
-                    if resp.status == 429:
-                        error_text = await resp.text()
-                        incident.capture_text(error_text)
-                        incident.current["response_body_complete"] = True
-                        logger.warning(
-                            "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
-                            endpoint.name,
-                            resp.status,
-                            headers_ms,
-                            len(error_text),
-                        )
-                        self._cool_endpoint(endpoint.name)
-                        if _is_usage_exhausted_error(resp.status, error_text):
-                            last_usage_error = ProviderUsageExhaustedError(
-                                f"Provider {endpoint.name} usage exhausted: HTTP {resp.status}"
-                            )
-                            if len(self._endpoints) == 1:
-                                raise last_usage_error
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} usage exhausted",
-                                max_attempts=max_attempts,
-                                fast_fallback=fast_fallback,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise last_usage_error
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} 429 rate limited",
-                            max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
-                        raise RuntimeError(
-                            f"Provider rate limited after retries: HTTP {resp.status}"
-                        )
                     if resp.status != 200:
                         error_text = await resp.text()
                         incident.capture_text(error_text)
                         incident.current["response_body_complete"] = True
-                        if (
-                            resp.status in (400, 422)
-                            and "stream_options" in data
-                            and re.search(
-                                r"\b(?:stream_options|include_usage)\b",
-                                error_text,
-                                re.IGNORECASE,
+                        detail = redact_sensitive_text(incident.response_text)
+                        if _is_usage_exhausted_error(resp.status, error_text):
+                            raise ProviderUsageExhaustedError(
+                                f"Provider usage exhausted: HTTP {resp.status}: {detail}"
                             )
-                            and any(
-                                term in error_text.lower()
-                                for term in (
-                                    "not supported", "does not support", "unsupported",
-                                    "not allowed", "unknown parameter", "unknown field",
-                                    "unrecognized", "unexpected", "extra inputs",
-                                )
-                            )
-                        ):
-                            self._stream_usage_unsupported.add(endpoint.name)
-                            if attempt < max_attempts:
-                                recovery_endpoint = endpoint
-                                continue
-                        if attempt >= max_attempts:
-                            raise ProviderRequestError(
-                                f"Provider API error: {resp.status}: {redact_sensitive_text(incident.response_text)}"
-                            )
+                        if resp.status in (429, 500, 502, 503, 504):
+                            raise RuntimeError(f"Provider API error: {resp.status}: {detail}")
                         logger.warning(
                             "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
                             endpoint.name,
@@ -2740,277 +2155,7 @@ class OpenAICompatibleProvider:
                             headers_ms,
                             len(error_text),
                         )
-                        if (
-                            resp.status in (400, 422)
-                            and tools
-                            and re.search(r"\b(?:tools?|functions?)\b", error_text, re.IGNORECASE)
-                            and any(term in error_text.lower() for term in (
-                                "not supported", "does not support", "unsupported",
-                                "not allowed", "unknown parameter", "unknown field",
-                            ))
-                        ):
-                            tools = None
-                            recovery_endpoint = endpoint
-                            logger.warning(
-                                "Provider %s rejected native tools; correcting payload within attempt budget",
-                                endpoint.name,
-                            )
-                            continue
-                        # Text-only models 400 on image_url/video_url; some
-                        # fallbacks 404 on input audio. Mark broken and retry a
-                        # media-capable endpoint (typically vision / primary).
-                        if has_media and _is_media_unsupported_error(
-                            resp.status, error_text
-                        ):
-                            media_broken.add(endpoint.name)
-                            # Model capability, not a transient fault — remember
-                            # it so later turns skip this endpoint for media.
-                            self._media_incapable.add(endpoint.name)
-                            order = self._media_endpoint_order()
-                            usable = [e for e in order if e.name not in media_broken]
-                            if not usable:
-                                # Every endpoint refused the attachments. Drop
-                                # them and answer the text instead of failing
-                                # the whole turn.
-                                if _strip_media_parts(chat_messages):
-                                    logger.warning(
-                                        "No endpoint accepts this media; retrying text-only: HTTP %s",
-                                        resp.status,
-                                    )
-                                    has_media = False
-                                    media_broken.clear()
-                                    continue
-                                raise RuntimeError(
-                                    f"Provider {endpoint.name} media-unsupported and no alternatives: HTTP {resp.status}"
-                                )
-                            logger.warning(
-                                "Provider endpoint %s cannot handle media; retrying with %s",
-                                endpoint.name,
-                                usable[0].name,
-                            )
-                            continue
-                        # Provider-side function degradation (e.g. "DEGRADED function
-                        # cannot be invoked"). This is NOT transient — don't waste
-                        # retries on the same endpoint; cool it and fall back now.
-                        if resp.status == 400 and "degraded" in error_text.lower():
-                            self._cool_endpoint(endpoint.name)
-                            logger.warning(
-                                "Provider endpoint %s marked degraded; skipping to fallback",
-                                endpoint.name,
-                            )
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} degraded",
-                                max_attempts=max_attempts,
-                                transient=False,
-                                fast_fallback=fast_fallback,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise RuntimeError(
-                                f"Provider {endpoint.name} degraded and no fallback available: HTTP {resp.status}"
-                            )
-                        # Region / geo blocks (DeepSeek V4 Flash China opt-in)
-                        # are not transient. Don't burn a 2s retry on the same
-                        # endpoint — cool it and fail over immediately.
-                        if resp.status == 403 or "regionerror" in error_text.lower():
-                            self._cool_endpoint(endpoint.name)
-                            logger.warning(
-                                "Provider endpoint %s returned 403/region block; skipping to fallback",
-                                endpoint.name,
-                            )
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} 403",
-                                max_attempts=max_attempts,
-                                transient=False,
-                                fast_fallback=True,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise RuntimeError(
-                                f"Provider {endpoint.name} 403 and no fallback available: HTTP {resp.status}"
-                            )
-                        # Content-policy prompt blocks (Gemini "sensitive words
-                        # that violate Google's use policy"). Not transient and
-                        # not payload-shaped: the same text will be refused every
-                        # time, so cool the endpoint and hand the turn to the
-                        # fallback model rather than burning retries or surfacing
-                        # a raw Google error into the channel.
-                        if _is_content_policy_block(resp.status, error_text):
-                            self._cool_endpoint(
-                                endpoint.name, "blocked the prompt on content policy"
-                            )
-                            logger.warning(
-                                "Provider endpoint %s blocked the prompt on content policy; "
-                                "failing over: HTTP %s",
-                                endpoint.name,
-                                resp.status,
-                            )
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} content-policy block",
-                                max_attempts=max_attempts,
-                                transient=False,
-                                fast_fallback=True,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise RuntimeError(
-                                f"Provider {endpoint.name} blocked this prompt on content "
-                                f"policy and no fallback endpoint was available"
-                            )
-                        # Auto-clamp max_tokens on context overflow (OpenRouter returns 400)
-                        if (
-                            resp.status == 400
-                            and "maximum context length" in error_text.lower()
-                            and max_tokens is None
-                        ):
-                            import re as _re
-
-                            ctx_match = _re.search(
-                                r"maximum context length is (\d+) tokens", error_text
-                            )
-                            req_match = _re.search(
-                                r"you requested about (\d+) tokens", error_text
-                            )
-                            if ctx_match and req_match:
-                                ctx_limit = int(ctx_match.group(1))
-                                requested = int(req_match.group(1))
-                                estimated_input = requested - int(
-                                    data.get("max_tokens", self.max_tokens)
-                                )
-                                safe_output = max(
-                                    4096, ctx_limit - estimated_input - 512
-                                )
-                                if safe_output < int(
-                                    data.get("max_tokens", self.max_tokens)
-                                ):
-                                    logger.warning(
-                                        "Clamping max_tokens from %s to %s due to context limit %s",
-                                        data.get("max_tokens"),
-                                        safe_output,
-                                        ctx_limit,
-                                    )
-                                    # The loop rebuilds payloads every attempt. Mutating only
-                                    # data["max_tokens"] here is a fake fix; keep the clamp in
-                                    # loop state or we retry the same busted request like idiots.
-                                    max_tokens = safe_output
-                                    data["max_tokens"] = safe_output
-                                    if await self._retry_after_attempt(
-                                        attempt,
-                                        endpoint,
-                                        f"Context overflow, clamped max_tokens to {safe_output}",
-                                        max_attempts=max_attempts,
-                                        transient=False,
-                                        fast_fallback=fast_fallback,
-                                        has_media=has_media,
-                                        prefer_fallback=prefer_fallback,
-                                    ):
-                                        continue
-                        # max_tokens is *output* length, not context. Models like
-                        # minimax-m3 can have 1M context but only e.g. 131072 max output.
-                        if resp.status == 400 and (
-                            "maximum output tokens" in error_text.lower()
-                            or "exceeds model's maximum output" in error_text.lower()
-                        ):
-                            import re as _re
-
-                            out_match = _re.search(
-                                r"maximum output tokens\s*\(?\s*(\d+)\s*\)?",
-                                error_text,
-                                _re.IGNORECASE,
-                            )
-                            if not out_match:
-                                out_match = _re.search(
-                                    r"maximum output tokens \((\d+)\)",
-                                    error_text,
-                                    _re.IGNORECASE,
-                                )
-                            if out_match:
-                                out_cap = int(out_match.group(1))
-                                # Leave headroom under the hard cap.
-                                safe_output = max(1024, min(out_cap - 64, out_cap))
-                                current = int(data.get("max_tokens", self.max_tokens))
-                                if safe_output < current:
-                                    logger.warning(
-                                        "Clamping max_tokens from %s to %s (model max output %s)",
-                                        current,
-                                        safe_output,
-                                        out_cap,
-                                    )
-                                    max_tokens = safe_output
-                                    # Remember per-endpoint so future calls to
-                                    # this endpoint clamp proactively without a
-                                    # wasted 400 round-trip. Do NOT mutate the
-                                    # shared self.max_tokens: that permanently
-                                    # crippled every other endpoint/concurrent
-                                    # request after one small-cap model was hit.
-                                    self._endpoint_output_caps[endpoint.name] = (
-                                        safe_output
-                                    )
-                                    data["max_tokens"] = safe_output
-                                    if await self._retry_after_attempt(
-                                        attempt,
-                                        endpoint,
-                                        f"Output cap, clamped max_tokens to {safe_output}",
-                                        max_attempts=max_attempts,
-                                        transient=False,
-                                        fast_fallback=True,
-                                        has_media=has_media,
-                                        prefer_fallback=prefer_fallback,
-                                    ):
-                                        continue
-                        # Some models accept exactly one temperature and 400 on
-                        # anything else. Learn it and resend to the SAME endpoint
-                        # rather than burning retries / falling back needlessly.
-                        required_temp = _required_temperature(resp.status, error_text)
-                        if (
-                            required_temp is not None
-                            and self._endpoint_temperatures.get(endpoint.name)
-                            != required_temp
-                        ):
-                            logger.warning(
-                                "Provider endpoint %s requires temperature=%s; resending",
-                                endpoint.name,
-                                required_temp,
-                            )
-                            # Recorded per-endpoint only. Assigning the local
-                            # `temperature` override instead would carry this
-                            # endpoint's constraint onto every other endpoint
-                            # this call later touches.
-                            self._endpoint_temperatures[endpoint.name] = required_temp
-                            continue
-                        # Anything else non-2xx used to die right here with no
-                        # failover, so a 404 "model unavailable for free" on the
-                        # primary killed the whole turn while a healthy fallback
-                        # sat unused (logged 2026-08-07). The body is
-                        # deterministic, so hand the call to a *different*
-                        # endpoint — repeating it here would just 404 again.
-                        # No _cool_endpoint(): a 400 from our own payload would
-                        # otherwise park all traffic on the fallback for a full
-                        # minute. Failing over for this call is enough.
-                        dead.add(endpoint.name)
-                        alternatives = [
-                            e for e in self._endpoints if e.name not in dead
-                        ]
-                        if alternatives:
-                            logger.warning(
-                                "Provider endpoint %s returned %s; failing over to %s",
-                                endpoint.name,
-                                resp.status,
-                                alternatives[0].name,
-                            )
-                            continue
-                        raise ProviderRequestError(
-                            f"Provider API error: {resp.status}: {redact_sensitive_text(incident.response_text)}"
-                        )
+                        raise ProviderRequestError(f"Provider API error: {resp.status}: {detail}")
 
                     content_type = resp.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                     safe_content_type = (
@@ -3066,16 +2211,11 @@ class OpenAICompatibleProvider:
                             endpoint,
                             f"Provider {endpoint.name} returned non-dict JSON body",
                             max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
                         ):
                             continue
                         raise ProviderResponseError(
                             "No response from provider (non-dict JSON body)"
                         )
-                    if turn is not None and reservation is not None:
-                        turn.settle(reservation, _explicit_output_tokens(result))
                     if result.get("error") is not None or result.get("type") == "error":
                         raise ProviderUpstreamError(result.get("error", result))
                     choices = result.get("choices", [])
@@ -3159,38 +2299,8 @@ class OpenAICompatibleProvider:
                         if response_format == "sse" and finish_reason == "length":
                             incident.current["usage_drain_complete"] = usage_drain_complete
                         raise incomplete
-                    # A blocked prompt comes back as a normal 200 whose content
-                    # IS Google's notice. Never let that reach the channel: drop
-                    # it, cool the endpoint and hand the turn to the fallback
-                    # model on the very next attempt (no second try against the
-                    # model that just refused — the same payload always loses).
                     if content and _is_policy_block_text(content):
-                        incident.failure("HTTP 200 content-policy prompt block")
-                        self._cool_endpoint(
-                            endpoint.name, "blocked the prompt on content policy"
-                        )
-                        logger.warning(
-                            "Provider %s returned a content-policy prompt block as its "
-                            "reply; discarding it and failing over",
-                            endpoint.name,
-                        )
-                        content = ""
-                        message["content"] = ""
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} content-policy block",
-                            max_attempts=max_attempts,
-                            transient=False,
-                            fast_fallback=True,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
-                        raise RuntimeError(
-                            "Prompt was blocked by the provider's content policy and "
-                            "no fallback endpoint was available"
-                        )
+                        raise ProviderRequestError("Prompt was blocked by the provider's content policy")
                     if not content and not message.get("tool_calls"):
                         incident.failure("HTTP 200 with empty content and no tool calls")
                         # Some providers return choices with a message but blank content (e.g. refusals, reasoning-only, or bugs).
@@ -3200,52 +2310,15 @@ class OpenAICompatibleProvider:
                             bool(message.get("tool_calls")),
                             len(message),
                         )
-                        if (
-                            attempt < max_attempts
-                            and attempt >= max_attempts - self.empty_response_retries
-                            and empty_response_recoveries < self.empty_response_retries
-                        ):
+                        if empty_response_recoveries < self.empty_response_retries:
                             empty_response_recoveries += 1
-                            order = (
-                                self._media_endpoint_order()
-                                if has_media
-                                else [e for e in self._endpoints if e.name != "vision"]
-                            )
-                            usable = [
-                                e
-                                for e in order
-                                if e.name not in media_broken and e.name not in dead
-                            ]
-                            alternatives = [
-                                e for e in usable if e.name != endpoint.name
-                            ]
-                            if alternatives:
-                                healthy = [
-                                    e
-                                    for e in alternatives
-                                    if not self._is_endpoint_cooling(e.name)
-                                ]
-                                recovery_endpoint = (healthy or alternatives)[0]
-                            else:
-                                recovery_endpoint = endpoint
-                            logger.warning(
-                                "Provider %s returned an empty response; recovery %s/%s "
-                                "using %s within the attempt budget (non-streaming)",
-                                endpoint.name,
-                                empty_response_recoveries,
-                                self.empty_response_retries,
-                                recovery_endpoint.name,
-                            )
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} returned empty response",
-                            max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
+                            if await self._retry_after_attempt(
+                                attempt,
+                                endpoint,
+                                f"Provider {endpoint.name} returned empty response",
+                                max_attempts=max_attempts,
+                            ):
+                                continue
                         raise ProviderEmptyResponseError("Empty response from provider")
 
                     metrics = build_call_metrics(
@@ -3261,8 +2334,6 @@ class OpenAICompatibleProvider:
                         "total_tokens": metrics.input_tokens + metrics.output_tokens,
                     }
                     self._last_usage = dict(usage)
-                    # Healthy response: this endpoint is no longer rate-limited.
-                    self._endpoint_cooldown.pop(endpoint.name, None)
                     logger.info(
                         "Provider timing done endpoint=%s status=%s headers_ms=%.1f total_ms=%.1f content_chars=%s tool_calls=%s tokens=%s",
                         endpoint.name,
@@ -3288,9 +2359,6 @@ class OpenAICompatibleProvider:
                     endpoint,
                     f"Provider {endpoint.name} timeout",
                     max_attempts=max_attempts,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
                 ):
                     continue
                 failure = RuntimeError(f"Provider request timed out after {timeout}s")
@@ -3302,14 +2370,13 @@ class OpenAICompatibleProvider:
                 incident.capture("Provider usage exhausted", e)
                 raise
             except ProviderRequestError as e:
-                # Deterministic and already failed over everywhere it could.
                 incident.failure("Provider request rejected", e)
                 incident.capture("Provider request rejected", e)
                 raise
             except RuntimeError as e:
                 incident.failure("Provider response failure", e)
                 last_error = e
-                if isinstance(e, ProviderIncompleteResponseError):
+                if isinstance(e, (ProviderIncompleteResponseError, ProviderEmptyResponseError)):
                     incident.capture("Provider response incomplete", e)
                     raise
                 if isinstance(e, ProviderResponseError):
@@ -3322,14 +2389,11 @@ class OpenAICompatibleProvider:
                     endpoint,
                     f"Provider {endpoint.name} error: {type(e).__name__}",
                     max_attempts=max_attempts,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
                 ):
                     continue
                 incident.capture("Provider response failure", e)
                 raise
-            except Exception as e:
+            except (aiohttp.ClientError, OSError) as e:
                 incident.failure("Provider transport or response failure", e)
                 last_error = e
                 if await self._retry_after_attempt(
@@ -3337,9 +2401,6 @@ class OpenAICompatibleProvider:
                     endpoint,
                     f"Provider {endpoint.name} error: {type(e).__name__}",
                     max_attempts=max_attempts,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
                 ):
                     continue
                 failure = RuntimeError(f"Provider call failed: {type(last_error).__name__}")
@@ -3347,27 +2408,9 @@ class OpenAICompatibleProvider:
                 incident.capture("Provider transport or response failure", failure)
                 raise failure from e
             finally:
-                if (
-                    turn is not None
-                    and reservation is not None
-                    and not reservation.settled
-                    and (
-                        incident.http_response is None
-                        or incident.http_response.status != 200
-                        or (
-                            incident.body_bytes_seen == 0
-                            and incident.response_text_chars_seen == 0
-                            and not getattr(incident.http_response, "_body", None)
-                        )
-                    )
-                ):
-                    turn.settle(reservation, 0)
                 active_exception = sys.exception()
                 if active_exception is not attempt_exception and isinstance(active_exception, asyncio.CancelledError) and incident.current:
                     incident.capture("Provider failures before request cancellation")
-        if last_usage_error:
-            incident.capture("Provider usage exhausted", last_usage_error)
-            raise last_usage_error
         failure = RuntimeError("Provider call failed after retries")
         incident.capture("Provider call failed after retries", failure)
         raise failure
@@ -3379,15 +2422,11 @@ class OpenAICompatibleProvider:
         reason: str,
         *,
         max_attempts: int | None = None,
-        fast_fallback: bool = False,
-        has_media: bool = False,
-        prefer_fallback: bool = False,
-        transient: bool = True,
     ) -> bool:
         max_attempts = max_attempts or self.retry_attempts
         if attempt >= max_attempts:
             return False
-        wait = 10 * attempt if transient else 0
+        wait = 10 * attempt
         logger.warning(
             "%s (attempt %s/%s), retrying in %ss...",
             reason, attempt, max_attempts, wait,
