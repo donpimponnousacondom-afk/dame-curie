@@ -1330,16 +1330,6 @@ async def _read_sse_response(
     return merged
 
 
-# When an endpoint returns a 429 (rate-limited / usage-exhausted), we temporarily
-# steer traffic away from it for this long instead of retrying it in the same
-# request. This avoids hammering a shared upstream pool (e.g. OpenRouter's
-# pooled free keys) that is already rate-limiting us, which only makes the
-# limit worse. Override via OPENAI_ENDPOINT_COOLDOWN_SECONDS.
-DEFAULT_ENDPOINT_COOLDOWN_SECONDS = 60.0
-# Reserve up to this many remaining attempts for non-streaming recovery
-# when HTTP 200 responses contain no assistant content or tool call.
-DEFAULT_EMPTY_RESPONSE_RETRIES = 2
-
 USAGE_EXHAUSTED_MESSAGE = (
     "The api is down cuz yall drained the usage and im not rich so wait like 2 hours"
 )
@@ -1807,6 +1797,8 @@ class OpenAICompatibleProvider:
             raise ValueError("Endpoint conflicts with configured provider profile")
         api_key = self.api_key
         headers = self.extra_headers.copy()
+        if any(not isinstance(key, str) or not isinstance(value, str) for key, value in headers.items()):
+            raise ValueError("OPENAI_EXTRA_HEADERS keys and values must be strings")
         names = [key.lower() for key in headers]
         if len(names) != len(set(names)):
             raise ValueError("OPENAI_EXTRA_HEADERS contains conflicting header names")
@@ -1836,6 +1828,8 @@ class OpenAICompatibleProvider:
             if value is not None:
                 if key in {"max_tokens", "top_k"} and type(value) is not int:
                     raise ValueError(f"{key} must be an integer")
+                if key == "max_tokens" and value < 1:
+                    raise ValueError("max_tokens must be a positive integer")
                 if key in {"temperature", "top_p"} and type(value) not in {int, float}:
                     raise ValueError(f"{key} must be a number")
                 if key in data and (type(data[key]) is not type(value) or data[key] != value):

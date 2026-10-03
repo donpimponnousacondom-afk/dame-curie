@@ -16,7 +16,6 @@ PROVIDER_FIELDS = (
     "OPENAI_EXTRA_BODY",
     "OPENAI_RETRY_ATTEMPTS",
     "OPENAI_EMPTY_RESPONSE_RETRIES",
-    "OPENAI_REM_MODEL",
     "AUTONOMY_BASE_URL",
     "AUTONOMY_API_KEY",
     "AUTONOMY_MODEL",
@@ -113,10 +112,10 @@ def parse_provider_settings(env: Mapping[str, str], *, require_primary: bool = T
     for name in env:
         if (
             name in {"OPENAI_DISABLE_REASONING", "AUTONOMY_DISABLE_REASONING", "AUX_DISABLE_REASONING",
-                     "OPENAI_ENDPOINT_COOLDOWN_SECONDS"}
+                     "OPENAI_ENDPOINT_COOLDOWN_SECONDS", "OPENAI_REM_MODEL"}
             or name.startswith(("OPENAI_FALLBACK_", "OPENAI_VISION_"))
         ):
-            raise ValueError(f"{name} is unsupported; declare literal request options in OPENAI_EXTRA_BODY")
+            raise ValueError(f"{name} is unsupported; remove this legacy setting and configure the provider profile explicitly")
     base_url = _url_field(env, "OPENAI_BASE_URL")
     model = env.get("OPENAI_MODEL", "")
     if require_primary and not base_url:
@@ -136,12 +135,11 @@ def parse_provider_settings(env: Mapping[str, str], *, require_primary: bool = T
         "OPENAI_EXTRA_BODY": _json_field(env, "OPENAI_EXTRA_BODY"),
         "OPENAI_RETRY_ATTEMPTS": _int_field(env, "OPENAI_RETRY_ATTEMPTS", 5, minimum=1),
         "OPENAI_EMPTY_RESPONSE_RETRIES": _int_field(env, "OPENAI_EMPTY_RESPONSE_RETRIES", 2, minimum=0),
-        "OPENAI_REM_MODEL": env.get("OPENAI_REM_MODEL", model),
         "AUTONOMY_BASE_URL": _url_field(env, "AUTONOMY_BASE_URL"),
-        "AUTONOMY_API_KEY": env.get("AUTONOMY_API_KEY", ""),
+        "AUTONOMY_API_KEY": env.get("AUTONOMY_API_KEY"),
         "AUTONOMY_MODEL": env.get("AUTONOMY_MODEL", ""),
         "AUX_BASE_URL": _url_field(env, "AUX_BASE_URL"),
-        "AUX_API_KEY": env.get("AUX_API_KEY", ""),
+        "AUX_API_KEY": env.get("AUX_API_KEY"),
         "AUX_MODEL": env.get("AUX_MODEL", ""),
     }
     body = settings["OPENAI_EXTRA_BODY"]
@@ -154,6 +152,12 @@ def parse_provider_settings(env: Mapping[str, str], *, require_primary: bool = T
     if settings["OPENAI_API_KEY"] and any(name.lower() == "authorization" for name in settings["OPENAI_EXTRA_HEADERS"]):
         raise ValueError("OPENAI_API_KEY conflicts with OPENAI_EXTRA_HEADERS Authorization")
     for role in ("AUTONOMY", "AUX"):
-        if bool(settings[f"{role}_BASE_URL"]) != bool(settings[f"{role}_MODEL"]):
-            raise ValueError(f"{role}_BASE_URL and {role}_MODEL must be configured together")
+        role_base, role_model, role_key = (settings[f"{role}_{field}"] for field in ("BASE_URL", "MODEL", "API_KEY"))
+        if role_base or role_model or role_key:
+            if role_base and role_base != base_url:
+                raise ValueError(f"{role}_BASE_URL requires its own complete provider configuration")
+            if role_key is not None and role_key != settings["OPENAI_API_KEY"]:
+                raise ValueError(f"{role}_API_KEY conflicts with the shared provider profile")
+            if role_model and not role_model.strip():
+                raise ValueError(f"{role}_MODEL must not be blank")
     return settings

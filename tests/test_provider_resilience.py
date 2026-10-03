@@ -1,4 +1,3 @@
-import ast
 import asyncio
 import json
 from pathlib import Path
@@ -6,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from provider_settings import parse_provider_settings
 from providers import (
     OpenAICompatibleProvider,
     ProviderResponseError,
@@ -174,7 +174,7 @@ def test_upstream_error_labels_are_allowlisted_and_bounded():
     ["application/json", "Application/JSON; charset=utf-8", "application/problem+json"],
 )
 def test_http200_json_response_overrides_stream_request(content_type):
-    provider = OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6)
+    provider = OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6, extra_body={"stream": True})
     provider.available = True
     body = {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
     response = StreamResponse([json.dumps(body).encode()], content_type)
@@ -228,7 +228,7 @@ def test_http200_unsupported_content_type_does_not_dump_body(caplog):
     )
     provider.available = True
     provider._session = FakeSession(StreamResponse([b"private-secret"], "text/html"))
-    with pytest.raises(ProviderResponseError, match="unterminated tail"):
+    with pytest.raises(ProviderResponseError, match="JSON decoding failed"):
         asyncio.run(provider.generate_response([]))
     assert "private-secret" not in caplog.text
 
@@ -236,16 +236,8 @@ def test_http200_unsupported_content_type_does_not_dump_body(caplog):
 def test_retry_defaults_match_config_and_template():
     assert OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6).retry_attempts == 5
     root = Path(__file__).resolve().parents[1]
-    config = ast.parse((root / "config.py").read_text())
-    call = next(
-        node
-        for node in ast.walk(config)
-        if isinstance(node, ast.Call)
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == "OPENAI_RETRY_ATTEMPTS"
-    )
-    assert call.args[1].value == 5
+    settings = parse_provider_settings({"OPENAI_BASE_URL": "http://example.test", "OPENAI_MODEL": "model"})
+    assert settings["OPENAI_RETRY_ATTEMPTS"] == 5
     assert "OPENAI_RETRY_ATTEMPTS=5\n" in (root / ".env.example").read_text()
 
 
@@ -273,18 +265,16 @@ def test_transient_failover_also_uses_linear_backoff(status, retry_sleep):
         "model",
         8192,
         0.6,
-        fallback_base_url="http://fallback.test",
-        fallback_model="fallback",
     )
     provider.available = True
     session = FakeSequenceSession(
         [FakeErrorResponse(status, "temporarily busy"), FakeResponse()]
     )
     provider._session = session
-    assert asyncio.run(provider.generate_response([], fast_fallback=True)) == "ok"
+    assert asyncio.run(provider.generate_response([])) == "ok"
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
-    assert "primary.test" in session.urls[0]
-    assert "fallback.test" in session.urls[1]
+    assert session.urls == ["http://primary.test/chat/completions"] * 2
+    assert session.payloads[0] == session.payloads[1]
 
 
 @pytest.mark.parametrize("status", [400, 403, 404])
@@ -294,17 +284,16 @@ def test_deterministic_failover_remains_immediate(status, retry_sleep):
         "model",
         8192,
         0.6,
-        fallback_base_url="http://fallback.test",
-        fallback_model="fallback",
     )
     provider.available = True
     session = FakeSequenceSession(
         [FakeErrorResponse(status, "invalid request"), FakeResponse()]
     )
     provider._session = session
-    assert asyncio.run(provider.generate_response([])) == "ok"
+    with pytest.raises(RuntimeError, match=f"Provider API error: {status}: invalid request"):
+        asyncio.run(provider.generate_response([]))
     retry_sleep.assert_not_awaited()
-    assert "fallback.test" in session.urls[1]
+    assert session.urls == ["http://primary.test/chat/completions"]
 
 
 def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
@@ -324,7 +313,8 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
     session = FakeSequenceSession([empty, streamed])
     provider._session = session
     assert asyncio.run(provider.generate_response([])) == "hello"
-    assert session.payloads[1]["stream"] is False
+    assert "stream" not in session.payloads[1]
+    assert session.payloads[0] == session.payloads[1]
     assert streamed.json_calls == 0
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
 
@@ -332,7 +322,7 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
 @pytest.mark.parametrize("content_type", ["text/plain", "", "private-header-secret"])
 def test_unrecognized_content_type_preserves_valid_sse(content_type):
     provider = OpenAICompatibleProvider(
-        "http://example.test", "model", 8192, 0.6, retry_attempts=1
+        "http://example.test", "model", 8192, 0.6, retry_attempts=1, extra_body={"stream": True}
     )
     provider.available = True
     provider._session = FakeSession(StreamResponse([CONTENT, DONE], content_type))
@@ -349,12 +339,13 @@ def test_empty_content_recovery_never_extends_attempt_budget(attempts, retry_sle
     provider._session = session
     with pytest.raises(RuntimeError, match="Empty response from provider"):
         asyncio.run(provider.generate_response([]))
-    assert len(session.payloads) == attempts
+    expected_attempts = min(attempts, 1 + provider.empty_response_retries)
+    assert len(session.payloads) == expected_attempts
     assert [call.args[0] for call in retry_sleep.await_args_list] == list(
-        range(10, attempts * 10, 10)
+        range(10, expected_attempts * 10, 10)
     )
-    if attempts > 1:
-        assert session.payloads[-1]["stream"] is False
+    assert all(payload == session.payloads[0] for payload in session.payloads)
+    assert "stream" not in session.payloads[0]
 
 
 @pytest.mark.parametrize("attempts", [1, 2, 5])
@@ -373,14 +364,10 @@ def test_native_tool_correction_uses_remaining_attempts(attempts, retry_sleep, c
     tokens = []
     tools = [{"type": "function", "function": {"name": "synthetic"}}]
     request = provider.generate_response([], tools=tools, on_token=tokens.append)
-    if attempts == 1:
-        with pytest.raises(RuntimeError, match="Provider API error: 400"):
-            asyncio.run(request)
-    else:
-        assert asyncio.run(request) == "ok"
-        assert "tools" not in session.payloads[1]
-        assert tokens
-    assert len(session.payloads) == min(attempts, 2)
+    with pytest.raises(RuntimeError, match="Provider API error: 400"):
+        asyncio.run(request)
+    assert not tokens
+    assert len(session.payloads) == 1
     assert session.payloads[0]["tools"] == tools
     assert "private-secret" not in caplog.text
     retry_sleep.assert_not_awaited()
@@ -393,10 +380,11 @@ def test_native_tool_correction_does_not_restart_default_budget(retry_sleep):
     responses.extend(FakeErrorResponse(500, "busy") for _ in range(4))
     session = FakeSequenceSession(responses)
     provider._session = session
-    with pytest.raises(RuntimeError, match="transient HTTP 500"):
+    with pytest.raises(RuntimeError, match="Provider API error: 400"):
         asyncio.run(provider.generate_response([], tools=[{"type": "function"}]))
-    assert len(session.payloads) == 5
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [20, 30, 40]
+    assert len(session.payloads) == 1
+    assert session.payloads[0]["tools"] == [{"type": "function"}]
+    retry_sleep.assert_not_awaited()
 
 
 @pytest.mark.parametrize("payload", [b'{"secret-prompt":broken}', b"\xff"])
@@ -428,7 +416,8 @@ def test_requested_json_ignores_mismatched_mime_validation(content_type, retry_s
     session = FakeSequenceSession([empty, response])
     provider._session = session
     assert asyncio.run(provider.generate_response([])) == "hello"
-    assert session.payloads[1]["stream"] is False
+    assert "stream" not in session.payloads[1]
+    assert session.payloads[0] == session.payloads[1]
     assert response.json_calls == 1
 
 
@@ -440,11 +429,12 @@ def test_retryable_http_status_uses_five_attempts_without_body_dumps(
     provider.available = True
     session = FakeSession(FakeErrorResponse(status, "private-response-secret"))
     provider._session = session
-    with pytest.raises(RuntimeError, match=f"transient HTTP {status}") as exc:
+    with pytest.raises(RuntimeError, match=f"Provider API error: {status}") as exc:
         asyncio.run(provider.generate_response([]))
     assert len(session.payloads) == 5
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20, 30, 40]
-    assert "private-response-secret" not in str(exc.value)
+    assert "private-response-secret" in str(exc.value)
+    assert all(payload == session.payloads[0] for payload in session.payloads)
     assert "private-response-secret" not in caplog.text
 
 

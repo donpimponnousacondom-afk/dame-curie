@@ -14,7 +14,7 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
-import bot as bot_module
+import job_routing
 from bot import MaxwellBot
 from config import Config
 from jobs import BackgroundJobManager
@@ -669,9 +669,18 @@ def test_apply_builds_the_new_provider_from_the_edited_settings(tmp_path):
     }
 
 
-def test_apply_retires_the_old_providers_on_a_sampling_only_change(tmp_path):
-    """Cached role clients key on sampling too, so they must be rebuilt."""
-    bot = _make_bot(tmp_path, text=_baseline_text(OPENAI_TEMPERATURE="0.25"))
+@pytest.mark.parametrize("field,value", [
+    ("OPENAI_TEMPERATURE", "0.6"), ("OPENAI_TOP_P", "0.95"),
+    ("OPENAI_TOP_K", "20"), ("OPENAI_MAX_TOKENS", "64000"),
+])
+def test_apply_retires_the_old_providers_on_a_sampling_only_change(tmp_path, field, value):
+    bot = _make_bot(
+        tmp_path, settings=_settings(**{field: value}),
+        text=_baseline_text() + f"# {field}={value}\n",
+    )
+    assert _run(bot.ai_provider.generate_response([])) == "ok"
+    parameter = field.removeprefix("OPENAI_").lower()
+    assert parameter in bot.ai_provider._session.payloads[0]
     bot.autonomy_provider = bot._create_main_provider(bot.config)
     bot.aux_provider = bot._create_main_provider(bot.config)
     bot._autonomy_provider_sig = "stale-autonomy-signature"
@@ -683,6 +692,10 @@ def test_apply_retires_the_old_providers_on_a_sampling_only_change(tmp_path):
     assert bot._autonomy_provider_sig == ""
     assert bot._aux_provider_sig == ""
     assert all(item in bot._retired_providers for item in old)
+    provider = _attach_transport(bot.ai_provider)
+    assert _run(provider.generate_response([])) == "ok"
+    assert parameter not in provider._session.payloads[0]
+    assert getattr(bot.config, field) is None
 
 
 def test_apply_touches_only_the_provider_field_surface(tmp_path):
@@ -1086,7 +1099,7 @@ def test_concurrent_role_initialization_shares_one_cached_client(tmp_path, monke
 
     async def scenario():
         bot = _make_bot(tmp_path)
-        bot.config.AUTONOMY_BASE_URL = "https://autonomy.example.test/v1"
+        bot.config.AUTONOMY_MODEL = "autonomy-model"
         started = asyncio.Event()
         release = asyncio.Event()
         initialized = []
@@ -1124,15 +1137,17 @@ def test_concurrent_role_initialization_shares_one_cached_client(tmp_path, monke
 def test_autonomy_construction_failure_keeps_the_previous_client(tmp_path, monkeypatch):
     async def scenario():
         bot = _make_bot(tmp_path)
-        bot.config.AUTONOMY_BASE_URL = "https://autonomy.example.test/v1"
+        bot.config.AUTONOMY_MODEL = "autonomy-model"
         bot.autonomy_provider = bot._create_main_provider(bot.config)
         bot._autonomy_provider_sig = "existing-autonomy-signature"
 
         def explode(*args, **kwargs):
             raise TypeError("synthetic constructor failure")
 
-        monkeypatch.setattr(bot_module, "OpenAICompatibleProvider", explode)
-        resolved = await bot._get_autonomy_provider()
+        monkeypatch.setattr(job_routing, "OpenAICompatibleProvider", explode)
+        with pytest.raises(TypeError, match="synthetic constructor failure"):
+            await bot._get_autonomy_provider()
+        resolved = None
         return (
             resolved,
             bot.ai_provider,
@@ -1142,7 +1157,7 @@ def test_autonomy_construction_failure_keeps_the_previous_client(tmp_path, monke
         )
 
     resolved, main, cached, sig, retired = _run(scenario())
-    assert resolved is main
+    assert resolved is None
     assert cached is not None and cached is not main
     assert sig == "existing-autonomy-signature"
     assert retired == []
@@ -1151,15 +1166,17 @@ def test_autonomy_construction_failure_keeps_the_previous_client(tmp_path, monke
 def test_aux_construction_failure_keeps_the_previous_client(tmp_path, monkeypatch):
     async def scenario():
         bot = _make_bot(tmp_path)
-        bot.config.AUX_BASE_URL = "https://aux.example.test/v1"
+        bot.config.AUX_MODEL = "aux-model"
         bot.aux_provider = bot._create_main_provider(bot.config)
         bot._aux_provider_sig = "existing-aux-signature"
 
         def explode(*args, **kwargs):
             raise TypeError("synthetic constructor failure")
 
-        monkeypatch.setattr(bot_module, "OpenAICompatibleProvider", explode)
-        resolved = await bot._get_aux_provider()
+        monkeypatch.setattr(job_routing, "OpenAICompatibleProvider", explode)
+        with pytest.raises(TypeError, match="synthetic constructor failure"):
+            await bot._get_aux_provider()
+        resolved = None
         return (
             resolved,
             bot.ai_provider,
@@ -1169,7 +1186,7 @@ def test_aux_construction_failure_keeps_the_previous_client(tmp_path, monkeypatc
         )
 
     resolved, main, cached, sig, retired = _run(scenario())
-    assert resolved is main
+    assert resolved is None
     assert cached is not None and cached is not main
     assert sig == "existing-aux-signature"
     assert retired == []
