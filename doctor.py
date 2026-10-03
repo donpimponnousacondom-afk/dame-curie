@@ -130,11 +130,10 @@ async def _probe_chat(cfg) -> tuple[str, str]:
 
     parts = urlsplit(normalize_base_url(cfg.OPENAI_BASE_URL))
     url = urlunsplit(parts._replace(path=parts.path.rstrip("/") + "/models"))
-    headers = {
-        key: value for key, value in cfg.OPENAI_EXTRA_HEADERS.items()
-        if not cfg.OPENAI_API_KEY or key.lower() != "authorization"
-    }
+    headers = dict(cfg.OPENAI_EXTRA_HEADERS)
     if cfg.OPENAI_API_KEY:
+        if any(name.lower() == "authorization" for name in headers):
+            raise ValueError("OPENAI_API_KEY conflicts with OPENAI_EXTRA_HEADERS Authorization")
         headers["Authorization"] = f"Bearer {cfg.OPENAI_API_KEY}"
     try:
         async with aiohttp.ClientSession() as session:

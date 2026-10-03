@@ -743,9 +743,12 @@ def doctor_config(enabled=True):
         (ValueError("private error text"), 200, "warn"),
     ],
 )
-@pytest.mark.parametrize("api_key", ["", "synthetic-chat-key"])
+@pytest.mark.parametrize("api_key,authorization", [
+    ("", None), ("", "header-key"), ("synthetic-chat-key", None),
+    ("synthetic-chat-key", "header-key"), ("synthetic-chat-key", "Bearer synthetic-chat-key"),
+])
 def test_doctor_checks_real_vectors_and_configured_backend(
-    monkeypatch, payload, status, expected, api_key
+    monkeypatch, payload, status, expected, api_key, authorization
 ):
     transport = install_transport(monkeypatch, Reply(payload, status))
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config()))
@@ -764,17 +767,26 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     cfg = SimpleNamespace(
         OPENAI_BASE_URL="https://chat.invalid/v1?region=private#section",
         OPENAI_API_KEY=api_key,
-        OPENAI_EXTRA_HEADERS={"X-Tenant": "configured", "authorization": "unused-key"},
+        OPENAI_COMPAT_API_KEY="must-not-borrow",
+        OPENAI_EXTRA_HEADERS={"X-Tenant": "configured"},
     )
+    if authorization is not None:
+        cfg.OPENAI_EXTRA_HEADERS["authorization"] = authorization
     original_headers = dict(cfg.OPENAI_EXTRA_HEADERS)
-    state, detail = asyncio.run(doctor._probe_chat(cfg))
-    assert state == ("ok" if 200 <= status < 300 else "bad")
-    assert transport.calls[0][0] == "https://chat.invalid/v1/models?region=private#section"
-    expected_headers = {"X-Tenant": "configured"}
-    expected_headers.update({"Authorization": f"Bearer {api_key}"} if api_key else {"authorization": "unused-key"})
-    assert transport.calls[0][1]["headers"] == expected_headers
-    assert transport.calls[0][1]["allow_redirects"] is False
-    assert len(transport.calls) == 1
+    if api_key and authorization is not None:
+        with pytest.raises(ValueError, match="OPENAI_API_KEY conflicts with OPENAI_EXTRA_HEADERS Authorization"):
+            asyncio.run(doctor._probe_chat(cfg))
+        assert transport.calls == []
+    else:
+        state, detail = asyncio.run(doctor._probe_chat(cfg))
+        assert state == ("ok" if 200 <= status < 300 else "bad")
+        assert transport.calls[0][0] == "https://chat.invalid/v1/models?region=private#section"
+        expected_headers = dict(original_headers)
+        if api_key:
+            expected_headers["Authorization"] = f"Bearer {api_key}"
+        assert transport.calls[0][1]["headers"] == expected_headers
+        assert transport.calls[0][1]["allow_redirects"] is False
+        assert len(transport.calls) == 1
     assert cfg.OPENAI_EXTRA_HEADERS == original_headers
 
 
