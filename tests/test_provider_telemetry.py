@@ -46,7 +46,7 @@ def sse_frame(delta=None, **fields):
 
 def provider_for(responses, **kwargs):
     provider = OpenAICompatibleProvider(
-        "https://user:synthetic@example.test/v1?secret=synthetic",
+        "https://user:synthetic@example.test/v1",
         "model",
         8192,
         0.6,
@@ -341,7 +341,8 @@ def test_sse_ttft_ignores_preamble_and_end_before_postprocessing(monkeypatch):
 
 
 @pytest.mark.parametrize("stream", [True, False])
-def test_actual_response_format_and_timing_before_tokenization(monkeypatch, stream):
+@pytest.mark.parametrize("configured", [{}, {"stream": False}, {"stream": True}])
+def test_actual_response_format_and_timing_before_tokenization(monkeypatch, stream, configured):
     now = [10.0]
     monkeypatch.setattr("providers.time.perf_counter", lambda: now[0])
     import provider_telemetry
@@ -366,18 +367,12 @@ def test_actual_response_format_and_timing_before_tokenization(monkeypatch, stre
             yield DONE
 
     response = TimedResponse([], "text/event-stream" if stream else "application/json")
-    provider = provider_for([response])
-    if stream:
-        original = provider._request_payload
-
-        def forced_json(*args, **kwargs):
-            data = original(*args, **kwargs)
-            data["stream"] = False
-            data.pop("stream_options", None)
-            return data
-
-        monkeypatch.setattr(provider, "_request_payload", forced_json)
+    provider = provider_for([response], extra_body=configured)
     result = asyncio.run(provider.generate_response([]))
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6,
+        "messages": [], **configured,
+    }]
     assert result.metrics.stream is stream
     assert result.metrics.elapsed_ms == 4000
     assert result.metrics.ttft_estimated is (not stream)
