@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shlex
 import subprocess
 import sys
 import threading
@@ -488,7 +489,10 @@ def test_one_shot_pull_is_idempotent_and_propagates_failure(
     service = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"][
         "ollama-pull"
     ]
-    command = service["command"][0].replace("$$", "$")
+    startup_log = tmp_path / "ollama-pull.log"
+    command = service["command"][0].replace("$$", "$").replace(
+        "/tmp/ollama-pull.log", shlex.quote(str(startup_log))
+    )
     result = subprocess.run(
         [*service["entrypoint"], command],
         env={
@@ -502,7 +506,7 @@ def test_one_shot_pull_is_idempotent_and_propagates_failure(
         text=True,
         timeout=10,
     )
-    assert result.returncode == pull_exit
+    assert result.returncode == pull_exit, (result.stderr, startup_log.read_text())
     assert (tmp_path / "pulled").exists() is not present
     if not present:
         assert (tmp_path / "pulled").read_text() == "qwen3-embedding:0.6b"
