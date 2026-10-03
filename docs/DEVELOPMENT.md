@@ -4,7 +4,7 @@
 
 **Python3.14 is mandatory.** Never replace system Python, install project packages into its package tree or use a system-package bypass. Select the interpreter explicitly before creating an environment. `.venv/` is an interpreter/dependency environment; `.env`, `bot.env` and `deploy.env` are configuration files and may contain secrets.
 
-The app recipe selects Python3.14.4. Shell runs inside that outer container, not host Python or a nested image. Its prepared persistent `/home/dame-curie/.venv` uses interpreter copies and the image's app packages plus separately pinned shell tools; it does not change the app interpreter or app pins. See [shell preparation](OPERATIONS.md#persistent-shell-tools). `/opt/dame-curie/.venv` is a separate trusted **operator-only** environment, not the application's installation. A host project venv must also use an explicitly selected3.14 interpreter. No project uv workflow has been verified; do not assume one exists or search unrelated environments.
+The app recipe selects Python3.14.4. Shell runs inside that outer container, not host Python or a nested image. Its prepared persistent `/home/dame-curie/.venv` uses interpreter copies and the image's app packages plus separately pinned shell tools; it does not change the app interpreter or app pins. See [shell preparation](OPERATIONS.md#v2-shell-tools-and-authored-path-compatibility). `/opt/dame-curie/.venv` is a separate trusted **operator-only** environment, not the application's installation. A host project venv must also use an explicitly selected3.14 interpreter. No project uv workflow has been verified; do not assume one exists or search unrelated environments.
 
 Under an explicit environment-creation assignment, for a new intended checkout environment:
 
