@@ -71,6 +71,30 @@ def test_image_uses_allowlisted_source_and_locked_dependencies():
     assert all("==" in line and ">" not in line for line in dependencies)
     assert "discord.py-self==2.1.0" in dependencies
     assert not any(line.startswith("discord.py==") for line in dependencies)
+    assert {"numpy==2.5.2", "setuptools==84.0.0"} <= set(dependencies)
+    assert "docker/shell-requirements.lock" in allowed
+    assert "COPY docker/shell-requirements.lock /opt/dame-curie/shell-requirements.lock" in dockerfile
+    assert (ROOT / "docker/shell-requirements.lock").read_text().splitlines() == [
+        "CairoSVG==2.9.1",
+        "cairocffi==1.7.1",
+        "cffi==2.1.1",
+        "cssselect2==0.10.1",
+        "defusedxml==0.7.1",
+        "dukpy==0.6.0",
+        "esprima==4.0.1",
+        "lupa==2.8",
+        "numpy==2.5.3",
+        "phply==1.2.6",
+        "pillow==12.3.0",
+        "ply==3.11",
+        "py-mini-racer==0.6.0",
+        "pycparser==3.0",
+        "pypdf==6.19.0",
+        "qrcode==8.2",
+        "setuptools==78.1.1",
+        "tinycss2==1.5.1",
+        "webencodings==0.6.1",
+    ]
     assert "error_reporting.py" in dockerfile.split()
     assert "error_reporting.py" in allowed
     assert "operator_commands.py" in dockerfile.split()

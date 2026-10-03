@@ -59,6 +59,7 @@ docker/**
 !docker/app.Dockerfile
 !docker/app.Dockerfile.dockerignore
 !docker/requirements.lock
+!docker/shell-requirements.lock
 !docker/check_embeddings.py
 !assets/
 assets/**
