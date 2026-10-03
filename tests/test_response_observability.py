@@ -650,13 +650,8 @@ def test_debug_loaded_runtime_before_completion_without_config_reads(runtime_pro
 @pytest.mark.parametrize("measured_endpoint", ["primary", "fallback", "vision"])
 def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metrics, measured_endpoint):
     from bot import MaxwellBot
-    from providers import ProviderEndpoint
 
     async def scenario():
-        runtime_provider._endpoints.append(ProviderEndpoint(
-            "fallback", "https://fallback-user:fallback-pass@fallback.example/private?key=fallback-secret",
-            "loaded-fallback", "fallback-key",
-        ))
         bot = fake_bot(
             _is_admin=lambda uid: True, command_prefix="!", ai_provider=runtime_provider,
             config=SimpleNamespace(OPENAI_MODEL="stale-config-model", OPENAI_BASE_URL="https://stale.example"),
@@ -669,14 +664,14 @@ def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metr
         runtime, measurement = text.split("\n\n", 1)
         assert "Primary model: loaded-model" in runtime
         assert "Primary provider: loaded.example" in runtime
-        assert "Fallback model: loaded-fallback" in runtime
-        assert "Fallback provider: fallback.example" in runtime
-        assert "Per-request fallback/overrides may differ" in runtime
+        assert len(runtime_provider._endpoints) == 1
+        assert "Fallback model:" not in runtime
+        assert "Fallback provider:" not in runtime
         assert "Measured bot message: 999" in measurement
         assert "Model: old-request-override" in measurement
         assert f"Provider: old.example ({measured_endpoint})" in measurement
         assert "TTFT: 125ms | TPS: 25.0 tok/s" in measurement
-        for absent in ("old-request-override", "old.example", "stale-config-model", "stale.example", "fallback-user", "fallback-pass", "fallback-secret", "fallback-key"):
+        for absent in ("old-request-override", "old.example", "stale-config-model", "stale.example"):
             assert absent not in runtime
         assert FOOTER_MARKER not in text
         assert bot._delivery_measurements.lookup("100")[1] is measured

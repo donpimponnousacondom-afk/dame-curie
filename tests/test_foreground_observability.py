@@ -14,7 +14,7 @@ from bot import MaxwellBot, TokenBudgetTracker
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from dirac_runtime import _NoticeInput
 from provider_telemetry import CallMetrics
-from providers import ProviderIncompleteResponseError, ProviderResult
+from providers import OpenAICompatibleProvider, ProviderIncompleteResponseError, ProviderResult
 from turn_budget import TurnBudgetExceeded, current_foreground_turn
 from response_observability import DeliveryMeasurements, FOOTER_MARKER, RunningBuild
 from tool_schemas import CORE_TOOL_NAMES, TOOL_DISCOVERY_GROUPS, TOOL_PARAMETERS, build_openai_tools
@@ -372,7 +372,8 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
     [
         "plain", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
-        "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty", "output_exhausted",
+        "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
+        "configured_output_64000", "configured_output_omitted",
         "attempts_exhausted",
         "deadline", "upstream_timeout", "cancelled",
     ],
@@ -424,10 +425,16 @@ def test_real_foreground_handler_preserves_producing_call(
             bot._generate_response = Mock(
                 side_effect=lambda *args, **kwargs: asyncio.sleep(2)
             )
-        elif mode == "output_exhausted":
-            bot._generate_response = AsyncMock(
-                side_effect=TurnBudgetExceeded("output_tokens")
+        elif mode in {"configured_output_64000", "configured_output_omitted"}:
+            bot._control["turn_output_token_budget"] = 1
+            bot.config.OPENAI_MAX_TOKENS = 64000 if mode == "configured_output_64000" else None
+            bot._is_short_live_turn = lambda *args: True
+            bot.ai_provider = OpenAICompatibleProvider(
+                base_url="https://provider.example/v1", model="model-A",
+                max_tokens=bot.config.OPENAI_MAX_TOKENS,
             )
+            responses = [ProviderResult("configured output unchanged", metrics=first)]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "attempts_exhausted":
             bot._generate_response = AsyncMock(
                 side_effect=TurnBudgetExceeded("provider_attempts")
@@ -538,7 +545,7 @@ def test_real_foreground_handler_preserves_producing_call(
         assert flushed_turns == [None]
         if mode in {
             "incomplete", "incomplete_partial", "incomplete_truncated", "followup_incomplete",
-            "reasoning_only", "incomplete_empty", "output_exhausted",
+            "reasoning_only", "incomplete_empty",
             "attempts_exhausted", "deadline", "upstream_timeout", "cancelled",
         }:
             expected_generations = 2 if mode == "followup_incomplete" else 1
@@ -657,9 +664,6 @@ def test_real_foreground_handler_preserves_producing_call(
                 assert "stopped at the output-token limit" in message.channel.sent[0].content
                 assert "INCOMPLETE RESPONSE" not in message.channel.sent[0].content
                 assert message.channel.sent[0].content.endswith(FOOTER_MARKER)
-            elif mode == "output_exhausted":
-                assert "output allowance exhausted" in message.channel.sent[0].content
-                assert "No additional provider attempt" in message.channel.sent[0].content
             elif mode == "attempts_exhausted":
                 assert "provider-attempt allowance exhausted" in message.channel.sent[0].content
                 assert "No additional provider attempt" in message.channel.sent[0].content
@@ -722,6 +726,16 @@ def test_real_foreground_handler_preserves_producing_call(
             )[1] is second
             return
         assert bot._generate_response.await_count == len(responses)
+        if mode in {"configured_output_64000", "configured_output_omitted"}:
+            call = bot._generate_response.call_args
+            assert not {"max_tokens", "temperature", "model", "disable_reasoning", "prefer_fallback"} & call.kwargs.keys()
+            payload = bot.ai_provider._request_payload(bot.ai_provider._endpoints[0], call.args[0])
+            if mode == "configured_output_64000":
+                assert payload["max_tokens"] == bot.config.OPENAI_MAX_TOKENS == 64000
+            else:
+                assert "max_tokens" not in payload
+                assert bot.config.OPENAI_MAX_TOKENS is None
+            assert current_foreground_turn() is None
         assert message.channel.sent
         assert all(
             "something broke" not in sent.content for sent in message.channel.sent
