@@ -24,6 +24,8 @@ from providers import (
     ProviderUpstreamError,
     ProviderUsageExhaustedError,
 )
+from scripts.log_console.console import Console
+from scripts.log_console.input import MAX_PENDING_BYTES
 
 
 class Response:
@@ -185,8 +187,11 @@ def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics
 @pytest.mark.parametrize("body", [
     "reason=" + "x" * 90_000 + "; missing reasoning_content in assistant continuation; END405",
     '{"error":{"message":"unknown provider for model mimo-v2.6-pro","type":"invalid_request_error","code":"model_not_found","param":"model"}}',
-], ids=["bounded-body", "model-not-found"])
+    "reason=" + "x" * (MAX_PENDING_BYTES + 1) + "; END405",
+    "reason=" + "𠀀" * (MAX_PENDING_BYTES // 4 + 1) + "; END405",
+], ids=["bounded-body", "model-not-found", "oversized-ascii-line", "oversized-utf8-line"])
 def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, caplog, retry_attempts, body):
+    assert "\n" not in body
     response = Response(body.encode(), 400, headers={
         "X-Request-ID": "synthetic-request-400", "CF-Ray": "synthetic-ray",
         "Retry-After": "7", "Set-Cookie": "synthetic-response-cookie",
@@ -201,14 +206,30 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
     with pytest.raises(ProviderRequestError) as caught:
         asyncio.run(provider.generate_chat_completion(MESSAGES, tools=tools, model="override-model"))
     error = caught.value
-    assert str(error) == f"Provider API error: 400: {body}"
-    response_capture = error.incident_details.split("\nUnderlying exception context:\n", 1)[0]
+    visible_body = body
     if len(body) > providers._PROVIDER_DIAGNOSTIC_BODY_LIMIT:
-        assert body not in response_capture
-        assert body[:100] in response_capture and "END405" in response_capture
-        assert "response characters omitted from provider diagnostics" in response_capture
-    else:
-        assert body in response_capture
+        omitted = len(body) - providers._PROVIDER_DIAGNOSTIC_BODY_LIMIT
+        half = providers._PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+        visible_body = (
+            body[:half]
+            + f"\n[... {omitted} response characters omitted from provider diagnostics ...]\n"
+            + body[-half:]
+        )
+        assert body not in error.incident_details
+    assert str(error) == f"Provider API error: 400: {visible_body}"
+    assert visible_body in error.incident_details
+    formatted = logging.Formatter("%(message)s").format(logging.LogRecord(
+        "bot", logging.ERROR, __file__, 0, "Error handling message: %s", (error,),
+        (type(error), error, error.__traceback__),
+    ))
+    log_bytes = ("".join(f"bot-1 | {line}\n" for line in formatted.splitlines())
+                 + "bot-1 | 2026-10-03 14:00:00,000 - bot - INFO - next event\n").encode("utf-8")
+    assert max(len(line) for line in log_bytes.splitlines()) < MAX_PENDING_BYTES
+    console = Console()
+    for line in console.lines.feed(log_bytes):
+        console.ingest(line, 0.0)
+    assert console.parser.continuity_lost is False
+    assert console.history.recent()[0].first.message == "next event"
     assert error.incident_id == "synthetic-incident-1"
     assert len(captured) == len(provider._session.requests) == 1
     report = captured[0]

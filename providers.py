@@ -2731,7 +2731,7 @@ class OpenAICompatibleProvider:
                                 continue
                         if attempt >= max_attempts:
                             raise ProviderRequestError(
-                                f"Provider API error: {resp.status}: {redact_sensitive_text(error_text)}"
+                                f"Provider API error: {resp.status}: {redact_sensitive_text(incident.response_text)}"
                             )
                         logger.warning(
                             "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
@@ -3009,7 +3009,7 @@ class OpenAICompatibleProvider:
                             )
                             continue
                         raise ProviderRequestError(
-                            f"Provider API error: {resp.status}: {redact_sensitive_text(error_text)}"
+                            f"Provider API error: {resp.status}: {redact_sensitive_text(incident.response_text)}"
                         )
 
                     content_type = resp.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
