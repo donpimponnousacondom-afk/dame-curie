@@ -774,25 +774,22 @@ async def _synthesize_tts_wav(text: str, output_path: str) -> str:
             f.setframerate(48000)
             f.writeframesraw(response.audio)
         return output_path
-    if engine not in {"fish", "gtts"}:
-        raise ValueError("TTS_ENGINE must explicitly select fish, riva, gtts or local")
+    if engine == "gtts":
+        raise ValueError("gTTS is unsupported because its SDK injects undeclared request parameters")
+    if engine != "fish":
+        raise ValueError("TTS_ENGINE must explicitly select fish, riva or local")
     mp3_path = output_path + ".mp3"
     try:
-        if engine == "fish":
-            from bot_tools import _synthesize_fish_tts
+        from bot_tools import _synthesize_fish_tts
 
-            await _synthesize_fish_tts(
-                text,
-                mp3_path,
-                api_key=Config.FISH_API_KEY,
-                model=Config.TTS_FISH_MODEL,
-                reference_id=Config.TTS_FISH_REFERENCE_ID,
-                fmt=Config.TTS_FISH_FORMAT,
-            )
-        else:
-            from gtts import gTTS
-
-            await asyncio.to_thread(lambda: gTTS(text=text).save(mp3_path))
+        await _synthesize_fish_tts(
+            text,
+            mp3_path,
+            api_key=Config.FISH_API_KEY,
+            model=Config.TTS_FISH_MODEL,
+            reference_id=Config.TTS_FISH_REFERENCE_ID,
+            fmt=Config.TTS_FISH_FORMAT,
+        )
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-hide_banner",

@@ -1,5 +1,7 @@
 import asyncio
+import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -74,7 +76,8 @@ def test_transcribe_riva_wav_sync_parses_results(monkeypatch, tmp_path):
         botmod._transcribe_riva_wav_sync(str(wav_path))
 
 
-def test_transcribe_vc_wav_returns_empty_on_error(monkeypatch):
+@pytest.mark.parametrize("engine", ["gtts", "", "auto", "unknown"])
+def test_transcribe_vc_wav_returns_empty_on_error(monkeypatch, engine):
     async def _run():
         def boom(_path):
             raise RuntimeError("no nvidia")
@@ -83,3 +86,16 @@ def test_transcribe_vc_wav_returns_empty_on_error(monkeypatch):
         return await botmod._transcribe_vc_wav("/tmp/missing.wav")
 
     assert asyncio.run(_run()) == ""
+    gtts = Mock(side_effect=AssertionError("gTTS must not be constructed"))
+    local = AsyncMock(side_effect=AssertionError("local fallback must not run"))
+    subprocess = AsyncMock(side_effect=AssertionError("no subprocess should run"))
+    monkeypatch.setitem(sys.modules, "gtts", SimpleNamespace(gTTS=gtts))
+    monkeypatch.setattr(botmod.Config, "TTS_ENGINE", engine)
+    monkeypatch.setattr(botmod, "_synthesize_local_tts_wav", local)
+    monkeypatch.setattr(botmod.asyncio, "create_subprocess_exec", subprocess)
+    reason = "SDK injects undeclared request parameters" if engine == "gtts" else "must explicitly select"
+    with pytest.raises(ValueError, match=reason):
+        asyncio.run(botmod._synthesize_tts_wav("synthetic text", "/unused/output.wav"))
+    gtts.assert_not_called()
+    local.assert_not_awaited()
+    subprocess.assert_not_awaited()

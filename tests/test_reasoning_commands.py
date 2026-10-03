@@ -200,16 +200,19 @@ def test_dashboard_update_reload_changes_future_requests(tmp_path):
 
 
 @pytest.mark.parametrize("max_tokens", [64000, None])
-def test_main_constructor_wires_live_control_callback(tmp_path, monkeypatch, max_tokens):
+@pytest.mark.parametrize("api_key", ["", "synthetic-primary-key"])
+def test_main_constructor_wires_live_control_callback(tmp_path, monkeypatch, max_tokens, api_key):
     captured = {}
     monkeypatch.setattr(bot_module, "OpenAICompatibleProvider", lambda **kwargs: captured.update(kwargs) or SimpleNamespace())
     config = dict.fromkeys(("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY"), "")
-    config.update(OPENAI_MAX_TOKENS=max_tokens, OPENAI_TEMPERATURE=0.6, OPENAI_TOP_P=0.95,
+    config.update(OPENAI_API_KEY=api_key, OPENAI_COMPAT_API_KEY="synthetic-alias-key",
+                  OPENAI_MAX_TOKENS=max_tokens, OPENAI_TEMPERATURE=0.6, OPENAI_TOP_P=0.95,
                   OPENAI_TOP_K=20, OPENAI_RETRY_ATTEMPTS=1, OPENAI_EXTRA_HEADERS={},
                   OPENAI_EXTRA_BODY={"reasoning": {"effort": 37}}, ENABLE_AUDIO_INPUT=False)
     bot = SimpleNamespace(config=SimpleNamespace(**config), _control={"deepseek_reasoning": "low"})
     bot._create_main_provider = MethodType(MaxwellBot._create_main_provider, bot)
     MaxwellBot._setup_ai(bot)
+    assert captured["api_key"] == api_key
     assert "reasoning_control" not in captured
     assert "disable_reasoning" not in captured
     assert captured["max_tokens"] == max_tokens
