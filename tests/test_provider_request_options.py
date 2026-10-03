@@ -93,7 +93,8 @@ def test_constructor_and_each_payload_defensively_copy_nested_body():
     assert provider._headers() == {"X-Primary-Only": "original"}
 
 
-def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider):
+def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider, caplog):
+    caplog.set_level("INFO", logger="providers")
     monkeypatch.setattr("providers.asyncio.sleep", AsyncMock())
     provider.available = True
     session = FakeSequenceSession([FakeErrorResponse(503, "temporarily unavailable"), FakeResponse()])
@@ -102,6 +103,12 @@ def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider):
 
     def post(url, json=None, timeout=None, headers=None):
         sent_headers.append(deepcopy(headers))
+        snapshots = [record.getMessage() for record in caplog.records if record.getMessage().startswith("Provider request settings")]
+        assert len(snapshots) == len(sent_headers)
+        assert '"max_tokens": 64000' in snapshots[-1]
+        assert '"temperature"' not in snapshots[-1]
+        assert "synthetic-primary-key" not in snapshots[-1]
+        assert "private-prompt-marker" not in snapshots[-1]
         response = original_post(url, json=json, timeout=timeout, headers=headers)
         json["custom"]["labels"].append("transport-mutation")
         headers["X-Primary-Only"] = "transport-mutation"
@@ -109,7 +116,7 @@ def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider):
 
     session.post = post
     provider._session = session
-    assert asyncio.run(provider.generate_response([{ "role": "user", "content": "synthetic"}])) == "ok"
+    assert asyncio.run(provider.generate_response([{"role": "user", "content": "private-prompt-marker"}])) == "ok"
     assert len(session.payloads) == 2
     assert session.payloads[0] == session.payloads[1]
     assert all(payload["max_tokens"] == 64000 for payload in session.payloads)
