@@ -744,7 +744,7 @@ class _ProviderDiagnostics:
         self.current = {
             "attempt": f"{attempt}/{maximum}",
             "endpoint": endpoint.name,
-            "url": f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}{path}",
+            "url": normalize_base_url(endpoint.base_url, path),
             "model": data.get("model", endpoint.model),
             "timeout_seconds": timeout,
             "parameters": copy.deepcopy({key: value for key, value in data.items() if key != "messages"}),
@@ -764,7 +764,8 @@ class _ProviderDiagnostics:
         }
         metadata = redact_sensitive_text(json.dumps({
             "source": "configured-profile", "endpoint": endpoint.name,
-            "url": self.current["url"], "model": self.current["model"],
+            "hostname": urlsplit(endpoint.base_url).hostname, "route": path,
+            "model": self.current["model"],
             "parameter_count": len(self.current["parameters"]),
             "parameters": {
                 key: {"type": type(value).__name__, "count": len(value) if isinstance(value, (str, list, dict)) else None}
@@ -1727,12 +1728,16 @@ class ProviderEndpoint:
     api_key: str = ""
 
 
-def normalize_base_url(base_url: str) -> str:
+def normalize_base_url(base_url: str, path: str = "") -> str:
     if not isinstance(base_url, str) or not base_url or any(char.isspace() for char in base_url):
         raise ValueError("base_url must be an http(s) URL without whitespace")
     parts = urlsplit(base_url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.query or parts.fragment:
-        raise ValueError("base_url must be an http(s) API root without query or fragment")
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ValueError("base_url must be an http(s) URL with a hostname")
+    if path:
+        root, fragment_separator, fragment = base_url.partition("#")
+        root, query_separator, query = root.partition("?")
+        base_url = f"{root}{'' if root.endswith('/') else '/'}{path}{query_separator}{query}{fragment_separator}{fragment}"
     return base_url
 
 
@@ -1887,7 +1892,7 @@ class OpenAICompatibleProvider:
             attempt_exception = sys.exception()
             try:
                 async with session.get(
-                    f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}models",
+                    normalize_base_url(endpoint.base_url, "models"),
                     timeout=aiohttp.ClientTimeout(total=10),
                     headers=self._headers(endpoint),
                     allow_redirects=False,
@@ -2136,7 +2141,7 @@ class OpenAICompatibleProvider:
             attempt_exception = sys.exception()
             try:
                 async with session.post(
-                    f"{endpoint.base_url}{'' if endpoint.base_url.endswith('/') else '/'}chat/completions",
+                    normalize_base_url(endpoint.base_url, "chat/completions"),
                     json=data,
                     timeout=aiohttp.ClientTimeout(total=timeout, connect=10),
                     headers=self._headers(endpoint),

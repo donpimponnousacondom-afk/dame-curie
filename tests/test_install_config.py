@@ -150,20 +150,29 @@ def test_validate_names_the_missing_requirement(missing, expected):
 
 
 @pytest.mark.parametrize(
-    "given,expected",
+    "given,path,expected",
     [
-        # A bare host gets the conventional API path — the #1 setup mistake.
-        ("http://localhost:11434", "http://localhost:11434/v1"),
-        ("https://api.openai.com", "https://api.openai.com/v1"),
-        ("http://localhost:11434/", "http://localhost:11434/v1"),
-        # Anything with a path is the operator's business, left alone.
-        ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"),
-        ("https://example.com/v2", "https://example.com/v2"),
-        ("", ""),
+        ("http://localhost:11434", "", "http://localhost:11434"),
+        ("https://api.openai.com", "", "https://api.openai.com"),
+        ("http://localhost:11434/", "", "http://localhost:11434/"),
+        ("https://openrouter.ai/api/v1", "", "https://openrouter.ai/api/v1"),
+        ("https://example.com/v2", "", "https://example.com/v2"),
+        ("https://example.com/v2?opaque=a%2Fb#fragment", "", "https://example.com/v2?opaque=a%2Fb#fragment"),
+        ("http://localhost:11434", "models", "http://localhost:11434/models"),
+        ("http://localhost:11434/", "chat/completions", "http://localhost:11434/chat/completions"),
+        ("https://example.com/v2?opaque=a%2Fb#fragment", "models", "https://example.com/v2/models?opaque=a%2Fb#fragment"),
+        ("HTTPS://Example.COM/v2/?opaque=a%2Fb#fragment", "chat/completions", "HTTPS://Example.COM/v2/chat/completions?opaque=a%2Fb#fragment"),
+        ("https://example.com/v2#fragment?literal", "models", "https://example.com/v2/models#fragment?literal"),
+        ("https://example.com/v2?#", "models", "https://example.com/v2/models?#"),
+        ("", "", None),
     ],
 )
-def test_base_url_normalization(given, expected):
-    assert normalize_base_url(given) == expected
+def test_base_url_normalization(given, path, expected):
+    if expected is None:
+        with pytest.raises(ValueError, match="base_url"):
+            normalize_base_url(given, path)
+    else:
+        assert normalize_base_url(given, path) == expected
 
 
 @pytest.mark.parametrize(

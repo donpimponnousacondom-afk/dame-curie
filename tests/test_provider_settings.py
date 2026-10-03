@@ -155,6 +155,8 @@ def test_garbage_boolean_reads_as_false_like_startup():
 @pytest.mark.parametrize("value", [
     "https://primary.example.test/v1", "http://127.0.0.1:8080/v1", "https://host.example.test",
     "HTTPS://Upper.Example.Test/v1", "http://[::1]:11434/v1", "https://primary.example.test:443/v1/",
+    "https://host.test/v1?route=other", "https://host.test/v1#fragment",
+    "https://host.test/v1/?opaque=a%2Fb#fragment?literal", "https://host.test/v1?#",
 ])
 def test_well_formed_endpoint_urls_are_accepted(value):
     assert parse(OPENAI_BASE_URL=value)["OPENAI_BASE_URL"] == value
@@ -163,7 +165,7 @@ def test_well_formed_endpoint_urls_are_accepted(value):
 @pytest.mark.parametrize("field", _URL_FIELDS)
 @pytest.mark.parametrize("value", [
     "primary.example.test/v1", "ftp://host.example.test/v1", "https://", "http:///path",
-    "://host", "https://[::1", "https://host.test/v1?route=other", "https://host.test/v1#fragment",
+    "://host", "https://[::1",
 ])
 def test_malformed_endpoint_urls_raise_naming_the_field_only(field, value):
     with pytest.raises(ValueError) as error:

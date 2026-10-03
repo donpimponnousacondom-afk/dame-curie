@@ -103,8 +103,8 @@ def _url_field(env: Mapping[str, str], name: str) -> str:
         _ = parts.port
     except ValueError:
         raise ValueError(f"{name} must be an http(s) URL with a hostname and a valid port") from None
-    if parts.scheme not in {"http", "https"} or not hostname or parts.query or parts.fragment:
-        raise ValueError(f"{name} must be an http(s) API root without query or fragment")
+    if parts.scheme not in {"http", "https"} or not hostname:
+        raise ValueError(f"{name} must be an http(s) URL with a hostname")
     return value
 
 

@@ -17,7 +17,7 @@ from test_providers import FakeErrorResponse, FakeResponse, FakeSequenceSession
 @pytest.fixture
 def provider():
     return OpenAICompatibleProvider(
-        "https://primary.example.test/v1", "main-model", 64000,
+        "https://primary.example.test/v1?opaque=opaque-query-credential#opaque-fragment-credential", "main-model", 64000,
         api_key="synthetic-primary-key",
         extra_body={"reasoning_effort": "high", "custom": {"labels": ["original"]}},
         extra_headers={"X-Primary-Only": "synthetic-header"},
@@ -112,10 +112,13 @@ def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider, caplo
         sent_headers.append(deepcopy(headers))
         snapshots = [record.getMessage() for record in caplog.records if record.getMessage().startswith("Provider request settings")]
         assert len(snapshots) == len(sent_headers)
-        assert '"max_tokens": {"type": "int", "count": null}' in snapshots[-1]
-        assert '"temperature"' not in snapshots[-1]
-        for private in ("synthetic-primary-key", "private-prompt-marker", "opaque-credential-marker", "configured-prompt-marker", "schema-content-marker"):
-            assert private not in snapshots[-1]
+        metadata = snapshots[-1].replace("\n", "")
+        assert '"max_tokens": {"type": "int", "count": null}' in metadata
+        assert '"temperature"' not in metadata
+        assert '"hostname": "primary.example.test"' in metadata
+        assert '"route": "chat/completions"' in metadata
+        for private in ("synthetic-primary-key", "private-prompt-marker", "opaque-credential-marker", "configured-prompt-marker", "schema-content-marker", "opaque-query-credential", "opaque-fragment-credential"):
+            assert private not in metadata
         assert all(len(line.encode("utf-8")) < 65536 for line in snapshots[-1].splitlines())
         assert len(snapshots[-1]) < 66000
         assert ("metadata characters omitted" in snapshots[-1]) is bool(metadata_size)
@@ -129,6 +132,7 @@ def test_actual_retry_receives_fresh_nested_options(monkeypatch, provider, caplo
     assert asyncio.run(provider.generate_response([{"role": "user", "content": "private-prompt-marker"}])) == "ok"
     assert len(session.payloads) == 2
     assert session.payloads[0] == session.payloads[1]
+    assert session.urls == ["https://primary.example.test/v1/chat/completions?opaque=opaque-query-credential#opaque-fragment-credential"] * 2
     assert all(payload["max_tokens"] == 64000 for payload in session.payloads)
     assert all(headers["X-Primary-Only"] == "synthetic-header" for headers in sent_headers)
     assert "temperature" not in session.payloads[0]
@@ -167,7 +171,7 @@ def test_headers_do_not_leak_to_fallback_or_vision(provider, path, status):
         with pytest.raises(RuntimeError, match=f"Provider API error: {status}: redirect refused"):
             asyncio.run(provider.generate_response([]))
     assert boundary.call_count == 1
-    assert boundary.call_args.args == (f"https://primary.example.test/v1/{path}",)
+    assert boundary.call_args.args == (f"https://primary.example.test/v1/{path}?opaque=opaque-query-credential#opaque-fragment-credential",)
     assert boundary.call_args.kwargs["allow_redirects"] is False
     assert boundary.call_args.kwargs["headers"]["Authorization"] == "Bearer synthetic-primary-key"
 
