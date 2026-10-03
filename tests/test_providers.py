@@ -178,10 +178,9 @@ def test_openrouter_native_reasoning_and_sampling_defaults(model, sampling):
 
 
 @pytest.mark.parametrize("max_tokens", [None, 64000])
-def test_openrouter_aux_override_does_not_mutate_main(max_tokens):
-    from time import monotonic
-
-    from turn_budget import ForegroundTurn, reset_foreground_turn, set_foreground_turn
+@pytest.mark.parametrize("controls,requests", [({"turn_generation_attempt_budget": 2}, 2), ({}, 14)])
+def test_openrouter_aux_override_does_not_mutate_main(max_tokens, controls, requests):
+    from turn_budget import ForegroundTurn, TurnBudgetExceeded, reset_foreground_turn, set_foreground_turn
 
     extra_body = {"reasoning": {"effort": "low"}, "provider": {"only": ["configured"], "allow_fallbacks": False}}
     original = copy.deepcopy(extra_body)
@@ -191,13 +190,22 @@ def test_openrouter_aux_override_does_not_mutate_main(max_tokens):
     )
     provider.available = True
     provider._session = session = FakeSession()
-    turn = ForegroundTurn(2, monotonic() + 60)
+    turn = ForegroundTurn.from_controls({"turn_deadline_seconds": 60, **controls})
     token = set_foreground_turn(turn)
 
     async def run():
         messages = [{"role": "user", "content": "hi"}]
-        await provider.generate_response(messages)
-        await provider.generate_chat_completion(messages + [{"role": "assistant", "content": "ok"}])
+        assert await provider.generate_response(messages) == "ok"
+        for index in range(1, requests):
+            response = await provider.generate_chat_completion(
+                messages + [{"role": "assistant", "content": "ok"}] * index,
+            )
+            assert response["content"] == "ok"
+        if "turn_generation_attempt_budget" in controls:
+            with pytest.raises(TurnBudgetExceeded) as exc:
+                await provider.generate_chat_completion(messages)
+            assert exc.value.reason == "provider_attempts"
+        assert messages == [{"role": "user", "content": "hi"}]
 
     try:
         asyncio.run(run())
@@ -210,10 +218,10 @@ def test_openrouter_aux_override_does_not_mutate_main(max_tokens):
             "top_p": 0.9, "top_k": 30, **original,
             **({"max_tokens": 64000} if max_tokens is not None else {}),
         }
-    assert turn.attempts == 2
+    assert turn.attempts == len(session.payloads) == requests
+    assert session.urls == ["https://openrouter.ai/api/v1/chat/completions"] * requests
     assert extra_body == original
-    assert len(session.payloads[0]["messages"]) == 1
-    assert len(session.payloads[1]["messages"]) == 2
+    assert [len(payload["messages"]) for payload in session.payloads] == list(range(1, requests + 1))
 
 
 @pytest.mark.parametrize("reasoning", [
