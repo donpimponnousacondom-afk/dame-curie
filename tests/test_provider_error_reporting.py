@@ -24,6 +24,7 @@ from providers import (
     ProviderUpstreamError,
     ProviderUsageExhaustedError,
 )
+from scripts.log_console.append_events import RECORD_BYTES, AppendLines, AppendParser
 from scripts.log_console.console import Console
 from scripts.log_console.input import MAX_PENDING_BYTES
 
@@ -89,7 +90,7 @@ class Session:
 
 def provider_for(responses, **kwargs):
     provider = OpenAICompatibleProvider(
-        "https://primary.example.test/v1", "synthetic-model", 8192, 0.6, **kwargs
+        "https://primary.example.test/v1", "synthetic-model", **kwargs
     )
     provider.available = True
     provider._session = Session(responses)
@@ -155,8 +156,11 @@ def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics
     response = Response(body.encode(), 400, headers={"X-Request-ID": "synthetic-effort-request"})
     provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "deepseek/deepseek-v4.1-flash", 8192, 0.6,
-        api_key="synthetic-effort-key", retry_attempts=4, reasoning_control=lambda: number,
-        extra_body={"provider": {"only": ["deepseek"]}},
+        api_key="synthetic-effort-key", retry_attempts=4,
+        extra_body={
+            "provider": {"only": ["deepseek"], "allow_fallbacks": False},
+            "reasoning": {"enabled": True, "effort": number},
+        },
     )
     provider.available = True
     provider._session = Session([response])
@@ -166,21 +170,25 @@ def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics
         "Provider request failed: %s", caught.value,
         exc_info=(type(caught.value), caught.value, caught.value.__traceback__),
     )
-    assert str(caught.value) == f"Provider API error: 400: {visible_body}"
+    assert str(caught.value).replace("\n", "") == f"Provider API error: 400: {visible_body}"
     assert len(provider._session.requests) == response.text_calls == 1
     payload = provider._session.requests[0][1]
     assert type(payload["reasoning"]["effort"]) is int
     assert payload["reasoning"] == {"enabled": True, "effort": number}
-    assert payload["provider"] == {"only": ["deepseek"]}
+    assert payload["provider"] == {"only": ["deepseek"], "allow_fallbacks": False}
+    assert payload == {
+        **provider.extra_body, "model": provider.model, "messages": MESSAGES,
+        "max_tokens": 8192, "temperature": 0.6,
+    }
     report = production_handler.get(0).format_report()
     assert visible_body in report and "synthetic-effort-request" in report
     assert f'"effort": {number}' in report
     assert "synthetic-effort-key" not in report + caplog.text
     assert MESSAGES[0]["content"] not in report + caplog.text
-    assert f"Provider API error: 400: {visible_body}" in caplog.text
+    assert str(caught.value) in caplog.text
     assert production_handler.get(0).incident_id == caught.value.incident_id
     assert production_handler.get(1) is None
-    assert provider.deepseek_reasoning_level(provider._endpoints[0]) == number
+    assert provider.extra_body["reasoning"] == {"enabled": True, "effort": number}
 
 
 @pytest.mark.parametrize("retry_attempts", [1, 4])
@@ -189,7 +197,8 @@ def test_numeric_openrouter_rejection_keeps_integer_and_full_support_diagnostics
     '{"error":{"message":"unknown provider for model mimo-v2.6-pro","type":"invalid_request_error","code":"model_not_found","param":"model"}}',
     "reason=" + "x" * (MAX_PENDING_BYTES + 1) + "; END405",
     "reason=" + "𠀀" * (MAX_PENDING_BYTES // 4 + 1) + "; END405",
-], ids=["bounded-body", "model-not-found", "oversized-ascii-line", "oversized-utf8-line"])
+    "reason=" + "𠀀" * 20_000 + "; END405",
+], ids=["bounded-body", "model-not-found", "oversized-ascii-line", "oversized-utf8-line", "untruncated-utf8-line"])
 def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, caplog, retry_attempts, body):
     assert "\n" not in body
     response = Response(body.encode(), 400, headers={
@@ -198,13 +207,17 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
     })
     provider = provider_for(
         [response], retry_attempts=retry_attempts, api_key="synthetic-provider-key",
-        extra_headers={"Cookie": "synthetic-request-cookie"},
-        extra_body={"provider": {"only": ["synthetic-upstream"]}, "reasoning": {"effort": "high"}},
+        max_tokens=8192, temperature=0.6, extra_headers={"Cookie": "synthetic-request-cookie"},
+        extra_body={
+            "provider": {"only": ["synthetic-upstream"], "allow_fallbacks": False},
+            "reasoning": {"effort": "high"}, "stream": True,
+            "stream_options": {"include_usage": True}, "tool_choice": "auto",
+        },
     )
     original_options = copy.deepcopy(provider.extra_body)
     tools = [{"type": "function", "function": {"name": "synthetic_tool", "parameters": {"type": "object"}}}]
     with pytest.raises(ProviderRequestError) as caught:
-        asyncio.run(provider.generate_chat_completion(MESSAGES, tools=tools, model="override-model"))
+        asyncio.run(provider.generate_chat_completion(MESSAGES, tools=tools))
     error = caught.value
     visible_body = body
     if len(body) > providers._PROVIDER_DIAGNOSTIC_BODY_LIMIT:
@@ -216,7 +229,9 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
             + body[-half:]
         )
         assert body not in error.incident_details
-    assert str(error) == f"Provider API error: 400: {visible_body}"
+    framed_body = "\n".join(visible_body[index:index + 4096] for index in range(0, len(visible_body), 4096))
+    assert str(error) == f"Provider API error: 400: {framed_body}"
+    assert str(error).replace("\n", "") == "Provider API error: 400: " + visible_body.replace("\n", "")
     assert visible_body in error.incident_details
     formatted = logging.Formatter("%(message)s").format(logging.LogRecord(
         "bot", logging.ERROR, __file__, 0, "Error handling message: %s", (error,),
@@ -224,19 +239,27 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
     ))
     log_bytes = ("".join(f"bot-1 | {line}\n" for line in formatted.splitlines())
                  + "bot-1 | 2026-10-03 14:00:00,000 - bot - INFO - next event\n").encode("utf-8")
-    assert max(len(line) for line in log_bytes.splitlines()) < MAX_PENDING_BYTES
+    assert max(len(line) for line in log_bytes.splitlines(keepends=True)) < min(MAX_PENDING_BYTES, RECORD_BYTES)
     console = Console()
     for line in console.lines.feed(log_bytes):
         console.ingest(line, 0.0)
     assert console.parser.continuity_lost is False
     assert console.history.recent()[0].first.message == "next event"
+    append_lines = AppendLines()
+    append_lines.pending.extend(log_bytes)
+    parser = AppendParser()
+    appended = []
+    while append_lines.pending:
+        appended.extend(parser.record(line) for line in append_lines.take())
+    assert parser.continuity_lost is False
+    assert appended[-1].message == "next event"
     assert error.incident_id == "synthetic-incident-1"
     assert len(captured) == len(provider._session.requests) == 1
     report = captured[0]
     assert report["exception"] is error
     details = report["details"]
     for expected in (
-        '"status": 400', f'"attempt": "1/{retry_attempts}"', '"model": "override-model"',
+        '"status": 400', f'"attempt": "1/{retry_attempts}"', '"model": "synthetic-model"',
         '"max_tokens": 8192', '"temperature": 0.6', '"effort": "high"',
         "synthetic-upstream", "synthetic_tool", "synthetic-request-400", "synthetic-ray",
         "https://primary.example.test/v1/chat/completions", "ProviderRequestError",
@@ -248,10 +271,8 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
     ):
         assert excluded not in details + str(error) + caplog.text
     assert provider._session.requests[0][1] == {
-        **original_options, "model": "override-model", "messages": MESSAGES,
-        "temperature": 0.6, "top_p": 0.95, "top_k": 20, "max_tokens": 8192,
-        "stream": True, "stream_options": {"include_usage": True},
-        "tools": tools, "tool_choice": "auto",
+        **original_options, "model": "synthetic-model", "messages": MESSAGES,
+        "temperature": 0.6, "max_tokens": 8192, "tools": tools,
     }
     assert provider.extra_body == original_options
     assert provider._session.requests[0][3] == {
@@ -261,14 +282,19 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
 
 
 @pytest.mark.parametrize("status", [500, 502, 503, 504, 429])
-def test_retried_http_failures_recover_in_one_incident(status, captured, retry_sleep):
+@pytest.mark.parametrize("max_tokens", [None, 16384])
+def test_retried_http_failures_recover_in_one_incident(status, max_tokens, captured, retry_sleep):
     first = "first upstream explanation " + "a" * 400
     second = "second upstream explanation " + "b" * 400
     provider = provider_for([
         Response(first.encode(), status), Response(second.encode(), status), success(),
-    ], retry_attempts=3)
-    provider.max_tokens = 16384
-    turn = ForegroundTurn(32768, 12, time.monotonic() + 600)
+    ], retry_attempts=3, max_tokens=max_tokens, api_key="synthetic-retry-key",
+        extra_headers={"X-Synthetic-Route": "fixed"}, extra_body={
+        "provider": {"only": ["synthetic-upstream"], "allow_fallbacks": False},
+        "reasoning": {"effort": "high"},
+    })
+    original = copy.deepcopy(provider.extra_body)
+    turn = ForegroundTurn(12, time.monotonic() + 600)
     token = set_foreground_turn(turn)
     try:
         result = asyncio.run(provider.generate_response(MESSAGES))
@@ -276,9 +302,16 @@ def test_retried_http_failures_recover_in_one_incident(status, captured, retry_s
         reset_foreground_turn(token)
     assert result == "ok"
     assert len(provider._session.requests) == 3
-    assert [request[1]["max_tokens"] for request in provider._session.requests] == [16384] * 3
+    expected = {**original, "model": "synthetic-model", "messages": MESSAGES}
+    if max_tokens is not None:
+        expected["max_tokens"] = max_tokens
+    assert [request[1] for request in provider._session.requests] == [expected] * 3
+    assert [request[3] for request in provider._session.requests] == [
+        {"X-Synthetic-Route": "fixed", "Authorization": "Bearer synthetic-retry-key"},
+    ] * 3
+    assert provider.extra_body == original
+    assert {request[0] for request in provider._session.requests} == {"https://primary.example.test/v1/chat/completions"}
     assert turn.attempts == 3
-    assert turn.output_remaining == 16384
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20]
     assert len(captured) == 1
     assert captured[0]["exception"] is None
@@ -305,7 +338,7 @@ def test_terminal_transient_failures_preserve_budget_and_exception(captured, ret
     provider = provider_for([
         Response(b"first server explanation", 503), Response(b"last server explanation", 503),
     ], retry_attempts=2)
-    with pytest.raises(RuntimeError, match="transient HTTP 503 failure after retries") as caught:
+    with pytest.raises(RuntimeError, match="Provider API error: 503: last server explanation") as caught:
         asyncio.run(provider.generate_response(MESSAGES))
     assert len(provider._session.requests) == 2
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
@@ -317,7 +350,7 @@ def test_terminal_transient_failures_preserve_budget_and_exception(captured, ret
     provider = provider_for([
         Response(b"first refusal", 503), Response(b"second refusal", 503),
     ], retry_attempts=3)
-    turn = ForegroundTurn(32768, 2, time.monotonic() + 600)
+    turn = ForegroundTurn(2, time.monotonic() + 600)
     token = set_foreground_turn(turn)
     try:
         with pytest.raises(RuntimeError, match="provider-attempt allowance exhausted") as budget_exit:
@@ -325,50 +358,66 @@ def test_terminal_transient_failures_preserve_budget_and_exception(captured, ret
     finally:
         reset_foreground_turn(token)
     assert len(provider._session.requests) == turn.attempts == 2
-    assert turn.output_remaining == 32768
+    assert [request[1] for request in provider._session.requests] == [
+        {"model": "synthetic-model", "messages": MESSAGES},
+    ] * 2
     assert "first refusal" in budget_exit.value.incident_details
     assert "second refusal" in budget_exit.value.incident_details
     assert captured[-1]["exception"] is budget_exit.value
 
 
-def test_http400_fallback_retains_both_endpoint_attempts(captured, retry_sleep):
-    provider = provider_for(
-        [Response(b"primary rejection " + b"a" * 405, 400), success()],
-        retry_attempts=5, fallback_base_url="https://fallback.example.test/v1",
-        fallback_model="fallback-model", fallback_api_key="synthetic-fallback-key",
-    )
-    assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
-    assert [request[1]["model"] for request in provider._session.requests] == ["synthetic-model", "fallback-model"]
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_http400_fallback_retains_both_endpoint_attempts(status, captured, retry_sleep):
+    response = Response(b"primary rejection " + b"a" * 405, status)
+    extras = {"provider": {"only": ["synthetic-upstream"], "allow_fallbacks": False}}
+    provider = provider_for([response, success()], retry_attempts=5, extra_body=extras)
+    with pytest.raises(ProviderRequestError, match=f"Provider API error: {status}: primary rejection") as caught:
+        asyncio.run(provider.generate_response(MESSAGES))
+    assert len(provider._session.requests) == len(provider._session.responses) == response.text_calls == 1
+    assert provider._session.requests[0][0] == "https://primary.example.test/v1/chat/completions"
+    assert provider._session.requests[0][1] == {**extras, "model": "synthetic-model", "messages": MESSAGES}
+    assert provider.extra_body == extras
     retry_sleep.assert_not_awaited()
     assert len(captured) == 1
+    assert captured[0]["exception"] is caught.value
     assert "primary rejection " + "a" * 405 in captured[0]["details"]
-    assert "https://fallback.example.test/v1/chat/completions" in captured[0]["details"]
+    assert '"attempt": "1/5"' in captured[0]["details"]
+    assert '"allow_fallbacks": false' in captured[0]["details"]
 
 
-@pytest.mark.parametrize("rejection, field", [
-    ("stream_options is an unsupported parameter", "stream_options"),
-    ("tools are not supported", "tools"),
+@pytest.mark.parametrize("rejection, field, value", [
+    ("stream_options is an unsupported parameter", "stream_options", {"include_usage": True}),
+    ("tools are not supported", "tools", [{"type": "function", "function": {"name": "synthetic_tool"}}]),
+    ("temperature must be 1", "temperature", 0.6),
+    ("maximum output tokens is 4096", "max_tokens", 8192),
+    ("maximum context length is 4096 tokens; you requested about 8192 tokens", "max_tokens", 8192),
 ])
-def test_payload_corrections_keep_attempt_budget_and_parameters(rejection, field, captured, retry_sleep):
-    provider = provider_for([Response(rejection.encode(), 400), success()], retry_attempts=2)
+def test_payload_corrections_keep_attempt_budget_and_parameters(rejection, field, value, captured, retry_sleep):
+    extras = {"provider": {"only": ["synthetic-upstream"], "allow_fallbacks": False}}
     tools = [{"type": "function", "function": {"name": "synthetic_tool"}}]
-    assert asyncio.run(provider.generate_response(MESSAGES, tools=tools)) == "ok"
-    assert len(provider._session.requests) == 2
-    assert field in provider._session.requests[0][1]
-    assert field not in provider._session.requests[1][1]
+    if field != "tools":
+        extras[field] = value
+    provider = provider_for([Response(rejection.encode(), 400), success()], retry_attempts=2, extra_body=extras)
+    with pytest.raises(ProviderRequestError) as caught:
+        asyncio.run(provider.generate_response(MESSAGES, tools=tools))
+    assert str(caught.value) == f"Provider API error: 400: {rejection}"
+    assert len(provider._session.requests) == len(provider._session.responses) == 1
+    assert provider._session.requests[0][1] == {**extras, "model": "synthetic-model", "messages": MESSAGES, "tools": tools}
+    assert provider._session.requests[0][1][field] == value
+    assert provider.extra_body == extras
     retry_sleep.assert_not_awaited()
     assert len(captured) == 1
     assert rejection in captured[0]["details"]
 
 
-def test_quota_body_not_echoed_and_no_retry_added(captured, caplog, retry_sleep):
+def test_quota_body_not_echoed_and_no_retry_added(captured, retry_sleep):
     body = "insufficient_quota: private balance explanation " + "q" * 405
     provider = provider_for([Response(body.encode(), 429)], retry_attempts=5)
     with pytest.raises(ProviderUsageExhaustedError) as caught:
         asyncio.run(provider.generate_response(MESSAGES))
     assert len(provider._session.requests) == len(captured) == 1
     assert body in caught.value.incident_details
-    assert "private balance" not in str(caught.value) + repr(caught.value) + caplog.text
+    assert str(caught.value) == f"Provider usage exhausted: HTTP 429: {body}"
     retry_sleep.assert_not_awaited()
 
 
@@ -470,7 +519,7 @@ def test_http200_incomplete_response_is_typed_bounded_and_terminal(
             )
     provider = provider_for(
         [response, success()], retry_attempts=1 if kind == "upstream" else 5, empty_response_retries=3,
-        fallback_base_url="https://fallback.example.test/v1", fallback_model="fallback-model",
+        extra_body={"provider": {"only": ["synthetic-upstream"], "allow_fallbacks": False}},
     )
     expected_error = ProviderUpstreamError if kind == "upstream" else ProviderIncompleteResponseError
     with pytest.raises(expected_error) as caught:
@@ -630,7 +679,7 @@ def test_skipped_bad_sse_frame_records_recovered_incident_not_fabricated_error(c
 def test_transport_failure_preserves_real_exception_trace_and_safe_wrapper(error, captured, caplog, retry_sleep):
     error.__cause__ = OSError("underlying synthetic OS detail")
     provider = provider_for([Response(error=error)], retry_attempts=1)
-    turn = ForegroundTurn(8192, 12, time.monotonic() + 600)
+    turn = ForegroundTurn(12, time.monotonic() + 600)
     token = set_foreground_turn(turn)
     try:
         with pytest.raises(RuntimeError) as caught:
@@ -638,7 +687,8 @@ def test_transport_failure_preserves_real_exception_trace_and_safe_wrapper(error
     finally:
         reset_foreground_turn(token)
     assert turn.attempts == 1
-    assert turn.output_remaining == 8192
+    assert provider._session.requests[0][1] == {"model": "synthetic-model", "messages": MESSAGES}
+    assert provider._session.requests[0][2].total == 17
     assert caught.value.__cause__ is error
     assert str(error) in caught.value.incident_details
     assert "underlying synthetic OS detail" in caught.value.incident_details
@@ -663,18 +713,26 @@ def test_timeout_then_network_recovery_keeps_all_traces_and_backoff(captured, re
     assert "original network detail" in captured[0]["details"]
 
 
-def test_empty_response_recovery_keeps_original_shape_and_nonstream_switch(captured, retry_sleep):
+@pytest.mark.parametrize("stream_options", [{}, {"stream": False}, {"stream": True, "stream_options": {"include_usage": True}}])
+def test_empty_response_recovery_keeps_original_shape_and_nonstream_switch(captured, retry_sleep, stream_options):
     body = json.dumps({
         "choices": [{"message": {
             "content": "",
             "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}],
         }}],
     }).encode()
-    provider = provider_for([Response(body), success()], retry_attempts=2, empty_response_retries=1)
+    extras = {
+        "provider": {"only": ["synthetic-upstream"], "allow_fallbacks": False},
+        **stream_options,
+    }
+    provider = provider_for([Response(body), success()], retry_attempts=2, empty_response_retries=1, extra_body=extras)
     assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
     assert len(captured) == 1
     assert body.decode() in captured[0]["details"]
-    assert [request[1]["stream"] for request in provider._session.requests] == [True, False]
+    assert [request[1] for request in provider._session.requests] == [
+        {**extras, "model": "synthetic-model", "messages": MESSAGES},
+    ] * 2
+    assert provider.extra_body == extras
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
 
 
@@ -768,58 +826,33 @@ def test_healthy_json_and_sse_never_capture_incidents(captured):
             complete_gemini,
         ]
     )
-    turn = ForegroundTurn(65536, 12, time.monotonic() + 600)
+    turn = ForegroundTurn(12, time.monotonic() + 600)
 
     token = set_foreground_turn(turn)
     try:
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        reserved = budgeted_provider._session.requests[0][1]["max_tokens"]
-        assert turn.output_remaining == 65536 - reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - 2 * reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - 3 * reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - 4 * reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - 5 * reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - 6 * reserved
-        assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
-        assert turn.output_remaining == 65536 - 6 * reserved - 28
+        for expected_attempts in range(1, 9):
+            assert asyncio.run(budgeted_provider.generate_response(MESSAGES)) == "ok"
+            assert turn.attempts == expected_attempts
+            assert budgeted_provider._session.requests[-1][1] == {"model": "synthetic-model", "messages": MESSAGES}
 
-        multi_choice = provider_for([], extra_body={"n": 2})
-        with pytest.raises(
-            ValueError, match="Foreground provider calls support only n=1"
-        ):
-            asyncio.run(multi_choice.generate_response(MESSAGES))
-        assert multi_choice._session.requests == []
-        assert turn.attempts == 8
+        multi_choice = provider_for([success()], extra_body={"n": 2})
+        assert asyncio.run(multi_choice.generate_response(MESSAGES)) == "ok"
+        assert multi_choice._session.requests[0][1] == {"model": "synthetic-model", "messages": MESSAGES, "n": 2}
+        assert turn.attempts == 9
 
-        turn.output_remaining = 512
         for key, value in (
             ("max_completion_tokens", True),
             ("max_output_tokens", 0),
         ):
-            invalid_caps = provider_for(
-                [],
-                extra_body={key: value},
-                fallback_base_url="https://fallback.example.test/v1",
-                fallback_model="synthetic-fallback",
-                fallback_api_key="synthetic-fallback-key",
-            )
-            with pytest.raises(ValueError, match=key):
-                asyncio.run(
-                    invalid_caps.generate_response(MESSAGES, prefer_fallback=True)
-                )
-            assert invalid_caps._session.requests == []
-            assert turn.output_remaining == 512
-            assert turn.attempts == 8
+            configured_caps = provider_for([success()], extra_body={key: value})
+            assert asyncio.run(configured_caps.generate_response(MESSAGES)) == "ok"
+            assert configured_caps._session.requests[0][1] == {"model": "synthetic-model", "messages": MESSAGES, key: value}
+            assert type(configured_caps._session.requests[0][1][key]) is type(value)
+            assert configured_caps.extra_body == {key: value}
+        assert turn.attempts == 11
 
         capped = provider_for(
-            [success()],
+            [success()], max_tokens=8192,
             extra_body={
                 "n": 1,
                 "max_completion_tokens": 9000,
@@ -827,16 +860,16 @@ def test_healthy_json_and_sse_never_capture_incidents(captured):
                 "custom": {"labels": ["preserved"]},
             },
         )
+        original_caps = copy.deepcopy(capped.extra_body)
         assert asyncio.run(capped.generate_response(MESSAGES)) == "ok"
-        capped_payload = capped._session.requests[0][1]
-        assert capped_payload["n"] == 1
-        assert capped_payload["max_tokens"] == 512
-        assert capped_payload["max_completion_tokens"] == 512
-        assert capped_payload["max_output_tokens"] == 128
-        assert capped_payload["custom"] == {"labels": ["preserved"]}
+        assert capped._session.requests[0][1] == {
+            **original_caps, "model": "synthetic-model", "messages": MESSAGES,
+            "max_tokens": 8192,
+        }
+        assert capped.extra_body == original_caps
     finally:
         reset_foreground_turn(token)
-    assert turn.attempts == 9
+    assert turn.attempts == 12
 
     nonforeground = provider_for(
         [success()],
@@ -857,11 +890,12 @@ def test_healthy_json_and_sse_never_capture_incidents(captured):
 def test_provider_registers_all_configured_keys_without_capturing_request_headers(monkeypatch, captured):
     registered = []
     monkeypatch.setattr(providers, "register_secrets", lambda values: registered.extend(values))
-    provider_for(
-        [], api_key=" synthetic-primary-key ", fallback_api_key=" synthetic-fallback-key ",
-        vision_api_key=" synthetic-vision-key ",
-    )
-    assert registered == ["synthetic-primary-key", "synthetic-fallback-key", "synthetic-vision-key"]
+    keys = [" synthetic-primary-key ", " synthetic-secondary-key ", " synthetic-third-key "]
+    for key in keys:
+        provider = provider_for([success()], api_key=key)
+        assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
+        assert provider._session.requests[0][3] == {"Authorization": f"Bearer {key}"}
+    assert registered == keys
     assert captured == []
 
 
@@ -886,11 +920,16 @@ def test_concurrent_calls_on_shared_provider_keep_diagnostics_separate(captured)
             FirstResponse(b"request-A private body", 400, headers={"X-Request-ID": "request-A-id"}),
             SecondResponse(b"request-B private body", 400, headers={"X-Request-ID": "request-B-id"}),
         ], retry_attempts=1)
-        return await asyncio.gather(
-            provider.generate_response(MESSAGES, model="request-A-model"),
-            provider.generate_response(MESSAGES, model="request-B-model"),
+        messages = [[{"role": "user", "content": f"request-{name} dynamic input"}] for name in ("A", "B")]
+        results = await asyncio.gather(
+            provider.generate_response(messages[0]),
+            provider.generate_response(messages[1]),
             return_exceptions=True,
         )
+        assert [request[1] for request in provider._session.requests] == [
+            {"model": "synthetic-model", "messages": message} for message in messages
+        ]
+        return results
 
     results = asyncio.run(run())
     assert len(captured) == 2
@@ -898,7 +937,8 @@ def test_concurrent_calls_on_shared_provider_keep_diagnostics_separate(captured)
     for own, other, error in [("A", "B", results[0]), ("B", "A", results[1])]:
         assert isinstance(error, ProviderRequestError)
         assert f"request-{own} private body" in error.incident_details
-        assert f"request-{own}-model" in error.incident_details
+        assert '"model": "synthetic-model"' in error.incident_details
+        assert "dynamic input" not in error.incident_details
         assert f"request-{own}-id" in error.incident_details
         assert f"request-{other}" not in error.incident_details
 
@@ -977,7 +1017,7 @@ def test_midstream_network_error_retains_received_body_and_trace(captured):
             raise aiohttp.ClientPayloadError("synthetic stream connection reset")
 
     provider = provider_for([BrokenStream(headers={"Content-Type": "text/event-stream"})], retry_attempts=1)
-    turn = ForegroundTurn(8192, 12, time.monotonic() + 600)
+    turn = ForegroundTurn(12, time.monotonic() + 600)
     token = set_foreground_turn(turn)
     try:
         with pytest.raises(RuntimeError) as caught:
@@ -985,7 +1025,7 @@ def test_midstream_network_error_retains_received_body_and_trace(captured):
     finally:
         reset_foreground_turn(token)
     assert turn.attempts == 1
-    assert turn.output_remaining == 0
+    assert provider._session.requests[0][1] == {"model": "synthetic-model", "messages": MESSAGES}
     assert partial.decode() not in caught.value.incident_details
     assert "response bytes omitted from provider diagnostics" in caught.value.incident_details
     assert "STREAM_CAPTURE_TAIL" in caught.value.incident_details
@@ -1318,10 +1358,15 @@ def test_handled_caller_cancellation_does_not_flush_normal_provider_attempts(rec
     responses = [Response(b"first real HTTP failure", 503), Response(b"second real HTTP failure", 503), success()] if recovered else [success()]
     provider = provider_for(responses, retry_attempts=len(responses))
     waits = []
+    incident_ids = []
 
     async def verify_backoff(delay):
         waits.append(delay)
-        assert production_handler.get(0) is None
+        incident = production_handler.get(0)
+        incident_ids.append(incident.incident_id)
+        assert "real HTTP failure" in incident.format_report()
+        assert "Provider failures before request cancellation" not in incident.format_report()
+        assert production_handler.get(1) is None
 
     async def run():
         try:
@@ -1335,10 +1380,12 @@ def test_handled_caller_cancellation_does_not_flush_normal_provider_attempts(rec
     if recovered:
         assert waits == [10, 20]
         incident = production_handler.get(0)
-        assert incident.summary == "Provider request recovered after upstream failures"
+        assert incident_ids == [incident.incident_id] * 2
+        assert "Provider request recovered after upstream failures" in incident.details
+        assert "Provider failures before request cancellation" not in incident.format_report()
         assert "first real HTTP failure" in incident.details
         assert "second real HTTP failure" in incident.details
-        assert '"attempt": "3/3"' in incident.details
+        assert all(f'"attempt": "{attempt}/3"' in incident.details for attempt in (1, 2, 3))
         assert production_handler.get(1) is None
     else:
         assert waits == []
