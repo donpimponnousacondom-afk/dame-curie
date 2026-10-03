@@ -57,6 +57,16 @@ Do not read production/backup files, real environment files, databases, raw logs
 
 Work locally: no automatic fetch/push/PR or remote research. Do not amend others' history, prune refs/worktrees/caches, overwrite unrelated work, or stage root's `reports/` and `.agents/skills/root-review-reports/` material. Accepted history mapping does not prove physical cleanliness or ownership.
 
+## AI request parameters — configuration is sacred
+
+Root's standing rule, 2026-10-03: **configuration and explicit operator commands are the only authority for AI request parameters.** Transport is not a second configuration system. This overrides inherited provider behavior and the rejected Mimo-specific workaround; it is a required contract, not a claim that the current implementation already complies.
+
+- Never silently add, strip, normalize or override configured generation, reasoning or routing parameters. No model-specific compatibility patches, operation-specific reasoning-off paths, learned sampling/output adjustments or retry-time parameter repairs.
+- Preserve configured provider selection and fallback restrictions through every request path. Never drop `provider.only`, relax `allow_fallbacks` or widen paid routing to make a request succeed. An upstream rejection must remain visible, not trigger a hidden change of settings.
+- Apply this to all AI HTTP paths: foreground/background/auxiliary calls, tool continuations, retries/fallbacks, image/audio generation and embeddings. Dynamic conversation/input/tool data is distinct from operator configuration and does not authorize overriding configured parameters.
+- Test the actual outgoing JSON/form/query at the HTTP boundary, not only stored configuration. Preserve explicit values and the original configuration object. Surface conflicts with budgets or other constraints instead of silently rewriting parameters or increasing spending.
+- New operational exceptions require root's explicit request. Do not silently rewrite the real configuration to disguise a transport fix, expose credentials/prompts for observability, or change existing security/redaction policy under this rule.
+
 ## Naming and configuration
 
 Use **dame-curie** externally and `DAME_CURIE_*` for environment identifiers. Root's short URL segment **dame** is intentional. Neutral `.env`, `bot.env`, `.venv` retain their distinct roles; default commands use `!`, while instance-specific help uses its configured prefix.
