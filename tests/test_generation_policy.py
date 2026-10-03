@@ -13,11 +13,11 @@ def shared_bot():
     bot = MaxwellBot.__new__(MaxwellBot)
     bot.config = SimpleNamespace(
         AUX_BASE_URL="",
-        AUX_API_KEY="",
+        AUX_API_KEY=None,
         AUX_MODEL="",
         AUX_DISABLE_REASONING=True,
         AUTONOMY_BASE_URL="",
-        AUTONOMY_API_KEY="",
+        AUTONOMY_API_KEY=None,
         AUTONOMY_MODEL="",
         AUTONOMY_DISABLE_REASONING=False,
         OPENAI_TEMPERATURE=0.6,

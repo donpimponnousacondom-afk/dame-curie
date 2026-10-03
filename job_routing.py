@@ -35,7 +35,7 @@ def resolve_job_endpoint(profile: JobProvider, config: Config) -> ProviderEndpoi
             JobProvider.AUTONOMY: (config.AUTONOMY_BASE_URL, config.AUTONOMY_MODEL, config.AUTONOMY_API_KEY),
             JobProvider.AUX: (config.AUX_BASE_URL, config.AUX_MODEL, config.AUX_API_KEY),
         }[profile]
-        if (role_base and role_base != base_url) or (role_key and role_key != api_key):
+        if (role_base and role_base != base_url) or (role_key is not None and role_key != api_key):
             raise ValueError(f"{profile} requires its own complete provider configuration; endpoint/credential overrides cannot inherit main request options")
         model = role_model or model
     return ProviderEndpoint("primary", base_url, model, api_key)

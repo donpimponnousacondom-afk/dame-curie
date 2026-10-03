@@ -2806,7 +2806,9 @@ class MaxwellBot(commands.Bot):
 
     async def _get_autonomy_provider(self) -> OpenAICompatibleProvider:
         """Use the configured autonomy profile without substituting another route."""
-        if not (self.config.AUTONOMY_BASE_URL or self.config.AUTONOMY_MODEL or self.config.AUTONOMY_API_KEY):
+        if not (self.config.AUTONOMY_BASE_URL or self.config.AUTONOMY_MODEL) and (
+            self.config.AUTONOMY_API_KEY is None or self.config.AUTONOMY_API_KEY == self.config.OPENAI_API_KEY
+        ):
             if self.autonomy_provider is not None:
                 retire_provider(self, self.autonomy_provider)
             self.autonomy_provider = None
@@ -2833,7 +2835,9 @@ class MaxwellBot(commands.Bot):
 
     async def _get_aux_provider(self) -> OpenAICompatibleProvider:
         """Use the configured auxiliary profile without borrowing autonomy settings."""
-        if not (self.config.AUX_BASE_URL or self.config.AUX_MODEL or self.config.AUX_API_KEY):
+        if not (self.config.AUX_BASE_URL or self.config.AUX_MODEL) and (
+            self.config.AUX_API_KEY is None or self.config.AUX_API_KEY == self.config.OPENAI_API_KEY
+        ):
             if self.aux_provider is not None:
                 retire_provider(self, self.aux_provider)
             self.aux_provider = None

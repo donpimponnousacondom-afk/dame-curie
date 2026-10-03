@@ -30,10 +30,10 @@ def _make_bot(monkeypatch, *, control=None, aux_env=None, auto_env=None):
     """Build only the bot surface needed for configured-profile resolution."""
     cfg = {
         "AUX_BASE_URL": (aux_env or {}).get("base_url", ""),
-        "AUX_API_KEY": (aux_env or {}).get("api_key", ""),
+        "AUX_API_KEY": (aux_env or {}).get("api_key"),
         "AUX_MODEL": (aux_env or {}).get("model", ""),
         "AUTONOMY_BASE_URL": (auto_env or {}).get("base_url", ""),
-        "AUTONOMY_API_KEY": (auto_env or {}).get("api_key", ""),
+        "AUTONOMY_API_KEY": (auto_env or {}).get("api_key"),
         "AUTONOMY_MODEL": (auto_env or {}).get("model", ""),
         "OPENAI_BASE_URL": "https://main.example/v1",
         "OPENAI_API_KEY": "synthetic-main-key",
@@ -106,22 +106,34 @@ def test_get_aux_provider_without_aux_config_defers_to_autonomy(monkeypatch):
         asyncio.run(bot._get_autonomy_provider())
 
 
+@pytest.mark.parametrize("profile", ["aux", "autonomy"])
 @pytest.mark.parametrize("settings", [
     {"base_url": "https://aux.example", "model": "aux-m"},
     {"api_key": "synthetic-other-key", "model": "aux-m"},
+    {"api_key": "", "model": "aux-m"},
+    {"api_key": "synthetic-other-key"},
+    {"api_key": ""},
 ])
-def test_get_aux_provider_builds_dedicated_when_aux_base_url_set(monkeypatch, settings):
-    bot = _make_bot(monkeypatch, aux_env=settings)
+def test_get_aux_provider_builds_dedicated_when_aux_base_url_set(monkeypatch, profile, settings):
+    bot = _make_bot(
+        monkeypatch,
+        aux_env=settings if profile == "aux" else None,
+        auto_env=settings if profile == "autonomy" else None,
+    )
     with pytest.raises(ValueError, match="complete provider configuration"):
-        asyncio.run(bot._get_aux_provider())
-    assert bot.aux_provider is None
+        asyncio.run(getattr(bot, f"_get_{profile}_provider")())
+    assert getattr(bot, f"{profile}_provider") is None
     assert bot._built == []
 
 
 @pytest.mark.parametrize("profile", ["aux", "autonomy"])
 @pytest.mark.parametrize("max_tokens", [64000, None])
-def test_get_autonomy_provider_forwards_main_sampling(monkeypatch, profile, max_tokens):
+@pytest.mark.parametrize("main_key", ["", "synthetic-main-key"])
+def test_get_autonomy_provider_forwards_main_sampling(monkeypatch, profile, max_tokens, main_key):
     bot = _make_bot(monkeypatch, aux_env={"model": "aux-m"}, auto_env={"model": "auto-m"})
+    assert bot.config.AUX_API_KEY is None
+    assert bot.config.AUTONOMY_API_KEY is None
+    bot.config.OPENAI_API_KEY = main_key
     bot.config.OPENAI_MAX_TOKENS = max_tokens
     bot._control = {"aux_disable_reasoning": True, "autonomy_disable_reasoning": True}
     provider = asyncio.run(getattr(bot, f"_get_{profile}_provider")())
