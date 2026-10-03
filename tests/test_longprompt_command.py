@@ -407,8 +407,13 @@ def test_longprompt_export_send_failure_closes_file_buffer(longprompt_case, monk
     public_error.assert_awaited_once_with(bot, message.channel)
 
 
-def test_longprompt_without_stored_prompt_returns_a_short_upload_hint(longprompt_case):
+@pytest.mark.parametrize("prefix", ["!", "?"])
+def test_longprompt_without_stored_prompt_returns_a_short_upload_hint(
+    longprompt_case, prefix
+):
     bot, message, memory = longprompt_case
+    bot.command_prefix = prefix
+    message.content = f"{prefix}longprompt"
 
     asyncio.run(MaxwellBot._handle_command(bot, message))
 
@@ -419,7 +424,20 @@ def test_longprompt_without_stored_prompt_returns_a_short_upload_hint(longprompt
     assert len(hint) <= 2000
     assert "prompt" in hint
     assert any(term in hint for term in ("attach", "upload", ".txt"))
+    assert f"{bot_module.SERVER_PROMPT_MAX_BYTES // 1024} kib" in hint
     assert "file" not in message.channel.sent[0]
+
+    message.channel.sent.clear()
+    message.content = f"{prefix}help"
+    asyncio.run(MaxwellBot._handle_command(bot, message))
+    help_text = "".join(item["content"] for item in message.channel.sent)
+    upload_help = next(
+        line
+        for line in help_text.splitlines()
+        if line.startswith(f"`{prefix}longprompt`")
+    )
+    assert f"{bot_module.SERVER_PROMPT_MAX_BYTES // 1024} KiB upload max" in upload_help
+    assert f"{bot_module.TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB" not in upload_help
 
 
 def test_prompt_and_clearprompt_retain_their_existing_command_behavior(longprompt_case):

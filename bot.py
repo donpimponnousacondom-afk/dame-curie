@@ -7071,7 +7071,7 @@ class MaxwellBot(commands.Bot):
                     f"`{self.command_prefix}version` - frozen running build\n"
                     f"`{self.command_prefix}stop` - stop active response in this channel\n"
                     f"`{self.command_prefix}prompt [text]` - view/set server prompt (admin)\n"
-                    f"`{self.command_prefix}longprompt` - download prompt; attach one UTF-8 .txt to replace it (admin, {TEXT_ATTACHMENT_MAX_BYTES // 1024} KiB max)\n"
+                    f"`{self.command_prefix}longprompt` - download prompt; attach one UTF-8 .txt to replace it (admin, {SERVER_PROMPT_MAX_BYTES // 1024} KiB upload max)\n"
                     f"`{self.command_prefix}clearprompt` - clear server prompt (admin)\n"
                     f"`{self.command_prefix}clearmem` - clear channel memory (admin)\n"
                     f"`{self.command_prefix}context ...` - manage memory/context (admin)\n"
