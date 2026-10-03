@@ -129,7 +129,6 @@ def test_real_requests_save_exact_submitted_text_without_changing_delivery(image
     payload = case.session.post.call_args.kwargs["json"]
     assert payload == {
         "model": "synthetic-image-a", "prompt": PROMPT, "quality": "low",
-        "output_format": "png", "response_format": "b64_json", "n": 1,
         **({"images": [{"image_url": "data:image/png;base64," + base64.b64encode(PNG).decode()}]}
            if case.profile == "edit" else {}),
     }

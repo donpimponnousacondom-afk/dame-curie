@@ -1250,6 +1250,8 @@ class RAGMemoryManager:
             async with self._embed_semaphore:
                 if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
                     return None
+                if not self.embed_url or not self.embed_model:
+                    raise ValueError("Embeddings require configured DAME_CURIE_EMBED_BASE_URL and DAME_CURIE_EMBED_MODEL")
                 async with aiohttp.ClientSession() as session:
                     for chunk_text in chunks_to_embed:
                         if not EMBEDDINGS_ENABLED:

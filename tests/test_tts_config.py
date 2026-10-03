@@ -3,8 +3,10 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
+from config import Config
 from bot_tools import (
-    FISH_REFERENCE_DEFAULT,
     TtsTool,
     _fish_reference_id,
     _tts_language_key,
@@ -16,16 +18,11 @@ def test_fish_reference_id_resolves_named_voices(monkeypatch):
     monkeypatch.setenv("TTS_FISH_REFERENCE_ID_TIKTOK", "id-tiktok")
     monkeypatch.setenv("TTS_FISH_REFERENCE_ID_MOMMY", "id-mommy")
     monkeypatch.setenv("TTS_FISH_REFERENCE_ID_ESPANOL", "id-espanol")
-    monkeypatch.setenv("TTS_FISH_REFERENCE_ID", "id-default")
-
-    assert _fish_reference_id("tiktok") == "id-tiktok"
-    assert _fish_reference_id("TikTok") == "id-tiktok"  # case-insensitive
-    assert _fish_reference_id("mommy") == "id-mommy"
-    assert _fish_reference_id("espanol") == "id-espanol"
-    assert _fish_reference_id("español") == "id-espanol"
-    assert _fish_reference_id("spanish") == "id-espanol"
-    # Unknown/empty voice falls back to the legacy default.
-    assert _fish_reference_id("britney") == "id-default"
+    monkeypatch.setattr(Config, "TTS_FISH_REFERENCE_ID", "id-default")
+    for voice in ("tiktok", "TikTok", "mommy", "espanol", "español", "spanish", "britney"):
+        with pytest.raises(ValueError, match="TTS_FISH_REFERENCE_ID"):
+            _fish_reference_id(voice)
+    assert _fish_reference_id("id-default") == "id-default"
     assert _fish_reference_id("") == "id-default"
     assert _fish_reference_id(None) == "id-default"
 
@@ -36,8 +33,10 @@ def test_fish_reference_id_falls_back_to_hardcoded_default(monkeypatch):
     monkeypatch.delenv("TTS_FISH_REFERENCE_ID_ESPANOL", raising=False)
     monkeypatch.delenv("TTS_FISH_REFERENCE_ID", raising=False)
 
-    assert _fish_reference_id("tiktok") == FISH_REFERENCE_DEFAULT
-    assert _fish_reference_id(None) == FISH_REFERENCE_DEFAULT
+    monkeypatch.setattr(Config, "TTS_FISH_REFERENCE_ID", "")
+    with pytest.raises(ValueError, match="TTS_FISH_REFERENCE_ID"):
+        _fish_reference_id("tiktok")
+    assert _fish_reference_id(None) == ""
 
 
 def test_tts_language_key_accepts_spanish_aliases():
@@ -52,23 +51,17 @@ def test_tts_language_key_defaults_to_english():
 
 
 def test_tts_spanish_riva_default_matches_available_nvidia_voice(monkeypatch):
-    monkeypatch.delenv("TTS_RIVA_VOICE_ES", raising=False)
-    monkeypatch.delenv("TTS_RIVA_LANGUAGE_ES", raising=False)
-
-    assert _tts_riva_voice_config("spanish") == (
-        "Magpie-Multilingual.ES-US.Jason.Angry",
-        "es-US",
-    )
+    monkeypatch.setattr(Config, "TTS_RIVA_VOICE", "configured-spanish")
+    monkeypatch.setattr(Config, "TTS_RIVA_LANGUAGE", "es-US")
+    assert _tts_riva_voice_config("spanish") == ("configured-spanish", "es-US")
+    with pytest.raises(ValueError, match="TTS_RIVA_LANGUAGE"):
+        _tts_riva_voice_config("english")
 
 
 def test_tts_english_riva_default_unchanged(monkeypatch):
-    monkeypatch.delenv("TTS_RIVA_VOICE", raising=False)
-    monkeypatch.delenv("TTS_RIVA_LANGUAGE", raising=False)
-
-    assert _tts_riva_voice_config("english") == (
-        "Magpie-Multilingual.EN-US.Jason.Angry",
-        "en-US",
-    )
+    monkeypatch.setattr(Config, "TTS_RIVA_VOICE", "configured-english")
+    monkeypatch.setattr(Config, "TTS_RIVA_LANGUAGE", "en-US")
+    assert _tts_riva_voice_config("english") == ("configured-english", "en-US")
 
 
 def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path):
@@ -82,8 +75,8 @@ def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path
     gtts_module = ModuleType("gtts")
 
     class FakeGTTS:
-        def __init__(self, text, lang):
-            calls.append((text, lang))
+        def __init__(self, text):
+            calls.append(text)
 
         def save(self, filename):
             (tmp_path / filename).write_bytes(b"fake audio")
@@ -125,24 +118,21 @@ def test_tts_spanish_falls_back_to_gtts_without_nvidia_key(monkeypatch, tmp_path
 
     async def run():
         result = await TtsTool(
-            SimpleNamespace(config=SimpleNamespace(NVIDIA_API_KEY=""))
-        ).execute(
-            message,
-            text="hola mundo",
-            language="spanish",
-        )
+            SimpleNamespace(config=SimpleNamespace(TTS_ENGINE="gtts", NVIDIA_API_KEY=""))
+        ).execute(message, text="hola mundo")
         assert result == "__TTS_SENT__"
 
     asyncio.run(run())
 
-    assert calls == [("hola mundo", "es")]
+    assert calls == ["hola mundo"]
     assert len(sent) == 1
     assert Path(sent[0]).is_absolute()
     assert Path(sent[0]).name.startswith("tts_") and sent[0].endswith(".ogg")
     assert not Path(sent[0]).parent.exists()
 
 
-def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path):
+@pytest.mark.parametrize("fmt", [None, "", "mp3", "wav"])
+def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path, fmt):
     """The Fish provider must POST its OpenAI-shaped speech request and write
     the response bytes to output_path."""
     from bot_tools import _synthesize_fish_tts
@@ -185,7 +175,7 @@ def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path):
             api_key="sk-fish-test",
             model="s2.1-pro-free",
             reference_id="abc123",
-            fmt="mp3",
+            fmt=fmt,
         )
         assert result == str(out)
 
@@ -196,13 +186,16 @@ def test_fish_tts_writes_audio_on_success(monkeypatch, tmp_path):
     assert captured["json"]["model"] == "s2.1-pro-free"
     assert captured["json"]["input"] == "hello fish"
     assert captured["json"]["voice"] == "abc123"
-    assert captured["json"]["language"] == "en"
+    expected = {"model": "s2.1-pro-free", "input": "hello fish", "voice": "abc123"}
+    if fmt is not None:
+        expected["response_format"] = fmt
+    assert captured["json"] == expected
     assert out.read_bytes().startswith(b"\xff\xfb")
     assert len(out.read_bytes()) == 202
 
 
 def test_fish_tts_returns_none_on_api_error(monkeypatch):
-    """API non-200 must return None so the provider chain can fall through."""
+    """A rejection remains visible instead of selecting another provider."""
     from bot_tools import _synthesize_fish_tts
 
     class FakeResponse:
@@ -230,27 +223,24 @@ def test_fish_tts_returns_none_on_api_error(monkeypatch):
     monkeypatch.setattr("bot_tools._get_shared_session", fake_get_session)
 
     async def run():
-        result = await _synthesize_fish_tts(
-            "x",
-            "/tmp/should_not_exist.mp3",
-            api_key="bad",
-            model="s2.1-pro-free",
-            reference_id="",
-        )
-        assert result is None
+        with pytest.raises(RuntimeError, match="401.*unauthorized"):
+            await _synthesize_fish_tts(
+                "x", "/tmp/should_not_exist.mp3", api_key="synthetic-key",
+                model="s2.1-pro-free", reference_id="configured-voice",
+            )
 
     asyncio.run(run())
 
 
 def test_fish_tts_returns_none_when_key_missing():
-    """No API key -> return None immediately, no network call."""
+    """Missing required configuration fails before contacting a service."""
     from bot_tools import _synthesize_fish_tts
 
     async def run():
-        result = await _synthesize_fish_tts(
-            "x", "/tmp/x.mp3", api_key="", model="s2.1-pro-free", reference_id=""
-        )
-        assert result is None
+        with pytest.raises(ValueError, match="FISH_API_KEY"):
+            await _synthesize_fish_tts(
+                "x", "/tmp/x.mp3", api_key="", model="s2.1-pro-free", reference_id=""
+            )
 
     asyncio.run(run())
 
@@ -326,12 +316,15 @@ def test_tts_tool_prefers_fish_over_riva(monkeypatch, tmp_path):
     async def run():
         result = await TtsTool(
             SimpleNamespace(
-                config=SimpleNamespace(NVIDIA_API_KEY="", FISH_API_KEY="sk-fish-test")
+                config=SimpleNamespace(
+                    TTS_ENGINE="fish", NVIDIA_API_KEY="", FISH_API_KEY="sk-fish-test",
+                    TTS_FISH_MODEL="s2.1-pro-free", TTS_FISH_REFERENCE_ID="configured-voice",
+                    TTS_FISH_FORMAT=None,
+                )
             )
         ).execute(
             message,
             text="hello from fish",
-            language="english",
         )
         assert result == "__TTS_SENT__"
 

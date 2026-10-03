@@ -103,8 +103,10 @@ def test_native_logs_exact_transmitted_request(image_request, caplog, model, inp
     case = image_request
     arguments = {"image": [REFERENCE_URI] * inputs} if inputs else {}
     if model is not None:
+        case.tool.bot.config.IMAGE_GEN_MODEL = model
         arguments["model"] = model
     if quality is not None:
+        case.tool.bot.config.IMAGE_GEN_QUALITY = quality
         arguments["quality"] = quality
     result = asyncio.run(case.tool.execute(case.message, prompt=LONG_PROMPT, auto_send=auto_send, **arguments))
 
@@ -157,7 +159,7 @@ def test_overlapping_requests_keep_ids_and_completions_associated(image_request,
         first = asyncio.create_task(case.tool.execute(case.message, prompt="first 雪\nnormal"))
         await first_reading.wait()
         second_result = await case.tool.execute(
-            case.message, prompt="second 火\nedit", image=REFERENCE_URI, model="synthetic-image-b",
+            case.message, prompt="second 火\nedit", image=REFERENCE_URI,
         )
         second_finished.set()
         return await first, second_result
@@ -176,7 +178,7 @@ def test_overlapping_requests_keep_ids_and_completions_associated(image_request,
         assert start["model"] == done["model"] == call.kwargs["json"]["model"]
         assert start["endpoint"] == done["endpoint"] == call.args[0]
         assert start["tool"] == done["tool"] == "image_generator"
-        assert start["operation"] == ("edits" if start["prompt"].startswith("second") else "generations")
+        assert start["operation"] == ("edits" if call.kwargs["json"].get("images") else "generations")
         assert done["status"] == 200 and done["outcome"] == "success"
         assert done["image_bytes"] == len(PNG) + (len(b"second-image") if start["operation"] == "edits" else 0)
     assert all("NOT sent" in result for result in results)
@@ -191,6 +193,7 @@ def test_credentials_and_image_payloads_are_redacted_without_changing_http(image
     case.tool.bot.config.IMAGE_GEN_API_KEY = key
     selected = "synthetic-model-" + key
     case.tool.bot.config.IMAGE_GEN_MODELS[selected] = "Synthetic private model"
+    case.tool.bot.config.IMAGE_GEN_MODEL = selected
     case.tool.bot.config.IMAGE_GEN_BASE_URL = base
     prompt = (
         f"paint 火 with {key}\nAuthorization: Bearer fake-authorization-secret\n"
@@ -204,13 +207,14 @@ def test_credentials_and_image_payloads_are_redacted_without_changing_http(image
     payload = call.kwargs["json"]
     assert payload["prompt"] == prompt and payload["model"] == selected
     assert call.kwargs["headers"]["Authorization"] == "Bearer " + key
-    assert call.args[0].startswith(base)
+    action = "edits" if editing else "generations"
+    assert call.args[0] == f"https://url-user:url-password@images.example.invalid/v1/{key}/images/{action}?access_token=query-secret#fragment-secret"
     assert start["prompt"] == (
         "paint 火 with [REDACTED]\nAuthorization: [REDACTED]\n"
         "Cookie: [REDACTED]\nKeep this final line intact."
     )
     assert start["model"] == "synthetic-model-[REDACTED]"
-    assert start["endpoint"] == "https://images.example.invalid/v1/[REDACTED]"
+    assert start["endpoint"] == f"https://images.example.invalid/v1/[REDACTED]/images/{action}"
     assert start["input_images"] == int(editing)
     messages = "\n".join(record.getMessage() for record in caplog.records)
     for secret in (key, "url-user", "url-password", "query-secret", "fragment-secret", "fake-authorization-secret", "fake-cookie-secret"):

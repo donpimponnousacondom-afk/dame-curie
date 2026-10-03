@@ -225,16 +225,18 @@ class Config:
     # -------------------------------------------------------------------------
 
     IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "images").strip().lower()
-    IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "").strip()
-    IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "").strip()
+    IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "")
+    IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "")
     IMAGE_GEN_CONFIG_ERROR = ""
+    IMAGE_GEN_EXTRA_BODY = {}
     try:
         IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
+        IMAGE_GEN_EXTRA_BODY = _json_env("IMAGE_GEN_EXTRA_BODY", strict=True)
     except ValueError as error:
         IMAGE_GEN_MODELS = {}
         IMAGE_GEN_CONFIG_ERROR = str(error)
-    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "").strip()
-    IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY", "low").strip() or "low"
+    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "")
+    IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY")
     IMAGE_GEN_TIMEOUT = _int_env(
         "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
     )
@@ -308,24 +310,26 @@ class Config:
     RAG_WEB_STORE_ENABLED = _bool_env("RAG_WEB_STORE_ENABLED", True)
 
     # -------------------------------------------------------------------------
-    # Embeddings for RAG memory. Defaults target a local Ollama, but any
-    # OpenAI-compatible /v1/embeddings endpoint works — set EMBED_BASE_URL
+    # Embeddings for RAG memory. Configure local Ollama or an
+    # OpenAI-compatible /v1/embeddings endpoint — set EMBED_BASE_URL
     # to e.g. https://api.openai.com/v1 with EMBED_MODEL/EMBED_DIM to match.
     # -------------------------------------------------------------------------
-    EMBED_BASE_URL = os.getenv(
-        "DAME_CURIE_EMBED_BASE_URL", os.getenv("EMBED_BASE_URL", "http://localhost:11434")
-    ).strip()
-    EMBED_MODEL = os.getenv(
-        "DAME_CURIE_EMBED_MODEL", os.getenv("EMBED_MODEL", "qwen3-embedding:0.6b")
-    ).strip()
-    EMBED_API_KEY = os.getenv(
-        "DAME_CURIE_EMBED_API_KEY", os.getenv("EMBED_API_KEY", "")
-    ).strip()
+    EMBED_BASE_URL = os.getenv("DAME_CURIE_EMBED_BASE_URL", os.getenv("EMBED_BASE_URL", ""))
+    EMBED_MODEL = os.getenv("DAME_CURIE_EMBED_MODEL", os.getenv("EMBED_MODEL", ""))
+    EMBED_API_KEY = os.getenv("DAME_CURIE_EMBED_API_KEY", os.getenv("EMBED_API_KEY", ""))
     EMBED_DIM = _int_env("DAME_CURIE_EMBED_DIM", 1024, min_value=8, max_value=16384)
 
-    # TTS engine selection. local / riva / gtts / auto. Undocumented before
-    # 2026-07-21 — used to fall through a chain in bot._synthesize_tts_wav.
-    TTS_ENGINE = os.getenv("TTS_ENGINE", "auto").strip().lower()
+    TTS_ENGINE = os.getenv("TTS_ENGINE", "").strip().lower()
+    FISH_API_KEY = os.getenv("FISH_API_KEY", "")
+    TTS_FISH_MODEL = os.getenv("TTS_FISH_MODEL", "")
+    TTS_FISH_REFERENCE_ID = os.getenv("TTS_FISH_REFERENCE_ID", "")
+    TTS_FISH_FORMAT = os.getenv("TTS_FISH_FORMAT")
+    TTS_RIVA_FUNCTION_ID = os.getenv("TTS_RIVA_FUNCTION_ID", "")
+    TTS_RIVA_VOICE = os.getenv("TTS_RIVA_VOICE", "")
+    TTS_RIVA_LANGUAGE = os.getenv("TTS_RIVA_LANGUAGE", "")
+    TTS_LOCAL_VOICE = os.getenv("TTS_LOCAL_VOICE")
+    TTS_LOCAL_SPEED = os.getenv("TTS_LOCAL_SPEED")
+    TTS_LOCAL_PITCH = os.getenv("TTS_LOCAL_PITCH")
 
     # Live tool progress messages. OFF by default: a per-server `!progress on`
     # opts a server in, and DAME_CURIE_PROGRESS_MESSAGES=true enables it for every
@@ -361,10 +365,8 @@ class Config:
     NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
     # NVIDIA Riva ASR (Parakeet) for live VC transcription. Whisper is too
     # slow for this path; VC utterances go through Riva then the text model.
-    ASR_RIVA_FUNCTION_ID = os.getenv(
-        "ASR_RIVA_FUNCTION_ID", "1598d209-5e27-4d3c-8079-4751568b1081"
-    ).strip()
-    ASR_RIVA_LANGUAGE = os.getenv("ASR_RIVA_LANGUAGE", "en-US").strip() or "en-US"
+    ASR_RIVA_FUNCTION_ID = os.getenv("ASR_RIVA_FUNCTION_ID", "")
+    ASR_RIVA_LANGUAGE = os.getenv("ASR_RIVA_LANGUAGE", "")
 
     MEMORY_MESSAGE_LIMIT = _int_env(
         "MEMORY_MESSAGE_LIMIT", 2000, min_value=1, max_value=10000
@@ -477,10 +479,9 @@ class Config:
                 "in .env if you did not mean to grant that."
             )
         # TTS engine sanity check
-        if cls.TTS_ENGINE not in {"auto", "local", "riva", "gtts", "fish"}:
+        if cls.TTS_ENGINE not in {"local", "riva", "gtts", "fish"}:
             _log.warning(
-                "TTS_ENGINE=%r is not one of auto/local/riva/gtts/fish — falling "
-                "back to 'auto' behaviour.",
+                "TTS_ENGINE=%r must explicitly select local/riva/gtts/fish; TTS requests will fail.",
                 cls.TTS_ENGINE,
             )
 

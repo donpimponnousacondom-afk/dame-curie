@@ -34,7 +34,7 @@ def test_native_generations_and_edits_use_one_configured_endpoint(monkeypatch):
     monkeypatch.setattr("bot_tools._get_shared_session", AsyncMock(return_value=session))
     monkeypatch.setattr("bot_tools._persist_public_image", MagicMock(return_value=("/synthetic/image.png", "")))
 
-    generated = asyncio.run(tool.execute(message, prompt="a fox", model="", quality=""))
+    generated = asyncio.run(tool.execute(message, prompt="a fox", model="", quality="high"))
     edited = asyncio.run(tool.execute(message, prompt="make it blue", image=REFERENCE_URI))
 
     assert "generated, NOT sent" in generated

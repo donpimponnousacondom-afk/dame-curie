@@ -7,10 +7,9 @@ without importing the application, and it never prints credentials, the
 resolved endpoint or response contents.
 
 The effective endpoint, model, dimension and auth resolve the way config.py
-resolves them for the bot -- dotenv file over process environment, then the
-same defaults -- because probing a different endpoint than the one the bot will
-call would preserve the bug this gate exists to catch. Local and external
-deployments resolve identically; only the request shape differs.
+resolves them for the bot -- dotenv file over process environment. Endpoint and
+model require explicit configuration. Local and external deployments resolve
+identically and send no unconfigured optional inference fields.
 
 The endpoint-form and response-shape rules deliberately mirror
 rag_memory._embed_endpoint and its Ollama/OpenAI response parsing. They are
@@ -28,11 +27,6 @@ from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values
 
-# Compose injects this project's own Ollama URL for the local deployment; a
-# value in the selected dotenv file still wins, as it does for the application.
-# The three defaults below mirror config.py.
-DEFAULT_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "qwen3-embedding:0.6b"
 DEFAULT_DIMENSION = 1024
 MIN_DIMENSION = 8
 MAX_DIMENSION = 16384
@@ -64,7 +58,7 @@ def first_setting(
     """Preserve explicit blanks while resolving embedding aliases in order."""
     for name in names:
         if name in environment:
-            return environment[name].strip()
+            return environment[name]
     return default
 
 
@@ -165,11 +159,10 @@ def main() -> None:
     )
     if not rag_enabled(environment):
         return
-    model = first_setting(environment, MODEL_KEYS, DEFAULT_MODEL)
+    model = first_setting(environment, MODEL_KEYS)
     dimension = embedding_dimension(environment)
     api_key = first_setting(environment, API_KEY_KEYS)
-    external = os.getenv("DAME_CURIE_EMBED_MODE", "local").strip().lower() == "external"
-    base_url = first_setting(environment, BASE_URL_KEYS, "" if external else DEFAULT_BASE_URL)
+    base_url = first_setting(environment, BASE_URL_KEYS)
     if not base_url or not model:
         raise ValueError("embedding readiness requires an explicit non-blank endpoint and model")
     check_embeddings(base_url, model, dimension, api_key)

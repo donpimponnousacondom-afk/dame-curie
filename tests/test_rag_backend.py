@@ -741,8 +741,9 @@ def doctor_config(enabled=True):
         (ValueError("private error text"), 200, "warn"),
     ],
 )
+@pytest.mark.parametrize("api_key", ["", "synthetic-chat-key"])
 def test_doctor_checks_real_vectors_and_configured_backend(
-    monkeypatch, payload, status, expected
+    monkeypatch, payload, status, expected, api_key
 ):
     transport = install_transport(monkeypatch, Reply(payload, status))
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config()))
@@ -757,17 +758,17 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     transport = install_transport(monkeypatch, Reply({}, status))
     transport.get = transport.post
     cfg = SimpleNamespace(
-        OPENAI_BASE_URL="https://chat.invalid/v1",
-        OPENAI_API_KEY="synthetic-chat-key",
+        OPENAI_BASE_URL="https://chat.invalid/v1?region=private#section",
+        OPENAI_API_KEY=api_key,
         OPENAI_EXTRA_HEADERS={"X-Tenant": "configured", "authorization": "unused-key"},
     )
     original_headers = dict(cfg.OPENAI_EXTRA_HEADERS)
     state, detail = asyncio.run(doctor._probe_chat(cfg))
     assert state == ("ok" if status < 400 else "bad")
-    assert transport.calls[0][0] == "https://chat.invalid/v1/models"
-    assert transport.calls[0][1]["headers"] == {
-        "Authorization": "Bearer synthetic-chat-key", "X-Tenant": "configured",
-    }
+    assert transport.calls[0][0] == "https://chat.invalid/v1/models?region=private#section"
+    expected_headers = {"X-Tenant": "configured"}
+    expected_headers.update({"Authorization": f"Bearer {api_key}"} if api_key else {"authorization": "unused-key"})
+    assert transport.calls[0][1]["headers"] == expected_headers
     assert cfg.OPENAI_EXTRA_HEADERS == original_headers
 
 

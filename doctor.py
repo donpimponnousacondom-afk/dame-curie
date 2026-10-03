@@ -121,12 +121,15 @@ def check_features(cfg) -> None:
 
 
 async def _probe_chat(cfg) -> tuple[str, str]:
+    from urllib.parse import urlsplit, urlunsplit
+
     import aiohttp
 
+    from error_reporting import redact_sensitive_text
     from providers import normalize_base_url
 
-    # Same URL the bot itself builds, so a green line here means the bot works.
-    url = f"{normalize_base_url(cfg.OPENAI_BASE_URL)}/models"
+    parts = urlsplit(normalize_base_url(cfg.OPENAI_BASE_URL))
+    url = urlunsplit(parts._replace(path=parts.path.rstrip("/") + "/models"))
     headers = {
         key: value for key, value in cfg.OPENAI_EXTRA_HEADERS.items()
         if not cfg.OPENAI_API_KEY or key.lower() != "authorization"
@@ -139,10 +142,10 @@ async def _probe_chat(cfg) -> tuple[str, str]:
                 url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 if resp.status < 400:
-                    return "ok", f"HTTP {resp.status} from {url}"
-                return "bad", f"HTTP {resp.status} from {url}"
+                    return "ok", f"HTTP {resp.status} from {redact_sensitive_text(url)}"
+                return "bad", f"HTTP {resp.status} from {redact_sensitive_text(url)}"
     except Exception as e:
-        return "bad", f"{type(e).__name__}: {e}"
+        return "bad", f"{type(e).__name__}: {redact_sensitive_text(str(e))}"
 
 
 async def _probe_embeddings(cfg) -> tuple[str, str]:

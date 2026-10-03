@@ -79,6 +79,7 @@ def isolate_readiness(monkeypatch, tmp_path, settings):
     """Point the gate at a synthetic dotenv file with no ambient embedding settings."""
     for name in EMBEDDING_SETTINGS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("EMBED_MODEL", "qwen3-embedding:0.6b")
     env_file = tmp_path / "bot.env"
     env_file.write_text("".join(f"{key}={value}\n" for key, value in settings.items()))
     monkeypatch.setenv("DAME_CURIE_ENV_FILE", str(env_file))
@@ -272,14 +273,21 @@ def test_readiness_main_treats_a_bare_dotenv_key_as_no_value(
 
 
 @pytest.mark.parametrize("mode", ["local", "external"])
+@pytest.mark.parametrize("setting", ["DAME_CURIE_EMBED_BASE_URL", "DAME_CURIE_EMBED_MODEL"])
+@pytest.mark.parametrize("value", [None, ""])
 def test_readiness_main_requires_an_explicit_external_endpoint(
-    tmp_path, monkeypatch, capsys, mode
+    tmp_path, monkeypatch, capsys, mode, setting, value
 ):
-    isolate_readiness(
-        monkeypatch, tmp_path, {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": ""}
-    )
+    settings = {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": "http://configured.invalid", "DAME_CURIE_EMBED_MODEL": "configured-model"}
+    if value is None:
+        del settings[setting]
+    else:
+        settings[setting] = value
+    isolate_readiness(monkeypatch, tmp_path, settings)
     monkeypatch.setenv("DAME_CURIE_EMBED_MODE", mode)
-    monkeypatch.setenv("EMBED_BASE_URL", "http://alias.invalid")
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    if value == "":
+        monkeypatch.setenv(setting.removeprefix("DAME_CURIE_"), "configured-alias")
     transport = Mock(side_effect=AssertionError("readiness used an inferred endpoint"))
     monkeypatch.setattr("urllib.request.urlopen", transport)
     with pytest.raises(SystemExit) as exit_info:
@@ -422,7 +430,7 @@ def test_compose_entrypoint_gates_application_exec(embeddings_server, tmp_path, 
     checker = tmp_path / "check_embeddings.py"
     checker.write_text(CHECKER.read_text())
     env_file = tmp_path / "bot.env"
-    env_file.write_text(f"ENABLE_RAG=true\nDAME_CURIE_EMBED_BASE_URL={url}\n")
+    env_file.write_text(f"ENABLE_RAG=true\nDAME_CURIE_EMBED_BASE_URL={url}\nDAME_CURIE_EMBED_MODEL=qwen3-embedding:0.6b\n")
     entrypoint = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["bot"][
         "entrypoint"
     ]

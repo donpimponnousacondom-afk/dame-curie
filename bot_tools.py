@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar, cast
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse, urlsplit, urlunsplit
 
 import aiohttp
 import asyncio
@@ -246,11 +246,6 @@ TTS_LANGUAGE_ALIASES = {
     "spanish_jason_angry": "spanish",
     "jason_es": "spanish",
 }
-TTS_RIVA_DEFAULTS = {
-    "english": ("Magpie-Multilingual.EN-US.Jason.Angry", "en-US"),
-    "spanish": ("Magpie-Multilingual.ES-US.Jason.Angry", "es-US"),
-}
-
 _SHARED_SESSION: aiohttp.ClientSession | None = None
 _SESSION_LOCK = asyncio.Lock()
 
@@ -273,16 +268,11 @@ def _tts_language_key(
 
 
 def _tts_riva_voice_config(language_key: str) -> tuple[str, str]:
-    voice_env = "TTS_RIVA_VOICE_ES" if language_key == "spanish" else "TTS_RIVA_VOICE"
-    lang_env = (
-        "TTS_RIVA_LANGUAGE_ES" if language_key == "spanish" else "TTS_RIVA_LANGUAGE"
-    )
-    default_voice, default_code = TTS_RIVA_DEFAULTS.get(
-        language_key, TTS_RIVA_DEFAULTS["english"]
-    )
-    return os.environ.get(voice_env, default_voice), os.environ.get(
-        lang_env, default_code
-    )
+    from config import Config
+
+    if language_key != _tts_language_key(Config.TTS_RIVA_LANGUAGE):
+        raise ValueError("TTS language must match TTS_RIVA_LANGUAGE")
+    return Config.TTS_RIVA_VOICE, Config.TTS_RIVA_LANGUAGE
 
 
 async def _synthesize_fish_tts(
@@ -292,107 +282,42 @@ async def _synthesize_fish_tts(
     api_key: str,
     model: str,
     reference_id: str,
-    fmt: str = "mp3",
-) -> str | None:
-    """Call Fish Audio's TTS API. Returns output_path on success, None on
-    failure (caller falls through to next provider).
-
-    Fish is preferred over Riva when FISH_API_KEY is set: free tier, no gRPC
-    dependency, supports emotion tags like `[excited]`, `[laughing]` inline.
-
-    Docs: https://docs.fish.audio/api-reference/developer-apis/text-to-speech
-    """
-    if not api_key:
-        return None
+    fmt: str | None = None,
+) -> str:
+    """Send the configured PPQ speech profile without provider fallthrough."""
+    if not api_key or not model or not reference_id:
+        raise ValueError("Fish TTS requires FISH_API_KEY, TTS_FISH_MODEL and TTS_FISH_REFERENCE_ID")
     register_secrets([api_key])
-    url = "https://api.ppq.ai/v1/audio/speech"
-    payload = { "model": model, "input": text, "voice": reference_id, "language": "en" }
-    headers = { "Authorization": f"Bearer {api_key}", "Content-Type": "application/json" }
-
-#    url = "https://api.fish.audio/v1/tts"
-#    payload = {
-#        "text": text,
-#        "format": fmt,
-#    }
-#    if reference_id:
-#        payload["reference_id"] = reference_id
-#    headers = {
-#        "Authorization": f"Bearer {api_key}",
-#        "Content-Type": "application/json",
-#        "model": model,
-#    }
-#
-    try:
-        session = await _get_shared_session()
-        timeout = aiohttp.ClientTimeout(total=45)
-        async with session.post(
-            url, json=payload, headers=headers, timeout=timeout
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                incident_id = capture_incident("tool.tts.fish", f"PPQ TTS API returned {resp.status}", details=body)
-                logger.warning("PPQ TTS API returned %s: %s", resp.status, body[:200], extra={"incident_id": incident_id})
-                return None
-            data = await resp.read()
-        if not data or len(data) < 64:
-            incident_id = capture_incident("tool.tts.fish", "Fish TTS returned empty/too-small payload", details=repr(data))
-            logger.warning(
-                "Fish TTS returned empty/too-small payload (%d bytes)", len(data),
-                extra={"incident_id": incident_id},
+    payload = {"model": model, "input": text, "voice": reference_id}
+    if fmt is not None:
+        payload["response_format"] = fmt
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    session = await _get_shared_session()
+    async with session.post(
+        "https://api.ppq.ai/v1/audio/speech", json=payload, headers=headers,
+        timeout=aiohttp.ClientTimeout(total=45),
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            failure = RuntimeError(f"PPQ TTS API returned {resp.status}: {redact_sensitive_text(body)}")
+            capture_incident(
+                "tool.tts.fish", f"PPQ TTS API returned {resp.status}", exception=failure, details=body,
             )
-            return None
-        # Fish returns MP3 bytes (or whatever fmt requested); write directly.
-        # The downstream `make_voice_ogg` re-encodes via ffmpeg so extension
-        # does not matter — ffmpeg sniffs the format.
-        # Written off-thread: this runs on the bot's event loop, and a blocking
-        # write of a few hundred KB stalls every other chat.
-        await asyncio.to_thread(Path(output_path).write_bytes, data)
-        logger.info(
-            "Fish TTS synthesized %d bytes (model=%s, ref=%s)",
-            len(data),
-            model,
-            bool(reference_id),
-        )
-        return output_path
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        capture_incident("tool.tts.fish", "Fish TTS request failed", exception=e)
-        logger.warning("Fish TTS request failed: %s", e)
-        return None
-    except Exception as e:
-        capture_incident("tool.tts.fish", "Fish TTS unexpected error", exception=e)
-        logger.warning("Fish TTS unexpected error: %s", e)
-        return None
-
-
-# Named Fish reference voices. Each name maps to its own env var; the
-# legacy TTS_FISH_REFERENCE_ID stays the backward-compatible default so
-# existing installs keep their current voice unless they opt into a name.
-FISH_REFERENCE_ENV = {
-    "tiktok": "TTS_FISH_REFERENCE_ID_TIKTOK",
-    "mommy": "TTS_FISH_REFERENCE_ID_MOMMY",
-    "espanol": "TTS_FISH_REFERENCE_ID_ESPANOL",
-    "español": "TTS_FISH_REFERENCE_ID_ESPANOL",
-    "spanish": "TTS_FISH_REFERENCE_ID_ESPANOL",
-}
-
-# Hardcoded fallback when no TTS_FISH_REFERENCE_ID* env var is set at all.
-FISH_REFERENCE_DEFAULT = "8d21b053e2804e2a890e1cf62f267b6f"
+            raise failure
+        data = await resp.read()
+    if not data or len(data) < 64:
+        raise RuntimeError("PPQ TTS returned empty/too-small audio")
+    await asyncio.to_thread(Path(output_path).write_bytes, data)
+    return output_path
 
 
 def _fish_reference_id(voice: str | None = None) -> str:
-    """Resolve a named Fish voice ("tiktok", "mommy", ...) to a reference id.
+    """Keep model-supplied voice hints from overriding the operator profile."""
+    from config import Config
 
-    Unknown/empty names fall back to TTS_FISH_REFERENCE_ID (then the
-    hardcoded default), so callers that don't care about voices keep the
-    exact behaviour they had before named voices existed.
-    """
-    if voice:
-        env_key = FISH_REFERENCE_ENV.get(str(voice).strip().lower())
-        if env_key:
-            value = os.environ.get(env_key, "").strip()
-            if value:
-                return value
-    return os.environ.get("TTS_FISH_REFERENCE_ID", FISH_REFERENCE_DEFAULT).strip()
+    if voice not in (None, "", Config.TTS_FISH_REFERENCE_ID):
+        raise ValueError("TTS voice must match TTS_FISH_REFERENCE_ID")
+    return Config.TTS_FISH_REFERENCE_ID
 
 
 async def _get_shared_session() -> aiohttp.ClientSession:
@@ -1210,7 +1135,9 @@ async def _image_generation_request(
         error_type = type(exc).__name__
         error = tool_failure(
             "tool.image_request",
-            "Error: Image request failed or returned unsupported image data." + no_retry,
+            "Error: Image request failed or returned unsupported image data. "
+            "This transport requires inline b64_json; configure response_format in IMAGE_GEN_EXTRA_BODY "
+            "if the endpoint otherwise returns URLs." + no_retry,
             exception=exc, details=body, context=context,
         )
     finally:
@@ -1225,21 +1152,26 @@ async def _image_generation_request(
 
 
 async def _native_image_request(
-    base: str, api_key: str, model: str, prompt: str, *, quality: str,
+    base: str, api_key: str, model: str, prompt: str, *, quality: str | None,
     timeout_s: int, images: tuple[str, ...] | list[str] = (),
-    auto_send: bool = False,
+    auto_send: bool = False, extra_body: dict | None = None,
 ) -> tuple[bytes, str, str]:
     """Select the generation/edit action and build its native payload."""
-    base = base.removesuffix("/images/generations").removesuffix("/images/edits")
+    parts = urlsplit(base)
+    path = parts.path.rstrip("/").removesuffix("/images/generations").removesuffix("/images/edits")
     action = "edits" if images else "generations"
-    payload = {
-        "model": model, "prompt": prompt, "quality": quality,
-        "output_format": "png", "response_format": "b64_json", "n": 1,
-    }
+    payload = {"model": model, "prompt": prompt}
+    if quality is not None:
+        payload["quality"] = quality
     if images:
         payload["images"] = [{"image_url": image} for image in images]
+    options = dict(extra_body or {})
+    conflicts = [key for key in payload if key in options and options[key] != payload[key]]
+    if conflicts:
+        return b"", "png", "Error: IMAGE_GEN_EXTRA_BODY conflicts with configured or input fields: " + ", ".join(conflicts)
+    payload.update(options)
     return await _image_generation_request(
-        f"{base}/images/{action}", api_key, payload,
+        urlunsplit(parts._replace(path=f"{path}/images/{action}")), api_key, payload,
         timeout_s=timeout_s, auto_send=auto_send,
     )
 
@@ -1258,12 +1190,7 @@ class ImageGeneratorTool(Tool):
         model_map = getattr(cfg, "IMAGE_GEN_MODELS", {}) or {}
         default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
         model_catalog = (
-            "Configured exact model IDs and operator descriptions; default is "
-            f"{default_model}:\n"
-            + "\n".join(
-                f"- {model_id}: {description}"
-                for model_id, description in model_map.items()
-            )
+            f"Configured model is {default_model}: {model_map.get(default_model, '')}"
             if isinstance(model_map, dict) and model_map else
             "No image models are configured; set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL."
         )
@@ -1271,8 +1198,8 @@ class ImageGeneratorTool(Tool):
             "Generate an AI image or edit/use supplied images as references. "
             "For an edit, describe the changes to make; provide an image URL or allowed local path, "
             "or up to four references. If image is None, attachments are used; image='' generates from scratch. "
-            "The optional model parameter selects an exact configured ID. Optional quality overrides "
-            "IMAGE_GEN_QUALITY. By default, generate/edit and save a local/public image WITHOUT posting it. "
+            "Model and quality use the operator-configured image profile; tool arguments cannot override it. "
+            "By default, generate/edit and save a local/public image WITHOUT posting it. "
             "Present it using send_file(path=..., caption=...) or an image-preview link. Set auto_send=true "
             "only to post immediately; __IMAGE_SENT__ means already sent, so do not resend its URL or add "
             "commentary unless another task needs a response.\n"
@@ -1412,14 +1339,11 @@ class ImageGeneratorTool(Tool):
             return "", (
                 "Error: IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
             )
-        selected_model = default_model if requested_model in (None, "") else requested_model
-        model_id = selected_model if isinstance(selected_model, str) else ""
         model_error = (
-            ""
-            if model_id and model_id in models
-            else "Error: model must be an exact ID from IMAGE_GEN_MODELS"
+            "" if requested_model in (None, "", default_model)
+            else "Error: model must match the operator-configured IMAGE_GEN_MODEL"
         )
-        return (model_id if not model_error else ""), model_error
+        return (default_model if not model_error else ""), model_error
 
     async def execute(
         self,
@@ -1444,8 +1368,13 @@ class ImageGeneratorTool(Tool):
             selected_model, error = "", "Error: unsupported IMAGE_GEN_PROTOCOL; only images is supported"
         else:
             selected_model, error = self._select_image_model(model)
-        base = (getattr(cfg, "IMAGE_GEN_BASE_URL", "") or "").strip().rstrip("/")
-        if not error and not base:
+        base = getattr(cfg, "IMAGE_GEN_BASE_URL", "")
+        configured_quality = getattr(cfg, "IMAGE_GEN_QUALITY", None)
+        extra_body = getattr(cfg, "IMAGE_GEN_EXTRA_BODY", {})
+        effective_quality = extra_body.get("quality", configured_quality)
+        if not error and quality is not None and quality != effective_quality:
+            error = "Error: quality must match the operator-configured image profile"
+        if not error and not base.strip().rstrip("/"):
             error = "Error: image generation is not configured (set IMAGE_GEN_BASE_URL explicitly)"
         if not error:
             images, input_error = await self._resolve_image_references(message, image)
@@ -1459,10 +1388,11 @@ class ImageGeneratorTool(Tool):
             getattr(cfg, "IMAGE_GEN_API_KEY", "") or "",
             selected_model,
             prompt,
-            quality=quality or getattr(cfg, "IMAGE_GEN_QUALITY", "low") or "low",
+            quality=configured_quality,
             timeout_s=int(getattr(cfg, "IMAGE_GEN_TIMEOUT", 300)),
             images=images,
             auto_send=auto_send,
+            extra_body=extra_body,
         )
         result = error
         if not error:
@@ -7037,8 +6967,7 @@ class TtsTool(Tool):
     def get_description(self):
         return (
             "Convert a text response into a speech voice message and send it to the triggering channel. "
-            "Params: text (required string), language/lang (optional: english or spanish), "
-            "voice (optional: tiktok or mommy — pick the TTS voice)."
+            "Params: text (required string). Engine, language and voice use the operator-configured TTS profile."
         )
 
     async def execute(
@@ -7072,128 +7001,87 @@ class TtsTool(Tool):
                     c: t for c, t in TtsTool._last_tts.items() if t > cutoff
                 }
 
-        language_key = _tts_language_key(language, lang, **kwargs)
-        lang_is_spanish = language_key == "spanish"
-
-        # Determine API Key and Setup File
-        bot_config = getattr(getattr(self, "bot", None), "config", None)
-        nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "") or getattr(
-            bot_config, "NVIDIA_API_KEY", ""
-        )
-        fish_api_key = os.environ.get("FISH_API_KEY", "") or getattr(
-            bot_config, "FISH_API_KEY", ""
-        )
+        cfg = self.bot.config
+        engine = getattr(cfg, "TTS_ENGINE", "")
+        if engine not in {"local", "fish", "riva", "gtts"}:
+            raise ValueError("TTS_ENGINE must explicitly select local/fish/riva/gtts")
+        configured_voice = {
+            "fish": getattr(cfg, "TTS_FISH_REFERENCE_ID", ""),
+            "riva": getattr(cfg, "TTS_RIVA_VOICE", ""),
+            "local": getattr(cfg, "TTS_LOCAL_VOICE", None),
+            "gtts": None,
+        }[engine]
+        if voice not in (None, "", configured_voice):
+            raise ValueError("TTS voice must match the configured engine profile")
+        if language is not None or lang is not None:
+            if engine != "riva" or _tts_language_key(language, lang) != _tts_language_key(cfg.TTS_RIVA_LANGUAGE):
+                raise ValueError("TTS language must be configured in the engine profile")
         with tempfile.TemporaryDirectory(prefix="tts_") as temp_dir:
             token = uuid.uuid4().hex[:12]
             filename = os.path.join(temp_dir, f"tts_{token}.wav")
             voice_filename = os.path.join(temp_dir, f"tts_{token}.ogg")
 
-            tts_source = None  # path to synthesized audio; drives fallback chain
-
-            # Provider order: Fish (best quality, free tier, emotion tags) →
-            # Riva (NVIDIA, paid) → gTTS (free fallback). Each block only sets
-            # `tts_source` on success; failures fall through silently.
-            if not tts_source and fish_api_key:
-                fish_model = os.environ.get("TTS_FISH_MODEL", "s2.1-pro-free")
-                fish_ref = _fish_reference_id(voice)
-                fish_fmt = os.environ.get("TTS_FISH_FORMAT", "mp3")
-                fish_out = await _synthesize_fish_tts(
-                    text,
-                    filename,
-                    api_key=fish_api_key,
-                    model=fish_model,
-                    reference_id=fish_ref,
-                    fmt=fish_fmt,
+            tts_source = filename
+            if engine == "fish":
+                tts_source = await _synthesize_fish_tts(
+                    text, filename, api_key=cfg.FISH_API_KEY,
+                    model=cfg.TTS_FISH_MODEL, reference_id=cfg.TTS_FISH_REFERENCE_ID,
+                    fmt=cfg.TTS_FISH_FORMAT,
                 )
-                if fish_out:
-                    tts_source = fish_out
-                    logger.info(
-                        "TTS provider: fish (model=%s, voice=%s)", fish_model, voice
+            elif engine == "riva":
+                if not cfg.NVIDIA_API_KEY or not cfg.TTS_RIVA_FUNCTION_ID or not cfg.TTS_RIVA_VOICE or not cfg.TTS_RIVA_LANGUAGE:
+                    raise ValueError("Riva TTS requires NVIDIA_API_KEY and TTS_RIVA_FUNCTION_ID/VOICE/LANGUAGE")
+                import riva.client
+                from riva.client.proto import riva_audio_pb2
+
+                auth = riva.client.Auth(
+                    use_ssl=True, uri="grpc.nvcf.nvidia.com:443",
+                    metadata_args=[
+                        ["function-id", cfg.TTS_RIVA_FUNCTION_ID],
+                        ["authorization", f"Bearer {cfg.NVIDIA_API_KEY}"],
+                    ],
+                    options=[
+                        ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+                        ("grpc.max_send_message_length", 64 * 1024 * 1024),
+                    ],
+                )
+                service = riva.client.SpeechSynthesisService(auth)
+
+                def run_riva():
+                    return service.synthesize(
+                        text=text, voice_name=cfg.TTS_RIVA_VOICE,
+                        language_code=cfg.TTS_RIVA_LANGUAGE, sample_rate_hz=44100,
+                        encoding=riva_audio_pb2.AudioEncoding.LINEAR_PCM,
                     )
 
-            if not tts_source:
-                try:
-                    # Try NVIDIA Riva TTS
-                    if not nvidia_api_key:
-                        raise RuntimeError("NVIDIA_API_KEY is not configured")
+                resp = await asyncio.wait_for(asyncio.to_thread(run_riva), timeout=30)
+                with wave.open(filename, "wb") as out_f:
+                    out_f.setnchannels(1)
+                    out_f.setsampwidth(2)
+                    out_f.setframerate(44100)
+                    out_f.writeframesraw(resp.audio)
+            elif engine == "local":
+                import subprocess
 
-                    import riva.client
-                    from riva.client.proto import riva_audio_pb2
+                executable = shutil.which("espeak-ng") or shutil.which("espeak")
+                if not executable:
+                    raise RuntimeError("Configured local TTS requires espeak-ng or espeak")
+                command = [executable]
+                for flag, value in (("-v", cfg.TTS_LOCAL_VOICE), ("-s", cfg.TTS_LOCAL_SPEED), ("-p", cfg.TTS_LOCAL_PITCH)):
+                    if value is not None:
+                        command.extend((flag, value))
+                command.extend(("-w", filename, "--", text))
+                await asyncio.to_thread(
+                    subprocess.run, command, check=True, timeout=30,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+            else:
+                from gtts import gTTS
 
-                    function_id = os.environ.get(
-                        "TTS_RIVA_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969"
-                    )
-                    auth = riva.client.Auth(
-                        use_ssl=True,
-                        uri="grpc.nvcf.nvidia.com:443",
-                        metadata_args=[
-                            ["function-id", function_id],
-                            ["authorization", f"Bearer {nvidia_api_key}"],
-                        ],
-                        options=cast(
-                            Any,
-                            [
-                                ("grpc.max_receive_message_length", 64 * 1024 * 1024),
-                                ("grpc.max_send_message_length", 64 * 1024 * 1024),
-                            ],
-                        ),
-                    )
-                    service = riva.client.SpeechSynthesisService(auth)
+                def run_gtts():
+                    gTTS(text=text).save(filename)
 
-                    tts_voice_name, tts_language_code = _tts_riva_voice_config(language_key)
-
-                    # Use gRPC service synchronously (run in executor since it is synchronous gRPC)
-                    def run_riva():
-                        return service.synthesize(
-                            text=text,
-                            voice_name=tts_voice_name,
-                            language_code=tts_language_code,
-                            sample_rate_hz=44100,
-                            encoding=cast(Any, riva_audio_pb2).AudioEncoding.LINEAR_PCM,
-                        )
-
-                    loop = asyncio.get_running_loop()
-                    # Bound the gRPC call: a stalled Riva endpoint would hang this tool
-                    # and leak an executor thread otherwise.
-                    resp = await asyncio.wait_for(
-                        loop.run_in_executor(None, run_riva), timeout=30
-                    )
-                    logger.info(
-                        f"Riva TTS synthesized audio with voice={tts_voice_name!r}, language={tts_language_code!r}"
-                    )
-
-                    # Save the WAV file
-                    with wave.open(filename, "wb") as out_f:
-                        out_f.setnchannels(1)
-                        out_f.setsampwidth(2)
-                        out_f.setframerate(44100)
-                        # cast: the riva client returns an untyped stub object; the
-                        # synthesized audio bytes live on `.audio` at runtime.
-                        out_f.writeframesraw(cast(Any, resp).audio)
-                    tts_source = filename
-                    logger.info("TTS provider: riva")
-                except Exception as e:
-                    logger.warning(f"Riva TTS synthesis failed: {e}")
-
-            # Last-resort fallback: gTTS. Used when neither Fish nor Riva produced
-            # audio. Kept at the bottom of the provider chain so the comment above
-            # about quality (no voice selection / no emotion tags) still applies.
-            if not tts_source:
-                try:
-                    from gtts import gTTS
-
-                    def run_gtts():
-                        tts = gTTS(text=text, lang="es" if lang_is_spanish else "en")
-                        tts.save(filename)
-
-                    loop = asyncio.get_running_loop()
-                    await asyncio.wait_for(loop.run_in_executor(None, run_gtts), timeout=30)
-                    logger.warning(
-                        "TTS used gTTS fallback; voice selection/emotion is unavailable in fallback audio"
-                    )
-                    tts_source = filename
-                except Exception as fallback_err:
-                    return f"Error: all TTS providers failed (last error: {fallback_err})"
+                await asyncio.wait_for(asyncio.to_thread(run_gtts), timeout=30)
 
             async def make_voice_ogg(source: str) -> str:
                 proc = await asyncio.create_subprocess_exec(
