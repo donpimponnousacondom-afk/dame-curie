@@ -747,8 +747,13 @@ def doctor_config(enabled=True):
     ("", None), ("", "header-key"), ("synthetic-chat-key", None),
     ("synthetic-chat-key", "header-key"), ("synthetic-chat-key", "Bearer synthetic-chat-key"),
 ])
+@pytest.mark.parametrize("base,endpoint", [
+    ("https://chat.invalid/v1?region=private#section", "https://chat.invalid/v1/models?region=private#section"),
+    ("HTTPS://Chat.INVALID/v1/?#", "HTTPS://Chat.INVALID/v1/models?#"),
+    ("https://chat.invalid/v1//?region=private#", "https://chat.invalid/v1//models?region=private#"),
+])
 def test_doctor_checks_real_vectors_and_configured_backend(
-    monkeypatch, payload, status, expected, api_key, authorization
+    monkeypatch, payload, status, expected, api_key, authorization, base, endpoint
 ):
     transport = install_transport(monkeypatch, Reply(payload, status))
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config()))
@@ -765,7 +770,7 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     transport = install_transport(monkeypatch, Reply({}, status))
     transport.get = transport.post
     cfg = SimpleNamespace(
-        OPENAI_BASE_URL="https://chat.invalid/v1?region=private#section",
+        OPENAI_BASE_URL=base,
         OPENAI_API_KEY=api_key,
         OPENAI_COMPAT_API_KEY="must-not-borrow",
         OPENAI_EXTRA_HEADERS={"X-Tenant": "configured"},
@@ -780,7 +785,7 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     else:
         state, detail = asyncio.run(doctor._probe_chat(cfg))
         assert state == ("ok" if 200 <= status < 300 else "bad")
-        assert transport.calls[0][0] == "https://chat.invalid/v1/models?region=private#section"
+        assert transport.calls[0][0] == endpoint
         expected_headers = dict(original_headers)
         if api_key:
             expected_headers["Authorization"] = f"Bearer {api_key}"

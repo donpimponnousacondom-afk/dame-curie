@@ -8508,7 +8508,7 @@ class UsageTool(Tool):
                     "Error: usage unavailable for this primary provider; "
                     "only a loaded HTTPS OpenRouter primary is supported."
                 )
-            key = getattr(provider, "api_key", "").strip()
+            key = getattr(provider, "api_key", "")
             if not key:
                 return "Error: usage unavailable; the loaded OpenRouter primary has no API key."
             session = await _get_shared_session()

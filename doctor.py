@@ -121,15 +121,12 @@ def check_features(cfg) -> None:
 
 
 async def _probe_chat(cfg) -> tuple[str, str]:
-    from urllib.parse import urlsplit, urlunsplit
-
     import aiohttp
 
     from error_reporting import redact_sensitive_text
     from providers import normalize_base_url
 
-    parts = urlsplit(normalize_base_url(cfg.OPENAI_BASE_URL))
-    url = urlunsplit(parts._replace(path=parts.path.rstrip("/") + "/models"))
+    url = normalize_base_url(cfg.OPENAI_BASE_URL, "models")
     headers = dict(cfg.OPENAI_EXTRA_HEADERS)
     if cfg.OPENAI_API_KEY:
         if any(name.lower() == "authorization" for name in headers):
