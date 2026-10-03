@@ -46,7 +46,7 @@ def sse_frame(delta=None, **fields):
 
 def provider_for(responses, *, model="model", **kwargs):
     provider = OpenAICompatibleProvider(
-        "https://user:synthetic@example.test/v1",
+        "https://user:synthetic@example.test/v1?secret=synthetic",
         model,
         8192,
         0.6,
@@ -562,7 +562,7 @@ def test_corrected_endpoint_is_pinned_not_switched_by_fast_fallback(no_wait):
     assert result.metrics.attempt == 1
     assert result.metrics.endpoint == "primary"
     assert result.metrics.provider == "example.test"
-    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions"] * 2
+    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions?secret=synthetic"] * 2
     assert provider._session.payloads == [{
         "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
         "stream": True, "stream_options": {"include_usage": True},
@@ -698,7 +698,7 @@ def test_actual_selected_model_override_and_fallback(model):
     assert primary.metrics.attempt == 1
     assert retried.metrics.attempt == 2
     assert primary.metrics.call_id != retried.metrics.call_id
-    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions"] * 3
+    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions?secret=synthetic"] * 3
     assert provider._session.payloads == [{
         "model": model, "max_tokens": 8192, "temperature": 0.6, "messages": [],
     }] * 3
