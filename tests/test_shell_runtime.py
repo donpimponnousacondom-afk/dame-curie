@@ -17,11 +17,29 @@ def isolated_environment(monkeypatch):
     monkeypatch.setattr(bot_tools.asyncio, "create_subprocess_exec", AsyncMock(side_effect=AssertionError("live subprocess forbidden")))
 
 
-def test_exec_uses_outer_bot_container(monkeypatch):
-    shell = ShellTool(bot=None)
+@pytest.mark.parametrize(
+    ("site_config", "site_root"),
+    [
+        ({"DAME_CURIE_SITE_DIR": "/state/sites"}, "/state/sites"),
+        ({"DAME_CURIE_SITE_DIR": "/state/sites/authored"}, "/state/sites/authored"),
+        ({"DAME_CURIE_SITE_DIR": "public/custom"}, "public/custom"),
+        ({}, "public/bot"),
+        ({"DAME_CURIE_SITE_DIR": ""}, "public/bot"),
+    ],
+    ids=["container", "configured", "relative", "default", "empty"],
+)
+def test_exec_uses_outer_bot_container(monkeypatch, tmp_path, site_config, site_root):
+    monkeypatch.chdir(tmp_path)
+    shell = ShellTool(bot=SimpleNamespace(config=SimpleNamespace(**site_config)))
+    monkeypatch.setenv("DAME_CURIE_SITE_DIR", "/synthetic/unrelated-site-root")
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-provider-secret")
     monkeypatch.setenv("DISCORD_TOKEN", "synthetic-discord-secret")
     monkeypatch.setenv("BASH_ENV", "/synthetic/must-not-source")
+    monkeypatch.setenv("ENV", "/synthetic/must-not-source-either")
+    monkeypatch.setenv("PYTHONPATH", "/synthetic/unrelated-python-path")
+    monkeypatch.setenv("DATA_DIR", "/synthetic/private-data")
+    monkeypatch.setenv("HOME", "/synthetic/unrelated-home")
+    monkeypatch.setenv("PATH", "/synthetic/unrelated-bin")
 
     async def run():
         stdout = asyncio.StreamReader()
@@ -42,6 +60,7 @@ def test_exec_uses_outer_bot_container(monkeypatch):
             "PATH": "/home/dame-curie/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG": "C.UTF-8",
             "PYTHONUNBUFFERED": "1",
+            "DAME_CURIE_SITE_DIR": str(tmp_path / site_root),
         }
         assert "synthetic-provider-secret" not in environment.values()
         assert "synthetic-discord-secret" not in environment.values()

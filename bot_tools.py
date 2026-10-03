@@ -5233,6 +5233,9 @@ class ShellTool(Tool):
                     "PATH": "/home/dame-curie/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "LANG": "C.UTF-8",
                     "PYTHONUNBUFFERED": "1",
+                    "DAME_CURIE_SITE_DIR": os.path.abspath(
+                        os.path.dirname(_public_image_target(self.bot)[0])
+                    ),
                 },
                 start_new_session=True,
                 stdin=asyncio.subprocess.DEVNULL,
