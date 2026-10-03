@@ -28,6 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 import numpy as np
@@ -46,22 +47,13 @@ logger = logging.getLogger(__name__)
 # vLLM, Infinity) and set DAME_CURIE_EMBED_MODEL / DAME_CURIE_EMBED_DIM to match.
 # Both the Ollama and the OpenAI response shapes are parsed below, so the
 # only thing you change is the URL.
-try:  # config is the single source of truth; fall back for standalone use
-    from config import Config as _Cfg
+from config import Config as _Cfg
 
-    EMBED_MODEL = _Cfg.EMBED_MODEL
-    EMBED_DIM = _Cfg.EMBED_DIM
-    EMBED_API_KEY = _Cfg.EMBED_API_KEY
-    EMBED_BASE_URL = _Cfg.EMBED_BASE_URL
-    EMBEDDINGS_ENABLED = _Cfg.ENABLE_RAG
-except Exception:  # pragma: no cover - config import failure is not fatal here
-    EMBED_MODEL = os.getenv("DAME_CURIE_EMBED_MODEL", "qwen3-embedding:0.6b")
-    EMBED_DIM = int(os.getenv("DAME_CURIE_EMBED_DIM", "1024"))
-    EMBED_API_KEY = os.getenv("DAME_CURIE_EMBED_API_KEY", "")
-    EMBED_BASE_URL = os.getenv("DAME_CURIE_EMBED_BASE_URL", "http://localhost:11434")
-    EMBEDDINGS_ENABLED = os.getenv("ENABLE_RAG", "true").strip().lower() not in {
-        "0", "false", "no", "off"
-    }
+EMBED_MODEL = _Cfg.EMBED_MODEL
+EMBED_DIM = _Cfg.EMBED_DIM
+EMBED_API_KEY = _Cfg.EMBED_API_KEY
+EMBED_BASE_URL = _Cfg.EMBED_BASE_URL
+EMBEDDINGS_ENABLED = _Cfg.ENABLE_RAG
 
 
 def _embed_endpoint(base_url: str) -> str:
@@ -70,14 +62,13 @@ def _embed_endpoint(base_url: str) -> str:
     Accepts a full endpoint (used as-is), an OpenAI-style `/v1` base
     (-> `/v1/embeddings`), or an Ollama host (-> `/api/embed`).
     """
-    base = (base_url or "").strip().rstrip("/")
-    if not base:
-        return "http://localhost:11434/api/embed"
-    if base.endswith(("/api/embed", "/embeddings")):
-        return base
-    if base.endswith("/v1") or "/v1/" in base:
-        return f"{base}/embeddings"
-    return f"{base}/api/embed"
+    parts = urlsplit(base_url)
+    path = parts.path.rstrip("/")
+    if not base_url:
+        return ""
+    if not path.endswith(("/api/embed", "/embeddings")):
+        path += "/embeddings" if path.endswith("/v1") or "/v1/" in path else "/api/embed"
+    return urlunsplit(parts._replace(path=path))
 
 
 EMBED_URL = _embed_endpoint(EMBED_BASE_URL)
@@ -159,11 +150,8 @@ MAX_BACKGROUND_EMBED_TASKS = int(
 # they used to disagree, and the batch path silently truncated at 8000.
 # Local ollama loads qwen3-embedding:0.6b at num_ctx=4096 (CPU default), so
 # 30k-char chunks overflow the runner and hang until Maxwell's 30s timeout.
-# Character counts are not token bounds; context rejections split only the
-# offending chunk without truncating text or changing normal chunk/cache identity.
 EMBED_MAX_CHARS = 6000
 EMBED_CHUNK_OVERLAP = 200
-EMBED_CONTEXT_SPLIT_LIMIT = 4
 # The pre-2026-08-09 hard cutoff. Rows embedded before that commit were
 # vectorized from text[:8000], so their cached vectors are NOT valid under the
 # current full-text/chunked derivation. Only used to detect legacy rows.
@@ -1263,33 +1251,16 @@ class RAGMemoryManager:
                 if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
                     return None
                 async with aiohttp.ClientSession() as session:
-                    pending_chunks = [(chunk, 0) for chunk in reversed(chunks_to_embed)]
-                    while pending_chunks:
-                        chunk_text, split_depth = pending_chunks.pop()
+                    for chunk_text in chunks_to_embed:
                         if not EMBEDDINGS_ENABLED:
                             return None
                         payload = {"model": self.embed_model, "input": chunk_text}
-                        if self.embed_url.endswith("/api/embed"):
-                            payload["truncate"] = False
                         async with session.post(
                             self.embed_url,
                             json=payload,
                             headers=self.embed_headers,
                             timeout=aiohttp.ClientTimeout(total=EMBED_HTTP_TIMEOUT_SECONDS),
                         ) as resp:
-                            if resp.status == 400 and self.embed_url.endswith("/api/embed"):
-                                error = await resp.json()
-                                if isinstance(error, dict) and error.get("error") == (
-                                    "the input length exceeds the context length"
-                                ):
-                                    if split_depth >= EMBED_CONTEXT_SPLIT_LIMIT or len(chunk_text) < 2:
-                                        return None
-                                    midpoint = len(chunk_text) // 2
-                                    pending_chunks.extend([
-                                        (chunk_text[midpoint:], split_depth + 1),
-                                        (chunk_text[:midpoint], split_depth + 1),
-                                    ])
-                                    continue
                             if resp.status != 200:
                                 self._trip_embed_breaker(f"HTTP {resp.status}")
                                 return None

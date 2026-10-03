@@ -753,6 +753,22 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     assert url == "http://configured.invalid/v1/embeddings"
     assert kwargs["json"]["model"] == "configured-model"
     assert kwargs["headers"]["Authorization"] == "Bearer synthetic-key"
+    assert kwargs["json"] == {"model": "configured-model", "input": "maxwell doctor probe"}
+    transport = install_transport(monkeypatch, Reply({}, status))
+    transport.get = transport.post
+    cfg = SimpleNamespace(
+        OPENAI_BASE_URL="https://chat.invalid/v1",
+        OPENAI_API_KEY="synthetic-chat-key",
+        OPENAI_EXTRA_HEADERS={"X-Tenant": "configured", "authorization": "unused-key"},
+    )
+    original_headers = dict(cfg.OPENAI_EXTRA_HEADERS)
+    state, detail = asyncio.run(doctor._probe_chat(cfg))
+    assert state == ("ok" if status < 400 else "bad")
+    assert transport.calls[0][0] == "https://chat.invalid/v1/models"
+    assert transport.calls[0][1]["headers"] == {
+        "Authorization": "Bearer synthetic-chat-key", "X-Tenant": "configured",
+    }
+    assert cfg.OPENAI_EXTRA_HEADERS == original_headers
 
 
 def test_doctor_disabled_rag_does_not_probe():

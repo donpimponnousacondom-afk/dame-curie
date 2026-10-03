@@ -92,12 +92,12 @@ def run_readiness():
 def test_readiness_requires_real_embedding_without_api_credentials(embeddings_server):
     url, state = embeddings_server
     runpy.run_path(str(CHECKER))["check_embeddings"](
-        url, "qwen3-embedding:0.6b", 1024, warm=True
+        url, "qwen3-embedding:0.6b", 1024
     )
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "keep_alive": -1},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
     assert "Authorization" not in state["headers"][0]
@@ -109,19 +109,20 @@ def test_readiness_external_ollama_form_matches_the_embedding_request(embeddings
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "shared-model", "input": "readiness", "truncate": False},
+            {"model": "shared-model", "input": "readiness"},
         )
     ]
 
 
-def test_readiness_external_openai_form_uses_v1_with_bearer_auth(embeddings_server):
+@pytest.mark.parametrize("suffix", ["", "?region=private&route=one"])
+def test_readiness_external_openai_form_uses_v1_with_bearer_auth(embeddings_server, suffix):
     url, state = embeddings_server
     state["shape"] = "openai"
     runpy.run_path(str(CHECKER))["check_embeddings"](
-        f"{url}/v1", "shared-model", 1024, "test-key"
+        f"{url}/v1{suffix}", "shared-model", 1024, "test-key"
     )
     assert state["requests"] == [
-        ("/v1/embeddings", {"model": "shared-model", "input": "readiness"})
+        (f"/v1/embeddings{suffix}", {"model": "shared-model", "input": "readiness"})
     ]
     assert state["headers"][0]["Authorization"] == "Bearer test-key"
 
@@ -130,7 +131,7 @@ def test_readiness_omits_ollama_fields_on_a_v1_endpoint(embeddings_server):
     url, state = embeddings_server
     state["shape"] = "openai"
     runpy.run_path(str(CHECKER))["check_embeddings"](
-        f"{url}/v1", "shared-model", 1024, warm=True
+        f"{url}/v1", "shared-model", 1024
     )
     assert state["requests"] == [
         ("/v1/embeddings", {"model": "shared-model", "input": "readiness"})
@@ -203,7 +204,7 @@ def test_readiness_main_probes_unless_rag_is_explicitly_disabled(
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "truncate": False},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
 
@@ -245,7 +246,7 @@ def test_readiness_main_prefers_the_dotenv_file_over_the_process_environment(
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "truncate": False},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
 
@@ -265,18 +266,20 @@ def test_readiness_main_treats_a_bare_dotenv_key_as_no_value(
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "keep_alive": -1},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
 
 
+@pytest.mark.parametrize("mode", ["local", "external"])
 def test_readiness_main_requires_an_explicit_external_endpoint(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, mode
 ):
     isolate_readiness(
         monkeypatch, tmp_path, {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": ""}
     )
-    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "external")
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", mode)
+    monkeypatch.setenv("EMBED_BASE_URL", "http://alias.invalid")
     transport = Mock(side_effect=AssertionError("readiness used an inferred endpoint"))
     monkeypatch.setattr("urllib.request.urlopen", transport)
     with pytest.raises(SystemExit) as exit_info:
@@ -367,7 +370,7 @@ def test_readiness_main_probes_the_injected_local_endpoint(
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "keep_alive": -1},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
 
@@ -386,7 +389,7 @@ def test_readiness_main_local_mode_honours_the_configured_endpoint(
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "keep_alive": -1},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
 
@@ -407,7 +410,7 @@ def test_readiness_main_keeps_the_deployment_mode_when_bot_env_disagrees(
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "keep_alive": -1},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
 

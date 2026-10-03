@@ -173,7 +173,9 @@ def test_base_url_normalization(given, expected):
         ("https://api.openai.com/v1", "https://api.openai.com/v1/embeddings"),
         ("https://api.openai.com/v1/embeddings", "https://api.openai.com/v1/embeddings"),
         ("http://box:11434/api/embed", "http://box:11434/api/embed"),
-        ("", "http://localhost:11434/api/embed"),
+        ("", ""),
+        ("https://embed.invalid/v1?region=private#section", "https://embed.invalid/v1/embeddings?region=private#section"),
+        ("https://embed.invalid/api/embed?region=private", "https://embed.invalid/api/embed?region=private"),
     ],
 )
 def test_embed_endpoint_derivation(given, expected):

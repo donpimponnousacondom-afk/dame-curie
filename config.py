@@ -312,13 +312,15 @@ class Config:
     # OpenAI-compatible /v1/embeddings endpoint works — set EMBED_BASE_URL
     # to e.g. https://api.openai.com/v1 with EMBED_MODEL/EMBED_DIM to match.
     # -------------------------------------------------------------------------
-    EMBED_BASE_URL = _first_env(
-        "DAME_CURIE_EMBED_BASE_URL", "EMBED_BASE_URL", default="http://localhost:11434"
-    ).rstrip("/")
-    EMBED_MODEL = _first_env(
-        "DAME_CURIE_EMBED_MODEL", "EMBED_MODEL", default="qwen3-embedding:0.6b"
-    )
-    EMBED_API_KEY = _first_env("DAME_CURIE_EMBED_API_KEY", "EMBED_API_KEY")
+    EMBED_BASE_URL = os.getenv(
+        "DAME_CURIE_EMBED_BASE_URL", os.getenv("EMBED_BASE_URL", "http://localhost:11434")
+    ).strip()
+    EMBED_MODEL = os.getenv(
+        "DAME_CURIE_EMBED_MODEL", os.getenv("EMBED_MODEL", "qwen3-embedding:0.6b")
+    ).strip()
+    EMBED_API_KEY = os.getenv(
+        "DAME_CURIE_EMBED_API_KEY", os.getenv("EMBED_API_KEY", "")
+    ).strip()
     EMBED_DIM = _int_env("DAME_CURIE_EMBED_DIM", 1024, min_value=8, max_value=16384)
 
     # TTS engine selection. local / riva / gtts / auto. Undocumented before

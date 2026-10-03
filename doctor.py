@@ -127,7 +127,12 @@ async def _probe_chat(cfg) -> tuple[str, str]:
 
     # Same URL the bot itself builds, so a green line here means the bot works.
     url = f"{normalize_base_url(cfg.OPENAI_BASE_URL)}/models"
-    headers = {"Authorization": f"Bearer {cfg.OPENAI_API_KEY}"} if cfg.OPENAI_API_KEY else {}
+    headers = {
+        key: value for key, value in cfg.OPENAI_EXTRA_HEADERS.items()
+        if not cfg.OPENAI_API_KEY or key.lower() != "authorization"
+    }
+    if cfg.OPENAI_API_KEY:
+        headers["Authorization"] = f"Bearer {cfg.OPENAI_API_KEY}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(

@@ -23,6 +23,7 @@ import math
 import os
 import sys
 from http.client import HTTPException
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values
@@ -47,9 +48,8 @@ def effective_environment(path: str) -> dict[str, str]:
     config.py loads that file with override=True, so a key declared in the file
     wins even when the container environment defines the same key. Mirroring
     python-dotenv there: a bare ``KEY`` line carries no value and leaves the
-    inherited value alone, while an explicitly blank ``KEY=`` wins as a blank,
-    which the readers below treat as unset -- the way config._first_env skips
-    blank values. A missing file contributes nothing.
+    inherited value alone, while an explicitly blank ``KEY=`` wins as a blank.
+    A missing file contributes nothing.
     """
     merged = dict(os.environ)
     for name, value in dotenv_values(path).items():
@@ -61,11 +61,10 @@ def effective_environment(path: str) -> dict[str, str]:
 def first_setting(
     environment: dict[str, str], names: tuple[str, ...], default: str = ""
 ) -> str:
-    """First non-blank value among ``names``, mirroring config._first_env."""
+    """Preserve explicit blanks while resolving embedding aliases in order."""
     for name in names:
-        value = environment.get(name)
-        if value is not None and value.strip():
-            return value.strip()
+        if name in environment:
+            return environment[name].strip()
     return default
 
 
@@ -94,12 +93,13 @@ def embedding_endpoint(base_url: str) -> str:
     ``/v1/embeddings``, and anything else is treated as an Ollama host. No
     vendor or model is inferred from the URL.
     """
-    base = (base_url or "").strip().rstrip("/")
-    if base.endswith(("/api/embed", "/embeddings")):
-        return base
-    if base.endswith("/v1") or "/v1/" in base:
-        return f"{base}/embeddings"
-    return f"{base}/api/embed"
+    parts = urlsplit(base_url)
+    path = parts.path.rstrip("/")
+    if not base_url:
+        return ""
+    if not path.endswith(("/api/embed", "/embeddings")):
+        path += "/embeddings" if path.endswith("/v1") or "/v1/" in path else "/api/embed"
+    return urlunsplit(parts._replace(path=path))
 
 
 def extract_vectors(payload: object) -> list:
@@ -131,23 +131,11 @@ def extract_vectors(payload: object) -> list:
 
 
 def check_embeddings(
-    base_url: str, model: str, dimension: int, api_key: str = "", *, warm: bool = False
+    base_url: str, model: str, dimension: int, api_key: str = ""
 ) -> None:
-    """Require one finite, nonzero numeric vector of exactly ``dimension`` length.
-
-    ``warm`` is the local deployment's unchanged probe: against this project's
-    own Ollama it also asks for the just-pulled model to stay resident. Ollama's
-    native fields are only ever added to the ``/api/embed`` form, so a
-    compatible ``/v1/embeddings`` service receives exactly what rag_memory
-    sends it.
-    """
+    """Require one finite, nonzero numeric vector of exactly ``dimension`` length."""
     url = embedding_endpoint(base_url)
     payload: dict[str, object] = {"model": model, "input": "readiness"}
-    if url.endswith("/api/embed"):
-        if warm:
-            payload["keep_alive"] = -1
-        else:
-            payload["truncate"] = False
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -181,12 +169,10 @@ def main() -> None:
     dimension = embedding_dimension(environment)
     api_key = first_setting(environment, API_KEY_KEYS)
     external = os.getenv("DAME_CURIE_EMBED_MODE", "local").strip().lower() == "external"
-    base_url = first_setting(environment, BASE_URL_KEYS)
-    if external and not base_url:
-        raise ValueError("external embedding mode requires DAME_CURIE_EMBED_BASE_URL")
-    check_embeddings(
-        base_url or DEFAULT_BASE_URL, model, dimension, api_key, warm=not external
-    )
+    base_url = first_setting(environment, BASE_URL_KEYS, "" if external else DEFAULT_BASE_URL)
+    if not base_url or not model:
+        raise ValueError("embedding readiness requires an explicit non-blank endpoint and model")
+    check_embeddings(base_url, model, dimension, api_key)
 
 
 def cli() -> None:
