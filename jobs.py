@@ -43,7 +43,7 @@ from control_defaults import SERVER_PROMPT_MAX_BYTES
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident
 from job_routing import JobProvider, resolve_job_endpoint
 from tools import Tool
-from turn_budget import TOOL_GROUPS_CONTEXT
+from turn_budget import TOOL_GROUPS_CONTEXT, TurnBudgetExceeded, current_foreground_turn
 from response_observability import TURN_INPUT, prepare_delivery, record_delivery
 from utils import _safe_int, _spawn_background
 
@@ -671,6 +671,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     terminal_failure = None
     failure_text = ""
     deadline = time.monotonic() + float(timeout)
+    turn = current_foreground_turn()
+    timeout_scope = asyncio.timeout_at(turn.deadline if turn is not None else None)
     job_provider = None
     effective_route = ""
     # Inside the job's own task, so every tool subtask it spawns inherits the
@@ -679,158 +681,172 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     job_turn_token = JOB_TURN.set(True)
     tool_groups_token = TOOL_GROUPS_CONTEXT.set(set())
     try:
-        for step in range(max(1, max_iters)):
-            if time.monotonic() > deadline:
-                manager.mark(job.id, progress=f"time budget ({timeout}s) hit at step {step}")
-                final_text = final_text or "I ran out of time budget — partial work is in the thread."
-                break
+        async with timeout_scope:
+            for step in range(max(1, max_iters)):
+                if turn is not None and turn.remaining_seconds <= 0:
+                    terminal_failure = TurnBudgetExceeded("deadline")
+                    failure_text = str(terminal_failure)
+                    break
+                if time.monotonic() > deadline:
+                    manager.mark(job.id, progress=f"time budget ({timeout}s) hit at step {step}")
+                    final_text = final_text or "I ran out of time budget — partial work is in the thread."
+                    break
 
-            try:
-                openai_tools = list(bot._build_openai_tools(platform, message=orig_message, content=job.goal) or [])
-                openai_tools = [t for t in openai_tools if (t.get("function") or {}).get("name") != _NO_RECURSE_TOOL]
-                custom_tool_calls, provider_tools = bot._select_tool_protocol(openai_tools)
-            except Exception as exc:
-                terminal_failure = exc
-                failure_text = f"tool catalog failed at step {step + 1}: {exc}"
-                logger.warning("background job %s tool catalog failed: %s", job.id, type(exc).__name__)
-                break
-            known_tool_names = {
-                name for tool in openai_tools
-                if isinstance(name := (tool.get("function") or {}).get("name"), str)
-                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
-            }
-            remaining = max(10.0, deadline - time.monotonic())
-            try:
-                await bot._acquire_ai_slot(
-                    timeout=float(min(remaining, 600)), priority="background", key=job.channel_id
-                )
-            except Exception as exc:
-                if step == 0:
-                    await _fail(f"still waiting on an LLM slot after 10m ({exc}).", exc)
-                    return
-                terminal_failure = exc
-                failure_text = f"LLM slot wait failed at step {step + 1}: {exc}"
-                capture_incident("jobs", "Background LLM slot wait failed", exception=exc, context=job_context | {"step": str(step + 1)})
-                logger.warning("background job %s slot wait failed at step %s: %s", job.id, step, type(exc).__name__)
-                break
-
-            try:
-                if step == 0:
-                    messages = background_messages(bot, job, orig_message, platform)
-                    if job.provider != JobProvider.MAIN or job.model is not None:
-                        job_provider = bot._create_background_provider(job.provider)
-                else:
-                    messages[0] = background_messages(bot, job, orig_message, platform)[0]
-                if job_provider is None:
-                    response = await bot._generate_response(
-                        messages,
-                        timeout=min(timeout, remaining),
-                        max_tokens=max_tokens,
-                        tools=provider_tools,
-                        custom_tool_calls=custom_tool_calls,
-                        disable_reasoning=False,
-                    )
-                else:
-                    response = await job_provider.generate_response(
-                        messages,
-                        timeout=min(timeout, remaining),
-                        max_tokens=max_tokens,
-                        tools=provider_tools,
-                        custom_tool_calls=custom_tool_calls,
-                        model=job.model,
-                        prefer_fallback=job.provider == JobProvider.MAIN and bot._night_fallback_active(),
-                    )
-                response_metrics = getattr(response, "metrics", None)
-                succeeded = True
-            except Exception as exc:
-                terminal_failure = exc
-                failure_text = f"generation failed at step {step + 1}: {exc}"
-                capture_incident("jobs", "Background generation failed", exception=exc, context=job_context | {"step": str(step + 1)})
-                logger.warning("background job %s generation failed at step %s: %s", job.id, step, type(exc).__name__)
-                break
-            finally:
-                with contextlib.suppress(Exception):
-                    await bot._release_ai_slot()
-            if response_metrics is not None:
-                actual_model = _short(response_metrics.model, 100).replace("`", "").replace("@", "@\u200b")
-                actual_route = f"{job.provider}/{response_metrics.endpoint}, model={actual_model}"
-                if actual_route != effective_route:
-                    await _post_thread(thread, f"Effective response route: {actual_route}", context=job_context)
-                    effective_route = actual_route
-            try:
-                calls = list(bot._native_calls_from(response) or [])
-            except Exception:
-                calls = []
-            if not calls:
                 try:
-                    recovered, response = bot._recover_text_tool_calls(response)
-                    calls = list(recovered or [])
-                except Exception:
-                    calls = []
-            metrics_kwargs = {"response_metrics": response_metrics} if response_metrics is not None else {}
-            if not calls:
-                try:
-                    cleaned = await bot._dispatch_tool_calls(orig_message, response or "", **metrics_kwargs)
-                    final_text = cleaned[0] if isinstance(cleaned, (list, tuple)) else str(cleaned or "")
-                    terminal_failure = None
+                    openai_tools = list(bot._build_openai_tools(platform, message=orig_message, content=job.goal) or [])
+                    openai_tools = [t for t in openai_tools if (t.get("function") or {}).get("name") != _NO_RECURSE_TOOL]
+                    custom_tool_calls, provider_tools = bot._select_tool_protocol(openai_tools)
                 except Exception as exc:
                     terminal_failure = exc
-                    failure_text = f"final dispatch failed at step {step + 1}: {exc}"
-                    capture_incident("jobs", "Background final dispatch failed", exception=exc, context=job_context | {"step": str(step + 1)})
-                    final_text = str(response or "")
-                final_text = str(final_text or "").strip()
-                final_metrics = response_metrics if final_text else None
-                break
-            names = [_call_name(c) for c in calls]
-            try:
-                dispatched = await bot._dispatch_tool_calls(
-                    orig_message, response, native_tool_calls=calls, **metrics_kwargs
+                    failure_text = f"tool catalog failed at step {step + 1}: {exc}"
+                    logger.warning("background job %s tool catalog failed: %s", job.id, type(exc).__name__)
+                    break
+                known_tool_names = {
+                    name for tool in openai_tools
+                    if isinstance(name := (tool.get("function") or {}).get("name"), str)
+                    and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+                }
+                remaining = max(10.0, deadline - time.monotonic())
+                try:
+                    await bot._acquire_ai_slot(
+                        timeout=float(min(remaining, 600)), priority="background", key=job.channel_id
+                    )
+                except Exception as exc:
+                    if step == 0:
+                        await _fail(f"still waiting on an LLM slot after 10m ({exc}).", exc)
+                        return
+                    terminal_failure = exc
+                    failure_text = f"LLM slot wait failed at step {step + 1}: {exc}"
+                    capture_incident("jobs", "Background LLM slot wait failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                    logger.warning("background job %s slot wait failed at step %s: %s", job.id, step, type(exc).__name__)
+                    break
+
+                try:
+                    if step == 0:
+                        messages = background_messages(bot, job, orig_message, platform)
+                        if job.provider != JobProvider.MAIN or job.model is not None:
+                            job_provider = bot._create_background_provider(job.provider)
+                    else:
+                        messages[0] = background_messages(bot, job, orig_message, platform)[0]
+                    if job_provider is None:
+                        response = await bot._generate_response(
+                            messages,
+                            timeout=min(timeout, remaining),
+                            max_tokens=max_tokens,
+                            tools=provider_tools,
+                            custom_tool_calls=custom_tool_calls,
+                            disable_reasoning=False,
+                        )
+                    else:
+                        response = await job_provider.generate_response(
+                            messages,
+                            timeout=min(timeout, remaining),
+                            max_tokens=max_tokens,
+                            tools=provider_tools,
+                            custom_tool_calls=custom_tool_calls,
+                            model=job.model,
+                            prefer_fallback=job.provider == JobProvider.MAIN and bot._night_fallback_active(),
+                        )
+                    response_metrics = getattr(response, "metrics", None)
+                    succeeded = True
+                except Exception as exc:
+                    terminal_failure = exc
+                    failure_text = f"generation failed at step {step + 1}: {exc}"
+                    capture_incident("jobs", "Background generation failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                    logger.warning("background job %s generation failed at step %s: %s", job.id, step, type(exc).__name__)
+                    break
+                finally:
+                    with contextlib.suppress(Exception):
+                        await bot._release_ai_slot()
+                if response_metrics is not None:
+                    actual_model = _short(response_metrics.model, 100).replace("`", "").replace("@", "@\u200b")
+                    actual_route = f"{job.provider}/{response_metrics.endpoint}, model={actual_model}"
+                    if actual_route != effective_route:
+                        await _post_thread(thread, f"Effective response route: {actual_route}", context=job_context)
+                        effective_route = actual_route
+                try:
+                    calls = list(bot._native_calls_from(response) or [])
+                except Exception:
+                    calls = []
+                if not calls:
+                    try:
+                        recovered, response = bot._recover_text_tool_calls(response)
+                        calls = list(recovered or [])
+                    except Exception:
+                        calls = []
+                metrics_kwargs = {"response_metrics": response_metrics} if response_metrics is not None else {}
+                if turn is not None and turn.remaining_seconds <= 0:
+                    terminal_failure = TurnBudgetExceeded("deadline")
+                    failure_text = str(terminal_failure)
+                    break
+                if not calls:
+                    try:
+                        cleaned = await bot._dispatch_tool_calls(orig_message, response or "", **metrics_kwargs)
+                        final_text = cleaned[0] if isinstance(cleaned, (list, tuple)) else str(cleaned or "")
+                        terminal_failure = None
+                    except Exception as exc:
+                        terminal_failure = exc
+                        failure_text = f"final dispatch failed at step {step + 1}: {exc}"
+                        capture_incident("jobs", "Background final dispatch failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                        final_text = str(response or "")
+                    final_text = str(final_text or "").strip()
+                    final_metrics = response_metrics if final_text else None
+                    break
+                names = [_call_name(c) for c in calls]
+                try:
+                    dispatched = await bot._dispatch_tool_calls(
+                        orig_message, response, native_tool_calls=calls, **metrics_kwargs
+                    )
+                    followups = list(getattr(bot, "_last_native_followup_messages", None) or [])
+                    if isinstance(dispatched, (list, tuple)):
+                        resp_text = str(dispatched[0] or "")
+                        tool_results = list(dispatched[1] or []) if len(dispatched) > 1 else []
+                    else:
+                        resp_text, tool_results = str(dispatched or ""), []
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    terminal_failure = exc
+                    failure_text = f"tool dispatch failed at step {step + 1}: {exc}"
+                    capture_incident("jobs", "Background tool dispatch failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                    logger.warning("background job %s dispatch failed at step %s: %s", job.id, step, type(exc).__name__)
+                    messages.append({"role": "assistant", "content": str(response or "")})
+                    messages.append({"role": "user", "content": f"=== TOOL RESULTS ===\ntool error: {exc}"})
+                    continue
+                terminal_failure = None
+                partial_tool_results.extend(tool_results)
+                safe_names = [name for name in names if name in known_tool_names][:4]
+                manager.mark(job.id, progress=f"step {step + 1}: {', '.join(safe_names) or 'tools'}")
+                await _post_thread(
+                    thread,
+                    f"step {step + 1} `{', '.join(safe_names) or 'tools'}` — {len(calls)} tool call(s), {len(tool_results)} result(s) received",
+                    context=job_context,
                 )
-                followups = list(getattr(bot, "_last_native_followup_messages", None) or [])
-                if isinstance(dispatched, (list, tuple)):
-                    resp_text = str(dispatched[0] or "")
-                    tool_results = list(dispatched[1] or []) if len(dispatched) > 1 else []
+                # An ending-only batch (e.g. the model wrapped up via send_message)
+                # is the finished answer — do not loop for more.
+                named = {n for n in names if n}
+                if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip():
+                    final_text = resp_text.strip()
+                    final_metrics = response_metrics if final_text else None
+                    break
+                if followups:
+                    messages.extend(followups)
                 else:
-                    resp_text, tool_results = str(dispatched or ""), []
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                terminal_failure = exc
-                failure_text = f"tool dispatch failed at step {step + 1}: {exc}"
-                capture_incident("jobs", "Background tool dispatch failed", exception=exc, context=job_context | {"step": str(step + 1)})
-                logger.warning("background job %s dispatch failed at step %s: %s", job.id, step, type(exc).__name__)
-                messages.append({"role": "assistant", "content": str(response or "")})
-                messages.append({"role": "user", "content": f"=== TOOL RESULTS ===\ntool error: {exc}"})
-                continue
-            terminal_failure = None
-            partial_tool_results.extend(tool_results)
-            safe_names = [name for name in names if name in known_tool_names][:4]
-            manager.mark(job.id, progress=f"step {step + 1}: {', '.join(safe_names) or 'tools'}")
-            await _post_thread(
-                thread,
-                f"step {step + 1} `{', '.join(safe_names) or 'tools'}` — {len(calls)} tool call(s), {len(tool_results)} result(s) received",
-                context=job_context,
-            )
-            # An ending-only batch (e.g. the model wrapped up via send_message)
-            # is the finished answer — do not loop for more.
-            named = {n for n in names if n}
-            if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip():
+                    messages.append({"role": "assistant", "content": str(response or "")})
+                    messages.append(
+                        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "\n".join(tool_results)}
+                    )
+                if not tool_results:
+                    final_text = resp_text.strip()
+                    final_metrics = response_metrics if final_text else None
+                    break
                 final_text = resp_text.strip()
                 final_metrics = response_metrics if final_text else None
-                break
-            if followups:
-                messages.extend(followups)
-            else:
-                messages.append({"role": "assistant", "content": str(response or "")})
-                messages.append(
-                    {"role": "user", "content": "=== TOOL RESULTS ===\n" + "\n".join(tool_results)}
-                )
-            if not tool_results:
-                final_text = resp_text.strip()
-                final_metrics = response_metrics if final_text else None
-                break
-            final_text = resp_text.strip()
-            final_metrics = response_metrics if final_text else None
+    except TimeoutError as exc:
+        if not timeout_scope.expired():
+            raise
+        terminal_failure = exc
+        failure_text = str(TurnBudgetExceeded("deadline"))
     except asyncio.CancelledError:
         manager.mark(job.id, status="cancelled", progress="cancelled on request")
         await _post_thread(thread, f"Job `{job.id}` cancelled.", context=job_context)

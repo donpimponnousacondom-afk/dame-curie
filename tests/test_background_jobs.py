@@ -7,7 +7,7 @@ fake Discord objects instead of a connection.
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import discord
 import pytest
@@ -343,6 +343,8 @@ class RunnerStubBot(StubBot):
         self.generated_turns = []
         self.catalog_groups = []
         self.discover = False
+        self.dispatch_delay = 0.0
+        self.dispatch_events = []
 
     def _message_tool_platform(self, message):
         return "discord"
@@ -382,6 +384,13 @@ class RunnerStubBot(StubBot):
         return [], response
 
     async def _dispatch_tool_calls(self, message, response, **kwargs):
+        self.dispatch_events.append("started")
+        try:
+            await asyncio.sleep(self.dispatch_delay)
+        finally:
+            await asyncio.sleep(0)
+            self.dispatch_events.append("settled")
+        self.dispatch_events.append("completed")
         self._last_native_followup_messages = []
         if response == "discover":
             current_tool_groups().add("identity")
@@ -396,13 +405,17 @@ class RunnerStubBot(StubBot):
 
 @pytest.mark.parametrize("discover", [False, True])
 @pytest.mark.parametrize("descendant", [False, True])
-def test_runner_delivers_final_reply_with_mention(tmp_path, discover, descendant):
+@pytest.mark.parametrize("dispatch_delay", [0.0, 0.2])
+def test_runner_delivers_final_reply_with_mention(
+    tmp_path, discover, descendant, dispatch_delay,
+):
     oversized_prompt = "x" * (SERVER_PROMPT_MAX_BYTES + 1)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = RunnerStubBot(manager)
         bot.discover = discover
+        bot.dispatch_delay = dispatch_delay
         bot.command_prefix = "?"
         bot.memory.get_server_prompt = lambda server_id: oversized_prompt
         message = FakeMessage()
@@ -431,6 +444,9 @@ def test_runner_delivers_final_reply_with_mention(tmp_path, discover, descendant
     assert bot.slot_priority == "background"  # user turns outrank it
     assert bot.generated_with.get("disable_reasoning") is False  # full thinking
     assert bot.generated_with.get("max_tokens", 0) >= 32768  # extended output
+    assert bot.dispatch_events == ["started", "settled", "completed"] * (2 if discover else 1)
+    if not descendant:
+        assert 600 < bot.generated_with["timeout"] <= 7200
     system_prompt = bot.generated_messages[0]["content"]
     assert "Stored server prompt omitted" in system_prompt
     assert "?longprompt" in system_prompt
@@ -450,33 +466,72 @@ def test_runner_delivers_final_reply_with_mention(tmp_path, discover, descendant
     assert any("http://example.local/site" in text for text in channel.sent)
 
 
-@pytest.mark.parametrize("failure", ["generation", "catalog"])
-def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize(
+    ("failure", "discover"),
+    [
+        ("generation", False), ("catalog", False),
+        ("deadline", False), ("deadline", True), ("expired", True),
+    ],
+)
+def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discover):
     class BrokenBot(RunnerStubBot):
         async def _generate_response(self, messages, **kwargs):
-            raise RuntimeError("provider down")
+            if failure in {"generation", "catalog"}:
+                raise RuntimeError("provider down")
+            return await super()._generate_response(messages, **kwargs)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = BrokenBot(manager)
+        bot.discover = discover
+        bot.dispatch_delay = 0.2
+        provider = SimpleNamespace(
+            generate_response=bot._generate_response, close=AsyncMock(),
+        )
+        bot._create_background_provider = Mock(return_value=provider)
         if failure == "catalog":
             monkeypatch.setattr(bot, "_build_openai_tools", Mock(side_effect=RuntimeError("catalog unavailable")))
         message = FakeMessage()
-        job = manager.create(guild_id="g", channel_id="222", user_id="111", goal="x")
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="x", provider="aux",
+        )
         manager.attach_runtime(job.id, message=message, channel=message.channel)
         parent_groups = {"games"}
         token = TOOL_GROUPS_CONTEXT.set(parent_groups)
+        turn = ForegroundTurn(
+            32768, 12, asyncio.get_running_loop().time() + (0.05 if failure == "deadline" else -1),
+        )
+        turn_token = set_foreground_turn(turn) if failure in {"deadline", "expired"} else None
         try:
-            await run_background_job(bot, job.id)
+            task = asyncio.create_task(run_background_job(bot, job.id))
+            manager.track_task(job.id, task)
+            await task
             assert current_tool_groups() is parent_groups and parent_groups == {"games"}
             assert not JOB_TURN.get()
+            assert not manager._tasks and not manager.runtime(job.id)
+            if turn_token is not None:
+                assert current_foreground_turn() is turn
+                assert all(observed is turn for observed in bot.generated_turns)
+                assert (turn.output_remaining, turn.attempts) == (32768, 0)
         finally:
             TOOL_GROUPS_CONTEXT.reset(token)
-        return manager.get(job.id), message.channel
+            if turn_token is not None:
+                reset_foreground_turn(turn_token)
+        assert provider.close.await_count == int(failure in {"generation", "deadline"})
+        return manager.get(job.id), message.channel, bot
 
-    job, channel = asyncio.run(scenario())
+    job, channel, bot = asyncio.run(scenario())
     assert job.status == "error"
+    assert job.finished_at > 0
     assert channel.sent == [PUBLIC_ERROR_TEXT]
+    if failure in {"deadline", "expired"}:
+        assert job.progress == "Foreground turn deadline expired"
+        assert job.result == ""
+        assert bot.dispatch_events == (["started", "settled"] if failure == "deadline" else [])
+        assert len(bot.generated_turns) == int(failure == "deadline")
+        assert channel.thread.sent[-1] == PUBLIC_ERROR_TEXT
+    if failure == "expired":
+        assert bot.slot_priority is None and bot.catalog_groups == []
 
 
 def test_manager_list_text_guild_filtering(tmp_path):
