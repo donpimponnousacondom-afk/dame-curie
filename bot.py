@@ -8535,7 +8535,7 @@ class MaxwellBot(commands.Bot):
                 :500
             ],
             "events_buffered": await self.rem_log.size(),
-            "model": self.config.OPENAI_REM_MODEL,
+            "model": resolve_job_endpoint(JobProvider.AUX, self.config).model,
             "running": self._rem_running or bool(state.get("running")),
         }
 

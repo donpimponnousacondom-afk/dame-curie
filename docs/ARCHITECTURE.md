@@ -31,7 +31,7 @@ Tool-tail history retains at most **36,000 characters / 12 messages**; the newes
 
 Native tool admission caps **8 calls**, **16,000 UTF-8 bytes per call's arguments**, **32,000 across batch arguments**, and **40,000 across the batch envelope**. A per-call oversize in an otherwise valid batch returns a recoverable tool error and refuses the **entire batch before effects**; malformed calls, aggregate/batch or envelope overflow fail closed. Large file-authoring arguments may therefore need a different approach; the limits do not imply a hidden truncation.
 
-Foreground turn defaults are **32,768 reserved output tokens, 12 actual POST attempts and 600 seconds**. Non-200 failures and attempts with no observed/cached200-response body refund their reservation; partially received200-response bodies retain it (not a billing guarantee). The turn deadline dominates the older 3,600-second AI/tool controls and bounds descendant jobs; work is not promised to survive it. Terminal reasoning-only responses stay terminal without automatic fallback/recovery; root has not decided to change that policy.
+Foreground turns have **no aggregate output-token cap and no default attempt limit**. An explicit `turn_generation_attempt_budget` remains enforced. The default deadline is **600 seconds**; `turn_deadline_seconds` can configure it. These local limits never add or change provider request parameters. The turn deadline bounds AI calls, tools and descendant jobs. Work is not promised to survive it. Terminal reasoning-only responses stay terminal without automatic fallback or recovery; root has not decided to change that policy.
 
 ## Commands, jobs and acceptance
 
