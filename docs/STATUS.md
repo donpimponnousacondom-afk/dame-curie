@@ -21,7 +21,7 @@ Root approved removal of exactly 12 unsupported live settings. The coordinator r
 
 ## Publication and validation limits
 
-[PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3) contains the source and later documentation-only corrections. Independent Luna/max and Sol/high reviewed the final source deltas. Full base-to-head coverage remains incomplete. The pull request remains draft; root owns merge.
+[PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3) contains the source and later documentation-only corrections. Independent Luna/max and Sol/high reviewed the final source deltas. Full base-to-head coverage remains incomplete. The pull request is ready for human review, not merged; root owns merge.
 
 Root deferred tests. No tests or synthetic messages were run for this deployment. Earlier source `23f0560` had **4,334 passed, 48 subtests passed, and two failures**. That is not a passing result for the deployed source. The observed startup and login do not establish full feature acceptance. GitHub has no checks; absence is not a pass.
 

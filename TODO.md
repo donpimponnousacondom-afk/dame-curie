@@ -12,7 +12,7 @@
 - [ ] Resolve the complete distinct-role AUX/autonomy profile contract. The deployed all-empty selector correction does not resolve this broader contract.
 - [ ] Obtain a decision on the legacy `curie` publisher-marker protection gap. No policy change or remote-exposure claim is made.
 
-The P3 generated-image wording issue is deferred. Do not expand this completion task. PR3 remains draft.
+The P3 generated-image wording issue is deferred. Do not expand this completion task. PR3 is ready for human review, not merged.
 
 ## Historical round-two closure — 2026-09-25
 
