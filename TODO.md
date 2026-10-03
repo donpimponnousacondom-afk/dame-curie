@@ -1,4 +1,22 @@
-# Round-two closure — completed assignment
+# Current completion state — 2026-10-03
+
+- [x] Publish the current source in [PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3). Root retains merge authority.
+- [x] Repair site publication and preserve both source trees. Recover root's later remote-directory deletion with the existing publisher. Confirm matching identity, ownership marker, HTML and nine image hashes.
+- [x] Remove exactly 12 unsupported live fields under root's approval. Preserve all other fields and a private backup.
+- [x] Correct the image permission failure and blank-role resolver defect. At `17:55:02Z`, confirm canonical Dame login on source `306b413`, running with restart count `0`. No startup, auxiliary-profile or context-extraction errors appeared in the inspected last 600 log records. This was passive observation, not a test.
+
+[Current status](docs/STATUS.md) records the exact source, image, container, failed-first-deployment history, and validation limits. Canonical Dame is the live target, not temporary Dirac. Root deferred tests; none ran for the final source or deployment. Earlier source had two failed tests. Independent final-delta review does not establish complete base-to-head acceptance.
+
+## Two open issues
+
+- [ ] Resolve the complete distinct-role AUX/autonomy profile contract. The deployed all-empty selector correction does not resolve this broader contract.
+- [ ] Obtain a decision on the legacy `curie` publisher-marker protection gap. No policy change or remote-exposure claim is made.
+
+The P3 generated-image wording issue is deferred. Do not expand this completion task. PR3 remains draft.
+
+## Historical round-two closure — 2026-09-25
+
+**Everything below records the completed temporary Dirac assignment. It is preserved as history, not current runtime state or current authority.**
 
 **No assigned correction or documentation-retirement item remains open.** Corrected source`89fb851` is live on temporary Dirac under the coordinator's exercised delegation. [Status](docs/STATUS.md) and the [final receipt](audit/20260924T210402Z-audit/09-CLOSURE.md) distinguish source, artifact and runtime proof. This is not standing permission for future runtime/private operations.
 

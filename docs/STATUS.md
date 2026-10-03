@@ -1,4 +1,40 @@
-# dame-curie status — 2026-09-25
+# dame-curie status — 2026-10-03
+
+## Current production state
+
+At **17:55:02Z**, the coordinator confirmed canonical Dame login **1545541390392369165** on the image below. Temporary Dirac is not the current production target. These are coordinator-supplied facts; the publication worker did not access private state.
+
+- Source: `306b4138540c0dd40b5de8c145b1c61337255405`.
+- Image: `sha256:778f5dc420c46de0e2d21b42410bca6a571b15896d64ffe99ac5b3cc3155f618`.
+- Container: `01ce0313bac814cdae84b5b6dbc93ada5cefd1101bc1c0f920619e1348f8f6a0`.
+- Started: `17:52:44.365556213Z`. Running, restart count `0`. Actual login observed.
+- No startup traceback, auxiliary-profile error, or context-extraction error in the inspected last 600 log records.
+- Saved deadline: `1800` seconds. Attempt-limit key absent.
+
+This is passive production observation, not a new test or proof of every feature.
+
+The first deployment failed because `/app/build_provenance.json` had mode `0600`. The coordinator rebuilt with `COPY --chmod=0644`. Source `eb16880` then logged in but failed context extraction. The narrow blank-role resolver correction is included in current source `306b413`; it does not resolve complete distinct-role support.
+
+The coordinator preserved both 13-file site trees and corrected the original publication. Root later deleted the remote `hammered-wallet` directory. The existing publisher `--once` recovered it. Saved and remote identity `[2314,17193851138]` and the ownership marker match. The HTML and nine known image hashes match the retained source. Publisher service is active, PID `559306`, restart count `0`. No new refresh tool was implemented.
+
+Root approved removal of exactly 12 unsupported live settings. The coordinator removed those at `17:36:45Z`, preserved all other fields, and retained a private backup.
+
+## Publication and validation limits
+
+[PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3) contains the source and later documentation-only corrections. Independent Luna/max and Sol/high reviewed the final source deltas. Full base-to-head coverage remains incomplete. The pull request remains draft; root owns merge.
+
+Root deferred tests. No tests or synthetic messages were run for this deployment. Earlier source `23f0560` had **4,334 passed, 48 subtests passed, and two failures**. That is not a passing result for the deployed source. The observed startup and login do not establish full feature acceptance. GitHub has no checks; absence is not a pass.
+
+Two issues remain open:
+
+1. Complete distinct-role AUX/autonomy profiles remain restricted. The all-empty selector correction is deployed, but it does not resolve that role contract.
+2. The publisher's legacy `curie` marker namespace is not covered by `static.htaccess`. This remains a separate policy question. No restriction was changed; remote exposure is unverified.
+
+The P3 image-guidance wording issue is deferred. Generated-image URLs remain valid. No new image behavior was added.
+
+## Historical record — 2026-09-25
+
+**Everything below records the earlier temporary Dirac release. It is preserved as history, not current runtime state or current authority.**
 
 ## Closure and release state
 
