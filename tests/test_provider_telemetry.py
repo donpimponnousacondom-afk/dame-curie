@@ -44,10 +44,10 @@ def sse_frame(delta=None, **fields):
     return b"data: " + json.dumps({**body, **fields}).encode() + b"\n\n"
 
 
-def provider_for(responses, **kwargs):
+def provider_for(responses, *, model="model", **kwargs):
     provider = OpenAICompatibleProvider(
         "https://user:synthetic@example.test/v1",
-        "model",
+        model,
         8192,
         0.6,
         **kwargs,
@@ -445,7 +445,6 @@ def test_reasoning_only_is_terminal_and_custom_json_is_counted_once():
     provider = provider_for(
         [json_response({"content": None, "reasoning_content": custom}), json_response()],
         retry_attempts=5, empty_response_retries=3,
-        fallback_base_url="https://fallback.example.test/v1", fallback_model="fallback-model",
     )
     with pytest.raises(ProviderIncompleteResponseError):
         asyncio.run(provider.generate_response([], custom_tool_calls=True))
@@ -531,61 +530,79 @@ def test_usage_rejection_is_cached_and_corrected_within_budget(
             json_response(),
         ],
         retry_attempts=attempts,
+        extra_body={"stream": True, "stream_options": {"include_usage": True}},
     )
-    if attempts == 1:
-        with pytest.raises(ProviderRequestError):
-            asyncio.run(provider.generate_response([]))
-        assert len(provider._session.payloads) == 1
-    else:
-        result = asyncio.run(provider.generate_response([]))
-        assert result.metrics.attempt == 2
-        assert len(provider._session.payloads) == 2
-        assert "stream_options" not in provider._session.payloads[1]
-    assert provider._stream_usage_unsupported == {"primary"}
+    with pytest.raises(ProviderRequestError, match="Unknown parameter: stream_options"):
+        asyncio.run(provider.generate_response([]))
+    assert len(provider._session.payloads) == len(provider._session.responses) == 1
     no_wait.assert_not_awaited()
-    provider._session = FakeSession(json_response())
-    asyncio.run(provider.generate_response([]))
-    assert "stream_options" not in provider._session.payloads[0]
+    result = asyncio.run(provider.generate_response([]))
+    assert result.metrics.attempt == 1
+    assert result.metrics.endpoint == "primary"
+    assert result.metrics.stream is False
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+    }] * 2
+    no_wait.assert_not_awaited()
 
 
 def test_corrected_endpoint_is_pinned_not_switched_by_fast_fallback(no_wait):
     provider = provider_for(
         [FakeErrorResponse(422, "include_usage is not supported"), json_response()],
-        fallback_base_url="https://fallback.test",
-        fallback_model="fallback-model",
+        extra_body={
+            "stream": True, "stream_options": {"include_usage": True},
+            "provider": {"only": ["configured"], "allow_fallbacks": False},
+        },
     )
-    result = asyncio.run(provider.generate_response([], fast_fallback=True))
-    assert result.metrics.attempt == 2
+    with pytest.raises(ProviderRequestError, match="include_usage is not supported"):
+        asyncio.run(provider.generate_response([]))
+    assert len(provider._session.payloads) == len(provider._session.responses) == 1
+    result = asyncio.run(provider.generate_response([]))
+    assert result.metrics.attempt == 1
     assert result.metrics.endpoint == "primary"
-    assert provider._session.urls[0] == provider._session.urls[1]
-    fallback = provider._endpoints[1]
-    assert provider._request_payload(fallback, [])["stream_options"] == {
-        "include_usage": True
-    }
+    assert result.metrics.provider == "example.test"
+    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions"] * 2
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+        "provider": {"only": ["configured"], "allow_fallbacks": False},
+    }] * 2
     no_wait.assert_not_awaited()
 
 
 def test_correction_does_not_extend_budget_on_final_rejection(no_wait):
     provider = provider_for(
         [
+            FakeErrorResponse(503, "temporarily unavailable"),
             FakeErrorResponse(400, "unsupported stream_options"),
-            FakeErrorResponse(400, "unsupported unrelated"),
+            json_response(),
         ],
         retry_attempts=2,
+        extra_body={"stream": True, "stream_options": {"include_usage": True}},
     )
-    with pytest.raises(ProviderRequestError):
+    with pytest.raises(ProviderRequestError, match="unsupported stream_options"):
         asyncio.run(provider.generate_response([]))
-    assert len(provider._session.payloads) == 2
-    no_wait.assert_not_awaited()
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+    }] * 2
+    assert len(provider._session.responses) == 1
+    assert [call.args[0] for call in no_wait.await_args_list] == [10]
 
 
-def test_forced_json_removes_stream_options(no_wait):
-    provider = provider_for([FakeEmptyResponse(), json_response()], retry_attempts=2)
+@pytest.mark.parametrize("configured", [{}, {"stream": False}, {"stream": True, "stream_options": {"include_usage": True}}])
+def test_forced_json_removes_stream_options(no_wait, configured):
+    provider = provider_for([FakeEmptyResponse(), json_response()], retry_attempts=2, extra_body=configured)
     result = asyncio.run(provider.generate_response([]))
     assert result.metrics.attempt == 2
-    assert provider._session.payloads[0]["stream_options"] == {"include_usage": True}
-    assert not provider._session.payloads[1]["stream"]
-    assert "stream_options" not in provider._session.payloads[1]
+    assert result.metrics.stream is False
+    assert result.metrics.ttft_estimated
+    assert result.metrics.output_tokens == count_tokens("hello")
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6,
+        "messages": [], **configured,
+    }] * 2
     assert [call.args[0] for call in no_wait.await_args_list] == [10]
 
 
@@ -667,22 +684,24 @@ def test_concurrent_response_wrapping_never_reads_last_usage():
     assert first.metrics.call_id != second.metrics.call_id
 
 
-def test_actual_selected_model_override_and_fallback():
-    provider = provider_for([json_response()])
-    primary = asyncio.run(provider.generate_response([], model="actual-override"))
-    assert primary.metrics.model == "actual-override"
+@pytest.mark.parametrize("model", ["configured-model", "unknown/new-model"])
+def test_actual_selected_model_override_and_fallback(model):
     provider = provider_for(
-        [FakeErrorResponse(503, "unavailable"), json_response()],
-        fallback_base_url="https://fallback.test",
-        fallback_model="actual-fallback",
+        [json_response(), FakeErrorResponse(503, "unavailable"), json_response()],
+        model=model,
     )
-    fallback = asyncio.run(
-        provider.generate_response([], model="ignored-on-fallback", fast_fallback=True)
-    )
-    assert fallback.metrics.model == "actual-fallback"
-    assert fallback.metrics.provider == "fallback.test"
-    assert fallback.metrics.endpoint == "fallback"
-    assert fallback.metrics.attempt == 2
+    primary = asyncio.run(provider.generate_response([]))
+    retried = asyncio.run(provider.generate_response([]))
+    assert primary.metrics.model == retried.metrics.model == model
+    assert primary.metrics.provider == retried.metrics.provider == "example.test"
+    assert primary.metrics.endpoint == retried.metrics.endpoint == "primary"
+    assert primary.metrics.attempt == 1
+    assert retried.metrics.attempt == 2
+    assert primary.metrics.call_id != retried.metrics.call_id
+    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions"] * 3
+    assert provider._session.payloads == [{
+        "model": model, "max_tokens": 8192, "temperature": 0.6, "messages": [],
+    }] * 3
 
 
 def test_tokenizer_failure_precedes_provider_network_initialization(monkeypatch):
@@ -1141,17 +1160,20 @@ def test_failed_attempt_time_is_not_accumulated(monkeypatch):
 def test_usage_correction_preserves_five_attempt_ceiling_and_waits(no_wait):
     provider = provider_for(
         [
-            FakeErrorResponse(400, "unsupported stream_options"),
-            *[FakeErrorResponse(503, "synthetic transient") for _ in range(3)],
+            *[FakeErrorResponse(503, "synthetic transient") for _ in range(4)],
             json_response(),
-        ]
+        ],
+        extra_body={"stream": True, "stream_options": {"include_usage": True}},
     )
     result = asyncio.run(provider.generate_response([]))
     assert result.metrics.attempt == len(provider._session.payloads) == 5
-    assert [call.args[0] for call in no_wait.await_args_list] == [20, 30, 40]
-    assert all(
-        "stream_options" not in payload for payload in provider._session.payloads[1:]
-    )
+    assert result.metrics.stream is False
+    assert result.metrics.output_source == "cl100k_base"
+    assert [call.args[0] for call in no_wait.await_args_list] == [10, 20, 30, 40]
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+    }] * 5
 
 
 @pytest.mark.parametrize(
