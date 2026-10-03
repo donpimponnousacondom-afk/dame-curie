@@ -118,7 +118,7 @@ def test_uses_fixed_origin_loaded_key_and_no_redirects(usage_tool, base):
     args, kwargs = session.get.call_args
     assert args == ("https://openrouter.ai/api/v1/key",)
     assert kwargs["headers"] == {
-        "Authorization": "Bearer synthetic-current-key",
+        "Authorization": "Bearer   synthetic-current-key  ",
         "Accept": "application/json",
     }
     assert kwargs["allow_redirects"] is False

@@ -139,7 +139,6 @@ DEFAULT_CONTROL = {
     # the enable_sleep control to False.
     "enable_sleep": True,
     "ai_timeout_seconds": 3600,
-    "turn_generation_attempt_budget": 12,
     "turn_deadline_seconds": 600,
     "ai_concurrency": 2,
     "memory_history_messages": 40,

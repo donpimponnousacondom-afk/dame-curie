@@ -26,7 +26,7 @@ class ForegroundTurn:
     this object; they do not receive a free attempt allowance.
     """
 
-    attempt_limit: int
+    attempt_limit: int | None
     deadline: float
     attempts: int = 0
     expanded_tool_groups: set[str] = field(default_factory=set)
@@ -37,7 +37,14 @@ class ForegroundTurn:
 
     @classmethod
     def from_controls(cls, control: Mapping[str, object]) -> ForegroundTurn:
-        attempts = _positive_control(control.get("turn_generation_attempt_budget"), 12)
+        attempts = None
+        if "turn_generation_attempt_budget" in control:
+            value = control["turn_generation_attempt_budget"]
+            if isinstance(value, str) and value.strip().isascii() and value.strip().isdecimal():
+                value = int(value)
+            if type(value) is not int or value <= 0:
+                raise ValueError("turn_generation_attempt_budget must be a positive integer when configured")
+            attempts = value
         seconds = _positive_control(control.get("turn_deadline_seconds"), 600)
         return cls(attempts, time.monotonic() + seconds)
 
@@ -47,7 +54,7 @@ class ForegroundTurn:
 
     def reserve_attempt(self, timeout_seconds: float) -> float:
         """Reserve an HTTP attempt and return its remaining local timeout."""
-        if self.attempts >= self.attempt_limit:
+        if self.attempt_limit is not None and self.attempts >= self.attempt_limit:
             raise TurnBudgetExceeded("provider_attempts")
         remaining_time = self.remaining_seconds
         if remaining_time <= 0:

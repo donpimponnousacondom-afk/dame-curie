@@ -5,13 +5,14 @@ from contextlib import nullcontext
 from dataclasses import replace
 import json
 from types import MethodType, SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import discord
 import pytest
 
 from bot import MaxwellBot, TokenBudgetTracker
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
+from control_defaults import DEFAULT_CONTROL
 from dirac_runtime import _NoticeInput
 from provider_telemetry import CallMetrics
 from providers import OpenAICompatibleProvider, ProviderIncompleteResponseError, ProviderResult
@@ -253,7 +254,7 @@ def test_notice_update_builds_with_actor_and_refreshed_poster_snapshot(
     assert len(notice.channel.sent) == 1
 
 
-def configure_dispatch(bot, *, expand_catalog=False):
+def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False):
     tool = SendMessageTool(bot)
     more_tools = MoreToolsTool(bot) if expand_catalog else None
 
@@ -263,6 +264,8 @@ def configure_dispatch(bot, *, expand_catalog=False):
         results = []
         paired_calls = []
         paired_results = []
+        if native_continuations:
+            bot._observed_turns.append(current_foreground_turn())
         for call in native_tool_calls or []:
             function = call["function"]
             if function["name"] == "send_message":
@@ -283,6 +286,9 @@ def configure_dispatch(bot, *, expand_catalog=False):
                 )
             else:
                 results.append("Tool web_search: synthetic result")
+                if native_continuations:
+                    paired_calls.append(call)
+                    paired_results.append({"role": "tool", "tool_call_id": call["id"], "content": results[-1]})
         if paired_calls:
             bot._last_native_followup_messages = [
                 {"role": "assistant", "content": str(response), "tool_calls": paired_calls},
@@ -374,6 +380,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
+        "native_continuations_unlimited", "native_continuations_limited",
         "attempts_exhausted",
         "deadline", "upstream_timeout", "cancelled",
     ],
@@ -415,7 +422,10 @@ def test_real_foreground_handler_preserves_producing_call(
             ])
             budget_spy = Mock(wraps=MaxwellBot._apply_prompt_budget)
             monkeypatch.setattr(MaxwellBot, "_apply_prompt_budget", budget_spy)
-        configure_dispatch(bot, expand_catalog=mode == "expanded_catalog_fallback")
+        configure_dispatch(
+            bot, expand_catalog=mode == "expanded_catalog_fallback",
+            native_continuations=mode in {"native_continuations_unlimited", "native_continuations_limited"},
+        )
         flushed_turns = []
         bot._flush_deferred_context_extraction.side_effect = (
             lambda channel: flushed_turns.append(current_foreground_turn())
@@ -435,6 +445,42 @@ def test_real_foreground_handler_preserves_producing_call(
             )
             responses = [ProviderResult("configured output unchanged", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode in {"native_continuations_unlimited", "native_continuations_limited"}:
+            assert "turn_generation_attempt_budget" not in DEFAULT_CONTROL
+            bot._control["max_tool_iterations"] = 20
+            if mode == "native_continuations_limited":
+                bot._control["turn_generation_attempt_budget"] = 12
+            bot._observed_turns = []
+            provider_tools = [{"type": "function", "function": {
+                "name": "web_search", "description": "Synthetic native search",
+                "parameters": TOOL_PARAMETERS["web_search"],
+            }}]
+            bot._build_openai_tools = Mock(return_value=provider_tools)
+            bot._select_tool_protocol = Mock(return_value=(False, provider_tools))
+            bot.ai_provider = OpenAICompatibleProvider(
+                base_url="https://provider.example/v1", model="model-A", retry_attempts=1,
+            )
+            bot.ai_provider.available = True
+            session = MagicMock(closed=False)
+            http_responses = []
+            for index in range(14):
+                assistant = {"role": "assistant", "content": "final answer after 13 tool continuations"}
+                if index < 13:
+                    call = tool_call("web_search", query=f"query {index}")
+                    call["id"] = f"search-{index}"
+                    assistant = {"role": "assistant", "content": "", "tool_calls": [call]}
+                response = MagicMock(status=200, headers={"Content-Type": "application/json"})
+                response.__aenter__ = AsyncMock(return_value=response)
+                response.__aexit__ = AsyncMock(return_value=None)
+                response.json = AsyncMock(return_value={
+                    "model": "model-A",
+                    "choices": [{"message": assistant, "finish_reason": "tool_calls" if index < 13 else "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                })
+                http_responses.append(response)
+            session.post.side_effect = http_responses
+            bot.ai_provider._session = session
+            bot._generate_response = AsyncMock(wraps=bot.ai_provider.generate_response)
         elif mode == "attempts_exhausted":
             bot._generate_response = AsyncMock(
                 side_effect=TurnBudgetExceeded("provider_attempts")
@@ -543,6 +589,36 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await MaxwellBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        if mode in {"native_continuations_unlimited", "native_continuations_limited"}:
+            expected_posts = 14 if mode == "native_continuations_unlimited" else 12
+            assert session.post.call_count == expected_posts
+            assert len(bot._observed_turns) == expected_posts
+            turn = bot._observed_turns[0]
+            assert all(observed is turn for observed in bot._observed_turns)
+            assert turn.attempts == expected_posts
+            assert turn.attempt_limit == (None if mode == "native_continuations_unlimited" else 12)
+            assert current_foreground_turn() is None
+            assert not bot._replying_channels
+            assert not bot._active_requests
+            assert not bot._active_request_user
+            assert bot._end_inflight_context.called
+            for index, request in enumerate(session.post.call_args_list):
+                assert request.args == ("https://provider.example/v1/chat/completions",)
+                assert "max_tokens" not in request.kwargs["json"]
+                if index:
+                    assert any(item["role"] == "tool" for item in request.kwargs["json"]["messages"])
+            assert len(message.channel.sent) == 1
+            if mode == "native_continuations_unlimited":
+                sent = message.channel.sent[0]
+                assert sent.content.startswith("final answer after 13 tool continuations")
+                assert sent.content.endswith(FOOTER_MARKER)
+                final_metrics = bot._dispatch_tool_calls.call_args.kwargs["response_metrics"]
+                assert final_metrics.model == "model-A"
+                assert bot._delivery_measurements.lookup("100", str(sent.id))[1] is final_metrics
+            else:
+                assert "provider-attempt allowance exhausted" in message.channel.sent[0].content
+                http_responses[12].json.assert_not_awaited()
+            return
         if mode in {
             "incomplete", "incomplete_partial", "incomplete_truncated", "followup_incomplete",
             "reasoning_only", "incomplete_empty",
