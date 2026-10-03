@@ -206,6 +206,7 @@ class Instance:
         command.extend(args)
         if args[0] == "logs":
             if __name__ == "__main__" and not __package__:
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
                 from log_filter import follow_logs
             else:
                 from scripts.log_filter import follow_logs

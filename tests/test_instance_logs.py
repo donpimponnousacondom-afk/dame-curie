@@ -185,16 +185,51 @@ def test_actual_logs_action_delegates_without_lifecycle_mutations(monkeypatch):
     assert env is app.env
 
 
-def test_standalone_help_does_not_require_log_filter(tmp_path):
-    script = tmp_path / "instance.py"
-    script.write_bytes(Path(instance.__file__).read_bytes())
+@pytest.mark.parametrize("flags", [("-B", "-E", "-s"), ("-I", "-B")])
+@pytest.mark.parametrize("action", ["help", "logs"])
+def test_standalone_help_does_not_require_log_filter(tmp_path, flags, action):
+    trusted = tmp_path / "trusted"
+    untrusted = tmp_path / "untrusted"
+    trusted.mkdir()
+    untrusted.mkdir()
+    (untrusted / "log_filter.py").write_text("raise AssertionError('untrusted follower imported')\n")
+    script = trusted / "instance.py"
+    source = Path(instance.__file__).read_text()
+    arguments = ["--help"]
+    if action == "logs":
+        (trusted / "log_filter.py").write_text("from unittest.mock import Mock\nfollow_logs = Mock()\n")
+        source = source.replace('if __name__ == "__main__":\n', '''if __name__ == "__main__":
+    from unittest.mock import Mock
+    app = Instance.__new__(Instance)
+    app.project = "dame-curie"
+    app.env = {"DOCKER_HOST": "unix:///synthetic/docker.sock"}
+    app.inventory = Mock(return_value=[])
+    app.docker = Mock(side_effect=AssertionError("no lifecycle mutation"))
+    service_account = Mock()
+    Instance = Mock(return_value=app)
+''')
+        source += '''
+if __name__ == "__main__":
+    service_account.assert_called_once_with("dame-curie", for_logs=True)
+    app.inventory.assert_called_once_with()
+    app.docker.assert_not_called()
+    follower = sys.modules["log_filter"].follow_logs
+    follower.assert_called_once()
+    command, environment = follower.call_args.args
+    assert command[-4:] == ["logs", "--follow", "--tail", "100"]
+    assert environment is app.env
+    assert follower.call_args.kwargs == {"output_format": "screen", "no_keys": False}
+'''
+        arguments = ["dame-curie", "logs", "--format", "screen"]
+    script.write_text(source)
     result = subprocess.run(
-        [sys.executable, "-B", "-E", "-s", str(script), "--help"],
-        cwd=tmp_path, env={"HOME": str(tmp_path), "PATH": "/usr/local/bin:/usr/bin:/bin"},
+        [sys.executable, *flags, str(script), *arguments], cwd=untrusted,
+        env={"HOME": str(tmp_path), "PATH": "/usr/local/bin:/usr/bin:/bin", "PYTHONPATH": str(untrusted)},
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert "logs" in result.stdout
+    if action == "help":
+        assert "logs" in result.stdout
     assert result.stderr == ""
 
 
