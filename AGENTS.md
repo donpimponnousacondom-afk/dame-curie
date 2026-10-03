@@ -32,7 +32,9 @@ Source children have **no execution, runtime or private-read authority**. Coordi
 
 ## Approved design and protected resources
 
-The consolidated design is in `docs/ARCHITECTURE.md`: remove dashboard/API/web hosting, nested shell, X/Telegram and companion/GF; run shell inside the outer bot container; retain Discord administration, autonomy, games/plugins, media/inbox and functional memory. The independent publisher, local authoring/image paths and remote mirroring remain protected. No replacement API/server, PM2 deployment, PHP/Perl installation or model-driven remote administration. Other feature cuts require root's assignment.
+The consolidated design is in `docs/ARCHITECTURE.md`: remove dashboard/API/web hosting, nested shell, X/Telegram and companion/GF; run shell inside the outer bot container; retain Discord administration, autonomy, games/plugins, media/inbox and functional memory. The independent publisher, local authoring/image paths and remote mirroring remain protected. No replacement API/server, PM2 deployment or model-driven remote administration. Other feature cuts require root's assignment.
+
+Root clarified container tools on 2026-10-02: keep lean defaults, not a blanket language/install ban. Python3.14 is the preferred baseline; install needed tools such as Git/Bash and their normal dependencies. Do not preinstall gratuitous options or add model-facing prompts/catalog entries that encourage a particular runtime, especially local execution of PHP authored for the remote service. The bot may manage its own container dependencies and cleanup within existing permissions. This does not restore removed hosting features, expand privileges or authorize host package changes.
 
 - V2 account: **`dame-curie`**, with its designated private rootless engine. Protected V1 account: **`maxwell-curie`**. Never substitute another account, a default/rootful engine or a guessed socket after failure. Re-resolve account/socket/engine before newly authorized runtime work.
 - Canonical Dame: **1545541390392369165**; temporary Dirac: **1504398705539944560**; root/.normal.man: **1482143139828596916**. Do not infer trust from other inherited IDs.
