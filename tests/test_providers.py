@@ -137,7 +137,8 @@ class FakeSession:
         self.closed = False
         self.response = response or FakeResponse()
 
-    def post(self, url, json=None, timeout=None, headers=None):
+    def post(self, url, json=None, timeout=None, headers=None, *, allow_redirects):
+        assert allow_redirects is False
         self.urls.append(url)
         self.payloads.append(copy.deepcopy(json))
         return self.response
@@ -148,7 +149,8 @@ class FakeSequenceSession(FakeSession):
         super().__init__()
         self.responses = list(responses)
 
-    def post(self, url, json=None, timeout=None, headers=None):
+    def post(self, url, json=None, timeout=None, headers=None, *, allow_redirects):
+        assert allow_redirects is False
         self.urls.append(url)
         self.payloads.append(copy.deepcopy(json))
         return self.responses.pop(0)
@@ -793,7 +795,7 @@ def test_media_unsupported_everywhere_falls_back_to_text_only(mime, part):
     assert len(session.responses) == 1
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 405, 415, 422, 451])
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308, 400, 401, 403, 404, 405, 415, 422, 451])
 def test_unhandled_4xx_fails_over_instead_of_raising(status):
     provider = OpenAICompatibleProvider("http://primary.test/v1", "dead-slug", 10, 0.5)
     provider.available = True
@@ -948,7 +950,8 @@ def test_retry_loop_cannot_spin_forever_on_endless_deterministic_400s():
     provider.available = True
 
     class EndlessErrorSession(FakeSession):
-        def post(self, url, json=None, timeout=None, headers=None):
+        def post(self, url, json=None, timeout=None, headers=None, *, allow_redirects):
+            assert allow_redirects is False
             self.urls.append(url)
             self.payloads.append(copy.deepcopy(json))
             return FakeErrorResponse(400, '{"error":{"message":"nope"}}')
@@ -1033,7 +1036,8 @@ def test_policy_block_fails_over_once_and_never_returns_the_notice():
             }
 
     class PolicyBlockSession(FakeSession):
-        def post(self, url, json=None, timeout=None, headers=None):
+        def post(self, url, json=None, timeout=None, headers=None, *, allow_redirects):
+            assert allow_redirects is False
             calls.append(url)
             self.urls.append(url)
             self.payloads.append(copy.deepcopy(json))
