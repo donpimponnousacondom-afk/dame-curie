@@ -340,7 +340,7 @@ final_summary() {
   Install path: $(pwd -P)
   Checkout dependencies/configuration only; no runtime was provisioned or activated.
   Deploy the bot only inside its service account's private rootless container.
-  Deployment contract and activation holds: phase-II_v2/DISCORD_ONLY_DEPLOYMENT.md
+  Deployment contract and activation gates: docs/OPERATIONS.md
   Edit configuration later: $(pwd -P)/.env
   Re-run the wizard: ./install.sh --local --reconfigure
   Update later: ./install.sh --local, or git pull --ff-only && ./install.sh --local

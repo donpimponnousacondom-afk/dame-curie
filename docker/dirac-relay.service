@@ -1,6 +1,6 @@
 [Unit]
 Description=Dirac V2 to protected V1 Ollama relay
-Documentation=file:/opt/dame-curie/phase-II_v2/DIRAC_RUNTIME_OPS.md
+Documentation=file:/opt/dame-curie/docs/OPERATIONS.md
 After=network-online.target
 StartLimitIntervalSec=0
 
