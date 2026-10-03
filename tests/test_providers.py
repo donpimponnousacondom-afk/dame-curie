@@ -7,7 +7,9 @@ import pytest
 
 from providers import (
     OpenAICompatibleProvider,
+    ProviderEmptyResponseError,
     ProviderIncompleteResponseError,
+    ProviderRequestError,
     ProviderUsageExhaustedError,
     USAGE_EXHAUSTED_MESSAGE,
     _is_content_policy_block,
@@ -215,6 +217,9 @@ def test_openrouter_aux_override_does_not_mutate_main(max_tokens):
 @pytest.mark.parametrize("reasoning", [
     {}, {"reasoning": {"enabled": False}}, {"reasoning": {"effort": "low"}},
     {"reasoning_effort": "none"}, {"thinking": {"type": "disabled", "budget_tokens": 0}},
+    {"max_tokens": 64000, "temperature": 0.2, "top_p": 0.8, "top_k": 0},
+    {"stream_options": {"include_usage": True}, "tool_choice": "none"},
+    {"reasoning": None, "vendor_options": {"thinking": {"enabled": False}}},
 ])
 def test_openrouter_reasoning_override_restores_native_default(reasoning):
     original = copy.deepcopy(reasoning)
@@ -315,232 +320,125 @@ def test_generate_chat_completion_usage_exhausted_error():
     assert len(session.payloads) == 1
 
 
-def test_generate_chat_completion_falls_back_to_secondary_provider():
+@pytest.mark.parametrize("streaming", [{}, {"stream": False}, {"stream": True, "stream_options": {"include_usage": False}}])
+def test_generate_chat_completion_falls_back_to_secondary_provider(streaming):
+    extra_body = {
+        "reasoning": {"effort": "low"}, "provider": {"only": ["configured"], "allow_fallbacks": False},
+        "tool_choice": "required", **streaming,
+    }
+    original = copy.deepcopy(extra_body)
     provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fallback-key",
+        "http://primary.test/v1", "unknown/new-model", 64000, 0.5,
+        top_p=0.9, top_k=20, extra_body=extra_body,
     )
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(503, "down"),
-            FakeErrorResponse(503, "down"),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(503, "down"), FakeErrorResponse(503, "down"), FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    options = copy.deepcopy((messages, tools))
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+    message = asyncio.run(provider.generate_chat_completion(messages, tools=tools))
 
-    asyncio.run(run())
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-    ]
-    assert session.payloads[0]["model"] == "primary-model"
-    assert session.payloads[1]["model"] == "primary-model"
-    assert session.payloads[2]["model"] == "fallback-model"
-    assert (
-        session.payloads[0]["max_tokens"] == 10
-    )  # configured max_tokens always included
-    assert session.payloads[2]["max_tokens"] == 10
-    assert session.payloads[2]["reasoning"] == {"effort": "none"}
-
-
-def test_generate_chat_completion_retries_primary_before_fallback():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fallback-key",
-    )
-    provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(503, "down"),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
-
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
-
-    asyncio.run(run())
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://primary.test/v1/chat/completions",
-    ]
-    assert session.payloads[0]["model"] == "primary-model"
-    assert session.payloads[1]["model"] == "primary-model"
-
-
-def test_empty_200_gets_non_streaming_recovery_within_total_budget():
-    """Empty-content recovery uses remaining attempts, never extra requests."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        empty_response_retries=1,
-    )
-    provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeEmptyResponse(),
-            FakeEmptyResponse(),
-            FakeEmptyResponse(),
-            FakeEmptyResponse(),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
-
-    async def run():
-        return await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-
-    message = asyncio.run(run())
     assert message["content"] == "ok"
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-        "http://primary.test/v1/chat/completions",
-    ]
-    assert session.payloads[4]["stream"] is False
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 3
+    assert session.payloads == [{
+        "model": "unknown/new-model", "messages": messages, "tools": tools,
+        "max_tokens": 64000, "temperature": 0.5, "top_p": 0.9, "top_k": 20, **original,
+    }] * 3
+    assert extra_body == original
+    assert (messages, tools) == options
 
 
-def test_prefer_fallback_routes_first_request_to_fallback():
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_generate_chat_completion_retries_primary_before_fallback(status):
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model")
+    provider.available = True
+    provider._session = session = FakeSequenceSession([FakeErrorResponse(status, "down"), FakeResponse()])
+    messages = [{"role": "user", "content": "hi"}]
+
+    message = asyncio.run(provider.generate_chat_completion(messages))
+
+    assert message["content"] == "ok"
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 2
+    assert session.payloads == [{"model": "primary-model", "messages": messages}] * 2
+
+
+@pytest.mark.parametrize("streaming", [{}, {"stream": False}, {"stream": True}])
+@pytest.mark.parametrize("attempts,empty_retries,empty_count,count,succeeds", [
+    (2, 1, 1, 2, True), (1, 1, 1, 1, False), (5, 0, 1, 1, False),
+    (5, 1, 2, 2, False), (3, 2, 2, 3, True),
+])
+def test_empty_200_gets_non_streaming_recovery_within_total_budget(streaming, attempts, empty_retries, empty_count, count, succeeds):
     provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
+        "http://primary.test/v1", "primary-model", 64000,
+        retry_attempts=attempts, empty_response_retries=empty_retries, extra_body=streaming,
     )
     provider.available = True
-    session = FakeSession()
-    provider._session = session
+    provider._session = session = FakeSequenceSession([FakeEmptyResponse() for _ in range(empty_count)] + [FakeResponse()])
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_response(
-            [{"role": "user", "content": "hi"}],
-            prefer_fallback=True,
-        )
-        assert message == "ok"
+    if succeeds:
+        message = asyncio.run(provider.generate_chat_completion(messages))
+        assert message["content"] == "ok"
+    else:
+        with pytest.raises(ProviderEmptyResponseError):
+            asyncio.run(provider.generate_chat_completion(messages))
 
-    asyncio.run(run())
-    assert session.urls == ["http://fallback.test/v1/chat/completions"]
-    assert session.payloads[0]["model"] == "fallback-model"
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * count
+    assert session.payloads == [{"model": "primary-model", "messages": messages, "max_tokens": 64000, **streaming}] * count
+
+
+@pytest.mark.parametrize("method", ["generate_response", "generate_chat_completion"])
+@pytest.mark.parametrize("override", [
+    {"model": "other"}, {"max_tokens": 1}, {"temperature": 0.2},
+    {"disable_reasoning": True}, {"fast_fallback": True}, {"prefer_fallback": True},
+])
+def test_prefer_fallback_routes_first_request_to_fallback(method, override):
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model")
+    provider.available = True
+    provider._session = session = FakeSession()
+
+    with pytest.raises(TypeError):
+        asyncio.run(getattr(provider, method)([{"role": "user", "content": "hi"}], **override))
+
+    assert session.urls == []
+    assert session.payloads == []
 
 
 def test_prefer_fallback_fails_over_to_primary():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model")
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(404, '{"error":{"message":"fallback unavailable"}}'),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(404, '{"error":{"message":"configured endpoint unavailable"}}'), FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}],
-            fast_fallback=True,
-            prefer_fallback=True,
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match="configured endpoint unavailable"):
+        asyncio.run(provider.generate_chat_completion(messages))
 
-    asyncio.run(run())
-    assert session.urls == [
-        "http://fallback.test/v1/chat/completions",
-        "http://primary.test/v1/chat/completions",
-    ]
-    assert session.payloads[0]["model"] == "fallback-model"
-    assert session.payloads[1]["model"] == "primary-model"
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
+    assert session.payloads == [{"model": "primary-model", "messages": messages}]
+    assert len(session.responses) == 1
 
 
 def test_429_rate_limit_skips_to_fallback_without_doomed_retry():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fallback-key",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model", 10, 0.5)
     provider.available = True
-    # A transient retry waits even when routing to a healthy fallback.
-    provider._cooldown_seconds = 60
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                429,
-                '{"error":{"code":429,"message":"xiaomi/mimo-v2.5 is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(429, '{"error":{"code":429,"message":"xiaomi/mimo-v2.5 is temporarily rate-limited upstream. Please retry shortly"}}'),
+        FakeResponse(), FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
     async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+        assert (await provider.generate_chat_completion(messages))["content"] == "ok"
+        assert (await provider.generate_chat_completion(messages))["content"] == "ok"
 
     asyncio.run(run())
-    # Only one primary call (the 429), then fallback after transient backoff.
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-    ]
-    assert session.payloads[0]["model"] == "primary-model"
-    assert session.payloads[1]["model"] == "fallback-model"
-    # Primary is now cooling: a follow-up call must skip straight to fallback.
-    session2 = FakeSequenceSession([FakeResponse()])
-    provider._session = session2
-
-    async def run2():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
-
-    asyncio.run(run2())
-    assert session2.urls == ["http://fallback.test/v1/chat/completions"]
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 3
+    assert session.payloads == [{"model": "primary-model", "messages": messages, "max_tokens": 10, "temperature": 0.5}] * 3
 
 
 def test_append_tool_call_arguments_accepts_dict():
@@ -615,9 +513,10 @@ def test_read_sse_native_tool_call_with_object_arguments():
     assert parsed["content"] == "hi"
 
 
-def test_generate_response_returns_native_tool_calls():
+@pytest.mark.parametrize("streaming", [{}, {"stream": True}])
+def test_generate_response_returns_native_tool_calls(streaming):
     """generate_response now supports native tool_calls instead of rejecting them."""
-    provider = OpenAICompatibleProvider("http://example.test", "base-model", 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", "base-model", 10, 0.5, extra_body=streaming)
     provider.available = True
     provider._session = FakeSession(FakeToolCallResponse())
 
@@ -627,262 +526,141 @@ def test_generate_response_returns_native_tool_calls():
         assert content == ""
         assert len(provider._last_tool_calls) == 1
         assert provider._last_tool_calls[0]["id"] == "1"
+        assert content.tool_calls == provider._last_tool_calls
 
     asyncio.run(run())
 
 
 def test_context_overflow_clamp_survives_retry():
-    provider = OpenAICompatibleProvider(
-        "http://example.test", "base-model", 12000, 0.5, retry_attempts=2
-    )
+    provider = OpenAICompatibleProvider("http://example.test", "base-model", 64000, 0.5, retry_attempts=2)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                400,
-                "maximum context length is 10000 tokens. you requested about 13000 tokens",
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
-
-    async def no_wait_retry(*args, **kwargs):
-        return True
-
-    provider._retry_after_attempt = no_wait_retry
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(400, "maximum context length is 10000 tokens. you requested about 65000 tokens"),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
     async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+        with pytest.raises(ProviderRequestError, match="maximum context length is 10000"):
+            await provider.generate_chat_completion(messages)
+        assert len(session.payloads) == 1
+        assert (await provider.generate_chat_completion(messages))["content"] == "ok"
 
     asyncio.run(run())
-    assert session.payloads[0]["max_tokens"] == 12000
-    assert session.payloads[1]["max_tokens"] == 8488
+    assert session.payloads == [{"model": "base-model", "messages": messages, "max_tokens": 64000, "temperature": 0.5}] * 2
 
 
 def test_none_json_body_retries_and_falls_back():
-    """A 200 response with a None/missing JSON body should not crash with
-    AttributeError — it should retry/fallback like any other failed response."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fallback-key",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model")
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeNoneJsonResponse(),  # primary attempt 1 — None body
-            FakeNoneJsonResponse(),  # primary attempt 2 — None body
-            FakeResponse(),  # fallback attempt 3 — success
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([FakeNoneJsonResponse(), FakeNoneJsonResponse(), FakeResponse()])
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+    message = asyncio.run(provider.generate_chat_completion(messages))
 
-    asyncio.run(run())
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-    ]
+    assert message["content"] == "ok"
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 3
+    assert session.payloads == [{"model": "primary-model", "messages": messages}] * 3
 
 
 def test_degraded_endpoint_skips_to_fallback_without_retry():
-    """A 400 'DEGRADED function cannot be invoked' should cool the endpoint and
-    fall back immediately — no wasted retries on the same degraded endpoint."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fallback-key",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model")
     provider.available = True
-    provider._cooldown_seconds = 60
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                400,
-                '{"status":400,"title":"Bad Request","detail":"Function id \'abc\': DEGRADED function cannot be invoked"}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(400, '{"status":400,"title":"Bad Request","detail":"Function id abc: DEGRADED function cannot be invoked"}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
     async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+        with pytest.raises(ProviderRequestError, match="DEGRADED function cannot be invoked"):
+            await provider.generate_chat_completion(messages)
+        assert len(session.payloads) == 1
+        assert (await provider.generate_chat_completion(messages))["content"] == "ok"
 
     asyncio.run(run())
-    # Only ONE primary call (the DEGRADED 400) then immediate fallback — no
-    # second doomed primary retry, no 2s wait.
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-    ]
-    assert session.payloads[0]["model"] == "primary-model"
-    assert session.payloads[1]["model"] == "fallback-model"
-    # Primary is now cooling: a follow-up call must skip straight to fallback.
-    session2 = FakeSequenceSession([FakeResponse()])
-    provider._session = session2
-
-    async def run2():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
-
-    asyncio.run(run2())
-    assert session2.urls == ["http://fallback.test/v1/chat/completions"]
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 2
+    assert session.payloads == [{"model": "primary-model", "messages": messages}] * 2
 
 
-def test_vision_model_used_for_images():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "deepseek-v4-flash",
-        10,
-        0.5,
-        api_key="pk",
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fk",
-        vision_model="mimo-v2.5",
-    )
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "mimo-v2.5", "unknown/new-model"])
+def test_vision_model_used_for_images(model):
+    provider = OpenAICompatibleProvider("http://primary.test/v1", model, 10, 0.5, api_key="pk")
     provider.available = True
-    session = FakeSession()
-    provider._session = session
+    provider._session = session = FakeSession()
+    messages = [{"role": "user", "content": "look"}]
+    media = [{"b64": "abc", "mime_type": "image/png"}]
+    original = copy.deepcopy((messages, media))
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "look"}],
-            media=[{"b64": "abc", "mime_type": "image/png"}],
-            model="deepseek-v4-flash",
-        )
-        assert message["content"] == "ok"
+    message = asyncio.run(provider.generate_chat_completion(messages, media=media))
 
-    asyncio.run(run())
+    assert message["content"] == "ok"
     assert session.urls == ["http://primary.test/v1/chat/completions"]
-    assert session.payloads[0]["model"] == "mimo-v2.5"
-    content = session.payloads[0]["messages"][0]["content"]
-    assert isinstance(content, list)
-    assert any(part.get("type") == "image_url" for part in content)
+    assert session.payloads == [{
+        "model": model, "max_tokens": 10, "temperature": 0.5,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ]}],
+    }]
+    assert (messages, media) == original
 
 
-def test_kimi_k27_vision_enables_thinking():
-    """kimi-k2.7-code rejects reasoning_effort=none and otherwise streams
-    reasoning-only with empty content. Vision must pin thinking=enabled."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "glm-5.2",
-        10,
-        0.7,
-        vision_model="kimi-k2.7-code",
-        vision_disable_reasoning=False,
-    )
+@pytest.mark.parametrize("reasoning", [{}, {"reasoning_effort": "none"}, {"thinking": {"type": "enabled"}}])
+def test_kimi_k27_vision_enables_thinking(reasoning):
+    original = copy.deepcopy(reasoning)
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "kimi-k2.7-code", extra_body=reasoning)
     provider.available = True
-    session = FakeSession()
-    provider._session = session
+    provider._session = session = FakeSession()
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "look"}],
-            media=[{"b64": "abc", "mime_type": "image/png"}],
-        )
-        assert message["content"] == "ok"
+    message = asyncio.run(provider.generate_chat_completion(
+        [{"role": "user", "content": "look"}], media=[{"b64": "abc", "mime_type": "image/png"}],
+    ))
 
-    asyncio.run(run())
-    payload = session.payloads[0]
-    assert payload["model"] == "kimi-k2.7-code"
-    assert payload.get("thinking") == {"type": "enabled"}
-    assert "reasoning_effort" not in payload
+    assert message["content"] == "ok"
+    assert {key: value for key, value in session.payloads[0].items() if key != "messages"} == {"model": "kimi-k2.7-code", **original}
+    assert reasoning == original
 
 
 def test_vision_model_not_used_for_text():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "deepseek-v4-flash",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fk",
-        vision_model="mimo-v2.5",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "deepseek-v4-flash", 10, 0.5)
     provider.available = True
-    session = FakeSession()
-    provider._session = session
+    provider._session = session = FakeSession()
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+    message = asyncio.run(provider.generate_chat_completion(messages))
 
-    asyncio.run(run())
-    assert session.payloads[0]["model"] == "deepseek-v4-flash"
+    assert message["content"] == "ok"
+    assert session.payloads == [{"model": "deepseek-v4-flash", "messages": messages, "max_tokens": 10, "temperature": 0.5}]
 
 
 def test_image_unsupported_skips_text_only_primary():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "deepseek-v4-flash",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fk",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "deepseek-v4-flash", 10, 0.5)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                400,
-                '{"error":{"message":"unknown variant `image_url`, expected `text`"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(400, '{"error":{"message":"unknown variant `image_url`, expected `text`"}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "look"}]
+    media = [{"b64": "abc", "mime_type": "image/png"}]
+    original = copy.deepcopy((messages, media))
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "look"}],
-            media=[{"b64": "abc", "mime_type": "image/png"}],
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match="unknown variant `image_url`"):
+        asyncio.run(provider.generate_chat_completion(messages, media=media))
 
-    asyncio.run(run())
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-    ]
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
     assert session.payloads[0]["model"] == "deepseek-v4-flash"
-    assert session.payloads[1]["model"] == "fallback-model"
+    assert session.payloads[0]["messages"][0]["content"][-1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+    assert (messages, media) == original
+    assert len(session.responses) == 1
 
 
-@pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek/deepseek-v4.1-flash:nitro", "grok-4.6"])
-def test_reasoning_only_response_is_terminal(model):
+@pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek/deepseek-v4.1-flash:nitro", "grok-4.6", "unknown/new-model"])
+@pytest.mark.parametrize("streaming", [{}, {"stream": True}])
+def test_reasoning_only_response_is_terminal(model, streaming):
     provider = OpenAICompatibleProvider(
         "http://primary.test/v1", model, 10, 0.5,
-        fallback_base_url="http://fallback.test/v1", fallback_model="fallback-model",
-        retry_attempts=5, empty_response_retries=3,
+        retry_attempts=5, empty_response_retries=3, extra_body=streaming,
     )
     provider.available = True
     session = FakeSequenceSession([FakeReasoningOnlyResponse(), FakeResponse()])
@@ -904,7 +682,7 @@ def test_reasoning_only_response_is_terminal(model):
     }]},
 ])
 def test_reasoning_with_answer_or_native_tool_calls_is_preserved(model, answer):
-    provider = OpenAICompatibleProvider("http://example.test", model, 10, 0.5)
+    provider = OpenAICompatibleProvider("http://example.test", model, 10, 0.5, extra_body={"stream": True})
     provider.available = True
     response = FakeReasoningOnlyResponse()
     response.content = _FakeAsyncStream(_sse_chunks_for({"choices": [{"message": {
@@ -922,40 +700,23 @@ def test_reasoning_with_answer_or_native_tool_calls_is_preserved(model, answer):
 
 
 def test_403_region_error_skips_to_fallback_without_retry():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "deepseek-v4-flash",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        fallback_api_key="fk",
-    )
+    extra_body = {"provider": {"only": ["configured"], "allow_fallbacks": False}}
+    original = copy.deepcopy(extra_body)
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "deepseek-v4-flash", extra_body=extra_body)
     provider.available = True
-    provider._cooldown_seconds = 60
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                403,
-                '{"type":"error","error":{"type":"RegionError","message":"China opt in"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(403, '{"type":"error","error":{"type":"RegionError","message":"China opt in"}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match="China opt in"):
+        asyncio.run(provider.generate_chat_completion(messages))
 
-    asyncio.run(run())
-    assert session.urls == [
-        "http://primary.test/v1/chat/completions",
-        "http://fallback.test/v1/chat/completions",
-    ]
-    assert session.payloads[1]["model"] == "fallback-model"
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
+    assert session.payloads == [{"model": "deepseek-v4-flash", "messages": messages, **original}]
+    assert extra_body == original
+    assert len(session.responses) == 1
 
 
 def test_video_parts_are_not_attached():
@@ -964,7 +725,6 @@ def test_video_parts_are_not_attached():
         "deepseek-v4-flash",
         10,
         0.5,
-        vision_model="mimo-v2.5",
     )
     provider.available = True
     session = FakeSession()
@@ -984,111 +744,71 @@ def test_video_parts_are_not_attached():
     content = session.payloads[0]["messages"][0]["content"]
     types = [p.get("type") for p in content if isinstance(p, dict)]
     assert "image_url" in types
-    assert "video_url" not in types
-    assert session.payloads[0]["model"] == "mimo-v2.5"
-
-
-# ---- deterministic 4xx handling: failover, media fallback, temperature ----
+    assert "video_url" in types
+    assert session.payloads[0]["model"] == "deepseek-v4-flash"
+    assert {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,vid"}} in content
 
 
 def test_openrouter_image_unsupported_routes_to_another_endpoint():
-    """404 'No endpoints found that support image input' must not kill the turn."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "text-only-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-    )
+    extra_body = {"provider": {"only": ["configured"], "allow_fallbacks": False}}
+    original = copy.deepcopy(extra_body)
+    provider = OpenAICompatibleProvider("https://openrouter.ai/api/v1", "text-only-model", extra_body=extra_body)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                404,
-                '{"error":{"message":"No endpoints found that support image input","code":404}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(404, '{"error":{"message":"No endpoints found that support image input","code":404}}'),
+        FakeResponse(),
+    ])
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "look"}],
-            media=[{"b64": "img", "mime_type": "image/png"}],
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match="No endpoints found that support image input"):
+        asyncio.run(provider.generate_chat_completion(
+            [{"role": "user", "content": "look"}], media=[{"b64": "img", "mime_type": "image/png"}],
+        ))
 
-    asyncio.run(run())
-    assert len(session.payloads) == 2
-    # Second attempt went to a different endpoint, still carrying the image.
-    assert session.urls[0] != session.urls[1]
-    parts = session.payloads[1]["messages"][0]["content"]
-    assert any(p.get("type") == "image_url" for p in parts if isinstance(p, dict))
+    assert session.urls == ["https://openrouter.ai/api/v1/chat/completions"]
+    assert session.payloads[0]["provider"] == original["provider"]
+    assert session.payloads[0]["messages"][0]["content"][-1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,img"}}
+    assert extra_body == original
+    assert len(session.responses) == 1
 
 
-def test_media_unsupported_everywhere_falls_back_to_text_only():
-    """When no endpoint accepts the image, answer the text instead of failing."""
-    provider = OpenAICompatibleProvider("http://primary.test/v1", "text-only-model", 10, 0.5)
+@pytest.mark.parametrize("mime,part", [("image/png", "image_url"), ("video/mp4", "video_url"), ("audio/mpeg", "input_audio")])
+def test_media_unsupported_everywhere_falls_back_to_text_only(mime, part):
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "text-only-model", enable_audio_input=True)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                404,
-                '{"error":{"message":"No endpoints found that support image input"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(404, '{"error":{"message":"No endpoints found that support this media"}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "what is this"}]
+    media = [{"b64": "img", "mime_type": mime}]
+    original = copy.deepcopy((messages, media))
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "what is this"}],
-            media=[{"b64": "img", "mime_type": "image/png"}],
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match="No endpoints found that support this media"):
+        asyncio.run(provider.generate_chat_completion(messages, media=media))
 
-    asyncio.run(run())
-    assert len(session.payloads) == 2
-    retried = session.payloads[1]["messages"][0]["content"]
-    assert isinstance(retried, str)
-    assert "what is this" in retried
-    assert "attachment(s) omitted" in retried
+    assert len(session.payloads) == 1
+    assert session.payloads[0]["messages"][0]["content"][0] == {"type": "text", "text": "what is this"}
+    assert session.payloads[0]["messages"][0]["content"][1]["type"] == part
+    assert (messages, media) == original
+    assert len(session.responses) == 1
 
 
-def test_unhandled_4xx_fails_over_instead_of_raising():
-    """404 model-unavailable on primary used to kill the turn outright."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "dead-slug",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-    )
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 405, 415, 422, 451])
+def test_unhandled_4xx_fails_over_instead_of_raising(status):
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "dead-slug", 10, 0.5)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                404,
-                '{"error":{"message":"This model is unavailable for free.","code":404}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(status, '{"error":{"message":"This model is unavailable for free."}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match=f"Provider API error: {status}:.*This model is unavailable for free"):
+        asyncio.run(provider.generate_chat_completion(messages))
 
-    asyncio.run(run())
-    assert len(session.payloads) == 2
-    assert session.payloads[1]["model"] == "fallback-model"
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
+    assert session.payloads == [{"model": "dead-slug", "messages": messages, "max_tokens": 10, "temperature": 0.5}]
+    assert len(session.responses) == 1
 
 
 def test_unhandled_4xx_single_endpoint_still_raises():
@@ -1106,179 +826,114 @@ def test_unhandled_4xx_single_endpoint_still_raises():
     assert len(session.payloads) == 1
 
 
-def test_temperature_constraint_is_learned_and_resent():
-    """'only 0.6 is allowed' must resend at 0.6, not burn retries."""
-    provider = OpenAICompatibleProvider("http://primary.test/v1", "picky-model", 10, 0.9)
+@pytest.mark.parametrize("sampling", [{}, {"temperature": 0.9}])
+def test_temperature_constraint_is_learned_and_resent(sampling):
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "picky-model", **sampling)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                400,
-                '{"error":{"message":"Upstream request failed: [invalid_request_error] '
-                'invalid temperature: only 0.6 is allowed for this model"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(400, '{"error":{"message":"invalid temperature: only 0.6 is allowed for this model"}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "hi"}]
 
     async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+        with pytest.raises(ProviderRequestError, match="only 0.6 is allowed"):
+            await provider.generate_chat_completion(messages)
+        assert len(session.payloads) == 1
+        assert (await provider.generate_chat_completion(messages))["content"] == "ok"
 
     asyncio.run(run())
-    assert session.payloads[0]["temperature"] == 0.9
-    assert session.payloads[1]["temperature"] == 0.6
-    # Learned, so the next call starts at the accepted value.
-    assert provider._endpoint_temperatures["primary"] == 0.6
+    assert session.payloads == [{"model": "picky-model", "messages": messages, **sampling}] * 2
 
 
 def test_media_incapable_endpoint_is_remembered_across_calls():
-    """A text-only fallback shouldn't be re-offered images on every turn."""
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="text-only-fallback",
-        vision_base_url="http://vision.test/v1",
-        vision_model="vision-model",
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model")
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                404,
-                '{"error":{"message":"No endpoints found that support image input"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
-    # Pretend the vision endpoint is the one that answered second.
-    provider._media_incapable.add("fallback")
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(404, '{"error":{"message":"No endpoints found that support image input"}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "look"}]
+    media = [{"b64": "img", "mime_type": "image/png"}]
+    original = copy.deepcopy((messages, media))
 
     async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "look"}],
-            media=[{"b64": "img", "mime_type": "image/png"}],
-        )
-        assert message["content"] == "ok"
+        with pytest.raises(ProviderRequestError, match="support image input"):
+            await provider.generate_chat_completion(messages, media=media)
+        assert len(session.payloads) == 1
+        assert (await provider.generate_chat_completion(messages, media=media))["content"] == "ok"
 
     asyncio.run(run())
-    # Never routed the image to the known text-only fallback.
-    assert all("fallback.test" not in url for url in session.urls)
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 2
+    assert session.payloads[0] == session.payloads[1]
+    assert session.payloads[1]["messages"][0]["content"][-1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,img"}}
+    assert (messages, media) == original
 
 
-def test_media_incapable_is_learned_from_a_404():
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="text-only-fallback",
-    )
+@pytest.mark.parametrize("body", [
+    {"tool_choice": "required"}, {"stream": True, "stream_options": {"include_usage": False}},
+    {"reasoning": {"effort": "low"}}, {"provider": {"only": ["configured"], "allow_fallbacks": False}},
+])
+def test_media_incapable_is_learned_from_a_404(body):
+    original = copy.deepcopy(body)
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "unknown/new-model", extra_body=body)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                404,
-                '{"error":{"message":"No endpoints found that support image input"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(400, '{"error":{"message":"Unsupported configured request parameter"}}'),
+        FakeResponse(),
+    ])
+    messages = [{"role": "user", "content": "look"}]
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
 
     async def run():
-        await provider.generate_chat_completion(
-            [{"role": "user", "content": "look"}],
-            media=[{"b64": "img", "mime_type": "image/png"}],
-        )
+        with pytest.raises(ProviderRequestError, match="Unsupported configured request parameter"):
+            await provider.generate_chat_completion(messages, tools=tools)
+        assert len(session.payloads) == 1
+        assert (await provider.generate_chat_completion(messages, tools=tools))["content"] == "ok"
 
     asyncio.run(run())
-    assert "primary" in provider._media_incapable
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * 2
+    assert session.payloads == [{"model": "unknown/new-model", "messages": messages, "tools": tools, **original}] * 2
+    assert body == original
 
 
-@pytest.mark.parametrize("attempts", [1, 2])
+@pytest.mark.parametrize("attempts", [1, 2, 3])
 def test_failover_respects_total_attempt_budget(attempts):
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
-        retry_attempts=attempts,
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model", retry_attempts=attempts)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                404,
-                '{"error":{"message":"This model is unavailable for free."}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(503, "temporarily unavailable") for _ in range(attempts)
+    ] + [FakeResponse()])
+    messages = [{"role": "user", "content": "hi"}]
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "hi"}]
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(RuntimeError, match="Provider API error: 503:.*temporarily unavailable"):
+        asyncio.run(provider.generate_chat_completion(messages))
 
-    if attempts == 1:
-        with pytest.raises(RuntimeError, match="Provider API error: 404"):
-            asyncio.run(run())
-    else:
-        asyncio.run(run())
-        assert "fallback.test" in session.urls[1]
-    assert len(session.urls) == attempts
+    assert session.urls == ["http://primary.test/v1/chat/completions"] * attempts
+    assert session.payloads == [{"model": "primary-model", "messages": messages}] * attempts
+    assert len(session.responses) == 1
 
 
 @pytest.mark.parametrize("attempts", [1, 2])
 def test_media_strip_retry_respects_total_attempt_budget(attempts):
-    provider = OpenAICompatibleProvider(
-        "http://primary.test/v1",
-        "primary-model",
-        10,
-        0.5,
-        retry_attempts=attempts,
-    )
+    provider = OpenAICompatibleProvider("http://primary.test/v1", "primary-model", retry_attempts=attempts)
     provider.available = True
-    session = FakeSequenceSession(
-        [
-            FakeErrorResponse(
-                400,
-                '{"error":{"message":"unknown variant `image_url`, expected `text`"}}',
-            ),
-            FakeResponse(),
-        ]
-    )
-    provider._session = session
+    provider._session = session = FakeSequenceSession([
+        FakeErrorResponse(400, '{"error":{"message":"unknown variant `image_url`, expected `text`"}}'),
+        FakeResponse(),
+    ])
 
-    async def run():
-        message = await provider.generate_chat_completion(
-            [{"role": "user", "content": "what is this"}],
-            media=[{"b64": "img", "mime_type": "image/png"}],
-        )
-        assert message["content"] == "ok"
+    with pytest.raises(ProviderRequestError, match="Provider API error: 400"):
+        asyncio.run(provider.generate_chat_completion(
+            [{"role": "user", "content": "what is this"}], media=[{"b64": "img", "mime_type": "image/png"}],
+        ))
 
-    if attempts == 1:
-        with pytest.raises(RuntimeError, match="Provider API error: 400"):
-            asyncio.run(run())
-    else:
-        asyncio.run(run())
-        retried = session.payloads[1]["messages"][-1]["content"]
-        assert isinstance(retried, str)
-        assert "attachment(s) omitted" in retried
-    assert len(session.payloads) == attempts
+    assert len(session.payloads) == 1
+    assert session.payloads[0]["messages"][0]["content"] == [
+        {"type": "text", "text": "what is this"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,img"}},
+    ]
+    assert len(session.responses) == 1
 
 
 def test_retry_loop_cannot_spin_forever_on_endless_deterministic_400s():
@@ -1288,8 +943,6 @@ def test_retry_loop_cannot_spin_forever_on_endless_deterministic_400s():
         "primary-model",
         10,
         0.5,
-        fallback_base_url="http://fallback.test/v1",
-        fallback_model="fallback-model",
         retry_attempts=3,
     )
     provider.available = True
@@ -1308,7 +961,8 @@ def test_retry_loop_cannot_spin_forever_on_endless_deterministic_400s():
             await provider.generate_chat_completion([{"role": "user", "content": "hi"}])
 
     asyncio.run(run())
-    assert len(session.urls) <= 3 + 2 * len(provider._endpoints) + 2
+    assert session.urls == ["http://primary.test/v1/chat/completions"]
+    assert session.payloads == [{"model": "primary-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 10, "temperature": 0.5}]
 
 
 GEMINI_PROMPT_BLOCK = (
@@ -1340,18 +994,11 @@ def test_content_policy_http_error_detected_without_false_positives():
 
 
 def test_policy_block_fails_over_once_and_never_returns_the_notice():
-    """One shot at the blocked model, then the fallback answers.
-
-    Regression: the notice was posted to Discord verbatim, and the blocked
-    endpoint was retried instead of being handed straight to the fallback.
-    """
     provider = OpenAICompatibleProvider(
         base_url="http://primary.test",
         model="gemini-3.7-flash-low",
         max_tokens=256,
         temperature=0.7,
-        fallback_base_url="http://fallback.test",
-        fallback_model="grok-4.6",
         retry_attempts=3,
     )
     provider.available = True
@@ -1399,12 +1046,14 @@ def test_policy_block_fails_over_once_and_never_returns_the_notice():
             [{"role": "user", "content": "something spicy"}]
         )
 
-    message = asyncio.run(run())
+    with pytest.raises(ProviderRequestError, match="Prompt was blocked by the provider's content policy"):
+        asyncio.run(run())
 
-    assert message["content"] == "real answer"
-    assert not _is_policy_block_text(message["content"])
-    assert sum("primary.test" in u for u in calls) == 1, calls
-    assert sum("fallback.test" in u for u in calls) == 1, calls
+    assert calls == ["http://primary.test/chat/completions"]
+    assert provider._session.payloads == [{
+        "model": "gemini-3.7-flash-low", "max_tokens": 256, "temperature": 0.7,
+        "messages": [{"role": "user", "content": "something spicy"}],
+    }]
 
 
 def test_audio_attaches_as_input_audio_when_enabled():
@@ -1506,15 +1155,23 @@ def test_invalid_svg_is_explicit_text_and_existing_image_parts_survive():
 
 
 @pytest.mark.parametrize("blob,expected", [(b"<svg>", False), (b"\x89PNG\r\n\x1a\nexisting", True)])
-def test_media_routing_uses_normalized_history_parts(monkeypatch, blob, expected):
+def test_media_routing_uses_normalized_history_parts(blob, expected):
     import base64
-    from unittest.mock import Mock
 
     provider = OpenAICompatibleProvider("http://example.test", "vision-model", 10, 0.5)
     provider.available = True
-    provider._session = FakeSession()
-    route = Mock(wraps=provider._attempt_endpoint)
-    monkeypatch.setattr(provider, "_attempt_endpoint", route)
+    provider._session = session = FakeSession()
     messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(blob).decode()}}]}]
+    original = copy.deepcopy(messages)
+
     asyncio.run(provider.generate_chat_completion(messages))
-    assert route.call_args.kwargs["has_media"] is expected
+
+    part = session.payloads[0]["messages"][0]["content"][0]
+    if expected:
+        assert part == original[0]["content"][0]
+    else:
+        assert part["type"] == "text"
+        assert part["text"].startswith("Error: image could not be attached")
+    assert session.urls == ["http://example.test/chat/completions"]
+    assert session.payloads[0]["model"] == "vision-model"
+    assert messages == original
