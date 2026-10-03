@@ -285,7 +285,7 @@ def test_bounded_http400_body_is_private_with_exact_request_metadata(captured, c
 
 @pytest.mark.parametrize("status", [500, 502, 503, 504, 429])
 @pytest.mark.parametrize("max_tokens", [None, 16384])
-def test_retried_http_failures_recover_in_one_incident(status, max_tokens, captured, retry_sleep):
+def test_retried_http_failures_recover_in_one_incident(status, max_tokens, captured, retry_sleep, caplog):
     first = "first upstream explanation " + "a" * 400
     second = "second upstream explanation " + "b" * 400
     provider = provider_for([
@@ -316,11 +316,17 @@ def test_retried_http_failures_recover_in_one_incident(status, max_tokens, captu
     assert turn.attempts == 3
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20]
     assert len(captured) == 1
-    assert captured[0]["exception"] is None
-    assert "recovered" in captured[0]["summary"]
+    error = captured[0]["exception"]
+    assert type(error) is RuntimeError
+    assert str(error) == f"Provider API error: {status}: {first}"
+    assert error.incident_id == "synthetic-incident-1"
+    assert error.incident_details == captured[0]["details"]
+    assert captured[0]["summary"] == "Provider request recovered after upstream failures"
     assert first in captured[0]["details"] and second in captured[0]["details"]
-    assert '"attempt": "3/3"' in captured[0]["details"]
+    assert all(f'"attempt": "{attempt}/3"' in captured[0]["details"] for attempt in (1, 2, 3))
     assert '"content":"ok"' not in captured[0]["details"]
+    for excluded in ("synthetic-retry-key", "Authorization", "X-Synthetic-Route", MESSAGES[0]["content"]):
+        assert excluded not in str(error) + error.incident_details + caplog.text
 
 
 def test_invalid_encoding_http_error_keeps_cached_bytes_and_existing_decode_failure(captured):
