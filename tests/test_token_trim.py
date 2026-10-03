@@ -100,7 +100,7 @@ def _tool_names(bot, message, content, platform="discord"):
 
 def test_every_turn_offers_every_registered_tool():
     bot = _live_bot()
-    turn = ForegroundTurn(100, 1, time.monotonic() + 60)
+    turn = ForegroundTurn(1, time.monotonic() + 60)
     token = set_foreground_turn(turn)
     try:
         for content in (
@@ -126,7 +126,7 @@ def test_every_turn_offers_every_registered_tool():
         ) == "Expanded the messaging tool group for the next model call."
         expanded = _tool_names(bot, message, "inbox")
         assert {"inbox_list", "inbox_act", "typing"}.issubset(expanded)
-        assert turn.output_remaining == 100
+        assert turn.attempt_limit == 1
         assert turn.attempts == 0
     finally:
         reset_foreground_turn(token)
@@ -143,7 +143,7 @@ def test_tool_prompt_lists_full_catalog_on_chat_turn():
     bot = _live_bot()
     message = _msg("wyd")
     message.author = bot.user
-    turn = ForegroundTurn(100, 1, time.monotonic() + 60)
+    turn = ForegroundTurn(1, time.monotonic() + 60)
     token = set_foreground_turn(turn)
     try:
         prompt = MaxwellBot._tool_system_prompt(

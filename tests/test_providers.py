@@ -158,105 +158,109 @@ class FakeSequenceSession(FakeSession):
         "inclusionai/ling-3.0-flash",
         "inclusionai/ling-3.0-flash-fin:free",
         "inclusionai/ling-3.0-flash-sante:free",
+        "unknown/new-model-2099",
     ],
 )
-def test_openrouter_native_reasoning_and_sampling_defaults(model):
-    provider = OpenAICompatibleProvider("https://openrouter.ai/api/v1", model, 8192, 0.6)
+@pytest.mark.parametrize("sampling", [{}, {"max_tokens": 64000, "temperature": 0.6}])
+def test_openrouter_native_reasoning_and_sampling_defaults(model, sampling):
+    provider = OpenAICompatibleProvider("https://openrouter.ai/api/v1", model, **sampling)
+    provider.available = True
+    provider._session = session = FakeSession()
     messages = [{"role": "user", "content": "hi"}]
 
-    payload = provider._request_payload(provider._endpoints[0], messages)
+    asyncio.run(provider.generate_chat_completion(messages))
 
-    assert payload == {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": 20,
-        "max_tokens": 8192,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
+    assert session.payloads == [{"model": model, "messages": messages, **sampling}]
 
 
-def test_openrouter_aux_override_does_not_mutate_main(caplog):
+@pytest.mark.parametrize("max_tokens", [None, 64000])
+def test_openrouter_aux_override_does_not_mutate_main(max_tokens):
+    from time import monotonic
+
+    from turn_budget import ForegroundTurn, reset_foreground_turn, set_foreground_turn
+
+    extra_body = {"reasoning": {"effort": "low"}, "provider": {"only": ["configured"], "allow_fallbacks": False}}
+    original = copy.deepcopy(extra_body)
     provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "inclusionai/ling-3.0-flash-fin:free",
-        8192, 0.6, top_p=0.9, top_k=30,
+        max_tokens, 0.6, top_p=0.9, top_k=30, extra_body=extra_body,
     )
     provider.available = True
-    session = FakeSession()
-    provider._session = session
+    provider._session = session = FakeSession()
+    turn = ForegroundTurn(2, monotonic() + 60)
+    token = set_foreground_turn(turn)
 
     async def run():
         messages = [{"role": "user", "content": "hi"}]
-        await provider.generate_response(
-            messages, temperature=0.2, disable_reasoning=True,
-        )
-        await provider.generate_chat_completion(messages)
+        await provider.generate_response(messages)
+        await provider.generate_chat_completion(messages + [{"role": "assistant", "content": "ok"}])
 
-    with caplog.at_level("INFO", logger="providers"):
+    try:
         asyncio.run(run())
+    finally:
+        reset_foreground_turn(token)
 
-    aux, main = session.payloads
-    assert aux["reasoning"] == {"enabled": False}
-    assert aux["temperature"] == 0.2
-    assert main["temperature"] == 0.6
-    assert "reasoning" not in main
     for payload in session.payloads:
-        assert payload["top_p"] == 0.9
-        assert payload["top_k"] == 30
-        assert "reasoning_effort" not in payload
-        assert "thinking" not in payload
-    assert "reasoning_disabled=True" in caplog.text
-    assert "reasoning_disabled=False" in caplog.text
+        assert {key: value for key, value in payload.items() if key != "messages"} == {
+            "model": "inclusionai/ling-3.0-flash-fin:free", "temperature": 0.6,
+            "top_p": 0.9, "top_k": 30, **original,
+            **({"max_tokens": 64000} if max_tokens is not None else {}),
+        }
+    assert turn.attempts == 2
+    assert extra_body == original
+    assert len(session.payloads[0]["messages"]) == 1
+    assert len(session.payloads[1]["messages"]) == 2
 
 
-def test_openrouter_reasoning_override_restores_native_default():
+@pytest.mark.parametrize("reasoning", [
+    {}, {"reasoning": {"enabled": False}}, {"reasoning": {"effort": "low"}},
+    {"reasoning_effort": "none"}, {"thinking": {"type": "disabled", "budget_tokens": 0}},
+])
+def test_openrouter_reasoning_override_restores_native_default(reasoning):
+    original = copy.deepcopy(reasoning)
     provider = OpenAICompatibleProvider(
         "https://openrouter.ai/api/v1", "inclusionai/ling-3.0-flash-fin:free",
-        8192, 0.6, disable_reasoning=True,
+        extra_body=reasoning,
     )
+    provider.available = True
+    provider._session = session = FakeSession()
     messages = [{"role": "user", "content": "hi"}]
-    endpoint = provider._endpoints[0]
 
-    disabled = provider._request_payload(endpoint, messages)
-    native = provider._request_payload(endpoint, messages, disable_reasoning=False)
+    asyncio.run(provider.generate_chat_completion(messages))
 
-    assert disabled["reasoning"] == {"enabled": False}
-    assert not {"reasoning", "reasoning_effort", "thinking"}.intersection(native)
-    assert endpoint.disable_reasoning is True
+    assert session.payloads == [{"model": provider.model, "messages": messages, **original}]
+    assert reasoning == original
 
 
 @pytest.mark.parametrize(
     "base_url",
-    ["http://localhost:11434/v1", "https://openrouter.ai.example.test/v1"],
+    ["http://localhost:11434/v1", "https://openrouter.ai.example.test/v1", "https://openrouter.ai/api/v1"],
 )
 def test_non_openrouter_reasoning_disable_protocol_is_preserved(base_url):
-    provider = OpenAICompatibleProvider(base_url, "model", 8192, 0.6, disable_reasoning=True)
-    payload = provider._request_payload(provider._endpoints[0], [])
+    extra_body = {"reasoning_effort": "none", "reasoning": {"effort": "none"}, "thinking": {"type": "disabled", "budget_tokens": 0}}
+    original = copy.deepcopy(extra_body)
+    provider = OpenAICompatibleProvider(base_url, "unknown/new-model", extra_body=extra_body)
+    provider.available = True
+    provider._session = session = FakeSession()
 
-    assert payload["reasoning_effort"] == "none"
-    assert payload["reasoning"] == {"effort": "none"}
-    assert payload["thinking"] == {"type": "disabled", "budget_tokens": 0}
+    asyncio.run(provider.generate_chat_completion([]))
+
+    assert session.payloads == [{"model": "unknown/new-model", "messages": [], **original}]
+    assert extra_body == original
 
 
-def test_reasoning_protocol_uses_selected_endpoint():
-    provider = OpenAICompatibleProvider(
-        "http://localhost:11434/v1", "local-model", 8192, 0.6,
-        disable_reasoning=True,
-        fallback_base_url="https://openrouter.ai/api/v1",
-        fallback_model="inclusionai/ling-3.0-flash-fin:free",
-        fallback_disable_reasoning=True,
-    )
-    primary, fallback = provider._endpoints
-
-    local = provider._request_payload(primary, [])
-    routed = provider._request_payload(fallback, [])
-
-    assert local["reasoning_effort"] == "none"
-    assert routed["reasoning"] == {"enabled": False}
-    assert "reasoning_effort" not in routed
-    assert "thinking" not in routed
+@pytest.mark.parametrize("body,typed", [
+    ({"temperature": 0.2}, {"temperature": 0.6}),
+    ({"max_tokens": 64000}, {"max_tokens": 8192}),
+    ({"top_p": 0.8}, {"top_p": 0.9}),
+    ({"top_k": 20}, {"top_k": 30}),
+    ({"model": "other-model"}, {}),
+])
+def test_reasoning_protocol_uses_selected_endpoint(body, typed):
+    original = copy.deepcopy(body)
+    with pytest.raises(ValueError, match="OPENAI_EXTRA_BODY conflicts with configured"):
+        OpenAICompatibleProvider("http://localhost:11434/v1", "local-model", extra_body=body, **typed)
+    assert body == original
 
 
 def test_generate_chat_completion_model_override():
@@ -268,7 +272,6 @@ def test_generate_chat_completion_model_override():
     async def run():
         message = await provider.generate_chat_completion(
             [{"role": "user", "content": "hi"}],
-            model="rem-model",
             tools=[
                 {
                     "type": "function",
@@ -282,7 +285,10 @@ def test_generate_chat_completion_model_override():
         assert message["content"] == "ok"
 
     asyncio.run(run())
-    assert session.payloads[0]["model"] == "rem-model"
+    assert session.payloads[0]["model"] == "base-model"
+    assert "tool_choice" not in session.payloads[0]
+    assert "stream" not in session.payloads[0]
+    assert "stream_options" not in session.payloads[0]
     assert (
         session.payloads[0]["max_tokens"] == 10
     )  # configured max_tokens always included
