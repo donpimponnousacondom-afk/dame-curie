@@ -68,6 +68,29 @@ Root's standing rule, 2026-10-03: **configuration and explicit operator commands
 - Root further clarified: commenting out a provider parameter must remove it upstream; there are not two provider configurations. Do not relocate forbidden overrides into job-owned constructors or `bot_control.json`. The unconfigured legacy aggregate output-token cap must be removed, not used to invent or shrink `max_tokens`. Local deadline/attempt guards are separate workflow limits and must never synthesize request fields.
 - New operational exceptions require root's explicit request. Do not silently rewrite the real configuration to disguise a transport fix, expose credentials/prompts for observability, or change existing security/redaction policy under this rule.
 
+## Failures stay visible — root's absolute rule, 2026-10-04
+
+This rule is final. It applies to every agent and every future change.
+
+- Do not hide a defect. Do not strip, filter, rewrite or drop model output to make a symptom go away. A leak in Discord is a signal. Root uses it to find the cause.
+- Do not add a regex that removes `<think>`, `<reasoning>` or similar blocks from visible text, stored memory or context. Root removed these filters. Do not add them again.
+- Fix the cause: the prompt, the tool schema, the request or the provider configuration.
+- An error must stop the operation and state one exact cause. Do not continue in a degraded mode. Do not replace an error with a warning.
+- An error message names what failed and why. "An error occurred" is not acceptable. "The schema or the provider is wrong" is not acceptable.
+- Code can handle an error and continue only when the handling is correct and visible. Handling is not hiding.
+- Code that hides a failure is rejected and removed. Add a regression test that fails if the hiding comes back.
+
+## Writing — ASD-STE100, 2026-10-04
+
+Write comments, documentation, commit messages and reports in the style of ASD-STE100 Simplified Technical English. Target: 80% conformance.
+
+- One statement in one sentence. Maximum 20 words for an instruction, 25 words for a description.
+- State one fact. Do not write "A or B" or "A and/or B" for a result. Find which one is true, then write it.
+- A check passed or it failed. A feature works or it does not. Do not write "almost", "mostly" or "should".
+- Report what you measured. If you did not measure it, write "not measured".
+- Use the active voice and the same word for the same thing.
+- Delete text that gives no fact and no instruction.
+
 ## Naming and configuration
 
 Use **dame-curie** externally and `DAME_CURIE_*` for environment identifiers. Root's short URL segment **dame** is intentional. Neutral `.env`, `bot.env`, `.venv` retain their distinct roles; default commands use `!`, while instance-specific help uses its configured prefix.

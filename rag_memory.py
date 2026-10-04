@@ -383,16 +383,6 @@ def _normalize_ltm_line(content: str) -> str:
     return " ".join(str(content).split())[:MAX_MEMORY_CHARS]
 
 
-def _strip_reasoning_text(content: str) -> str:
-    import re
-
-    text = str(content or "")
-    text = re.sub(
-        r"<think\b[^>]*>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL
-    )
-    return " ".join(text.split())
-
-
 def _embedding_to_blob(vec: np.ndarray) -> bytes:
     """Store float32 embedding as compact BLOB."""
     return vec.astype(np.float32).tobytes()
@@ -621,7 +611,7 @@ class RemEventLog:
                     "user_id": str(raw.get("user_id") or ""),
                     "user_name": str(raw.get("user_name") or "")[:120],
                     "role": role,
-                    "content": _strip_reasoning_text(raw.get("content", ""))[:4000],
+                    "content": " ".join(str(raw.get("content") or "").split())[:4000],
                     "mentions": mentions,
                     "reply_to_message_id": str(raw.get("reply_to_message_id") or ""),
                     "reply_to_author": str(raw.get("reply_to_author") or "")[:120],

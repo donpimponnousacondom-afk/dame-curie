@@ -785,7 +785,7 @@ def contract_groups(names: list[str]) -> dict[str, list[str]]:
 REASONING_PARAM: dict[str, Any] = {
     "type": "string",
     "description": (
-        "Why this call, one sentence, first argument. Plain text only."
+        "The reason for this call. One sentence. The user sees it as a progress line."
     ),
 }
 
@@ -847,7 +847,9 @@ def build_openai_tools(
         params = dict(declared)
         raw_props = params.get("properties")
         props = dict(raw_props) if isinstance(raw_props, dict) else {}
-        props.setdefault("reasoning", REASONING_PARAM)
+        # `reasoning` is the first property and the first required name.
+        # The prompt tells the model to write it first; the schema must agree.
+        props = {"reasoning": props.pop("reasoning", REASONING_PARAM), **props}
         params["properties"] = props
         # reasoning is ALWAYS required — no exceptions, no "terse on a trivial
         # call" carve-out. If the model thinks before it acts, we want the
@@ -859,9 +861,7 @@ def build_openai_tools(
             if isinstance(raw_required, (list, tuple))
             else []
         )
-        if "reasoning" not in required:
-            required.append("reasoning")
-        params["required"] = required
+        params["required"] = ["reasoning", *required]
         out.append(
             {
                 "type": "function",

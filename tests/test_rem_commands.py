@@ -120,7 +120,7 @@ def test_record_rem_event_user_and_assistant_metadata(tmp_path):
         assert events[0]["user_id"] == "42"
         assert events[0]["channel_id"] == "1"
         assert events[0]["auto_mode"] is True
-        assert events[0]["content"] == "hello"
+        assert events[0]["content"] == "hello <think>secret</think>"
         assert events[0]["message_id"] == "123"
         assert events[0]["mentions"] == [{"id": "99", "name": "Maxwell"}]
         assert events[0]["reply_to_message_id"] == "555"
@@ -129,6 +129,6 @@ def test_record_rem_event_user_and_assistant_metadata(tmp_path):
         assert events[1]["role"] == "assistant"
         assert events[1]["user_id"] == "99"
         assert events[1]["user_name"] == "Maxwell"
-        assert events[1]["content"] == "visible reply"
+        assert events[1]["content"] == "visible <think>hidden</think> reply"
 
     asyncio.run(run())

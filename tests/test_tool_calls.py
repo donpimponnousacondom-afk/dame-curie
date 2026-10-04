@@ -199,9 +199,8 @@ def test_reasoning_is_always_required():
     # reasoning is always in required so the provider rejects empty calls
     # instead of silently dropping the trace. The tool's own required field
     # (content) is preserved alongside.
-    assert "reasoning" in required
-    assert "content" in required
-    assert set(required) == {"reasoning", "content"}
+    assert required == ["reasoning", "content"]
+    assert next(iter(out["function"]["parameters"]["properties"])) == "reasoning"
 
 
 def test_reasoning_param_schema_is_stable():

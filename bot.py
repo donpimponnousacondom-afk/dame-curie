@@ -1560,11 +1560,10 @@ def strip_tool_payload_leaks(text: str) -> str:
     cleaned = re.sub(
         r"<\|?[^<>\|\s]{0,30}tool[^<>\|\s]{0,30}\|?>", "", cleaned, flags=re.IGNORECASE
     )
-    # Extra defensive: strip common leaked reasoning blocks that escape other passes
-    # (some models leak <think> or raw JSON decision objects into visible text).
-    cleaned = re.sub(
-        r"<think\b[^>]*>.*?</think>", "", cleaned, flags=re.IGNORECASE | re.DOTALL
-    )
+    # Root, 2026-10-04: do not strip <think> or <reasoning> blocks here.
+    # The provider returns reasoning in its own field. A block in content is a
+    # prompt or tool-schema defect. It must stay visible in Discord.
+    # See AGENTS.md, "Failures stay visible".
     # Strip leading JSON decision/tool-call blocks. The previous trigger set
     # missed models that invent their own keys ("reasoning", "name", "arguments",
     # "emoji") and emit the raw tool JSON as their visible reply. Match any JSON
@@ -8867,9 +8866,7 @@ class MaxwellBot(commands.Bot):
                 str(getattr(getattr(message, "channel", None), "id", "") or ""), {}
             ),
         )
-        text = re.sub(
-            r"<think\b[^>]*>.*?</think>", "", str(text), flags=re.IGNORECASE | re.DOTALL
-        ).strip()
+        text = str(text).strip()
         parts = [text] if text else []
         for attachment in self._payload_attr_list(message, "attachments", 5):
             content_type = getattr(attachment, "content_type", "") or ""
