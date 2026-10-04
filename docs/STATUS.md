@@ -1,6 +1,59 @@
 # dame-curie status — 2026-10-03
 
-## Current production state
+## Publisher inventory update — 2026-10-03, 19:44Z
+
+The initial repair below restored publication but continuously ran rsync across all
+sites. The follow-up replaces that loop with one short-lived remote inventory command.
+It compares cached metadata first, verifies changed content only when needed, and queues
+only differences. Local edits still use inotify. Unchanged checks no longer emit per-site
+success messages. See [Publishing](PUBLISHING.md) for the algorithm and scale limits.
+
+Installed at **19:44:53Z**, service PID **676081**. Its first normal background inventory
+reported **31 targets, 31 cold content checks, zero repairs**. A subsequent **65-second
+read-only process observation** saw **two SSH commands, 30.6 seconds apart, and zero
+rsync processes**. No synthetic source edits or remote deletions were used.
+
+Independent `gpt-6-astra` reviewed the implementation and the final correction. Its two
+liveness findings (one unstable site blocking every audit; dirty work starving remote
+repairs) were fixed before deployment. Council source inspection supplied the short-lived
+receiver/stdin protocol precedent; its full-file hashing and incompatible publication
+policies were not copied. Remote Python is 3.12.3; local operator Python remains 3.14.4.
+Syntax/diff checks passed. No tests ran. This is not measured 50,000-site acceptance;
+request size, full metadata traversal and whole-audit timeout limits remain explicit.
+
+Private previous-source/state backup:
+`/var/backups/dame-curie-v2-recovery/publisher-inventory-20261003T194453Z`.
+This update is deployed locally, not yet integrated into PR3.
+
+## Publisher repair — 2026-10-03, 19:14Z
+
+The publisher was in a restart loop. Read-only remote inspection found
+`hammered-wallet` missing; both remote roots and the other 29 saved site markers/identities
+matched. Service-mode synchronization skipped claim when a saved site identity existed.
+The resulting transfer failure stopped the whole publisher.
+
+The focused repair is installed in `/opt/dame-curie/scripts/publisher/{guard,mirror,service,transport}.py`.
+Root explicitly confirmed local-to-remote authority, including empty recreated remote
+roots and stale remote replacements. The service now refreshes destination identities,
+reclaims each transferred site, reconciles remote state on periodic scans, and retains
+failed transfer/deletion work without stopping other sites. Errors identify the operation,
+site, exit code and available guard/transport cause. Filesystem and SSH checks remain.
+
+At deployment, **19:14:11Z**, service PID **643148** started. Subsequent read-only comparison
+confirmed **18 local files and 18 remote files in `hammered-wallet`, all SHA-256 hashes equal,
+with no missing or extra files**. Recovery was performed by the background service, not
+`--once`. The service remained active with **zero restarts**; later sites also completed.
+
+Independent `gpt-6-astra` source review found a missed-deletion retry bug in the first
+patch; it was fixed before deployment. Final source review found no remaining blocker.
+Syntax/diff checks passed. No tests, synthetic file edits, remote deletion drills, V1
+startup or bot deployment ran. Full remote-root destruction recovery is source-reviewed,
+not exercised. This repair is local and deployed; it is not yet included in PR3.
+
+Private pre-repair source/state backup:
+`/var/backups/dame-curie-v2-recovery/publisher-repair-20261003T191411Z`.
+
+## Earlier production state
 
 At **17:55:02Z**, the coordinator confirmed canonical Dame login **1545541390392369165** on the image below. Temporary Dirac is not the current production target. These are coordinator-supplied facts; the publication worker did not access private state.
 

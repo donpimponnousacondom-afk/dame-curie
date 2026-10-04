@@ -1,5 +1,17 @@
 # Current completion state — 2026-10-03
 
+- [x] Repair and deploy the background publisher at 19:14Z. It restored missing
+  `hammered-wallet` without `--once`; all 18 files matched local hashes, with zero
+  service restarts. Remote reconciliation, replacement claims, specific errors and
+  durable failed-deletion retries are included. See the current publisher repair in
+  [STATUS](docs/STATUS.md) for review and validation limits.
+- [x] Replace repeated per-site rsync with one metadata-cached remote inventory at
+  19:44Z. First inventory: 31 targets, zero differences. Later 65-second observation:
+  two SSH commands and no rsync processes. Independent final source review completed;
+  tests remain deferred, and 50,000-site capacity remains unmeasured.
+- [ ] Integrate the publisher repair and inventory update into PR3. The earlier PR
+  readiness statement below does not cover these new patches.
+
 - [x] Publish the current source in [PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3). Root retains merge authority.
 - [x] Repair site publication and preserve both source trees. Recover root's later remote-directory deletion with the existing publisher. Confirm matching identity, ownership marker, HTML and nine image hashes.
 - [x] Remove exactly 12 unsupported live fields under root's approval. Preserve all other fields and a private backup.

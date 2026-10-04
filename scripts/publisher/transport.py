@@ -1,3 +1,4 @@
+import errno
 import inspect
 import json
 import shlex
@@ -39,12 +40,14 @@ class Transport:
             "marker_namespace": self.config.marker_namespace,
         }
 
-    def command(self, request: dict) -> str:
-        return shlex.join(["python3", "-I", "-S", "-c", self.program, json.dumps(request, ensure_ascii=True)])
+    def command(self, request: dict | None = None) -> str:
+        payload = "-" if request is None else json.dumps(request, ensure_ascii=True)
+        return shlex.join(["python3", "-I", "-S", "-c", self.program, payload])
 
     def control(self, request: dict) -> dict:
-        argv = [*self.ssh(), f"{self.config.user}@{self.config.host}", self.command(request)]
-        result = self.execute(argv, capture=True)
+        argv = [*self.ssh(), f"{self.config.user}@{self.config.host}", self.command()]
+        result = self.execute(argv, capture=True, operation=f"{request['action']} {request['name']!r}",
+                              input_data=json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode())
         try:
             data = json.loads(result.stdout)
         except (ValueError, UnicodeError):
@@ -66,17 +69,33 @@ class Transport:
             marker_name = f".{request['marker_namespace']}-publisher-owner"
             argv.extend(["--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}"])
         argv.extend(["--", str(source) + "/", f"{self.config.user}@{self.config.host}:./"])
-        self.execute(argv, capture=False)
+        self.execute(argv, capture=False, operation=f"{request['action']} {request['name']!r}")
 
-    def execute(self, argv: list[str], capture: bool) -> subprocess.CompletedProcess:
+    def execute(
+        self, argv: list[str], capture: bool, operation: str = "remote", input_data: bytes | None = None,
+    ) -> subprocess.CompletedProcess:
         try:
             result = subprocess.run(
-                argv, stdin=subprocess.DEVNULL,
+                argv, stdin=subprocess.DEVNULL if input_data is None else None, input=input_data,
                 stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, timeout=self.config.timeout_seconds, check=False,
+                stderr=subprocess.PIPE, timeout=self.config.timeout_seconds, check=False,
             )
-        except (OSError, subprocess.TimeoutExpired):
-            raise RemoteFailure("remote transport unavailable") from None
+        except OSError as error:
+            raise RemoteFailure(f"{operation}: cannot start {argv[0]}: {errno.errorcode.get(error.errno, 'UNKNOWN')}") from None
+        except subprocess.TimeoutExpired:
+            raise RemoteFailure(f"{operation}: {argv[0]} timed out after {self.config.timeout_seconds}s") from None
         if result.returncode:
-            raise RemoteFailure("remote operation refused or failed")
+            lines = result.stderr.decode("utf-8", errors="replace").splitlines()
+            detail = next((line for line in lines if line.startswith("publisher-guard: ")), "")
+            if not detail:
+                reasons = (
+                    "Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED",
+                    "Permission denied", "Connection refused", "Connection timed out",
+                    "No route to host", "Could not resolve hostname", "No space left on device",
+                    "Disk quota exceeded", "Read-only file system", "Connection reset by peer",
+                )
+                detail = next((reason for reason in reasons if any(reason in line for line in lines)), "")
+            if not detail:
+                detail = "no guard diagnostic received"
+            raise RemoteFailure(f"{operation}: {argv[0]} exit={result.returncode}: {detail}")
         return result

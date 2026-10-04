@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import stat
 import tempfile
@@ -60,6 +61,16 @@ class Snapshot:
     directories: set[Path] = field(default_factory=set)
     files: dict[Path, str] = field(default_factory=dict)
     signatures: dict[Path, tuple[int, ...]] = field(default_factory=dict)
+
+    def manifest(self, name: str) -> dict:
+        rows = [[str(path.relative_to(name)), "d", 0o755] for path in self.directories]
+        rows.extend([str(path.relative_to(name)), "f", 0o755, digest] for path, digest in self.files.items())
+        shape = [row[:2] for row in rows]
+        result = {"shape": hashlib.sha256(json.dumps(sorted(shape), separators=(",", ":")).encode()).hexdigest(),
+                  "tree": hashlib.sha256(json.dumps(sorted(rows), separators=(",", ":")).encode()).hexdigest()}
+        if name == "_images":
+            result["files"] = sorted(path.name for path in self.files)
+        return result
 
 
 class Scanner:
@@ -156,8 +167,11 @@ class Scanner:
             result = Snapshot(identity(os.fstat(fd)))
             if expected_root and result.root_identity != expected_root:
                 raise ScanIncomplete("source root replacement refused")
-            if name in os.listdir(fd):
+            try:
                 value = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                value = None
+            if value is not None:
                 result.present.add(name)
                 result.signatures[path] = fingerprint(value)
                 if stat.S_ISDIR(value.st_mode):
