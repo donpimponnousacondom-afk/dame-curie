@@ -4,18 +4,18 @@ Two decisions used to be made by fixed constants and a list of trigger
 phrases:
 
 * **Conversation watch.** After he speaks, a room stayed "on watch" for a
-  flat 180 seconds — the same 180 whether the room was mid-conversation with
+  flat 180 seconds - the same 180 whether the room was mid-conversation with
   him or had ignored his last four contributions. Every human line in that
   window became a full LLM turn whose answer was usually `no_response`.
 * **Context extraction.** A message was worth remembering if it contained one
-  of about fifteen English phrases — "remember", "i like", "my name is". Say
+  of about fifteen English phrases - "remember", "i like", "my name is". Say
   the same thing in other words and nothing was kept; say "I like it" about a
   sandwich and it was.
 
 Both are replaced here by scores over observable signals. Nothing in this
 module matches on wording. It reads who a message is addressed to, how the
 room is moving, whether he was engaged with recently, and how his own last
-few decisions in that room went — and it keeps state, so a room where he is
+few decisions in that room went - and it keeps state, so a room where he is
 being ignored quietly falls out of watch instead of burning a turn per line.
 
 Everything is a pure function or a small dataclass so the behaviour can be
@@ -48,7 +48,7 @@ SILENCE_PATIENCE = 4
 
 # How much a line has to be asking for a reply before it is worth an LLM
 # turn at all. Every soft line used to become a turn, and a model handed a
-# turn nearly always finds something to say — so the "should I speak" call
+# turn nearly always finds something to say - so the "should I speak" call
 # was being made by the most agreeable judge available. This moves the first
 # cut to the signals, and only the lines that plausibly want him get asked.
 REPLY_PRESSURE_THRESHOLD = 0.4
@@ -103,7 +103,7 @@ class WatchState:
 
 
 def engagement_factor(state: WatchState, now: float, base_window: float) -> float:
-    """0..1 — how recently this room was actually interacting with him.
+    """0..1 - how recently this room was actually interacting with him.
 
     Decays over the base window, so "engaged" means engaged on the same
     timescale the operator configured the watch for, not a fixed constant.
@@ -122,7 +122,7 @@ def patience_factor(state: WatchState) -> float:
 
 
 def presence_factor(state: WatchState, now: float, base_window: float) -> float:
-    """0..1 — how much of a participant he currently is in this room.
+    """0..1 - how much of a participant he currently is in this room.
 
     Being addressed counts fully. Having spoken recently counts for most of
     it: he is plausibly still in the conversation, but nobody has confirmed
@@ -143,7 +143,7 @@ def window_seconds(state: WatchState, base: float, now: float) -> float:
     A room mid-conversation earns more time than the configured base; a room
     where his last few contributions went unanswered earns much less. The two
     terms multiply rather than average, because being ignored has to shorten
-    the window even in a room he was just part of — that is the case the flat
+    the window even in a room he was just part of - that is the case the flat
     timer got wrong, and the whole reason for this.
     """
     if base <= 0:
@@ -178,7 +178,7 @@ def debounce_seconds(state: WatchState, base: float) -> float:
 class AddressSignal:
     """Everything observable about who a message is aimed at.
 
-    Populated from Discord metadata only — no text matching beyond "does his
+    Populated from Discord metadata only - no text matching beyond "does his
     name appear", which is a fact about the string, not a rule about wording.
     """
 
@@ -196,7 +196,7 @@ class AddressSignal:
 def name_mentioned(text: str, names: list[str]) -> bool:
     """Whole-word check for any of his names in the text.
 
-    Not a trigger list — the names come from his own Discord identity at
+    Not a trigger list - the names come from his own Discord identity at
     runtime, so this follows a rename with no code change.
     """
     body = str(text or "")
@@ -213,15 +213,15 @@ def name_mentioned(text: str, names: list[str]) -> bool:
 
 def reply_pressure(signal: AddressSignal, state: WatchState, now: float,
                    base_window: float) -> float:
-    """0..1 — how much this line is asking him to say something.
+    """0..1 - how much this line is asking him to say something.
 
     A hard ping short-circuits to 1.0; the interesting range is the soft
     middle, where a line lands in a room he was recently part of.
 
     The weights are deliberately tight. Silence is the default for anything
     nobody pointed at him: being named, or a live exchange he is already in,
-    clears the bar on its own; everything else — a question thrown at the
-    room, an image, a line right after he happened to speak — needs a second
+    clears the bar on its own; everything else - a question thrown at the
+    room, an image, a line right after he happened to speak - needs a second
     signal to get there. That is what stops him agreeing with every line in
     a busy channel.
     """
@@ -242,13 +242,13 @@ def reply_pressure(signal: AddressSignal, state: WatchState, now: float,
     # talking is not evidence anyone wants him to keep going.
     score += 0.45 * presence_factor(state, now, base_window)
     # A question in a room he is part of is more likely aimed at him than a
-    # statement is — but only as a tie-breaker on top of real continuity.
+    # statement is - but only as a tie-breaker on top of real continuity.
     if signal.is_question:
         score += 0.08
     if signal.has_media:
         score += 0.03
-    # Explicitly aimed elsewhere. Not disqualifying — people talk to two
-    # people at once — but it is strong evidence, and cheap to be wrong
+    # Explicitly aimed elsewhere. Not disqualifying - people talk to two
+    # people at once - but it is strong evidence, and cheap to be wrong
     # about in the silent direction.
     if signal.reply_to_other:
         score -= 0.45
@@ -273,8 +273,8 @@ def should_consider_reply(pressure: float,
     The model is the final judge of whether to speak, but it only gets asked
     when the situation itself suggests the line might be for him. Below the
     bar there is no LLM call: he stays quiet without anyone paying for the
-    decision, which is both cheaper and — since the model leans agreeable
-    when handed a turn — much less chatty.
+    decision, which is both cheaper and - since the model leans agreeable
+    when handed a turn - much less chatty.
     """
     try:
         bar = float(threshold)
@@ -304,7 +304,7 @@ def describe_signal(signal: AddressSignal, state: WatchState, pressure: float,
         if signal.mentions_other:
             bits.append("@ mentioned someone else, not a ping to you")
         if not bits:
-            bits.append("posted to the channel, not sent to you — not a ping")
+            bits.append("posted to the channel, not sent to you - not a ping")
     if state.spoke_at:
         bits.append(f"you last spoke here {int(max(0, now - state.spoke_at))}s ago")
     if state.silent_streak:
@@ -321,7 +321,7 @@ def describe_signal(signal: AddressSignal, state: WatchState, pressure: float,
         # above already describe the situation; this names what they add up
         # to, which is the part the model kept talking itself out of.
         line += (
-            " Nothing here is pointed at you — this is a marginal one, so"
+            " Nothing here is pointed at you - this is a marginal one, so"
             " no_response unless the line only makes sense as something said"
             " to you."
         )
@@ -335,7 +335,7 @@ def describe_signal(signal: AddressSignal, state: WatchState, pressure: float,
 # What "worth an extraction call" looks like, before any per-room adjustment.
 #
 # Deliberately low. Structure alone cannot tell "I prefer dark mode" from
-# "bro that's crazy" — they are the same shape — so this errs toward asking
+# "bro that's crazy" - they are the same shape - so this errs toward asking
 # the extractor, which is good at exactly that judgement and answers
 # should_store:false for free. What keeps the cost down is the per-room
 # recency term below, not a higher bar on any single message.
@@ -343,7 +343,7 @@ EXTRACT_THRESHOLD = 0.25
 
 _URL = re.compile(r"https?://\S+")
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
-# A capitalised word that is not the first in its sentence — a decent
+# A capitalised word that is not the first in its sentence - a decent
 # language-agnostic proxy for a name or a product, without a list of names.
 _MIDCAP = re.compile(r"(?<=[a-z,\s])\b[A-Z][a-z]{2,}")
 
@@ -386,8 +386,8 @@ def extraction_score(ctx: ExtractionContext) -> ExtractionScore:
     count = len(words)
 
     if count:
-        # Saturating length. Most durable facts are short — "call me Z", "the
-        # box reboots at 04:00" — so this saturates around six or seven words
+        # Saturating length. Most durable facts are short - "call me Z", "the
+        # box reboots at 04:00" - so this saturates around six or seven words
         # rather than rewarding essays.
         density = 1 - math.exp(-count / 6.0)
         score.add(0.35 * density, "length")
@@ -401,7 +401,7 @@ def extraction_score(ctx: ExtractionContext) -> ExtractionScore:
     if not count and not ctx.has_attachments:
         return score
 
-    # Specificity: names, numbers, links — the things a durable fact is made of.
+    # Specificity: names, numbers, links - the things a durable fact is made of.
     if _MIDCAP.search(text):
         score.add(0.15, "proper-noun")
     if _URL.search(text):

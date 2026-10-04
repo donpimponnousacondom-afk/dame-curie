@@ -3,7 +3,7 @@
 Maxwell's core personality still says he is Maxwell, but the live Discord
 guild nick (or account name in DMs) must appear in the per-turn context so
 he knows what people in that room actually call him. The nick is read from
-the guild member object every call — not cached on the bot.
+the guild member object every call - not cached on the bot.
 """
 
 import asyncio

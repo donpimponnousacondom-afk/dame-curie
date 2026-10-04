@@ -1,4 +1,4 @@
-# Optional extras. Install only the lines for features you actually want —
+# Optional extras. Install only the lines for features you actually want -
 # every one of them is auto-detected, so a missing package just means that
 # feature stays off (see `python3 doctor.py`).
 #

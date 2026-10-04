@@ -151,7 +151,7 @@ def help_text() -> str:
 
 def inspector_text(history: EventHistory, state: ConsoleState, color: bool) -> str:
     return "\n".join((
-        "LOCAL CONSOLE INSPECTOR — NOT a bot/container/runtime probe",
+        "LOCAL CONSOLE INSPECTOR - NOT a bot/container/runtime probe",
         f"retained_records={history.event_count}/{history.max_events}",
         f"retained_evidence_bytes={history.evidence_bytes}/{history.max_evidence_bytes} (not process RSS)",
         f"evicted_entries={history.evicted_entries} oversized_omitted_records={history.omitted_events}",

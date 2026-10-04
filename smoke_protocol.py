@@ -263,7 +263,7 @@ class SmokeRecord:
     only non-terminal states; everything in ``TERMINAL_STATUSES`` is final. A
     ``completed`` record means the turn returned, its own model call produced
     usable output, and the target channel received model output rather than only a
-    notice or a progress placeholder — never that the task's goal was achieved,
+    notice or a progress placeholder - never that the task's goal was achieved,
     and never that a tool's own claim about itself was verified. ``reply_text`` is the
     harness's own fetch of the exact delivered ids, so it is evidence of what was
     delivered, not an evaluation, and ``reply_verified`` stays false.
@@ -383,8 +383,8 @@ def request_files(settings: SmokeSettings) -> list[Path]:
     name-based order is not an arrival order. Dot-prefixed names are the
     temporaries of the two writers here and are never requests.
 
-    A file that cannot be stamped right now — deleted between the directory scan
-    and the stamp, or unreadable for the moment — is skipped, not an error: a
+    A file that cannot be stamped right now - deleted between the directory scan
+    and the stamp, or unreadable for the moment - is skipped, not an error: a
     withdrawn request is no reason to stop reading the ones still there, and the
     next poll picks it up if it is really there.
     """

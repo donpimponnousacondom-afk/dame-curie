@@ -65,15 +65,15 @@ def test_reports_per_key_usd_and_separate_byok_without_private_fields(usage_tool
 
     assert result == (
         "OpenRouter primary-key usage (USD):\n"
-        "Windows: current UTC day, week (Monday–Sunday), and month.\n"
-        "OpenRouter credits used — all time: $25.5\n"
-        "OpenRouter credits used — day: $0.000031\n"
-        "OpenRouter credits used — week: $3.75\n"
-        "OpenRouter credits used — month: $9.25\n"
-        "External BYOK usage — all time: $17.38\n"
-        "External BYOK usage — day: $0.1\n"
-        "External BYOK usage — week: $0.8\n"
-        "External BYOK usage — month: $5.2\n"
+        "Windows: current UTC day, week (Monday-Sunday), and month.\n"
+        "OpenRouter credits used - all time: $25.5\n"
+        "OpenRouter credits used - day: $0.000031\n"
+        "OpenRouter credits used - week: $3.75\n"
+        "OpenRouter credits used - month: $9.25\n"
+        "External BYOK usage - all time: $17.38\n"
+        "External BYOK usage - day: $0.1\n"
+        "External BYOK usage - week: $0.8\n"
+        "External BYOK usage - month: $5.2\n"
         "Key spending cap: $100\n"
         "Key remaining cap: $74.5\n"
         "Key cap reset: monthly\n"
@@ -204,7 +204,7 @@ def test_real_provider_uses_primary_not_fallback_or_last_response(usage_tool, ke
     assert tool.bot.ai_provider.base_url == base_url
     assert len(tool.bot.ai_provider._endpoints) == 1
     if base_url == "https://openrouter.ai/api/v1" and key:
-        assert "OpenRouter credits used — all time: $25.5" in result
+        assert "OpenRouter credits used - all time: $25.5" in result
         assert session.get.call_args.args == ("https://openrouter.ai/api/v1/key",)
         assert session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {key}"
     else:
@@ -337,8 +337,8 @@ def test_monetary_values_cannot_expose_unexpected_strings_or_fake_numbers(usage_
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
-    assert "OpenRouter credits used — all time: unknown" in result
-    assert "External BYOK usage — all time: unknown" in result
+    assert "OpenRouter credits used - all time: unknown" in result
+    assert "External BYOK usage - all time: unknown" in result
     assert "Key spending cap: unknown" in result
     assert "Key remaining cap: unknown" in result
     assert "Key cap reset: unknown" in result
@@ -353,8 +353,8 @@ def test_zero_and_negative_remaining_are_preserved_without_claiming_capacity(usa
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
-    assert "OpenRouter credits used — all time: $0\n" in result
-    assert "External BYOK usage — all time: $0\n" in result
+    assert "OpenRouter credits used - all time: $0\n" in result
+    assert "External BYOK usage - all time: $0\n" in result
     assert "Key remaining cap: $-0.125" in result
     assert "not an account/workspace balance or a guarantee requests can run" in result
 
@@ -370,5 +370,5 @@ def test_schema_preserves_name_and_explains_per_key_scope(usage_tool):
     assert "current UTC day/week/month" in schema["description"]
     assert "Not account/workspace balance, token counts or cache ratios" in schema["description"]
     assert "not necessarily this bot alone" in schema["description"]
-    assert set(schema["parameters"]["properties"]) == {"reasoning"}
+    assert set(schema["parameters"]["properties"]) == {"explanation"}
     assert "z3ki" not in schema["description"]

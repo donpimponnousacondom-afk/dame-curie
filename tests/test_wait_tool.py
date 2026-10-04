@@ -110,7 +110,7 @@ def test_wait_tool_caps_at_10_seconds():
 
 
 def test_wait_tool_negative_clamped_to_zero():
-    """Negative values are nonsense — clamp to 0, don't crash."""
+    """Negative values are nonsense - clamp to 0, don't crash."""
     tool = WaitTool(bot=None)
 
     async def run():
@@ -128,7 +128,7 @@ def test_wait_tool_garbage_string_defaults_to_2():
         return await tool.execute(_msg(), seconds="not a number")
 
     result = asyncio.run(run())
-    # Default path — should sleep ~2s.
+    # Default path - should sleep ~2s.
     assert result == "Waited 2.0s"
 
 
@@ -150,12 +150,12 @@ def _build_test_bot(tools_dict):
     """Build a SimpleNamespace fake bot with the attributes
     _process_native_tool_calls / _execute_tool_by_name touch. We also
     monkey-patch MaxwellBot._execute_tool_by_name to invoke the fake
-    tool's execute directly — we don't want the real send_message's
+    tool's execute directly - we don't want the real send_message's
     emoji-rendering / Discord-posting code path in a unit test of
     dispatch ordering.
 
     The patch is restored at the end of the test via a pytest fixture
-    pattern — see `_restore_execute_tool_by_name` autouse fixture
+    pattern - see `_restore_execute_tool_by_name` autouse fixture
     below. Without the restore, tests that run AFTER our patch see the
     fake and break (test order pollution).
     """
@@ -202,8 +202,8 @@ def _build_test_bot(tools_dict):
     bot._tool_system_prompt = lambda platform="discord", **kwargs: ""
     bot.config = SimpleNamespace(DATA_DIR="/tmp", log_level="info")
     bot._extract_reasoning = lambda params: (
-        str(params.get("reasoning", "") or ""),
-        {k: v for k, v in params.items() if k != "reasoning"},
+        str(params.get("explanation", "") or ""),
+        {k: v for k, v in params.items() if k != "explanation"},
     )
     bot._tool_breaker = SimpleNamespace(
         is_open=lambda name: False,
@@ -259,7 +259,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "first", "content": "first msg"}',
+                "arguments": '{"explanation": "first", "content": "first msg"}',
             },
         },
         {
@@ -267,7 +267,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
             "type": "function",
             "function": {
                 "name": "wait",
-                "arguments": '{"reasoning": "pause", "seconds": 1.0}',
+                "arguments": '{"explanation": "pause", "seconds": 1.0}',
             },
         },
         {
@@ -275,7 +275,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "second", "content": "second msg"}',
+                "arguments": '{"explanation": "second", "content": "second msg"}',
             },
         },
     ]
@@ -303,7 +303,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
 
 
 def test_no_response_blocks_later_send_message():
-    """no_response must be exclusive — a later send_message in the same
+    """no_response must be exclusive - a later send_message in the same
     batch gets rejected with an error the model can see."""
     from bot import MaxwellBot, _tool_results_need_followup
 
@@ -341,7 +341,7 @@ def test_no_response_blocks_later_send_message():
             "type": "function",
             "function": {
                 "name": "no_response",
-                "arguments": '{"reasoning": "stay silent"}',
+                "arguments": '{"explanation": "stay silent"}',
             },
         },
         {
@@ -349,7 +349,7 @@ def test_no_response_blocks_later_send_message():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "send", "content": "hi"}',
+                "arguments": '{"explanation": "send", "content": "hi"}',
             },
         },
     ]
@@ -378,7 +378,7 @@ def test_no_response_blocks_later_send_message():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning":"' + "x" * 16_000 + '","content":"hi"}',
+                "arguments": '{"explanation":"' + "x" * 16_000 + '","content":"hi"}',
             },
         },
     ]
@@ -409,7 +409,7 @@ def test_no_response_blocks_later_send_message():
 
 
 def test_two_send_messages_in_a_row_both_fire_in_order():
-    """Two send_messages back-to-back (no wait) — both must fire, in order."""
+    """Two send_messages back-to-back (no wait) - both must fire, in order."""
     from bot import MaxwellBot
 
     sent = []
@@ -441,7 +441,7 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "first", "content": "alpha"}',
+                "arguments": '{"explanation": "first", "content": "alpha"}',
             },
         },
         {
@@ -449,7 +449,7 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "second", "content": "beta"}',
+                "arguments": '{"explanation": "second", "content": "beta"}',
             },
         },
     ]

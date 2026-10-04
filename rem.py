@@ -34,17 +34,17 @@ def rem_system_prompt(turns_remaining: int, prompt_body: str | None = None) -> s
     # prompt advertised "N turns left" but the runner never looped, which
     # misled the model. Don't mention turns; just ask for one DONE audit.
     return (
-        "You are Dame Curie REM — periodic memory assimilation, not live chat.\n"
+        "You are Dame Curie REM - periodic memory assimilation, not live chat.\n"
         "Keep the last slice useful, specific, deduplicated. Don't drop decisions, "
         "preferences, unresolved tasks, or identity facts.\n\n"
         f"## Task\n{body}\n\n"
         "## Output\nSingle pass. Brief reason, then exactly one JSON object "
-        "(one line). `audit` is the operator-facing summary — keep it short."
+        "(one line). `audit` is the operator-facing summary - keep it short."
     )
 
 
 # The event ring holds up to DEFAULT_REM_EVENT_BUFFER_MAX (500) events of up
-# to 4000 chars each, so an un-budgeted slice can serialize to ~2M chars — well
+# to 4000 chars each, so an un-budgeted slice can serialize to ~2M chars - well
 # past any model's context window, which fails the whole assimilation pass
 # instead of just losing detail. Shrink every event proportionally rather than
 # dropping the oldest ones: the watermark advances past this slice either way,
@@ -114,7 +114,7 @@ def load_rem_defaults() -> dict:
     # Use `or` chains to fall back to defaults when the JSON value is missing
     # OR an empty string/0/None. Each int() conversion is wrapped in a
     # try/except so a malformed rem_defaults.json (e.g. "interval_seconds":
-    # "ten minutes") doesn't crash bot startup — it falls back to the
+    # "ten minutes") doesn't crash bot startup - it falls back to the
     # hardcoded default instead.
     try:
         interval_seconds = int(data.get("interval_seconds") or 600)

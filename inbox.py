@@ -1,7 +1,7 @@
 """Maxwell's notification inbox.
 
 Friend requests and other actionable events land here. The planner sees
-unread items only in the volatile context tail — never in the cached
+unread items only in the volatile context tail - never in the cached
 system prefix.
 """
 
@@ -28,7 +28,7 @@ INBOX_PLANNER_BUDGET = 900
 ACTIONABLE_STATES = frozenset({"unread", "read"})
 
 # Actions that mean a human is waiting on an answer. An item carrying one of
-# these stays in the planner tail after it has been read — reading a friend
+# these stays in the planner tail after it has been read - reading a friend
 # request does not answer it. Everything else is a *notice*: something to be
 # told once.
 DECISION_ACTIONS = frozenset({"accept", "decline"})
@@ -42,7 +42,7 @@ def needs_decision(item: dict) -> bool:
     )
 
 # Planner ordering. Something a human is waiting on outranks a notice he can
-# read whenever. Within a kind, newest first — an inbox is a feed, not a log.
+# read whenever. Within a kind, newest first - an inbox is a feed, not a log.
 KIND_PRIORITY = {
     "friend_request": 0,
     "group_dm": 1,
@@ -129,7 +129,7 @@ class InboxStore:
         Sorted by urgency, then capped per kind so a burst of notices can't
         push a waiting friend request out of the tail.
 
-        ``exclude_announced`` drops notices he has already said out loud —
+        ``exclude_announced`` drops notices he has already said out loud -
         read, and with no decision left to make. Only the prompt tail passes
         it. `inbox_list` deliberately does not: a read notice has not gone
         anywhere, and "show me my inbox" should show the whole inbox.
@@ -179,7 +179,7 @@ class InboxStore:
         pending = self.planner_items(items, exclude_announced=True)
         if not pending:
             return ""
-        lines = ["=== INBOX (unread / actionable — you may ignore) ==="]
+        lines = ["=== INBOX (unread / actionable - you may ignore) ==="]
         lines.extend(self.render_item(item) for item in pending[:14])
         if len(pending) > 14:
             lines.append(f"… and {len(pending) - 14} more (inbox_list to see them)")
@@ -412,7 +412,7 @@ async def apply_inbox_action(
         await store.mark(str(item.get("id")), "dismissed")
         return f"Dismissed {item.get('id')}"
     if action == "read":
-        # Takes a notice out of the prompt tail without deleting it — it is
+        # Takes a notice out of the prompt tail without deleting it - it is
         # still in `inbox_list`, and `dismiss` is still what clears one for
         # good. Deliberately handled before the `allowed` check below: every
         # item can be read, whatever actions it declares.
@@ -427,7 +427,7 @@ async def apply_inbox_action(
         # guess, and it usually guessed accept again.
         valid = ", ".join(sorted(allowed | {"dismiss"})) or "dismiss"
         return (
-            f"Error: {action} is not valid for a {kind or 'notice'} — "
+            f"Error: {action} is not valid for a {kind or 'notice'} - "
             f"{item.get('id')} accepts: {valid}"
         )
 
@@ -435,7 +435,7 @@ async def apply_inbox_action(
     if not uid.isdigit():
         return (
             f"Error: {item.get('id')} is a {kind or 'notice'}, not a friend "
-            "request — there is no Discord user to accept or decline. Use "
+            "request - there is no Discord user to accept or decline. Use "
             "read or dismiss."
         )
     rel = None

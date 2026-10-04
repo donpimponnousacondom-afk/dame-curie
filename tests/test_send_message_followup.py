@@ -127,7 +127,7 @@ def test_real_answer_mentioning_work_stays_terminal():
     # A substantive reply must NOT re-generate, even though it contains
     # "working on". Length is the discriminator.
     answer = (
-        "yeah I've been working on that codebase for a while — the dispatch "
+        "yeah I've been working on that codebase for a while - the dispatch "
         "loop lives in bot.py and the tool contract is stamped in tool_schemas, "
         "so the follow-up turn is what feeds results back to the model. "
         "the short version is that it loops until a terminal tool lands."
@@ -148,7 +148,7 @@ def test_ordinary_short_reply_is_not_treated_as_a_promise():
         "the build is done and deployed",
         "created: https://example.com",
         "yeah I set that up last week",
-        "done — live at https://x.dev",
+        "done - live at https://x.dev",
     ):
         results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
         assert _tool_results_need_followup(results) is False, text
@@ -157,7 +157,7 @@ def test_ordinary_short_reply_is_not_treated_as_a_promise():
 
 def test_ack_plus_real_tool_does_not_consume_the_promise_budget():
     # This batch already loops via FOLLOWUP_TOOL_NAMES (shell), so it
-    # must not be classified as ack-only — otherwise the one-shot promise
+    # must not be classified as ack-only - otherwise the one-shot promise
     # budget would be spent on a turn that was already going to loop.
     results = [
         "Tool send_message: __MESSAGE_SENT__\non it...",

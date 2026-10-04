@@ -1,7 +1,7 @@
 """Global per-user entity memory.
 
-The premise: a Discord user id is already global — the same person in two
-servers and a DM is one id — but nothing in the store used that. Channel
+The premise: a Discord user id is already global - the same person in two
+servers and a DM is one id - but nothing in the store used that. Channel
 memory is per-channel, LTM is unattributed, and shared-context facts are
 scoped strings. So the bot could learn your name in one server and meet you
 as a stranger in the next. These tests pin the properties that make that
@@ -103,7 +103,7 @@ def test_facts_are_not_scoped_to_the_guild_they_were_learned_in(tmp_path):
         mgr = RAGMemoryManager(str(tmp_path))
         await mgr.observe_user("111", "alice", guild_id="g1")
         await mgr.add_entity_fact("111", "lives in Halifax", source_guild_id="g1")
-        # No guild argument exists on the read path at all — that is the point.
+        # No guild argument exists on the read path at all - that is the point.
         facts = await mgr.get_entity_facts("111")
         assert [f["content"] for f in facts] == ["lives in Halifax"]
 
@@ -214,7 +214,7 @@ def test_profile_bundles_identity_and_facts(tmp_path):
 
 def test_repeating_an_ltm_line_is_a_dedup_not_an_error(tmp_path):
     # The unique index always refused the duplicate; it refused it by raising,
-    # which apply_ltm_batch counted as an error — and models retry failures.
+    # which apply_ltm_batch counted as an error - and models retry failures.
     async def run():
         mgr = RAGMemoryManager(str(tmp_path))
         first, created_first = await mgr.add_long_term_memory_dedup("the sky is blue")

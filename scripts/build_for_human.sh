@@ -23,6 +23,8 @@ case "$security" in
   *) printf 'Refusing a non-rootless engine.\n' >&2; exit 1 ;;
 esac
 
+"$(git rev-parse --show-toplevel)/scripts/check_dashes.sh" "$rev"
+
 git archive "$rev" |
   "${engine[@]}" build --target app -f docker/app.Dockerfile \
     --build-arg DAME_CURIE_BUILD_COMMIT="$rev" \

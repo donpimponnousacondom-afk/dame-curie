@@ -1,7 +1,7 @@
 """Turn-taking rules: does Maxwell hold the floor in this room right now.
 
 The unit tests below drive `read_floor` directly with synthetic message
-windows — no Discord, no bot — because the rules are the part worth pinning
+windows - no Discord, no bot - because the rules are the part worth pinning
 down. The engine tests at the bottom check the other half: that a closed
 verdict actually stops a send.
 """
@@ -55,7 +55,7 @@ def _read(messages, **kwargs):
 
 def test_replying_beats_everything():
     # Even a room where somebody is plainly waiting stays closed while the
-    # main reply path is mid-generation — that reply IS the answer.
+    # main reply path is mid-generation - that reply IS the answer.
     verdict = _read([_msg(5, addresses=True)], is_replying=True)
     assert verdict.state == FLOOR_REPLYING
     assert verdict.may_speak is False
@@ -141,7 +141,7 @@ def test_ping_newer_than_the_live_reply_is_still_addressed():
 
 
 def test_ping_that_predates_his_own_last_line_does_not_count():
-    # He was pinged, then he spoke. The ping is spent — this must not read as
+    # He was pinged, then he spoke. The ping is spent - this must not read as
     # someone still waiting once the hold window lapses.
     verdict = _read(
         [
@@ -749,7 +749,7 @@ def test_a_blocked_post_does_not_consume_the_room_slot(tmp_path):
 
 
 class _CtxDM(discord.DMChannel):
-    """A real DMChannel by type — isinstance is what classification keys on —
+    """A real DMChannel by type - isinstance is what classification keys on -
     with a test-friendly history(). Subclassing (rather than patching the
     label) is the point: it pins the branch production actually takes."""
 
@@ -764,7 +764,7 @@ class _CtxDM(discord.DMChannel):
 
 
 def test_dm_labels_omit_the_channel_snowflake(tmp_path):
-    """send_dm targets a user id — a DM channel id in the prompt is only misusable.
+    """send_dm targets a user id - a DM channel id in the prompt is only misusable.
 
     And a DM must never render as a channel: it gets a D-handle, so no number
     the planner types into target_channel_id can ever land here.
@@ -784,7 +784,7 @@ def test_dm_labels_omit_the_channel_snowflake(tmp_path):
     # The recipient's user id survives (send_dm needs it); the channel id does not.
     assert "Eliel(1416565530504200254)" in floor
     assert dm_cid not in floor
-    # It is named as a DM, with the action that reaches it — never as channel=N.
+    # It is named as a DM, with the action that reaches it - never as channel=N.
     assert "dm=D1" in floor
     assert "send_dm target_user_id=1416565530504200254" in floor
     assert "channel=D1" not in floor

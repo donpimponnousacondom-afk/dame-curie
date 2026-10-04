@@ -105,7 +105,7 @@ def test_dispatch_native_runs_tool_and_records_reasoning():
     tts = FakeTool("__TTS_SENT__")
     bot = _native_bot({"tts": tts})
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=123))
-    raw = [_native_call("tts", {"text": "say this", "reasoning": "user wants speech"})]
+    raw = [_native_call("tts", {"text": "say this", "explanation": "user wants speech"})]
 
     async def run():
         return await MaxwellBot._dispatch_tool_calls(
@@ -114,7 +114,7 @@ def test_dispatch_native_runs_tool_and_records_reasoning():
 
     _, tool_results = asyncio.run(run())
     assert tool_results == ["Tool tts: __TTS_SENT__"]
-    # reasoning must be stripped from the args passed to the tool
+    # explanation must be stripped from the args passed to the tool
     assert tts.calls == [{"text": "say this"}]
     # and recorded to the trace attached to the real tool
     assert bot.traces and bot.traces[0]["tool"] == "tts"
@@ -146,7 +146,7 @@ def test_send_file_results_need_followup():
         ],
     )
     # send_message does NOT short-circuit a batch that also contains a
-    # follow-up tool — the model still needs a turn to react to the
+    # follow-up tool - the model still needs a turn to react to the
     # non-terminal tool's output (otherwise shell/web_search/etc results
     # get dropped on the floor).
     assert _tool_results_need_followup(
@@ -235,7 +235,7 @@ def test_dispatch_native_runs_nonterminal_tool():
     bot = _native_bot({"react": react, "web_search": broken})
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=123))
     raw = [
-        _native_call("react", {"emoji": "catjam", "reasoning": "reacting"}, "success"),
+        _native_call("react", {"emoji": "catjam", "explanation": "reacting"}, "success"),
         _native_call("web_search", {"query": "test"}, "failure"),
     ]
 
@@ -442,7 +442,7 @@ def test_dispatch_native_skips_no_response_after_send_message():
 
     _, tool_results = asyncio.run(run())
     assert first.calls == [{"content": "hi"}]
-    # no_response never invoked — a send_message already fired earlier
+    # no_response never invoked - a send_message already fired earlier
     # in the batch, so no_response is a contradiction, not a duplicate.
     assert second.calls == []
     assert "send_message already fired" in tool_results[-1]
@@ -484,8 +484,8 @@ def test_tool_prompt_keeps_discord_tools_for_discord():
 
 
 def test_tool_prompt_describes_reasoning_inside_tool_calls():
-    # No more reasoning_log tool — the prompt must tell the model reasoning
-    # rides inside each tool's `reasoning` param, and chat goes via send_message.
+    # No more reasoning_log tool - the prompt must tell the model the explanation
+    # rides inside each tool's `explanation` param, and chat goes via send_message.
     bot = SimpleNamespace(
         _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
         _control={
@@ -500,17 +500,17 @@ def test_tool_prompt_describes_reasoning_inside_tool_calls():
     prompt = MaxwellBot._tool_system_prompt(bot, "discord")
 
     assert "reasoning_log" not in prompt.lower()
-    assert "reasoning" in prompt.lower()
+    assert "explanation" in prompt.lower()
     assert "send_message" in prompt
     # native-only: must NOT teach the XML tool-call FORM (the lone mention of
-    # <tool:name> is the "do not invent" warning, which is fine — assert the
+    # <tool:name> is the "do not invent" warning, which is fine - assert the
     # instructional FORM/Examples block is gone instead).
     assert "TOOL CALL FORMAT" not in prompt
     assert "<tool:send_file>" not in prompt
 
 
 def test_ensure_reasoning_trace_backfills_only_when_no_tool_ran():
-    # New contract: per-tool reasoning is recorded by record_reasoning during
+    # New contract: per-tool reasoning is recorded by record_explanation during
     # dispatch. _ensure_reasoning_trace only fires for the pure-text fallback
     # (no tools ran at all -> tool_results empty). Use the backfill tool.
     from bot_tools import ReasoningLogTool
@@ -681,13 +681,9 @@ def test_tool_prompt_keeps_reasoning_plain_text_rule():
     bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
     prompt = MaxwellBot._tool_system_prompt(bot, "discord")
 
+    # The prompt states the format in positive form. It does not name XML or tags.
     assert "plain text" in prompt.lower()
-    # reasoning is plain text only — no nested tags / JSON / <thoughts>
-    assert (
-        "no xml" in prompt.lower()
-        or "no nested" in prompt.lower()
-        or "plain text only" in prompt.lower()
-    )
+    assert "xml" not in prompt.lower().split("## the `explanation` argument")[1]
 
 
 def test_tool_prompt_native_mode_no_xml_instructions():
@@ -707,7 +703,7 @@ def test_tool_prompt_native_mode_no_xml_instructions():
     assert "native function/tool calling" in prompt.lower()
     assert "XML text tags only" not in prompt
     assert "send_message" in prompt
-    # Native tools= already carries descriptions — don't dump `name: desc`.
+    # Native tools= already carries descriptions - don't dump `name: desc`.
     assert "send_message: fake tool" not in prompt
 
 

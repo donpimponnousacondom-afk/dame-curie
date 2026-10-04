@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # input.
 TURN_INPUT: ContextVar[str] = ContextVar("turn_input", default="")
 
-# True while the bot posts one of its own notices — a sleep gate, a public error.
+# True while the bot posts one of its own notices - a sleep gate, a public error.
 # A notice is a real message in the channel but never the model's answer, so the
 # turn observer records it as evidence and not as output. Set only around the
 # send, by notice_send.
@@ -81,7 +81,7 @@ def render_footer(
     *,
     code_block: bool = False,
 ) -> str:
-    values = dict.fromkeys(FOOTER_TOKENS, "—")
+    values = dict.fromkeys(FOOTER_TOKENS, "-")
     values["BOT"] = bot_name
     if metrics is not None:
         values.update(

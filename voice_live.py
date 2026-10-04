@@ -256,7 +256,7 @@ class LiveSpeechSink(voice_recv.AudioSink):
                 raise
             except Exception as e:
                 # A single bad finalize/config read must NOT kill the flush loop
-                # silently — that used to leave _running=True with no utterances
+                # silently - that used to leave _running=True with no utterances
                 # ever dispatched (bot goes deaf, no error). Log and keep going.
                 logger.warning("VC flush loop iteration error (continuing): %s", e)
                 await asyncio.sleep(1.0)

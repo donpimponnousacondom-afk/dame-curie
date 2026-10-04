@@ -42,7 +42,7 @@ def test_disabled_tiers_give_their_share_to_the_others():
     plan = allocate(100_000, disabled={"web", "entity"})
     assert plan.budget_for("web") == 0
     assert plan.budget_for("entity") == 0
-    # The whole budget is still spent — a disabled tier must not leave a hole.
+    # The whole budget is still spent - a disabled tier must not leave a hole.
     assert _total(plan) == 100_000
     assert plan.budget_for("recent") > DEFAULT_WEIGHTS["recent"] * 1000
 

@@ -19,7 +19,7 @@ def test_find_balanced_json_end_basic():
 
 
 def test_find_balanced_json_end_with_braces_in_string():
-    # A create_site body can contain CSS with braces — must not fool the counter.
+    # A create_site body can contain CSS with braces - must not fool the counter.
     text = '{"name": "create_site", "arguments": {"body": "a { b } c", "path": "/x"}}'
     end = providers._find_balanced_json_end(text, 0)
     assert end == len(text)
@@ -89,7 +89,7 @@ def test_buffer_multiple_tool_calls():
                 "type": "function",
                 "function": {
                     "name": "shell",
-                    "arguments": json.dumps({"reasoning": "r" * 2000, "command": "c" * 9000}),
+                    "arguments": json.dumps({"explanation": "r" * 2000, "command": "c" * 9000}),
                 },
             })
             results.append(
@@ -119,7 +119,7 @@ def test_buffer_malformed_json_is_kept_as_text():
     buf.drain()
     visible = "".join(buf.text_parts)
     assert "oops" in visible
-    # Either it parsed (best-effort) or it's preserved as text — no crash.
+    # Either it parsed (best-effort) or it's preserved as text - no crash.
     assert len(buf.completed) >= 0
 
 
@@ -136,7 +136,7 @@ def test_feed_return_value_never_leaks_raw_tool_json():
     chunks = [
         '{"name": "shell",',
         ' "arguments": {"command": "rm -rf /tmp/x",',
-        ' "reasoning": "cleaning up"}}',
+        ' "explanation": "cleaning up"}}',
         '\nAll done!',
     ]
     revealed = []
@@ -157,7 +157,7 @@ def test_feed_return_value_never_leaks_raw_tool_json():
 
 def test_feed_returns_visible_text_immediately_when_no_tool_call():
     """Plain reply text (no tool call) should be revealed immediately,
-    not buffered — otherwise the live progress preview would lag."""
+    not buffered - otherwise the live progress preview would lag."""
     buf = providers._CustomToolCallBuffer()
     assert buf.feed("Hello ") == "Hello "
     assert buf.feed("there!") == "there!"
@@ -175,7 +175,7 @@ def test_on_token_preview_uses_filtered_text_not_raw_delta():
     raw_chunks = [
         "Let me check that.\n",
         '{"name": "web_search", "argum',
-        'ents": {"query": "weather today", "reasoning": "looking it up"}}',
+        'ents": {"query": "weather today", "explanation": "looking it up"}}',
         "\nHere's what I found.",
     ]
     for c in raw_chunks:

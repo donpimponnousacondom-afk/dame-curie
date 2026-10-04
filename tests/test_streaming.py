@@ -1,6 +1,6 @@
 """Test the live SSE streaming path against OpenRouter, using the production
 providers.py code. This is intentionally NOT a unit test of _read_sse_response
-in isolation — it imports the real module so any bug in the consumer is caught
+in isolation - it imports the real module so any bug in the consumer is caught
 here, not in a mock-only test that wouldn't have caught the request_start * 1000
 unit mismatch from the first edit.
 

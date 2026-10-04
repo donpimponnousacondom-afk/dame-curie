@@ -1,6 +1,6 @@
-# dame-curie status — 2026-10-03
+# dame-curie status - 2026-10-03
 
-## Publisher inventory update — 2026-10-03, 19:44Z
+## Publisher inventory update - 2026-10-03, 19:44Z
 
 The initial repair below restored publication but continuously ran rsync across all
 sites. The follow-up replaces that loop with one short-lived remote inventory command.
@@ -25,7 +25,7 @@ Private previous-source/state backup:
 `/var/backups/dame-curie-v2-recovery/publisher-inventory-20261003T194453Z`.
 This update is deployed locally, not yet integrated into PR3.
 
-## Publisher repair — 2026-10-03, 19:14Z
+## Publisher repair - 2026-10-03, 19:14Z
 
 The publisher was in a restart loop. Read-only remote inspection found
 `hammered-wallet` missing; both remote roots and the other 29 saved site markers/identities
@@ -85,7 +85,7 @@ Two issues remain open:
 
 The P3 image-guidance wording issue is deferred. Generated-image URLs remain valid. No new image behavior was added.
 
-## Historical record — 2026-09-25
+## Historical record - 2026-09-25
 
 **Everything below records the earlier temporary Dirac release. It is preserved as history, not current runtime state or current authority.**
 
@@ -115,7 +115,7 @@ Image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc
 
 QA77 built an explicit offline source overlay onto previously verified `be28b85` image`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`, because the local Python-base tag was absent. No pull/install; normal recipe and dependency lock unchanged, dependency layers inherited, **not freshly rebuilt**. QA78 matched all56copied inputs to the committed archive and checked baked commit/branch/dirty plus OCI revision. The existing guarded constructor passed in the actual image without network/private state/login. Later documentation commits do not change its application inputs.
 
-## Current temporary runtime — checked16:47:48Z
+## Current temporary runtime - checked16:47:48Z
 
 - Account`dame-curie`, UID1005; rootless engine`12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`, socket`/run/user/1005/docker.sock`.
 - Container **`ef618129341ed4b2b83dceebd2a92e3e0e3437585e53f96c488381a3ca23e2d5`**, running the immutable image above; started**16:46:31.285765518Z**. Durable image selector matches.

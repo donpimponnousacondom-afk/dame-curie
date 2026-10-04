@@ -24,7 +24,7 @@ change detector so a no-op update doesn't burn a slot.
 Don't confuse this with the LLM trace
 ------------------------------------
 This is user-facing channel feedback. The trace file
-(data/llm_traces.json via tool_registry.record_reasoning) tracks the
+(data/llm_traces.json via tool_registry.record_explanation) tracks the
 model's internal reasoning for audit. This file is about what shows up
 in the channel.
 """
@@ -62,7 +62,7 @@ _TOKEN_TICK_INTERVAL = 1.0
 # Total visible budget for the buffer tail (the model's words).
 # The "thinking: " prefix (~9 chars) and the " → <tool>" tag are
 # added on top, so the FINAL message is longer than this. We budget
-# for the content only — the head + tag are negligible vs the
+# for the content only - the head + tag are negligible vs the
 # Discord 2000-char limit.
 # 2026-07-21: was 120, raised to 160 so a long phrase fits.
 _VISIBLE_BUDGET = 160
@@ -85,7 +85,7 @@ _VISIBLE_STRIP_CHARS = set("{}[\\]\"`:")
 # the tool runs. We surface a SHORT head of the artifact on the
 # progress line so the user can watch the code scroll by in real time.
 # 2026-07-21: per the user request "show a snippet of the code its
-# generating" — the model is producing content, the user wants to
+# generating" - the model is producing content, the user wants to
 # SEE the content, not just a label.
 _SNIPPET_BUDGET = 80
 
@@ -96,7 +96,7 @@ _SNIPPET_JOIN_CHAR = " "
 
 # Fast-tool fix. start() is called before generation / tool dispatch and
 # posts a 'working on it…' message. For fast paths the progress message
-# posts, sits for a few ms, then gets deleted by stop() — and a fresh
+# posts, sits for a few ms, then gets deleted by stop() - and a fresh
 # message.reply(response) lands right after. The user sees flicker.
 #
 # Fix: defer the FIRST post. If the tool batch finishes (stop() called)
@@ -111,7 +111,7 @@ def _latest_complete_sentence(text: str) -> str:
     """Return the LATEST complete sentence in ``text``.
 
     2026-07-21: user wants the progress line to update per sentence
-    — when the model finishes a sentence, show THAT sentence; when
+    - when the model finishes a sentence, show THAT sentence; when
     it finishes the next one, show the new one. Not a rolling tail
     (which scrolls mid-sentence fragments), not pinned to the first
     sentence (which freezes). The user watches the model think in
@@ -165,7 +165,7 @@ class ToolProgress:
     The visible text is just the LAST ``_VISIBLE_BUDGET`` chars of the
     model's streaming output, prefixed once with the current tool name
     if one has been announced. No sentence detection, no regex, no
-    term-paragraph reconstruction — just a sliding window of what the
+    term-paragraph reconstruction - just a sliding window of what the
     model has typed so far. The user watches the words scroll by.
     """
 
@@ -187,7 +187,7 @@ class ToolProgress:
         # Code-snippet preview buffer. While the model is generating a
         # large artifact (HTML body, shell script, etc.) the caller
         # feeds head-slices into here via update(snippet=...) and the
-        # progress line shows a rolling tail — so the user can WATCH
+        # progress line shows a rolling tail - so the user can WATCH
         # the code being written, not just hear "thinking…".
         self._snippet_buffer: str = ""
         # First tool-name arrival is always allowed through the rate
@@ -195,7 +195,7 @@ class ToolProgress:
         # committed to a tool.
         self._last_tool_name_announced: bool = False
         # The very first tick() after start() is also exempt from the
-        # rate limit — the user just posted 'working on it…' and is
+        # rate limit - the user just posted 'working on it…' and is
         # staring at it; showing them SOMETHING (the model's first
         # reasoning tokens) is worth a Discord edit slot.
         self._first_tick_done: bool = False
@@ -278,7 +278,7 @@ class ToolProgress:
         Providers stream tokens glued with no whitespace ('hello world'
         then 'The user wants me to look at' arrive as two chunks with
         no separator). Concatenating them gives 'hello worldThe user
-        wants me to look at' — a single 40-char run that reads as
+        wants me to look at' - a single 40-char run that reads as
         gibberish. We insert a space at the join point when neither
         side has a boundary, then collapse runs of whitespace so
         consecutive deltas stay readable.
@@ -323,12 +323,12 @@ class ToolProgress:
         if prev_tool and prev_tool != tool_name:
             # Tool switched: also reset the announcement flag so the
             # new tool name bypasses the rate limit on first arrival,
-            # and clear the snippet — a different tool = different
+            # and clear the snippet - a different tool = different
             # artifact.
             self._last_tool_name_announced = False
             self._snippet_buffer = ""
         if reasoning and reasoning != _GENERATING_PLACEHOLDER:
-            # Normalize and set (not append — update() carries full
+            # Normalize and set (not append - update() carries full
             # reasoning strings from the model's tool-call announcement,
             # not per-token deltas. tick() owns the per-token append.)
             self._reasoning_buffer = " ".join(reasoning.split())
@@ -416,7 +416,7 @@ class ToolProgress:
             except Exception as e:
                 # 2026-07-21: a Discord 429 (TOO MANY REQUESTS) used
                 # to kill the entire progress UI for the rest of the
-                # turn — the broad `except Exception: self._posted =
+                # turn - the broad `except Exception: self._posted =
                 # None` blanket was the same response for a real
                 # network error and a rate-limit, so a single 429
                 # would silently freeze the spinner. Detect 429s
@@ -435,19 +435,19 @@ class ToolProgress:
                         _TOKEN_TICK_INTERVAL,
                     )
                     return
-                logger.debug("Progress edit failed (%s) — disabling further edits", e)
+                logger.debug("Progress edit failed (%s) - disabling further edits", e)
                 self._posted = None
 
     def _render(self) -> str:
         """Render the progress line. Up to two lines:
 
-        1. Reasoning (one sentence) + tool tag — always present when
+        1. Reasoning (one sentence) + tool tag - always present when
            we have any state to show.
-        2. Code-snippet preview — present only when a snippet has been
+        2. Code-snippet preview - present only when a snippet has been
            fed via update(snippet=...).
 
         2026-07-21: the model's reasoning is the useful content for
-        the user — it explains what the model is about to do in its
+        the user - it explains what the model is about to do in its
         own words. We extract ONE complete sentence from the
         streaming buffer (everything from the start to the first
         '.', '!', or '?') and show that. Format: 'thinking: I'll
@@ -487,12 +487,12 @@ class ToolProgress:
             cleaned = " ".join(cleaned.split())
             # 2026-07-21: show the LATEST COMPLETE SENTENCE, not a
             # rolling tail. The user wants the progress line to update
-            # each time the model finishes a new sentence — coherent
+            # each time the model finishes a new sentence - coherent
             # sentence units, not mid-thought fragments. The visible
             # line therefore advances by sentence, not by char.
             sentence = _latest_complete_sentence(cleaned)
             if not sentence:
-                # No terminator yet — fall back to a partial preview
+                # No terminator yet - fall back to a partial preview
                 # so the user sees liveness while the model is still
                 # composing the first sentence. Trim to fit budget.
                 partial = cleaned[:_VISIBLE_BUDGET]
@@ -503,7 +503,7 @@ class ToolProgress:
                         partial = partial[:last_ws]
                 sentence = partial
             elif len(sentence) > _VISIBLE_BUDGET:
-                # Long sentence — keep the tail (most recent words)
+                # Long sentence - keep the tail (most recent words)
                 # trimmed to a word boundary.
                 head2 = sentence[-_VISIBLE_BUDGET:]
                 first_ws = head2.find(" ")
@@ -548,14 +548,14 @@ class ToolProgress:
             self._deferred_task.cancel()
 
     async def stop(self) -> None:
-        """Delete the progress message ASAP — no edit, no waiting.
+        """Delete the progress message ASAP - no edit, no waiting.
 
         2026-07-22: the delete is fired as a background task (fire-and-
         forget) so the caller can proceed to post the reply immediately
         without waiting on a Discord round-trip. The reply send and the
         delete race; the delete is a lighter request so it almost always
         wins, and even if it doesn't the user just sees the placeholder
-        for a beat longer — never a stale edit flicker.
+        for a beat longer - never a stale edit flicker.
 
         No final drain edit: a previous version edited the message to
         the latest reasoning before deleting, which made it visibly

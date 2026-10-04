@@ -11,7 +11,7 @@ Before this existed the only way in was an explicit tool call from the model, so
 "accept friend requests as they arrive" was not expressible as a plugin: the
 model had to happen to call something. A plugin now declares what it wants to
 listen to and the host owns the wiring, which also means the host can take it
-all back down on reload — a plugin that registered its own listener or task had
+all back down on reload - a plugin that registered its own listener or task had
 no way to unregister it, so every reload left the previous copy running.
 """
 
@@ -67,7 +67,7 @@ class PluginContext:
     """What a plugin gets to work with, and the only supported way in.
 
     Handed to ``setup(bot, ctx)`` when the plugin accepts a second argument.
-    Plugins written against the old one-argument ``setup(bot)`` keep working —
+    Plugins written against the old one-argument ``setup(bot)`` keep working -
     they just do not get events, jobs, or a scoped data directory.
 
     Everything registered here is tracked by the manager, so ``reload_plugins``
@@ -112,7 +112,7 @@ class PluginContext:
             raise TypeError("callback must be callable")
         if not inspect.iscoroutinefunction(callback):
             raise TypeError(
-                f"{event} callback must be an async def — a blocking callback "
+                f"{event} callback must be an async def - a blocking callback "
                 "would stall every channel while it runs"
             )
         self._manager._register_listener(self.name, event, callback)
@@ -128,7 +128,7 @@ class PluginContext:
 
         Started once the bot's event loop is running (see ``start_jobs``), so a
         plugin whose ``setup`` runs during construction does not have to care
-        that there is no loop yet — the alternative was calling
+        that there is no loop yet - the alternative was calling
         ``asyncio.create_task`` in ``setup``, where it fails or is garbage
         collected mid-flight.
         """
@@ -418,7 +418,7 @@ class PluginManager:
         """One scheduled job: sleep, run, log, repeat.
 
         A raising job is logged and retried on the next tick rather than
-        killing the schedule — one failure should not stop it forever.
+        killing the schedule - one failure should not stop it forever.
         """
         interval = float(spec["interval"])
         callback = spec["callback"]
@@ -616,7 +616,7 @@ class PluginManager:
         """Call the plugin's entry point, passing ctx when it accepts one.
 
         The one-argument ``setup(bot)`` form predates the context and must keep
-        loading — breaking existing plugins to add a feature they do not use
+        loading - breaking existing plugins to add a feature they do not use
         would be a poor trade.
         """
         for attr in ("setup", "get_tools"):

@@ -11,7 +11,7 @@ its configured job limits; a model-spawned job still shares its originating
 foreground turn's remaining attempt and deadline budget.
 Detaching work does not reset that budget.
 When the job finishes it mentions the requester in the origin channel with
-the result data. Progress lands in a ``build: <goal>`` thread — in the origin
+the result data. Progress lands in a ``build: <goal>`` thread - in the origin
 thread's parent channel when the job was started from inside a thread, since
 Discord cannot nest them, and only when the bot's own gates allow it to act
 in that parent; a job started from an explicitly allowed thread under a
@@ -260,7 +260,7 @@ class BackgroundJobManager:
         if self.user_active_count(str(user_id)) >= self.max_per_user:
             raise RuntimeError("ALREADY_RUNNING: you already have a background job running")
         if self.active_count() >= self.max_jobs:
-            raise RuntimeError("ALL_BUSY: all background slots are busy — try again in a bit")
+            raise RuntimeError("ALL_BUSY: all background slots are busy - try again in a bit")
         jid = secrets.token_hex(JOB_ID_BYTES)
         while jid in self._jobs:
             jid = secrets.token_hex(JOB_ID_BYTES)
@@ -378,7 +378,7 @@ class SpawnBackgroundTool(Tool):
             "does not replenish them. Params: goal (what to build/do, required), context (extra "
             "spec, optional). Uses the configured provider and model. "
             "After calling, reply with send_message: ONE short ack line naming the "
-            "job id and requested profile/model — nothing else, no other tools."
+            "job id and requested profile/model - nothing else, no other tools."
         )
 
     async def execute(
@@ -386,7 +386,7 @@ class SpawnBackgroundTool(Tool):
         **kwargs: Any,
     ) -> str:
         if JOB_TURN.get():
-            return "ALREADY INSIDE a background job — do the work inline with normal tools, do not spawn again."
+            return "ALREADY INSIDE a background job - do the work inline with normal tools, do not spawn again."
         bot = getattr(self, "bot", None)
         manager = getattr(bot, "bg_jobs", None) if bot is not None else None
         if manager is None:
@@ -413,7 +413,7 @@ class SpawnBackgroundTool(Tool):
             text = str(exc)
             if text.startswith("ALREADY_RUNNING:"):
                 return (
-                    "A background job is ALREADY RUNNING for this user — do not start another. "
+                    "A background job is ALREADY RUNNING for this user - do not start another. "
                     "Reply NOW with send_message: ONE short ack line and NOTHING else."
                 )
             if text.startswith("ALL_BUSY:"):
@@ -435,7 +435,7 @@ class SpawnBackgroundTool(Tool):
             f"Reply NOW with send_message: ONE short ack line naming job `{job.id}` "
             f"and '{job.requested_route}', then say you'll ping when done. "
             "NOTHING else. Do not start the work "
-            "in this turn — the detached job does it."
+            "in this turn - the detached job does it."
         )
 
 
@@ -487,7 +487,7 @@ def background_messages(
         "told the work is running. Complete the goal with the available tools; "
         "do not spawn another background job. Preserve actor authorization and "
         "configured tool/platform restrictions. Keep intermediate chatter out of the main channel "
-        "— progress goes to the job thread. End with a concise summary of the "
+        "- progress goes to the job thread. End with a concise summary of the "
         "result and relevant URLs, if any.\n"
         "Website authoring uses shell writes to local files. An external "
         "automatic publisher mirrors those files; do not start local hosting "
@@ -568,7 +568,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
 
     # Progress thread: keeps the origin channel clean while work runs. Discord
     # cannot nest threads, so a job started inside one gets its progress thread
-    # in that thread's own parent channel instead of losing it — but only when
+    # in that thread's own parent channel instead of losing it - but only when
     # the bot's own gates allow it to act there. A job started from an
     # explicitly allowed thread whose parent is refused stays in that thread:
     # the allowance is the thread's own, and it is never turned into a new
@@ -606,7 +606,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         manager.mark(job.id, thread_id=str(getattr(thread, "id", "") or ""))
         if not await _post_thread(
             thread,
-            f"Job `{job.id}` running for <@{job.user_id}> — `{_short(job.goal, 120)}`\n"
+            f"Job `{job.id}` running for <@{job.user_id}> - `{_short(job.goal, 120)}`\n"
             f"{job.requested_route}.\n"
             f"Job limits: {timeout}s timeout, {max_iters} steps. "
             "An originating foreground budget, if any, still applies. Progress lands here.",
@@ -667,7 +667,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     break
                 if time.monotonic() > deadline:
                     manager.mark(job.id, progress=f"time budget ({timeout}s) hit at step {step}")
-                    final_text = final_text or "I ran out of time budget — partial work is in the thread."
+                    final_text = final_text or "I ran out of time budget - partial work is in the thread."
                     break
 
                 try:
@@ -782,11 +782,11 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 manager.mark(job.id, progress=f"step {step + 1}: {', '.join(safe_names) or 'tools'}")
                 await _post_thread(
                     thread,
-                    f"step {step + 1} `{', '.join(safe_names) or 'tools'}` — {len(calls)} tool call(s), {len(tool_results)} result(s) received",
+                    f"step {step + 1} `{', '.join(safe_names) or 'tools'}` - {len(calls)} tool call(s), {len(tool_results)} result(s) received",
                     context=job_context,
                 )
                 # An ending-only batch (e.g. the model wrapped up via send_message)
-                # is the finished answer — do not loop for more.
+                # is the finished answer - do not loop for more.
                 named = {n for n in names if n}
                 if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip():
                     final_text = resp_text.strip()
@@ -825,11 +825,11 @@ async def run_background_job(bot: Any, job_id: str) -> None:
             await _post_thread(thread, PUBLIC_ERROR_TEXT, context=job_context)
         return
 
-    final_text = str(final_text or "").strip() or "Done — details are in the thread."
+    final_text = str(final_text or "").strip() or "Done - details are in the thread."
     manager.mark(job.id, status="done", result=final_text[:8000], progress="done")
 
     # Deliver: mention the requester in the ORIGIN channel with the data.
-    # Direct send — never through ReplyQueue, so nothing else ever waits.
+    # Direct send - never through ReplyQueue, so nothing else ever waits.
     max_chars = 4000
     try:
         max_chars = max(500, min(int((getattr(bot, "_control", {}) or {}).get("max_response_chars", 4000) or 4000), 1900 * 4))
@@ -841,7 +841,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         thread_ref = getattr(thread, "jump_url", None) or getattr(thread, "mention", "") or ""
     except Exception:
         pass
-    delivery = f"<@{job.user_id}> job `{job.id}` done ({job.requested_route}) — {body}"
+    delivery = f"<@{job.user_id}> job `{job.id}` done ({job.requested_route}) - {body}"
     if thread_ref:
         delivery += f"\n{thread_ref}"
     try:

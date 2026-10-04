@@ -12,7 +12,7 @@ come from ``record_delivery`` and from a wrapper around the client's
 ``send_message``, which is what catches file and plugin posts; only deliveries in
 the target channel count for the receipt. ``completed`` needs more than a
 delivery: the turn's own model call has to have returned usable output, and one of
-the messages in the receipt has to be model output — posted outside that call and
+the messages in the receipt has to be model output - posted outside that call and
 not one of the bot's own notices. A notice and the "thinking: …" placeholder stay
 in the receipt as evidence, with their text, but they are not an answer. The
 runtime sets ``bot._turn_observer`` itself; ``bot.py`` never does.
@@ -159,9 +159,9 @@ class _TurnObserver:
         would overstate what was verified.
 
         ``notice`` marks a bot notice or a progress placeholder, which are
-        deliveries but never output. The same id can arrive twice — a placeholder
+        deliveries but never output. The same id can arrive twice - a placeholder
         posted as progress and later edited into the reply is reported again by the
-        reply path — so an id first seen as progress joins the output then.
+        reply path - so an id first seen as progress joins the output then.
         """
         turn = self._turns.get(input_id)
         if turn is None or turn.done.is_set():
@@ -268,7 +268,7 @@ class DiracSmokeRuntime:
         The environment variable already opted in, so a missing request mount or
         an unwritable status mount fails the bot's own start: a poll loop that
         cannot record results would deliver real operator input and lose it. Both
-        directories must already exist — the operator prepares the mounts, and a
+        directories must already exist - the operator prepares the mounts, and a
         runtime that created its own status directory would be writing its ledger
         somewhere ephemeral that disappears with the container.
         """
@@ -849,8 +849,8 @@ class DiracSmokeRuntime:
     ) -> tuple[str, list[str]]:
         """What the delivered messages said, fetched by their exact ids.
 
-        Capped in count and in time — the whole readback gets ``READBACK_SECONDS``,
-        not each fetch — because it only enriches a record that is already
+        Capped in count and in time - the whole readback gets ``READBACK_SECONDS``,
+        not each fetch - because it only enriches a record that is already
         terminal, and it must never hold a request open. Text the harness did not
         fetch itself is text it cannot stand behind, so an id it cannot read is
         recorded as exactly that and never turns a delivery into a failed turn.

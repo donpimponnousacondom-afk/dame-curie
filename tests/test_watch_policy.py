@@ -270,7 +270,7 @@ def test_only_named_or_live_lines_clear_the_bar():
     plain = AddressSignal(text_length=40)
     assert should_consider_reply(reply_pressure(named, cold, 0.0, BASE))
     assert not should_consider_reply(reply_pressure(plain, cold, 0.0, BASE))
-    # Mid-exchange — they addressed him seconds ago — a plain line lands.
+    # Mid-exchange - they addressed him seconds ago - a plain line lands.
     live = WatchState(engaged_at=1000.0)
     assert should_consider_reply(reply_pressure(plain, live, 1005.0, BASE))
     # The same room a minute later is no longer an exchange.

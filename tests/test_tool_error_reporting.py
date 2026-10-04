@@ -335,7 +335,7 @@ def test_guide_partial_failure_preserves_original_result_and_full_trace(incident
     detail = "private thread error " * 100 + "TRACE-END"
     message.create_thread = AsyncMock(side_effect=RuntimeError(detail))
     result = asyncio.run(bot_tools.GuideTool(tool_bot()).execute(message, goal="synthetic goal"))
-    assert result == f"Guide posted in channel (no thread: {detail[:200]}) — waiting for replies."
+    assert result == f"Guide posted in channel (no thread: {detail[:200]}) - waiting for replies."
     assert isinstance(result, ToolFailure)
     assert result.incident_id == incidents.get(0).incident_id
     assert "TRACE-END" in incidents.get(0).format_report()
@@ -346,7 +346,7 @@ def test_guide_ordinary_dm_no_thread_is_not_an_incident(incidents):
     message = message_in()
     message.guild = None
     result = asyncio.run(bot_tools.GuideTool(tool_bot()).execute(message, goal="synthetic goal"))
-    assert result == "Guide posted in channel (no thread: DMs have no threads) — waiting for replies."
+    assert result == "Guide posted in channel (no thread: DMs have no threads) - waiting for replies."
     assert not isinstance(result, ToolFailure)
     assert incidents.get(0) is None
 
@@ -832,7 +832,7 @@ def test_ordinary_invite_accept_http_failure_keeps_full_body(root_incidents, sta
     tool.bot.fetch_invite.return_value.accept = accept
     result = asyncio.run(tool.execute(message, invite="synthetic-code"))
     if status == 429:
-        assert result == "Error joining Synthetic Guild: rate limited (429). Wait a bit and retry — Discord throttles rapid joins."
+        assert result == "Error joining Synthetic Guild: rate limited (429). Wait a bit and retry - Discord throttles rapid joins."
     else:
         assert result == f"Error joining Synthetic Guild: HTTP {status}: {body[:200]}"
     assert isinstance(result, ToolFailure)

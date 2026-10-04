@@ -1,4 +1,4 @@
-# Current completion state — 2026-10-03
+# Current completion state - 2026-10-03
 
 - [x] Repair and deploy the background publisher at 19:14Z. It restored missing
   `hammered-wallet` without `--once`; all 18 files matched local hashes, with zero
@@ -26,7 +26,7 @@
 
 The P3 generated-image wording issue is deferred. Do not expand this completion task. PR3 is ready for human review, not merged.
 
-## Historical round-two closure — 2026-09-25
+## Historical round-two closure - 2026-09-25
 
 **Everything below records the completed temporary Dirac assignment. It is preserved as history, not current runtime state or current authority.**
 
@@ -42,7 +42,7 @@ The P3 generated-image wording issue is deferred. Do not expand this completion 
 - [x] One bounded current-image smoke passed in7seconds; restore original controls/channels, pin accepted image and verify final identity/readiness. Operator restart-after-stop mistake and corrected replacement retained in the ledger.
 - [x] Leave coordinated response/validation/closure and current source/runtime handoff; preserve unrelated work.
 
-## Held decisions — not automatic follow-up tasks
+## Held decisions - not automatic follow-up tasks
 
 Canonical/V1 activation and canonical native-image reconciliation remain held. Publisher/remote/shared-service lifecycle work, host viewer rollout, worktree/ref pruning and broader live-feature/load/replica acceptance require separate assignments. Reasoning-only fallback and mandatory tool-reasoning policy remain unchanged pending root. Existing same-UID trust and fail-closed viewer policy stay explicit.
 

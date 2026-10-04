@@ -13,7 +13,7 @@ def _bot(**cfg):
 def test_image_input_needs_both_switches():
     # .env is the hard switch; the dashboard control is the soft one. Only the
     # soft one was ever read, so ENABLE_IMAGE_INPUT=false forwarded images
-    # anyway — the opposite of what someone turning it off for cost or privacy
+    # anyway - the opposite of what someone turning it off for cost or privacy
     # expects.
     assert MaxwellBot._image_input_enabled(_bot()) is True
 

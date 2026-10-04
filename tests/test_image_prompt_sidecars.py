@@ -21,7 +21,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 LOCAL = "https://images.example.invalid"
 CDN = "https://cdn.example.invalid/image.png"
 KEY = "synthetic/key+credential"
-PROMPT = " \n\t" + '火 dragon 🐉 — café e\u0301 "glass" \\ moon\n' * 100 + "FULL PROMPT TAIL \t\n"
+PROMPT = " \n\t" + '火 dragon 🐉 - café e\u0301 "glass" \\ moon\n' * 100 + "FULL PROMPT TAIL \t\n"
 REVISION = "Provider revision is not the submitted prompt."
 PROFILES = ["generation", "edit"]
 

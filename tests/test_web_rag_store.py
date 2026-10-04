@@ -11,7 +11,7 @@ These tests stub the embed call so they don't need a live ollama. The
 embed function is patched to a deterministic hash-based stub so we can
 exercise the store/recall pipeline end-to-end without external
 dependencies. The real ollama path is covered by smoke tests in the live
-bot, not by unit tests (per the skill's audit-before-patch rule —
+bot, not by unit tests (per the skill's audit-before-patch rule -
 test what matters, mock what's expensive).
 """
 
@@ -332,12 +332,12 @@ def test_embed_chunks_long_content(tmp_path, monkeypatch):
         mgr = RAGMemoryManager(str(tmp_path))
         # Wipe any cache so we exercise the embed path.
         mgr._db.execute("DELETE FROM embed_cache")
-        # Short content — single chunk.
+        # Short content - single chunk.
         short = "hello world this is short"
         v_short = await mgr._embed(short)
         assert v_short is not None, "short embed returned None"
         assert len(v_short) == EMBED_DIM
-        # Long content — multi-chunk. ~34000 chars with sentence boundaries.
+        # Long content - multi-chunk. ~34000 chars with sentence boundaries.
         long_text = (
             "This is sentence one about asyncio. "
             "This is sentence two about asyncio. "

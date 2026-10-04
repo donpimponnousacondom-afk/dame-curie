@@ -1,7 +1,7 @@
 """Media posted as a bare link, not an upload.
 
 Discord unfurls only some links into embeds and never audio ones, so these
-references used to reach the model as plain text — it could read the URL but
+references used to reach the model as plain text - it could read the URL but
 never see or hear what was behind it.
 """
 

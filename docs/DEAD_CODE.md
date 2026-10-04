@@ -1,4 +1,4 @@
-# Static dead-code audit — soft landing
+# Static dead-code audit - soft landing
 
 ## Tool and scope
 

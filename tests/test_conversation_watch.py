@@ -289,7 +289,7 @@ def test_a_live_exchange_still_carries_without_an_at():
 
 
 def test_being_ignored_raises_the_bar():
-    """Same line, same room — but his last few turns there went unanswered."""
+    """Same line, same room - but his last few turns there went unanswered."""
     bot = _bot()
 
     async def run():
@@ -307,7 +307,7 @@ def test_being_ignored_raises_the_bar():
 
 
 def test_watch_yields_while_he_is_busy():
-    """Nothing unprompted while a turn is running — his or anyone's."""
+    """Nothing unprompted while a turn is running - his or anyone's."""
     bot = _bot()
 
     async def run():
@@ -381,7 +381,7 @@ def test_watch_is_the_room_not_one_user():
 
     async def run():
         MaxwellBot._arm_conversation_watch(bot, other.channel.id)
-        # Anyone in the room can pull him in — it is not one user's watch.
+        # Anyone in the room can pull him in - it is not one user's watch.
         assert MaxwellBot._should_live_reply(bot, other) is True
         ambient = _plain_followup(content="lol", author_id=99, display_name="Alice")
         assert MaxwellBot._should_live_reply(bot, ambient) is False

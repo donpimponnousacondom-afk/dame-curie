@@ -1,6 +1,6 @@
 """Configuration management for Maxwell Bot.
 
-Design note — optional features
+Design note - optional features
 -------------------------------
 Maxwell only *requires* two things: a Discord token and an OpenAI-compatible
 model endpoint. Everything else (voice, YouTube, web search, TTS,
@@ -91,7 +91,7 @@ def _json_env(name: str, *, strict: bool = False) -> dict:
     except (TypeError, ValueError):
         if strict:
             raise ValueError(f"{name} must be a valid JSON object") from None
-        print(f"warning: {name} is not valid JSON — ignoring it", file=sys.stderr)
+        print(f"warning: {name} is not valid JSON - ignoring it", file=sys.stderr)
         return {}
     if strict and not isinstance(value, dict):
         raise ValueError(f"{name} must be a JSON object")
@@ -216,7 +216,7 @@ class Config:
     ENABLE_AUDIO_INPUT = _feature_env("ENABLE_AUDIO_INPUT", default=True)
 
     # -------------------------------------------------------------------------
-    # Optional features (true / false / auto — see the module docstring).
+    # Optional features (true / false / auto - see the module docstring).
     #
     # Unset means "auto": the feature turns itself on only when whatever it
     # needs is actually installed. A bare clone with nothing but ffmpeg
@@ -244,7 +244,7 @@ class Config:
         IMAGE_GEN_PROTOCOL, IMAGE_GEN_BASE_URL, IMAGE_GEN_MODELS, IMAGE_GEN_MODEL
     )
 
-    # No external dependency — pure code paths, on by default.
+    # No external dependency - pure code paths, on by default.
     ENABLE_IMAGE_INPUT = _feature_env("ENABLE_IMAGE_INPUT")
     ENABLE_FETCH_URL = _feature_env("ENABLE_FETCH_URL")
     ENABLE_AVATAR = _feature_env("ENABLE_AVATAR")
@@ -309,7 +309,7 @@ class Config:
 
     # -------------------------------------------------------------------------
     # Embeddings for RAG memory. Configure local Ollama or an
-    # OpenAI-compatible /v1/embeddings endpoint — set EMBED_BASE_URL
+    # OpenAI-compatible /v1/embeddings endpoint - set EMBED_BASE_URL
     # to e.g. https://api.openai.com/v1 with EMBED_MODEL/EMBED_DIM to match.
     # -------------------------------------------------------------------------
     EMBED_BASE_URL = os.getenv("DAME_CURIE_EMBED_BASE_URL", os.getenv("EMBED_BASE_URL", ""))
@@ -348,7 +348,7 @@ class Config:
     CUSTOM_TOOL_CALLS = _bool_env("DAME_CURIE_CUSTOM_TOOL_CALLS", False)
 
     # Discord join-captcha handling. Discord sometimes challenges an invite
-    # accept (or other API action) with an hCaptcha — surfaced by the library
+    # accept (or other API action) with an hCaptcha - surfaced by the library
     # as discord.CaptchaRequired. When CAPTCHA_SOLVER_SERVICE+API_KEY are set,
     # the bot solves the challenge via the external service and auto-retries.
     # When unset, the challenge details are surfaced in the tool result so the
@@ -447,16 +447,16 @@ class Config:
             )
         if not cls.OPENAI_BASE_URL:
             raise ValueError(
-                "OPENAI_BASE_URL is required — set your remote OpenAI-compatible "
+                "OPENAI_BASE_URL is required - set your remote OpenAI-compatible "
                 "chat endpoint explicitly; no vendor or endpoint is assumed."
             )
         if not cls.OPENAI_MODEL:
             raise ValueError(
-                "OPENAI_MODEL is required — set the model name your endpoint serves."
+                "OPENAI_MODEL is required - set the model name your endpoint serves."
             )
         if cls.OPENAI_MAX_TOKENS is not None and cls.OPENAI_MAX_TOKENS < 1:
             raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
-        # Soft warnings — these don't block startup but they WILL cause
+        # Soft warnings - these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is
         # confusing without a hint. Log via the standard logging facility
         # so pm2 captures it.
@@ -466,13 +466,13 @@ class Config:
 
         if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(
-                "DAME_CURIE_OWNER_IDS is empty — admin commands (`!prompt`, "
+                "DAME_CURIE_OWNER_IDS is empty - admin commands (`!prompt`, "
                 "`!clearmem`, `!autonomy`, `!rem`, etc.) will be denied to "
                 "everyone. Set your Discord user ID in .env."
             )
         if cls.ENABLE_SHELL:
             _log.warning(
-                "ENABLE_SHELL is on — the model can run commands inside the bot container "
+                "ENABLE_SHELL is on - the model can run commands inside the bot container "
                 "with the bot's permissions and mounted state. Set ENABLE_SHELL=false "
                 "in .env if you did not mean to grant that."
             )

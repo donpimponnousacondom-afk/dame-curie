@@ -22,7 +22,7 @@ def parse_bool(value, default: bool = False) -> bool:
     return default
 
 
-# Canonical DEFAULT_CONTROL — bot and prompt storage import this.
+# Canonical DEFAULT_CONTROL - bot and prompt storage import this.
 # If you change a value here, it changes everywhere. That's the point.
 DEFAULT_CONTROL = {
     "bot_enabled": True,
@@ -47,7 +47,7 @@ DEFAULT_CONTROL = {
     # Per-call timeout for the background context-extraction LLM call
     # (the one that asks the model to summarize a message into a
     # durable shared-context fact). 20s was way too tight for cold-start
-    # 1M-context models — the call would time out, retry, fall back to
+    # 1M-context models - the call would time out, retry, fall back to
     # a smaller model, and flood the provider log. 60s is generous enough
     # for a cold start and still short enough that one stuck call can't
     # back up the rest of the context-extract queue.
@@ -64,7 +64,7 @@ DEFAULT_CONTROL = {
     # Off means the tier is neither written nor read; existing rows are kept.
     "entity_memory_enabled": True,
     # Facts about the current speaker injected into one prompt. The tier's
-    # real ceiling is the character budget below — this only bounds how many
+    # real ceiling is the character budget below - this only bounds how many
     # rows are considered.
     "entity_memory_max_items": 8,
     # Mirror `user:`/`dm:`-scoped extracted facts into entity memory. Those
@@ -73,7 +73,7 @@ DEFAULT_CONTROL = {
     "entity_memory_from_extract": True,
     # Hybrid graph next to vector RAG: site routes + ownership triples.
     # Deterministic (ast scan) plus optional triples from the existing
-    # context-extractor call — no extra LLM. Off leaves vector RAG as-is.
+    # context-extractor call - no extra LLM. Off leaves vector RAG as-is.
     "knowledge_graph_enabled": True,
     # ─── per-tier context budget (see context_budget.py) ────────────────
     # Relative weights for how the memory character budget is divided. They
@@ -105,7 +105,7 @@ DEFAULT_CONTROL = {
     # After a mention/reply (or after Maxwell posts in a room), keep
     # watching that whole channel so a directed follow-up does not need
     # another @ or Discord reply. Each later line can spend a full LLM
-    # turn deciding whether to speak — that is token-expensive, so the
+    # turn deciding whether to speak - that is token-expensive, so the
     # bool is the master switch. Seconds=0 also disables (legacy).
     "conversation_watch_enabled": True,
     "conversation_watch_seconds": 180,
@@ -115,7 +115,7 @@ DEFAULT_CONTROL = {
     # How much a line nobody pinged him with has to look like it wants an
     # answer before it is worth an LLM turn (0..1, see
     # watch_policy.reply_pressure). Every watched line used to become a turn,
-    # and a model asked "should you reply?" nearly always says yes — so the
+    # and a model asked "should you reply?" nearly always says yes - so the
     # first cut is made here, on the signals, and only lines that plausibly
     # want him get asked. Lower is chattier; 1.0 means only hard pings.
     "conversation_watch_pressure": 0.4,
@@ -170,13 +170,13 @@ DEFAULT_CONTROL = {
     "blocked_channels": [],
     "disabled_commands": [],
     # {guild_id: channel_id}. When a server has an entry, Maxwell only speaks
-    # in that one channel there — every other channel in that server is dead to
+    # in that one channel there - every other channel in that server is dead to
     # him, including autonomy. Set with `!solo`, cleared with `!solo off`.
     # Scoped per server on purpose: allowed_channels is global, so using it to
     # quiet one server silences him everywhere.
     "guild_solo_channel": {},
     # Guild ids whose autonomy blacklist entry was added BY `!solo`. Only these
-    # are handed back on `!solo off` — a server an admin silenced by hand stays
+    # are handed back on `!solo off` - a server an admin silenced by hand stays
     # silenced.
     "guild_solo_autonomy_added": [],
     "base_personality": (
@@ -205,7 +205,7 @@ DEFAULT_CONTROL = {
     "vc_debug": True,
     "autonomy_enabled": False,
     "autonomy_interval_seconds": 300,
-    "autonomy_min_post_gap_seconds": 0,  # deprecated — no longer enforced, kept for compat
+    "autonomy_min_post_gap_seconds": 0,  # deprecated - no longer enforced, kept for compat
     # Legacy single-purpose cooldown. Superseded by autonomy_floor_* below, which
     # subsumes it; kept because it's honored as a FLOOR on the new cooldown, so an
     # operator who tuned this up doesn't silently get a shorter window. 0 = defer
@@ -214,7 +214,7 @@ DEFAULT_CONTROL = {
     # --- Conversational turn-taking (autonomy_social.py) ---------------------
     # Autonomy runs on a timer; conversation runs on turns. These decide whether
     # Maxwell holds the floor in a room before he's allowed to speak unprompted.
-    # They gate ONLY speaking — memory and goal actions are untouched.
+    # They gate ONLY speaking - memory and goal actions are untouched.
     # Off means the planner still sees the room read but execute() stops
     # enforcing it: a debugging escape hatch, not a mode to run in.
     "autonomy_floor_enabled": True,
@@ -236,7 +236,7 @@ DEFAULT_CONTROL = {
     "autonomy_blocked_channels": [],
     "autonomy_blocked_servers": [],
     # Goals not acted on for this many days are flagged STALE in context (candidates for
-    # the complete_goal action). Not auto-deleted — the bot decides to retire them.
+    # the complete_goal action). Not auto-deleted - the bot decides to retire them.
     "autonomy_goal_stale_days": 14,
     # Periodic reflection nudge injected into context roughly every N seconds so Maxwell
     # self-reviews goals/memory and sets new objectives on its own cadence.

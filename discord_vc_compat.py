@@ -66,7 +66,7 @@ def _vc_member(vc, uid: int):
 def _patch_voice_recv_dm_hook() -> None:
     """voice_recv's gateway hook uses vc.guild.me, which is None in DM calls.
 
-    Do not override VoiceRecvClient.guild — VoiceConnectionState needs it
+    Do not override VoiceRecvClient.guild - VoiceConnectionState needs it
     to stay None so DM connect uses client.change_voice_state.
     """
     try:

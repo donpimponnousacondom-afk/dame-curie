@@ -80,7 +80,7 @@ class FakeBot:
     tests need: _is_sleeping / set_sleep / clear_sleep /
     _check_sleep_gate / _format_sleep_remaining. We DON'T pull the
     full MaxwellBot class in (it requires a Discord client + config
-    pipeline) — we test the *contract* by calling the methods that
+    pipeline) - we test the *contract* by calling the methods that
     the SleepTool / clear_sleep tool will hit at runtime.
 
     For the gate-level tests (which need a real `asyncio.Lock`-free
@@ -98,7 +98,7 @@ class FakeBot:
 
     def _now(self):
         # The real MaxwellBot uses asyncio.get_running_loop().time() so
-        # the test mirror here uses time.monotonic() — same epoch,
+        # the test mirror here uses time.monotonic() - same epoch,
         # no event-loop dependency.
         import time
 
@@ -299,7 +299,7 @@ def test_sleep_gate_posts_in_channel_not_dm():
 
 
 def test_sleep_gate_is_silent_for_lines_nobody_sent_him():
-    """Typing in a room he was in is not a ping — he stays asleep, and quiet.
+    """Typing in a room he was in is not a ping - he stays asleep, and quiet.
 
     The watch keeps a whole room live after he speaks, so an ordinary line in
     that room used to reach the gate and get answered with "the dame is sleeping":

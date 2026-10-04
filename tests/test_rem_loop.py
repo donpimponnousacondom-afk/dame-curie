@@ -50,7 +50,7 @@ def test_rem_loop_bypasses_tool_calls_and_records_run(tmp_path, disable_reasonin
             {"role": "assistant", "content": "DONE\n- reviewed visible slice\n- no memory edits"},
         ])
         rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), max_turns=3)
-        # 2026-07-21: REM no longer bypasses — it parses a trailing JSON
+        # 2026-07-21: REM no longer bypasses - it parses a trailing JSON
         # actions block and applies ltm/shared writes itself. A response
         # with no JSON block is a no-op (no edits), but tool_counts is now
         # a real action summary, not an empty dict.

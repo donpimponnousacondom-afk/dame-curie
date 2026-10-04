@@ -72,7 +72,7 @@ async def main() -> int:
     print(f"  tool_calls: {tool_calls!r}")
 
     if not content and not tool_calls:
-        print("FAIL: no answer or native tool call — reasoning alone is not a reply")
+        print("FAIL: no answer or native tool call - reasoning alone is not a reply")
         return 1
     if not p._last_usage or p._last_usage.get("total_tokens", 0) <= 0:
         print("WARN: usage not populated (some providers omit it on free tier)")

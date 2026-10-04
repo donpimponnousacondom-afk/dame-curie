@@ -21,7 +21,7 @@ extend-exclude = [
 
 [tool.ruff.lint]
 # Curated for signal over volume. The full E/W/S/TRY/ARG/PTH set reports >5k
-# findings on this tree, ~4k of which are `assert` in tests and long lines —
+# findings on this tree, ~4k of which are `assert` in tests and long lines -
 # neither is a defect here. What stays selected is the set where a hit usually
 # means a real bug: undefined names, bugbear traps, async footguns, mutable
 # shared state, and silently-wrong comprehensions.
@@ -51,7 +51,7 @@ ignore = [
     # it saves. Genuinely blocking work (reads, writes) is covered by ASYNC230.
     "ASYNC240",
     # try/except inside a loop. Flagged 15 times, and in each the try is there
-    # to keep one bad item from killing the batch — that is the intended shape.
+    # to keep one bad item from killing the batch - that is the intended shape.
     "PERF203",
     # zip() strict=: correct default is version-dependent behaviour change, so
     # it is opted into per call site rather than enforced tree-wide.

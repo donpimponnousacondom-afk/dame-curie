@@ -47,7 +47,7 @@ def _num(desc: str = "") -> dict[str, Any]:
     return {"type": "number", "description": desc}
 
 
-# parameter schemas only — descriptions are attached from tool.get_description()
+# parameter schemas only - descriptions are attached from tool.get_description()
 CORE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "send_message", "react", "search_messages", "lookup_user", "web_search",
@@ -101,7 +101,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "image_generator": _obj(
         {
             "prompt": _str(
-                "What to generate, or — with input images — the change to make"
+                "What to generate, or - with input images - the change to make"
             ),
             "image": _str(
                 "Optional image URL, data URI, or local path Dame Curie wrote; for several, pass a "
@@ -447,10 +447,10 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         },
         ["content"],
     ),
-    # NOTE: no more `reasoning_log` tool. Reasoning now rides inside every
-    # tool call via the auto-injected `reasoning` param (see build_openai_tools
-    # above and tool_registry.record_reasoning). Plain chat goes through
-    # send_message, which itself carries a reasoning field.
+    # NOTE: no more `explanation_log` tool. Reasoning now rides inside every
+    # tool call via the auto-injected `explanation` param (see build_openai_tools
+    # above and tool_registry.record_explanation). Plain chat goes through
+    # send_message, which itself carries a explanation field.
     "no_response": _obj({}),
     "more_tools": _obj(
         {
@@ -607,7 +607,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
             "move": _str(
                 "The move to play, in SAN (e4, Nf3, O-O, exd5, Qh5) or UCI "
                 "(e2e4, e7e8q). On the player's turn this is THEIR move. On "
-                "this bot's turn this is the move YOU chose — pick it from the "
+                "this bot's turn this is the move YOU chose - pick it from the "
                 "annotated legal-move list in the previous result. There is no "
                 "engine playing for you; omitting move on your own turn just "
                 "returns the position again."
@@ -639,7 +639,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
 # the matching one-line contract onto every tool description, the system prompt
 # lists tools grouped by contract, and bot.py imports RESULT_TOOL_NAMES to
 # decide whether a batch loops back for another model turn. Add a new tool to
-# exactly one set — the prompt, the schema, and the dispatch loop all follow.
+# exactly one set - the prompt, the schema, and the dispatch loop all follow.
 
 # Tools whose output is fed back to the model in a fresh turn.
 RESULT_TOOL_NAMES: frozenset[str] = frozenset(
@@ -657,7 +657,7 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "edit_message",
         # change_avatar returns a bare success ack ("Avatar changed
         # successfully"). Without a follow-up turn a model that calls only
-        # this leaves the turn silent — the user sees the new avatar and no
+        # this leaves the turn silent - the user sees the new avatar and no
         # text at all.
         "change_avatar",
         "list_servers",
@@ -698,7 +698,7 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "vc_where",
         "leave_vc",
         # set_activity gets a follow-up so the model can react to its own
-        # status change. change_presence deliberately does NOT — that one is
+        # status change. change_presence deliberately does NOT - that one is
         # the online/idle/dnd dot the user just set, and a follow-up turn
         # would race to undo it.
         "set_activity",
@@ -725,7 +725,7 @@ TURN_ENDING_TOOL_NAMES: frozenset[str] = frozenset(
 )
 
 # Plugin tools that declared ``returns_result = True``. Plugin names cannot live
-# in the static set above — they are discovered at import time — and without
+# in the static set above - they are discovered at import time - and without
 # this every plugin tool got the "returns nothing" contract, so the dispatch
 # loop ended the turn and the plugin's output was never read by the model.
 # Populated by PluginManager on load.
@@ -747,7 +747,7 @@ def returns_result(name: str) -> bool:
 
 
 # One line per contract class, appended to the tool's description so the model
-# reads it in the same place it reads the parameters. Kept short on purpose —
+# reads it in the same place it reads the parameters. Kept short on purpose -
 # this text is paid for on every single request, for every single tool.
 _CONTRACT_RESULT = " [returns output]"
 _CONTRACT_ENDING = " [ends the turn]"
@@ -779,13 +779,14 @@ def contract_groups(names: list[str]) -> dict[str, list[str]]:
     return groups
 
 
-# The reasoning parameter is stamped onto EVERY tool so the model does its
-# real reasoning *inside the tool call it wants to use* instead of a separate,
-# pointless `reasoning_log` tool. Same shape everywhere — see tool_registry.py.
-REASONING_PARAM: dict[str, Any] = {
+# Each tool gets the `explanation` argument. It gives the reason for the call
+# in one sentence. It is not the model's reasoning channel. Do not name it
+# `reasoning`: that name made models write <reasoning> tags into content.
+# See tool_registry.py.
+EXPLANATION_PARAM: dict[str, Any] = {
     "type": "string",
     "description": (
-        "The reason for this call. One sentence. The user sees it as a progress line."
+        "The reason for this call. One sentence, plain text. The user sees it as a progress line."
     ),
 }
 
@@ -799,10 +800,10 @@ def build_openai_tools(
 ) -> list[dict[str, Any]]:
     """Build OpenAI ``tools`` payload from live tool instances.
 
-    Every tool gets an auto-injected `reasoning` parameter on top of whatever
-    it declared in TOOL_PARAMETERS. Reasoning lives INSIDE the tool call now —
-    there is no standalone reasoning_log tool anymore. If you add a new tool,
-    you do nothing special: it gets reasoning for free. Stop forgetting.
+    Every tool gets an auto-injected `explanation` parameter on top of whatever
+    it declared in TOOL_PARAMETERS. The explanation lives INSIDE the tool call now -
+    there is no standalone explanation_log tool anymore. If you add a new tool,
+    you do nothing special: it gets explanation for free. Stop forgetting.
 
     Every description also gets its result contract appended (see
     result_contract) so the model knows, per tool, whether the output comes
@@ -847,21 +848,21 @@ def build_openai_tools(
         params = dict(declared)
         raw_props = params.get("properties")
         props = dict(raw_props) if isinstance(raw_props, dict) else {}
-        # `reasoning` is the first property and the first required name.
+        # `explanation` is the first property and the first required name.
         # The prompt tells the model to write it first; the schema must agree.
-        props = {"reasoning": props.pop("reasoning", REASONING_PARAM), **props}
+        props = {"explanation": props.pop("explanation", EXPLANATION_PARAM), **props}
         params["properties"] = props
-        # reasoning is ALWAYS required — no exceptions, no "terse on a trivial
+        # explanation is ALWAYS required - no exceptions, no "terse on a trivial
         # call" carve-out. If the model thinks before it acts, we want the
-        # trace. If it skips reasoning, the provider rejects the call instead
+        # trace. If it skips explanation, the provider rejects the call instead
         # of silently dropping it (which is what bit us before).
         raw_required = params.get("required")
         required = (
-            [r for r in raw_required if isinstance(r, str) and r != "reasoning"]
+            [r for r in raw_required if isinstance(r, str) and r != "explanation"]
             if isinstance(raw_required, (list, tuple))
             else []
         )
-        params["required"] = ["reasoning", *required]
+        params["required"] = ["explanation", *required]
         out.append(
             {
                 "type": "function",
@@ -1146,8 +1147,8 @@ def normalize_native_tool_calls(
 # Before this module the only handling was defensive scrubbing, and both of
 # its outcomes were bad: a dialect the scrubber knew got deleted (the reply
 # vanished and the turn went silent), and a dialect it did not know got
-# posted to the channel verbatim — the user reading a raw parameter dump
-# ("reasoning … content … reply true") instead of the message.
+# posted to the channel verbatim - the user reading a raw parameter dump
+# ("explanation … content … reply true") instead of the message.
 #
 # Recovery beats scrubbing: parse the leaked markup back into a real tool
 # call so it EXECUTES. send_message actually sends, shell actually runs, and
@@ -1218,7 +1219,7 @@ def _harmony_call_start(text: str, pos: int) -> int:
     return start
 
 
-# "send_message<arg>content</arg>hola</arg>" — a bare tool name glued to
+# "send_message<arg>content</arg>hola</arg>" - a bare tool name glued to
 # <arg> pairs, with no wrapper tag to find it by. Built per known-name set.
 _BARE_ARG_BODY = r"((?:<arg>\s*[A-Za-z_]\w*\s*</arg>.*?</arg>)+)"
 _bare_arg_cache: dict[frozenset, re.Pattern] = {}
@@ -1268,7 +1269,7 @@ def _json_only_fence_span(
     Models (Grok especially) wrap a real tool-call JSON object in `````json``.
     Skipping that fence left the sanitizer to strip the object and post an
     empty `````json`` block to Discord. XML/tool markup inside a fence is
-    still ignored — only a fence whose body is exactly one tool JSON counts.
+    still ignored - only a fence whose body is exactly one tool JSON counts.
     """
     json_body = text[json_start:json_end].strip()
     if not json_body:
@@ -1404,7 +1405,7 @@ def _pairs_from_body(body: str, name: str) -> dict[str, Any]:
     # e.g. "<content>hola</content>". Only names the schema declares are
     # accepted, so prose in angle brackets cannot invent an argument.
     props = dict((TOOL_PARAMETERS.get(name) or {}).get("properties") or {})
-    props.setdefault("reasoning", REASONING_PARAM)
+    props.setdefault("explanation", EXPLANATION_PARAM)
     args: dict[str, Any] = {}
     for key in props:
         tag = re.search(
@@ -1417,15 +1418,15 @@ def _pairs_from_body(body: str, name: str) -> dict[str, Any]:
     return args
 
 
-# The Python-call dialect: ``send_message(reasoning=…, content=…)``. Models
+# The Python-call dialect: ``send_message(explanation=…, content=…)``. Models
 # emit it constantly, nothing recovered it, so the whole parameter dump landed
 # in the channel as the visible reply.
 #
 # Two things make it awkward, and both show up in every real example:
-#   * values are unquoted and full of commas — "content=quedó santo pa, ya
+#   * values are unquoted and full of commas - "content=quedó santo pa, ya
 #     tenés el aura" is ONE value, so splitting on commas truncates the reply
 #     mid-sentence;
-#   * keys repeat — the model likes to restate `reasoning` after `content`.
+#   * keys repeat - the model likes to restate `explanation` after `content`.
 # So a comma only ends a value when a DECLARED parameter name and `=` follow
 # it, and the first occurrence of a key wins.
 _PAREN_ARG_KEY_RE = re.compile(r"([A-Za-z_]\w*)\s*=")
@@ -1450,7 +1451,7 @@ def _paren_call_re(names: frozenset) -> re.Pattern:
 
 
 # ":)", ";-)", "=)" and friends. A smiley inside a value is not a closing
-# paren, and Dame Curie's rooms are full of them — without this, "content=mira
+# paren, and Dame Curie's rooms are full of them - without this, "content=mira
 # esto :) jaja" gets cut to "mira esto :".
 _EMOTICON_CLOSE_RE = re.compile(r"[:;=xX8]-?\)$")
 
@@ -1485,7 +1486,7 @@ def _strip_wrapping_quotes(value: str) -> str:
 def _pairs_from_paren_body(interior: str, name: str) -> dict[str, Any]:
     """Split ``key=value, key=value`` where values may contain commas."""
     props = dict((TOOL_PARAMETERS.get(name) or {}).get("properties") or {})
-    props.setdefault("reasoning", REASONING_PARAM)
+    props.setdefault("explanation", EXPLANATION_PARAM)
     marks: list[tuple[int, int, str]] = []
     for match in _PAREN_ARG_KEY_RE.finditer(interior):
         key = match.group(1)
@@ -1514,7 +1515,7 @@ def _coerce_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
 
     A recovered call arrives as text, so ``reply`` is the string ``"true"``
     and ``max_results`` is ``"5"``. Tools take those through kwargs, where a
-    non-empty string is truthy — ``reply="false"`` would Discord-reply.
+    non-empty string is truthy - ``reply="false"`` would Discord-reply.
     """
     props = dict((TOOL_PARAMETERS.get(name) or {}).get("properties") or {})
     out: dict[str, Any] = {}
@@ -1546,7 +1547,7 @@ def _coerce_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
 # Keys of a leaked send_message whose tags were eaten before we saw the text
 # (a markdown renderer, a scrubber, a client that swallows angle brackets),
 # leaving a bare "key\nvalue" ladder as the visible reply.
-_TAGLESS_KEYS = ("reasoning", "content", "reply", "reply_to")
+_TAGLESS_KEYS = ("explanation", "content", "reply", "reply_to")
 
 
 def _recover_tagless_kv(text: str) -> tuple[str, dict[str, Any]] | None:
@@ -1554,7 +1555,7 @@ def _recover_tagless_kv(text: str) -> tuple[str, dict[str, Any]] | None:
 
     Deliberately narrow: the text must OPEN on a bare parameter-name line and
     carry at least two of them including ``content``. A real reply that opens
-    with a line reading only "reasoning" and later a line reading only
+    with a line reading only "explanation" and later a line reading only
     "content" is not a thing anyone types.
     """
     lines = str(text or "").split("\n")
@@ -1595,11 +1596,11 @@ def recover_text_tool_calls(
     Returns ``(raw_calls, leftover_text)``. ``raw_calls`` are in the provider's
     own ``tool_calls`` shape, so callers can feed them straight into the same
     dispatch path a native call takes. ``leftover_text`` is the response with
-    the recovered markup removed — the prose the model wrote around the call.
+    the recovered markup removed - the prose the model wrote around the call.
 
     Only names in ``known_names`` are recovered. XML/tool markup inside a
     fenced code block is skipped (quoting syntax is not a call). A fence
-    whose body is exactly one tool-call JSON object is recovered — Grok
+    whose body is exactly one tool-call JSON object is recovered - Grok
     wraps real calls in ``json`` fences, and skipping those left Discord
     an empty fence after the sanitizer ate the object.
     """
@@ -1609,7 +1610,7 @@ def recover_text_tool_calls(
     if len(raw) > _RECOVERY_MAX_INPUT_CHARS or not raw.strip():
         return [], raw
     allowed = {str(n).lower() for n in (known_names or ())} or None
-    # Recovery runs on every reply the provider did not attach tool_calls to —
+    # Recovery runs on every reply the provider did not attach tool_calls to -
     # which is most of them. Cheap substring gates keep an ordinary chat
     # message from paying for six regex scans it can never match.
     lowered = raw.lower()
@@ -1630,7 +1631,7 @@ def recover_text_tool_calls(
         name_attr = _NAME_ATTR_RE.search(match.group(0)[: match.group(0).find(">") + 1])
         name = name_attr.group(1) if name_attr else ""
         if not name:
-            # "<tool_call>send_message\n<arg_key>…" — the name is whatever
+            # "<tool_call>send_message\n<arg_key>…" - the name is whatever
             # leads the body, before the first tag or line break. Both the
             # newline-separated and the glued form show up in the wild.
             lead = re.split(r"[<\n]", body.lstrip(), maxsplit=1)[0]
@@ -1666,7 +1667,7 @@ def recover_text_tool_calls(
                 match.start(), match.end(), name, _pairs_from_body(match.group(2), name)
             )
 
-    # send_message(reasoning=…, content=…) — a call written as a Python call.
+    # send_message(explanation=…, content=…) - a call written as a Python call.
     if allowed and "(" in raw and "=" in raw:
         for match in _paren_call_re(frozenset(allowed)).finditer(raw):
             name = _clean_tool_name(match.group(1))
@@ -1773,7 +1774,7 @@ def message_chars(message: dict) -> int:
 
     An assistant turn replayed in a tool loop carries its arguments (a
     file body, a shell script, a long send_message) and those are real
-    prompt tokens — counting only ``content`` leaves a budget blind to the
+    prompt tokens - counting only ``content`` leaves a budget blind to the
     heaviest messages in the conversation.
     """
     extra = len(str(message.get("tool_call_id") or ""))
@@ -1966,10 +1967,10 @@ def elide_tool_calls_for_history(
         original_chars = len(raw_args) if isinstance(raw_args, str) else len(json.dumps(raw_args, ensure_ascii=False))
         changed = False
         for key, value in args.items():
-            limit = 300 if key == "reasoning" else max_chars
+            limit = 300 if key == "explanation" else max_chars
             if isinstance(value, str) and len(value) > limit:
-                if key == "reasoning":
-                    marker = f"… [{len(value)} chars total; reasoning shortened]"
+                if key == "explanation":
+                    marker = f"… [{len(value)} chars total; explanation shortened]"
                     args[key] = value[: limit - len(marker)] + marker
                 else:
                     args[key] = f"[large {key} omitted, {len(value)} chars]"

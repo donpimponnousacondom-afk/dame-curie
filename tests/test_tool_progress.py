@@ -3,7 +3,7 @@
 Covers the four behaviors the user actually cares about:
   1. First post is the generic "working on it…" (no tool name yet)
   2. update() replaces the previous sentence in place (one line, not a log)
-  3. Rate limit coalesces rapid updates — the channel doesn't see every tick
+  3. Rate limit coalesces rapid updates - the channel doesn't see every tick
   4. notify_streaming() + stop() cleanly deletes the message so the
      channel is left with only the tool's own streamed output
   5. stop() is idempotent and safe from finally blocks
@@ -114,7 +114,7 @@ def test_half_sentence_reasoning_shows_partial_tail():
     # Set a tool but the reasoning buffer has no terminator yet.
     prog._last_edit = 0
     asyncio.run(prog.update("shell", "the user wants me to look at"))
-    # No sentence terminator yet — show a partial preview.
+    # No sentence terminator yet - show a partial preview.
     assert msg_obj.content == "thinking: the user wants me to look at → shell"
     # A terminator arrives. The latest complete sentence IS the
     # whole buffer, so the visible line shows it.
@@ -138,11 +138,11 @@ def test_update_replaces_in_place():
     asyncio.run(prog.start())
     msg_obj = msg.channel.sent[0]
 
-    # First update — tool name + reasoning appended to buffer.
+    # First update - tool name + reasoning appended to buffer.
     prog._last_edit = 0
     asyncio.run(prog.update("shell", "checking disk usage."))
     assert msg_obj.content == "thinking: checking disk usage. → shell"
-    # New tool — buffer resets to the new reasoning (new tool = new line).
+    # New tool - buffer resets to the new reasoning (new tool = new line).
     prog._last_edit = 0
     asyncio.run(prog.update("web_search", "searching the docs."))
     assert msg_obj.content == "thinking: searching the docs. → web_search"
@@ -150,7 +150,7 @@ def test_update_replaces_in_place():
 
 
 def test_update_uses_models_own_words():
-    """The reason field IS the message — no decoration, no backticks, no emoji.
+    """The reason field IS the message - no decoration, no backticks, no emoji.
     Format: 'using <tool>: <reasoning>'."""
     msg = FakeMessage()
     prog = tool_progress.ToolProgress(msg)
@@ -186,12 +186,12 @@ def test_rate_limit_coalesces_rapid_updates():
     prog = tool_progress.ToolProgress(msg)
     asyncio.run(prog.start())
     msg_obj = msg.channel.sent[0]
-    # First update — go through (force last_edit to 0 so the rate limit
+    # First update - go through (force last_edit to 0 so the rate limit
     # treats the post-start window as already-elapsed).
     prog._last_edit = 0
     asyncio.run(prog.update("shell", "doing thing one."))
     assert msg_obj.content == "thinking: doing thing one. → shell"
-    # Second update immediately — should be cached but NOT edited
+    # Second update immediately - should be cached but NOT edited
     edits_before = len(msg.channel.edited)
     asyncio.run(prog.update("shell", "doing thing two."))
     # No new edit because we're within the rate limit window
@@ -264,7 +264,7 @@ def test_long_reasoning_truncated_to_visible_budget():
     content = msg.channel.sent[0].content
     # Newlines collapsed to spaces.
     assert "\n" not in content
-    # Latest complete sentence — the one that ended with a period.
+    # Latest complete sentence - the one that ended with a period.
     # The 'x' filler has no terminator so it's NOT shown.
     assert content == "thinking: checking disk usage and memory now. → shell"
     # No "x" filler in the visible line.
@@ -310,7 +310,7 @@ def test_tool_base_helper_signals_progress():
     # The per-channel bug under load: when a tool batches across
     # many channels and the helper doesn't have the message in scope,
     # the OLD code (single ``bot._current_progress``) would signal
-    # whatever channel's progress was last written — almost always
+    # whatever channel's progress was last written - almost always
     # the WRONG one. The NEW code without ``message`` only acts when
     # the dict has exactly one entry (the single-channel bot case),
     # so a multi-channel bot never accidentally signals the wrong
@@ -340,7 +340,7 @@ def test_tool_base_helper_signals_progress():
 
 def test_progress_not_posted_when_start_skipped():
     """If the bot didn't create a progress (flag off, no batch), start() is
-    a no-op and update() does nothing — exactly the disabled-by-default case."""
+    a no-op and update() does nothing - exactly the disabled-by-default case."""
     msg = FakeMessage()
     # The control flag check happens in bot.py, not in ToolProgress itself.
     # But we can verify the *tool* handles the case where start was never
@@ -368,7 +368,7 @@ def test_tick_shows_thinking_before_tool_name():
     asyncio.run(prog.start())
     msg_obj = msg.channel.sent[0]
     edits_before = len(msg.channel.edited)
-    # First tick — reasoning must include a sentence terminator to
+    # First tick - reasoning must include a sentence terminator to
     # pass the meaningful-reasoning gate.
     asyncio.run(
         prog.tick(reasoning_delta="The user wants me to draft a site about apples.")
@@ -382,13 +382,13 @@ def test_tick_shows_thinking_before_tool_name():
 
 def test_tick_accumulates_reasoning_text():
     """Multiple reasoning deltas accumulate in the buffer. 2026-07-21:
-    visible line is the LATEST complete sentence — it advances
+    visible line is the LATEST complete sentence - it advances
     each time a new sentence finishes, not by char."""
     msg = FakeMessage()
     prog = tool_progress.ToolProgress(msg)
     asyncio.run(prog.start())
     msg_obj = msg.channel.sent[0]
-    # First tick — a complete first sentence, no second yet.
+    # First tick - a complete first sentence, no second yet.
     prog._last_edit = 0
     asyncio.run(prog.tick(reasoning_delta="First bit. "))
     assert msg_obj.content == "thinking: First bit."
@@ -397,7 +397,7 @@ def test_tick_accumulates_reasoning_text():
     prog._last_edit = 0
     asyncio.run(prog.tick(reasoning_delta="Then more thinking. "))
     assert msg_obj.content == "thinking: Then more thinking."
-    # The buffer does hold the new text — the visible line just
+    # The buffer does hold the new text - the visible line just
     # tracks the latest finished sentence.
     assert "Then more thinking." in prog._reasoning_buffer
     assert "First bit." in prog._reasoning_buffer
@@ -407,7 +407,7 @@ def test_tick_accumulates_reasoning_text():
 def test_tick_tool_name_shows_tool_prefix():
     """When the model commits to a tool, the tool name appears on
     the visible line along with whatever reasoning the model attached
-    to the tool call. The reasoning IS the message — the tool name
+    to the tool call. The reasoning IS the message - the tool name
     is just a tag.
 
     2026-07-21 contract: the visible line is one of three states:
@@ -418,7 +418,7 @@ def test_tick_tool_name_shows_tool_prefix():
     prog = tool_progress.ToolProgress(msg)
     asyncio.run(prog.start())
     msg_obj = msg.channel.sent[0]
-    # First, a thinking tick — reasoning arrives, tool not yet announced.
+    # First, a thinking tick - reasoning arrives, tool not yet announced.
     prog._last_edit = 0
     asyncio.run(prog.tick(reasoning_delta="Let me check that user."))
     assert msg_obj.content == "thinking: Let me check that user."
@@ -452,21 +452,21 @@ def test_tick_tool_name_only_shows_using_when_no_reasoning():
 def test_tick_rate_limits_to_avoid_429():
     """Rapid ticks within _TOKEN_TICK_INTERVAL coalesce. 2026-07-21:
     with the per-sentence design, the visible line only changes when
-    a NEW sentence terminator arrives — same sentence, no edit."""
+    a NEW sentence terminator arrives - same sentence, no edit."""
     msg = FakeMessage()
     prog = tool_progress.ToolProgress(msg)
     asyncio.run(prog.start())
     msg_obj = msg.channel.sent[0]
-    # First tick — first complete sentence, goes through.
+    # First tick - first complete sentence, goes through.
     prog._last_edit = 0
     asyncio.run(prog.tick(reasoning_delta="First reasoning fragment."))
     edits_after_first = len(msg.channel.edited)
-    # Two rapid ticks inside the window — same sentence, no new
+    # Two rapid ticks inside the window - same sentence, no new
     # terminator, so the rendered line is unchanged → no edit.
     asyncio.run(prog.tick(reasoning_delta=" More after."))
     asyncio.run(prog.tick(reasoning_delta=" And more."))
     assert len(msg.channel.edited) == edits_after_first
-    # A new tick that lands a NEW terminator — the latest complete
+    # A new tick that lands a NEW terminator - the latest complete
     # sentence advances, so a new edit fires.
     prog._last_edit = 0
     asyncio.run(prog.tick(reasoning_delta=" Brand new sentence here."))
@@ -481,7 +481,7 @@ def test_tick_is_noop_after_stop():
     prog = tool_progress.ToolProgress(msg)
     asyncio.run(prog.start())
     asyncio.run(prog.stop())
-    # Stopped — tick should not raise, not edit.
+    # Stopped - tick should not raise, not edit.
     edits_before = len(msg.channel.edited)
     asyncio.run(prog.tick(reasoning_delta="after stop"))
     assert len(msg.channel.edited) == edits_before
@@ -492,7 +492,7 @@ def test_stop_deletes_without_final_edit():
 
     2026-07-22: the previous design did a final edit() in stop() to show
     the model's "last words" before the delete. That edit was fire-and-
-    forget and ran AFTER stop() returned, racing the bot's reply send —
+    forget and ran AFTER stop() returned, racing the bot's reply send -
     the user saw the stale progress message visibly change content then
     vanish a beat later (reported as "reappears then disappears"). The
     fix: stop() just deletes. A tick that fired right before stop() may
@@ -541,7 +541,7 @@ def test_fast_tool_no_progress_message_posted():
     on it…', stops the tool batch in 50ms, then sends a fresh reply.
     Old behavior: <placeholder> <deletion> <reply>. New behavior:
     if stop() lands before the deferred post window, no message
-    ever goes out — the user just sees the reply.
+    ever goes out - the user just sees the reply.
 
     With the fire-and-forget start_defer() API this is the path the
     bot's gen_progress takes. We exercise it directly: start_defer
@@ -652,7 +652,7 @@ def test_update_does_not_clobber_buffer_with_placeholder():
     # Now the bot's _on_tool_call_name fires with the placeholder
     prog._last_edit = 0
     asyncio.run(prog.update("shell", "generating…"))
-    # The buffer is INTACT — the placeholder is treated as a
+    # The buffer is INTACT - the placeholder is treated as a
     # tool-name announcement, not a thought.
     assert "I will check the disk." in prog._reasoning_buffer
     assert "Now looking at usage." in prog._reasoning_buffer
@@ -664,13 +664,13 @@ def test_update_does_not_clobber_buffer_with_placeholder():
 def test_concurrent_stop_during_deferred_post():
     """stop() called during the deferred post window must cancel
     the post task. Otherwise a 'working on it…' message lands
-    AFTER the bot's reply has gone out — the exact orphan-message
+    AFTER the bot's reply has gone out - the exact orphan-message
     flicker the user complained about."""
     msg = FakeMessage()
     prog = tool_progress.ToolProgress(msg)
     # Fire-and-forget the deferred post
     asyncio.run(prog.start_defer())
-    # stop() immediately — the deferred post is mid-sleep
+    # stop() immediately - the deferred post is mid-sleep
     asyncio.run(prog.stop())
     # The post task was cancelled; the post never landed
     assert msg.channel.sent == []
@@ -722,11 +722,11 @@ def test_concurrent_progresses_isolated_per_channel():
     inst = _Stub(bot)
     msg_a = SimpleNamespace(channel=SimpleNamespace(id=100))
     msg_b = SimpleNamespace(channel=SimpleNamespace(id=200))
-    # Tool runs in channel A — should signal ONLY A's progress.
+    # Tool runs in channel A - should signal ONLY A's progress.
     inst._signal_streaming(msg_a)
     assert sig_a == [True]
     assert sig_b == []
-    # Tool runs in channel B — should signal ONLY B's progress.
+    # Tool runs in channel B - should signal ONLY B's progress.
     sig_a.clear()
     inst._signal_streaming(msg_b)
     assert sig_a == []

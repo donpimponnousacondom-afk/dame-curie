@@ -3,11 +3,11 @@
 A tool missing from one of them fails differently each time and none of the
 failures point at the cause:
 
-* no entry in ``TOOL_PARAMETERS`` — the model gets a nameless free-form object
-* missing from ``KNOWN_TOOLS`` — the dashboard never lists it, and
+* no entry in ``TOOL_PARAMETERS`` - the model gets a nameless free-form object
+* missing from ``KNOWN_TOOLS`` - the dashboard never lists it, and
   ``api/state.py`` silently strips it out of ``disabled_tools``, so the tool
   cannot be turned off through the API at all
-* in neither contract set — it is treated as silent, and a turn that only
+* in neither contract set - it is treated as silent, and a turn that only
   called it goes out empty
 
 This is a static scan of bot.py's registrations because constructing the bot

@@ -515,15 +515,15 @@ def test_footer_commands_auth_validation_and_static_replies(
         assert "Footer: on" in message.channel.sent[-1].content
         assert FOOTER_MARKER not in message.channel.sent[0].content
         assert message.channel.sent[1].content.endswith(
-            "-# TTFT — | TPS —" + FOOTER_MARKER
+            "-# TTFT - | TPS -" + FOOTER_MARKER
         )
         assert all(
-            sent.content.endswith("-# — —" + FOOTER_MARKER)
+            sent.content.endswith("-# - -" + FOOTER_MARKER)
             and not sent.content.startswith("```")
             for sent in message.channel.sent[2:-1]
         )
         assert message.channel.sent[-1].content.startswith("```\nFooter: on\n")
-        assert message.channel.sent[-1].content.endswith("— —" + FOOTER_MARKER + "\n```")
+        assert message.channel.sent[-1].content.endswith("- -" + FOOTER_MARKER + "\n```")
         assert message.channel.sent[-1].content.count("```") == 2
         assert bot._delivery_measurements.lookup("100")[0] == "999"
         assert len(writes) == 3
@@ -560,7 +560,7 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
             for sent in message.channel.sent[:-1]
         )
         assert message.channel.sent[-1].content == (
-            "```\n" + build.format() + "\nTTFT — | TPS —" + FOOTER_MARKER + "\n```"
+            "```\n" + build.format() + "\nTTFT - | TPS -" + FOOTER_MARKER + "\n```"
         )
         assert len(bot._delivery_measurements.records) == 1
         bot._control["footer_enabled"] = False
@@ -779,11 +779,11 @@ def test_intentional_unmeasured_footer_has_no_call_fields():
     template = "{{TTFT}} {{TPS}} {{PROVIDER}} {{CONTEXT}} {{MODEL}} {{BOT}}"
     bot = fake_bot(_control={"footer_format": template})
     assert (
-        render_footer(template, None, "Curie") == "-# — — — — — Curie" + FOOTER_MARKER
+        render_footer(template, None, "Curie") == "-# - - - - - Curie" + FOOTER_MARKER
     )
     clean, wire = prepare_delivery(bot, "static reply", None, unmeasured=True)
     assert clean == ["static reply"]
-    assert wire[0].endswith("-# — — — — — Dame Curie" + FOOTER_MARKER)
+    assert wire[0].endswith("-# - - - - - Dame Curie" + FOOTER_MARKER)
     assert prepare_delivery(bot, "other static reply", None)[1] == [
         "other static reply"
     ]
@@ -937,7 +937,7 @@ def test_dispatch_overwrites_forged_metrics_without_polluting_tool_history(
     from bot import MaxwellBot
 
     trace = AsyncMock()
-    monkeypatch.setattr(bot_module, "record_reasoning", trace)
+    monkeypatch.setattr(bot_module, "record_explanation", trace)
 
     async def scenario():
         tool = SimpleNamespace(

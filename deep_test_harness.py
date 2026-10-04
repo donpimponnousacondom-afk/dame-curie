@@ -224,8 +224,8 @@ class DeepTestHarness:
             return "Unescaped HTML double quotes safely escaped in JSON"
 
         def test_partial_reasoning_extraction():
-            arg_chunk = '{"reasoning": "Thinking step 1: check files", "command": "ls"}'
-            extracted = providers._extract_partial_reasoning(arg_chunk)
+            arg_chunk = '{"explanation": "Thinking step 1: check files", "command": "ls"}'
+            extracted = providers._extract_partial_explanation(arg_chunk)
             assert "Thinking step 1" in extracted
             return "Partial in-flight reasoning extracted from streaming arguments"
 
@@ -258,8 +258,8 @@ class DeepTestHarness:
                 params = fn["parameters"]
                 assert params["type"] == "object"
                 assert "properties" in params
-                assert "reasoning" in params["properties"]  # reasoning injected into all schemas
-            return f"{len(tools)} OpenAI tool schemas built with injected reasoning"
+                assert "explanation" in params["properties"]  # explanation injected into all schemas
+            return f"{len(tools)} OpenAI tool schemas built with injected explanation"
 
         def test_native_tool_call_normalization():
             raw_calls = [
@@ -268,7 +268,7 @@ class DeepTestHarness:
                     "type": "function",
                     "function": {
                         "name": "shell",
-                        "arguments": '{"command": "date", "reasoning": "Need current timestamp"}',
+                        "arguments": '{"command": "date", "explanation": "Need current timestamp"}',
                     },
                 }
             ]
@@ -277,7 +277,7 @@ class DeepTestHarness:
             call = normalized[0]
             assert call["name"] == "shell"
             assert call["arguments"]["command"] == "date"
-            assert call["arguments"]["reasoning"] == "Need current timestamp"
+            assert call["arguments"]["explanation"] == "Need current timestamp"
             return "Native tool calls normalized and argument JSON parsed"
 
         def test_text_tool_call_recovery():
@@ -288,12 +288,12 @@ class DeepTestHarness:
             return "Text tag tool calls successfully recovered"
 
         def test_reasoning_extraction_and_clamping():
-            params = {"reasoning": "A" * 500, "command": "uname"}
-            reasoning, clean_params = tool_registry.extract_reasoning(params)
-            assert "reasoning" not in clean_params  # popped out
-            assert len(reasoning) <= 500
-            cleaned_reasoning = tool_registry._sanitize_reasoning(reasoning)
-            assert len(cleaned_reasoning) <= tool_registry.REASONING_MAX_CHARS
+            params = {"explanation": "A" * 500, "command": "uname"}
+            explanation, clean_params = tool_registry.extract_explanation(params)
+            assert "explanation" not in clean_params  # popped out
+            assert len(explanation) <= 500
+            cleaned_explanation = tool_registry._sanitize_explanation(explanation)
+            assert len(cleaned_explanation) <= tool_registry.EXPLANATION_MAX_CHARS
             assert clean_params["command"] == "uname"
             return "Reasoning popped and clamped to max chars"
 

@@ -2,7 +2,7 @@
 
 Discord does NOT answer that with a 404. It answers the send with a 400
 "Invalid Form Body / In message_reference: Unknown message" (error code
-50035), which discord.py raises as a bare ``discord.HTTPException`` — so the
+50035), which discord.py raises as a bare ``discord.HTTPException`` - so the
 ``except discord.NotFound`` guards never fired and the whole turn blew up
 with an unhandled exception (pm2 maxwell-bot-error.log 2026-07-21 12:47 and
 2026-07-23 09:24, both "ERROR - Error handling message").

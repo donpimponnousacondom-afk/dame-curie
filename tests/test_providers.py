@@ -77,7 +77,7 @@ class FakeResponse:
 
 
 class FakeNoneJsonResponse(FakeResponse):
-    """Returns None from json() — simulates a malformed/empty 200 response."""
+    """Returns None from json() - simulates a malformed/empty 200 response."""
 
     def _json_body(self):
         return None
@@ -453,19 +453,19 @@ def test_429_rate_limit_skips_to_fallback_without_doomed_retry():
 
 def test_append_tool_call_arguments_accepts_dict():
     """GLM-style providers send arguments as an object, not a JSON string."""
-    from providers import _append_tool_call_arguments, _extract_partial_reasoning
+    from providers import _append_tool_call_arguments, _extract_partial_explanation
 
     slot = {"function": {"name": "send_message", "arguments": ""}}
     _append_tool_call_arguments(
         slot,
-        {"reasoning": "replying", "content": "hello"},
+        {"explanation": "replying", "content": "hello"},
     )
     args = slot["function"]["arguments"]
     assert isinstance(args, str)
     parsed = json.loads(args)
     assert parsed["content"] == "hello"
-    assert _extract_partial_reasoning(args) == "replying"
-    assert _extract_partial_reasoning(parsed) == "replying"
+    assert _extract_partial_explanation(args) == "replying"
+    assert _extract_partial_explanation(parsed) == "replying"
 
 
 def test_append_tool_call_arguments_concatenates_strings():

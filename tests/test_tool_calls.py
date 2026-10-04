@@ -1,13 +1,13 @@
-"""Tests for the new reasoning-in-tool-calls + native-only dispatch.
+"""Tests for the new explanation-in-tool-calls + native-only dispatch.
 
 The XML ``collect_tool_calls`` dispatcher is gone (Maxwell is native
-function-calling only now). What stays is ``strip_tool_payload_leaks`` — the
+function-calling only now). What stays is ``strip_tool_payload_leaks`` - the
 defensive sanitizer that scrubs any leaked ``<tool:...>`` tags a misbehaving
 model drops into visible text even in native mode. These tests cover that
-sanitizer plus the new reasoning contract:
-- every tool schema gets an auto-injected ``reasoning`` param,
-- ``extract_reasoning`` pulls it out of params before the tool runs,
-- ``_sanitize_reasoning`` strips tag-wrapped thoughts the model sneakily emits.
+sanitizer plus the new explanation contract:
+- every tool schema gets an auto-injected ``explanation`` param,
+- ``extract_explanation`` pulls it out of params before the tool runs,
+- ``_sanitize_explanation`` strips tag-wrapped thoughts the model sneakily emits.
 """
 
 import json
@@ -16,9 +16,9 @@ from types import SimpleNamespace
 import pytest
 
 from bot import MaxwellBot, strip_tool_payload_leaks
-from tool_registry import extract_reasoning, _sanitize_reasoning, record_reasoning
+from tool_registry import extract_explanation, _sanitize_explanation, record_explanation
 from tool_schemas import (
-    REASONING_PARAM,
+    EXPLANATION_PARAM,
     build_openai_tools,
     elide_tool_calls_for_history,
     message_chars,
@@ -119,7 +119,7 @@ def test_strip_tool_payload_leaks_catches_leaking_variants():
 def test_strip_tool_payload_leaks_removes_deepseek_dsml_invoke():
     leaked = (
         '<｜｜DSML｜｜invoke name="send_message">\n'
-        '<｜｜DSML｜｜parameter name="reasoning" string="true">'
+        '<｜｜DSML｜｜parameter name="explanation" string="true">'
         "Z3ki is calling me out</｜｜DSML｜｜parameter>\n"
         '<｜｜DSML｜｜parameter name="content" string="true">'
         "my bad</｜｜DSML｜｜parameter>\n"
@@ -141,19 +141,19 @@ def test_strip_tool_payload_leaks_removes_deepseek_dsml_invoke():
 
 def test_strip_tool_payload_leaks_extracts_send_message_arg_protocol():
     leaked = (
-        "send_message<arg>reasoning</arg>Short Russian one-liner acknowledging "
+        "send_message<arg>explanation</arg>Short Russian one-liner acknowledging "
         "they dropped it; stay firm, no MCP connect.</arg>"
-        "<arg>content</arg>ну ладно, без обид — просто к чужим mcp не лезу.</arg>"
+        "<arg>content</arg>ну ладно, без обид - просто к чужим mcp не лезу.</arg>"
     )
-    assert strip_tool_payload_leaks(leaked) == "ну ладно, без обид — просто к чужим mcp не лезу."
+    assert strip_tool_payload_leaks(leaked) == "ну ладно, без обид - просто к чужим mcp не лезу."
     mixed = "ok " + leaked
-    assert strip_tool_payload_leaks(mixed) == "ok ну ладно, без обид — просто к чужим mcp не лезу."
-    assert "reasoning" not in strip_tool_payload_leaks(leaked)
+    assert strip_tool_payload_leaks(mixed) == "ok ну ладно, без обид - просто к чужим mcp не лезу."
+    assert "explanation" not in strip_tool_payload_leaks(leaked)
     assert "<arg>" not in strip_tool_payload_leaks(leaked)
 
 
 def test_strip_tool_payload_leaks_drops_non_send_message_arg_protocol():
-    leaked = "shell<arg>command</arg>cat /etc/passwd</arg><arg>reasoning</arg>peek</arg>"
+    leaked = "shell<arg>command</arg>cat /etc/passwd</arg><arg>explanation</arg>peek</arg>"
     out = strip_tool_payload_leaks(leaked)
     assert "passwd" not in out
     assert "shell" not in out
@@ -181,7 +181,7 @@ def test_strip_tool_payload_leaks_drops_empty_json_fence():
     assert strip_tool_payload_leaks("look:\n```json\n\n```\noops") == "look:\n\noops"
 
 
-# ---- reasoning param injection on every tool schema ----
+# ---- explanation param injection on every tool schema ----
 
 
 def test_every_tool_gets_reasoning_param():
@@ -189,65 +189,65 @@ def test_every_tool_gets_reasoning_param():
     out = {o["function"]["name"]: o for o in build_openai_tools(tools)}
     for name, fn in out.items():
         props = fn["function"]["parameters"]["properties"]
-        assert "reasoning" in props, f"{name} is missing the reasoning param, damn it"
+        assert "explanation" in props, f"{name} is missing the explanation param, damn it"
 
 
 def test_reasoning_is_always_required():
     tools = {"send_message": _FakeTool()}
     out = build_openai_tools(tools)[0]
     required = out["function"]["parameters"].get("required", [])
-    # reasoning is always in required so the provider rejects empty calls
+    # explanation is always in required so the provider rejects empty calls
     # instead of silently dropping the trace. The tool's own required field
     # (content) is preserved alongside.
-    assert required == ["reasoning", "content"]
-    assert next(iter(out["function"]["parameters"]["properties"])) == "reasoning"
+    assert required == ["explanation", "content"]
+    assert next(iter(out["function"]["parameters"]["properties"])) == "explanation"
 
 
 def test_reasoning_param_schema_is_stable():
-    # same shape everywhere — no per-tool drift
-    assert REASONING_PARAM["type"] == "string"
-    assert "plain" in REASONING_PARAM["description"].lower()
+    # same shape everywhere - no per-tool drift
+    assert EXPLANATION_PARAM["type"] == "string"
+    assert "plain" in EXPLANATION_PARAM["description"].lower()
 
 
-# ---- extract_reasoning / sanitize ----
+# ---- extract_explanation / sanitize ----
 
 
 def test_extract_reasoning_pops_it_out_of_params():
-    reasoning, params = extract_reasoning(
-        {"reasoning": "because the user asked", "content": "hi"}
+    explanation, params = extract_explanation(
+        {"explanation": "because the user asked", "content": "hi"}
     )
-    assert reasoning == "because the user asked"
+    assert explanation == "because the user asked"
     assert params == {"content": "hi"}
 
 
 def test_extract_reasoning_missing_returns_empty():
-    reasoning, params = extract_reasoning({"content": "hi"})
-    assert reasoning == ""
+    explanation, params = extract_explanation({"content": "hi"})
+    assert explanation == ""
     assert params == {"content": "hi"}
 
 
 def test_extract_reasoning_handles_none_params():
-    reasoning, params = extract_reasoning(None)
-    assert reasoning == ""
+    explanation, params = extract_explanation(None)
+    assert explanation == ""
     assert params == {}
 
 
 def test_sanitize_reasoning_strips_wrapped_thought_tags():
-    assert _sanitize_reasoning("<thoughts>why</thoughts> do it") == "why  do it"
+    assert _sanitize_explanation("<thoughts>why</thoughts> do it") == "why  do it"
 
 
 def test_sanitize_reasoning_clamps_giant_input():
-    out = _sanitize_reasoning("x" * 5000)
+    out = _sanitize_explanation("x" * 5000)
     assert len(out) <= 1000
     assert out.endswith("…")
 
 
 def test_sanitize_reasoning_empty_stays_empty():
-    assert _sanitize_reasoning("") == ""
-    assert _sanitize_reasoning(None) == ""
+    assert _sanitize_explanation("") == ""
+    assert _sanitize_explanation(None) == ""
 
 
-# ---- record_reasoning end-to-end (fake bot) ----
+# ---- record_explanation end-to-end (fake bot) ----
 
 
 def test_record_reasoning_writes_trace_and_swallows_errors():
@@ -263,9 +263,9 @@ def test_record_reasoning_writes_trace_and_swallows_errors():
     bot = FakeBot()
 
     async def run():
-        await record_reasoning(
+        await record_explanation(
             bot, message=object(), tool_name="send_message",
-            reasoning="user wants a reply", params={"content": "hi", "reasoning": "x"},
+            explanation="user wants a reply", params={"content": "hi", "explanation": "x"},
             result="__MESSAGE_SENT__",
         )
 
@@ -274,8 +274,8 @@ def test_record_reasoning_writes_trace_and_swallows_errors():
     t = bot.traces[0]
     assert t["tool"] == "send_message"
     assert t["thoughts"] == "user wants a reply"
-    # reasoning must NOT leak into the params_preview
-    assert "reasoning" not in t["params_preview"]
+    # explanation must NOT leak into the params_preview
+    assert "explanation" not in t["params_preview"]
     assert t["params_preview"]["content"] == "hi"
 
 
@@ -292,13 +292,13 @@ def test_record_reasoning_empty_reasoning_records_a_stub():
     bot = FakeBot()
 
     async def run():
-        await record_reasoning(
+        await record_explanation(
             bot, message=object(), tool_name="react",
-            reasoning="", params={"emoji": "👍"}, result="Reacted",
+            explanation="", params={"emoji": "👍"}, result="Reacted",
         )
 
     asyncio.run(run())
-    assert bot.traces[0]["thoughts"] == "(no reasoning provided by the model)"
+    assert bot.traces[0]["thoughts"] == "(no explanation provided by the model)"
 
 
 def test_select_tool_protocol_native_wins_over_custom():
@@ -453,10 +453,10 @@ def test_record_reasoning_does_not_raise_on_bot_failure():
     import asyncio
 
     async def run():
-        # must NOT raise — a trace write failure must never kill the tool result
-        await record_reasoning(
+        # must NOT raise - a trace write failure must never kill the tool result
+        await record_explanation(
             BrokenBot(), message=object(), tool_name="shell",
-            reasoning="x", params={"command": "ls"}, result="ok",
+            explanation="x", params={"command": "ls"}, result="ok",
         )
 
     asyncio.run(run())  # no exception = pass
@@ -479,15 +479,15 @@ def test_elide_compacts_message_content():
     assert send_args["content"].startswith("[large content omitted,")
     assert "20000" in send_args["content"] or str(len(html)) in send_args["content"]
     calls[0]["function"]["arguments"] = json.dumps(
-        {"reasoning": "r" * 9000, "query": "weather"}
+        {"explanation": "r" * 9000, "query": "weather"}
     )
     reason_args = json.loads(elide_tool_calls_for_history(calls)[0]["function"]["arguments"])
-    assert reason_args["reasoning"].startswith("r" * 200)
-    assert reason_args["reasoning"].endswith("[9000 chars total; reasoning shortened]")
-    assert len(reason_args["reasoning"]) <= 300
+    assert reason_args["explanation"].startswith("r" * 200)
+    assert reason_args["explanation"].endswith("[9000 chars total; explanation shortened]")
+    assert len(reason_args["explanation"]) <= 300
     assert reason_args["query"] == "weather"
     calls[0]["function"]["arguments"] = json.dumps(
-        {"reasoning": "r" * 9000, "query": "q" * 5000, "options": ["x" * 9000]}
+        {"explanation": "r" * 9000, "query": "q" * 5000, "options": ["x" * 9000]}
     )
     out = elide_tool_calls_for_history(calls)
     bounded = out[0]["function"]["arguments"]
@@ -498,7 +498,7 @@ def test_elide_compacts_message_content():
     assert elide_tool_calls_for_history(out) == out
 
     text_tail = [
-        {"role": "assistant", "content": "reasoning " * 5000},
+        {"role": "assistant", "content": "explanation " * 5000},
         {"role": "user", "content": "=== TOOL RESULTS ===\n" + "result " * 5000},
         {"role": "assistant", "content": "new round " * 5000},
         {"role": "user", "content": "=== TOOL RESULTS ===\n" + "fresh " * 5000},

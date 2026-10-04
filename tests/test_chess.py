@@ -49,13 +49,13 @@ def test_render_black_perspective_flips_the_image():
     black = cg.render_board_png(b, perspective="black")
     assert white[:8] == b"\x89PNG\r\n\x1a\n"
     assert black[:8] == b"\x89PNG\r\n\x1a\n"
-    # The two orientations must actually differ — the flip is real.
+    # The two orientations must actually differ - the flip is real.
     assert white != black
 
 
 def test_black_perspective_puts_black_back_rank_at_the_bottom():
     # For a player on black, h8 (black's king square) must sit at the
-    # bottom-left, and a1 (white's rook square) at the top-right — the board
+    # bottom-left, and a1 (white's rook square) at the top-right - the board
     # reads from black's side, not the standard white-at-the-bottom view.
     h8_x, h8_y = cg._pixel(chess.H8, perspective="black")
     a1_x, a1_y = cg._pixel(chess.A1, perspective="black")
@@ -132,7 +132,7 @@ def test_manager_one_game_per_channel_and_owner(manager):
     game = manager.start("c1", "alice", "Alice", bot_color=True)
     assert manager.active("c1") is game
     # A second start in the same channel must NOT silently overwrite alice's
-    # game — the one-game-per-channel rule protects the running game.
+    # game - the one-game-per-channel rule protects the running game.
     with pytest.raises(ValueError):
         manager.start("c1", "bob", "Bob", bot_color=True)
     assert manager.active("c1").player_id == "alice"
@@ -408,7 +408,7 @@ def test_position_notes_report_being_down_material():
 
 
 def test_state_text_hands_maxwell_the_full_annotated_move_list():
-    """On his own turn he must see every move — a truncated list hides the
+    """On his own turn he must see every move - a truncated list hides the
     one move that does not lose."""
     import bot_tools
 

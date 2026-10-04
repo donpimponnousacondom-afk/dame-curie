@@ -1,7 +1,7 @@
 """Tools for Dame Curie Bot
 
 All tools return a result string for the LLM. They do NOT send errors
-to the Discord channel — errors are returned as strings so the LLM can
+to the Discord channel - errors are returned as strings so the LLM can
 generate a natural response. Only success outputs (images, DMs) are
 sent directly to their target.
 """
@@ -193,7 +193,7 @@ except ImportError:
     _DDGS = None
     _DDGS_AVAILABLE = False
 
-# Owner IDs come from env var only — no hardcoded defaults to leak in open-source.
+# Owner IDs come from env var only - no hardcoded defaults to leak in open-source.
 # Load dotenv first so bare `python bot.py` sees DAME_CURIE_OWNER_IDS from .env
 # (config.py also loads dotenv; this avoids import-order freezing empty OWNER_IDS).
 try:
@@ -680,7 +680,7 @@ def _guild_access_line(guild) -> str:
     if not caps:
         return (
             f"Your Discord access in {name} ({gid}): roles={role_txt} | "
-            "perms=none | no kick/ban/channel/role tools here — "
+            "perms=none | no kick/ban/channel/role tools here - "
             "list_admin_servers shows servers where you do."
         )
     tools = _tools_for_caps(caps)
@@ -1212,7 +1212,7 @@ class ImageGeneratorTool(Tool):
         if not ref:
             return None, "empty image reference"
 
-        # Already-inlined data URI — accept it as-is.
+        # Already-inlined data URI - accept it as-is.
         m = self._DATA_URI_RE.search(ref)
         if m:
             try:
@@ -1251,7 +1251,7 @@ class ImageGeneratorTool(Tool):
             except Exception as e:
                 return None, f"could not fetch {ref[:80]}: {e}"
 
-        # Local path — only from the dirs Dame Curie itself writes images to.
+        # Local path - only from the dirs Dame Curie itself writes images to.
         try:
             img_dir, _ = _public_image_target(self.bot)
             allowed = [os.path.realpath(img_dir), os.path.realpath("temp")]
@@ -1428,9 +1428,9 @@ class ImageGeneratorTool(Tool):
                 sent_msg = await message.channel.send(file=file)
             except discord.Forbidden:
                 logger.warning(
-                    f"Cannot send image in {message.channel.id} — missing permissions"
+                    f"Cannot send image in {message.channel.id} - missing permissions"
                 )
-                return "Error: Cannot send image — missing permissions"
+                return "Error: Cannot send image - missing permissions"
 
         cdn_url = None
         if sent_msg and sent_msg.attachments:
@@ -1455,7 +1455,7 @@ class ImageGeneratorTool(Tool):
         if perm_url:
             result += (
                 f"\nPermanent URL: {perm_url} "
-                "(never expires — use this directly in HTML <img> tags or curl)"
+                "(never expires - use this directly in HTML <img> tags or curl)"
             )
         if local_path:
             result += (
@@ -1519,7 +1519,7 @@ class ReactTool(Tool):
                         await message.add_reaction(e)
                         return f"Reacted with {e}"
                     except discord.HTTPException as ex:
-                        return tool_failure("tool.react", f"Error: Could not add reaction — {ex}", exception=ex)
+                        return tool_failure("tool.react", f"Error: Could not add reaction - {ex}", exception=ex)
             # Full emoji strings can still be valid if Discord lets this bot use
             # the emoji cross-guild. Try it, but don't try malformed nonsense.
             try:
@@ -1529,7 +1529,7 @@ class ReactTool(Tool):
                 return f"Error: Emoji '{raw}' not found or invalid"
             except discord.HTTPException as e:
                 capture_incident(f"tool.{type(self).__name__}", str(e), exception=e, details=str(getattr(e, "text", "") or ""))
-                return f"Error: Could not add reaction — {e}"
+                return f"Error: Could not add reaction - {e}"
 
         alias_match = self._ALIAS_RE.match(raw)
         broken_match = self._BROKEN_CUSTOM_EMOJI_RE.match(raw)
@@ -1547,7 +1547,7 @@ class ReactTool(Tool):
                             await message.add_reaction(e)
                             return f"Reacted with {e}"
                         except discord.HTTPException as ex:
-                            return tool_failure("tool.react", f"Error: Could not add reaction — {ex}", exception=ex)
+                            return tool_failure("tool.react", f"Error: Could not add reaction - {ex}", exception=ex)
             if (
                 alias_match
                 or broken_match
@@ -1573,7 +1573,7 @@ class ReactTool(Tool):
             return f"Error: Emoji '{raw}' not found or invalid"
         except discord.HTTPException as e:
             capture_incident(f"tool.{type(self).__name__}", str(e), exception=e, details=str(getattr(e, "text", "") or ""))
-            return f"Error: Could not add reaction — {e}"
+            return f"Error: Could not add reaction - {e}"
 
 
 class EditMessageTool(Tool):
@@ -1688,7 +1688,7 @@ class SetActivityTool(Tool):
     def get_description(self):
         return (
             "Set visible activity or custom status. Call only when asked or "
-            "after a real state change — not every turn. "
+            "after a real state change - not every turn. "
             "Params: type (playing/watching/listening/competing/custom), text, "
             "elapsed (optional). type='custom' for a plain status. text='' clears."
         )
@@ -1762,18 +1762,18 @@ class SetActivityTool(Tool):
             activities=activities, edit_settings=bool(self.bot._custom_status)
         )
         # Silent: the new status is already visible on the profile. No DM,
-        # no channel echo, no LLM-visible text — the user can see it
+        # no channel echo, no LLM-visible text - the user can see it
         # themselves without the bot narrating the change.
         return ""
 
 
 class SleepTool(Tool):
     """Take a sleep window. While sleeping the bot won't dispatch
-    LLM turns — the triggering channel gets a 'the dame is sleeping,
+    LLM turns - the triggering channel gets a 'the dame is sleeping,
     back in Xm' notice (deduped per user, never a DM). The 2026-07-19
     user directive: the bot kept spamming goodnight/goodbye in chat;
     a real sleep window is the structural fix. Use this when the
-    conversation is genuinely winding down — not as a generic
+    conversation is genuinely winding down - not as a generic
     goodbye."""
 
     streams_output: bool = False
@@ -1792,7 +1792,7 @@ class SleepTool(Tool):
         duration_minutes: int | str = 30,
         **kwargs,
     ) -> str:
-        # Defensive parse — the model may emit a string.
+        # Defensive parse - the model may emit a string.
         try:
             n = int(duration_minutes)
         except (TypeError, ValueError):
@@ -1810,7 +1810,7 @@ class SleepTool(Tool):
 
 
 class ClearSleepTool(Tool):
-    """Cancel an active sleep window. Idempotent — safe to call when
+    """Cancel an active sleep window. Idempotent - safe to call when
     not sleeping. Use when the bot decided to sleep but the user
     immediately needs a reply."""
 
@@ -1834,7 +1834,7 @@ class ClearSleepTool(Tool):
 class WaitTool(Tool):
     """Pause the current tool batch for N seconds before continuing.
 
-    Use this WITHIN a single turn to space out multiple actions — e.g.
+    Use this WITHIN a single turn to space out multiple actions - e.g.
     `send_message('starting...')` → `wait(2)` → `send_message('done!')`
     for a staged reveal, or `send_message('countdown: 3')` → `wait(1)` →
     `send_message('2')` → `wait(1)` → `send_message('1')` → `wait(1)` →
@@ -1844,7 +1844,7 @@ class WaitTool(Tool):
     `wait` is a sub-turn pause that keeps the turn open and lets you
     follow up with more tool calls.
 
-    Max is 10 seconds — longer pauses should use `sleep` instead. The
+    Max is 10 seconds - longer pauses should use `sleep` instead. The
     user-visible progress message updates to 'waiting Ns…' so they
     know the bot isn't stuck."""
 
@@ -1853,7 +1853,7 @@ class WaitTool(Tool):
     def get_description(self):
         return (
             "Pause this tool batch (`wait`) for `seconds` (float, default 2, max 10). "
-            "Turn stays open. For spacing separate send_messages only — not "
+            "Turn stays open. For spacing separate send_messages only - not "
             "to chunk a normal reply. If someone is typing, wait for them to send. "
             "Distinct from sleep (minutes, ends dispatch)."
         )
@@ -2034,7 +2034,7 @@ def _solver_status(bot) -> str:
     key = getattr(cfg, "CAPTCHA_SOLVER_API_KEY", "") or ""
     if service and key:
         return f" (auto-solver {service} is configured)"
-    return " (no captcha solver configured — CAPTCHA_SOLVER_SERVICE/CAPTCHA_SOLVER_API_KEY)"
+    return " (no captcha solver configured - CAPTCHA_SOLVER_SERVICE/CAPTCHA_SOLVER_API_KEY)"
 
 
 def _format_captcha(e) -> str:
@@ -2061,9 +2061,9 @@ class JoinServerTool(Tool):
     def get_description(self):
         return (
             "Join a Discord server via invite code or full invite URL "
-            "(https://discord.gg/code). Restricted to admins — if anyone else "
+            "(https://discord.gg/code). Restricted to admins - if anyone else "
             "asks, say it needs an admin and do not call this. Always pass the "
-            "exact link or code the user gave — do not invent or reuse another "
+            "exact link or code the user gave - do not invent or reuse another "
             "invite. Reports name, gates, captcha, and errors. "
             "Params: invite (required)."
         )
@@ -2076,7 +2076,7 @@ class JoinServerTool(Tool):
         # that server's rules and moderators then apply to it. Anyone able to
         # paste an invite could park the account anywhere, so this is gated on
         # identity the same way change_avatar is, and enforced here rather
-        # than only in the prompt — a prompt is a request, not a permission.
+        # than only in the prompt - a prompt is a request, not a permission.
         author_id = getattr(getattr(message, "author", None), "id", None)
         is_admin = bool(
             author_id is not None
@@ -2117,18 +2117,18 @@ class JoinServerTool(Tool):
         features = list(g.features) if g else []
         level = g.verification_level.name if g and g.verification_level else "unknown"
         lines = [
-            f"Invite ok — {gname} (ID: {gid}) {members or '?'} members, verification={level}"
+            f"Invite ok - {gname} (ID: {gid}) {members or '?'} members, verification={level}"
         ]
         if features:
             lines.append(f"  features: {', '.join(features)}")
 
         if gid and self.bot.get_guild(gid):
-            return "\n".join(lines + [f"Already in {gname} — no join needed."])
+            return "\n".join(lines + [f"Already in {gname} - no join needed."])
 
         manual_approval = "MEMBER_VERIFICATION_MANUAL_APPROVAL" in features
         if manual_approval:
             lines.append(
-                "  NOTE: server uses MANUAL APPROVAL — join will be pending until an admin approves."
+                "  NOTE: server uses MANUAL APPROVAL - join will be pending until an admin approves."
             )
 
         try:
@@ -2149,7 +2149,7 @@ class JoinServerTool(Tool):
             return f"Error joining '{code}': invite invalid/expired (HTTP {e.status})"
         except discord.Forbidden as e:
             return (
-                f"Error joining {gname}: forbidden (HTTP {e.status}) — "
+                f"Error joining {gname}: forbidden (HTTP {e.status}) - "
                 "likely banned from the server, or the invite was revoked "
                 "between fetch and accept."
             )
@@ -2161,7 +2161,7 @@ class JoinServerTool(Tool):
             if e.status == 429:
                 return ToolFailure(
                     f"Error joining {gname}: rate limited (429). "
-                    "Wait a bit and retry — Discord throttles rapid joins.",
+                    "Wait a bit and retry - Discord throttles rapid joins.",
                     incident_id,
                 )
             return ToolFailure(f"Error joining {gname}: HTTP {e.status}: {detail}", incident_id)
@@ -2182,11 +2182,11 @@ class JoinServerTool(Tool):
             if manual_approval:
                 return (
                     "\n".join(lines)
-                    + "\nJOIN REQUEST SUBMITTED — the server uses MANUAL APPROVAL, "
+                    + "\nJOIN REQUEST SUBMITTED - the server uses MANUAL APPROVAL, "
                     "so membership is pending until an admin approves. "
                     "The bot is NOT inside the server yet."
                 )
-            # Confirm membership from the API before claiming anything — the
+            # Confirm membership from the API before claiming anything - the
             # gateway cache can lag behind the actual accept.
             confirmed = False
             try:
@@ -2203,12 +2203,12 @@ class JoinServerTool(Tool):
                 gname2 = (gdata or {}).get("name") or gname
                 return (
                     "\n".join(lines)
-                    + f"\nJOINED {gname2} (ID: {gid}) — confirmed via API. "
+                    + f"\nJOINED {gname2} (ID: {gid}) - confirmed via API. "
                     "The gateway cache is still syncing; list_servers will show it shortly."
                 )
             return (
                 "\n".join(lines)
-                + "\nJoin result uncertain — the invite was accepted but the "
+                + "\nJoin result uncertain - the invite was accepted but the "
                 "guild is not visible yet. Ask the server owner to confirm, "
                 "then check list_servers."
             )
@@ -2227,7 +2227,7 @@ class JoinServerTool(Tool):
                 roles = len(onboard.get("role_ids") or [])
                 if roles:
                     lines.append(
-                        f"  picked up {roles} role(s) — run server_setup to change them."
+                        f"  picked up {roles} role(s) - run server_setup to change them."
                     )
             elif onboard.get("prompts"):
                 # Prompts exist but the submit didn't land: say so, because the
@@ -2237,7 +2237,7 @@ class JoinServerTool(Tool):
             logger.debug("auto-onboard via join tool failed: %s", ex)
 
         # Post-join verification gates (Wick captcha-on-join, verify channels,
-        # MEE6/Bloxlink-style role gates). These aren't API errors — the join
+        # MEE6/Bloxlink-style role gates). These aren't API errors - the join
         # worked, but the account is usually role-locked until it completes
         # the gate.
         gate_channels = [
@@ -2247,7 +2247,7 @@ class JoinServerTool(Tool):
         ][:6]
         if gate_channels:
             lines.append(
-                f"  NOTE: verification gate channels present: {', '.join(gate_channels)} — "
+                f"  NOTE: verification gate channels present: {', '.join(gate_channels)} - "
                 "the account may be role-locked until it completes verification there."
             )
         result = "\n".join(lines)
@@ -2283,7 +2283,7 @@ def _find_guild(guilds: list, target: str) -> tuple[Any, str]:
         return None, (
             f"Error: '{target}' matches {len(matches)} servers "
             + ", ".join(f"{g.name} ({g.id})" for g in matches[:8])
-            + " — use the numeric ID to disambiguate."
+            + " - use the numeric ID to disambiguate."
         )
     return None, (
         f"Error: not in any server named/matching '{target}'. "
@@ -2324,7 +2324,7 @@ class ServerSetupTool(Tool):
             if guild is None:
                 return (
                     "Error: no server given and this isn't a server channel. "
-                    "Pass server (name or ID) — list_servers shows them."
+                    "Pass server (name or ID) - list_servers shows them."
                 )
 
         # Models hand booleans over as "true"/"false" strings often enough
@@ -2345,7 +2345,7 @@ class ServerSetupTool(Tool):
         lines = [f"{guild.name} (ID: {guild.id})"]
         if not prompts:
             lines.append(
-                f"  {result.get('summary')} — nothing to pick here. If you still "
+                f"  {result.get('summary')} - nothing to pick here. If you still "
                 "can't see channels, the server gates on verification, not onboarding."
             )
             return "\n".join(lines)
@@ -2357,7 +2357,7 @@ class ServerSetupTool(Tool):
             lines.append(f'  • "{prompt["title"]}" (pick {rule}):')
             for opt in prompt["options"]:
                 mark = "✓" if opt["id"] in chosen else " "
-                desc = f" — {opt['description']}" if opt["description"] else ""
+                desc = f" - {opt['description']}" if opt["description"] else ""
                 lines.append(f"      [{mark}] {opt['title']}{desc}"[:240])
 
         roles = [
@@ -2386,7 +2386,7 @@ class ServerSetupTool(Tool):
         if result.get("picked_by") == "fallback":
             lines.append(
                 "  NOTE: the model call failed, so these are first-option "
-                "defaults — rerun to choose properly."
+                "defaults - rerun to choose properly."
             )
         return "\n".join(lines)
 
@@ -3981,7 +3981,7 @@ class ChangeAvatarTool(Tool):
         if not _is_safe_url(url):
             return "Error: URL must use HTTP(S) and include a hostname"
 
-        # Local cooldown fully removed — was previously env-driven
+        # Local cooldown fully removed - was previously env-driven
         # (AVATAR_COOLDOWN_SECONDS, default 0). Discord's own API rate limit
         # is the only throttle left; the bot will get a 429 from Discord if
         # it spams, which is fine.
@@ -4017,7 +4017,7 @@ class GuideTool(Tool):
     def get_description(self):
         return (
             "Start a guided build: create a thread named 'guide: <goal>' and ask "
-            "clarifying questions before you build. Optional — only when you "
+            "clarifying questions before you build. Optional - only when you "
             "genuinely cannot start without answers. Params: goal (short "
             "description of what they want)."
         )
@@ -4029,13 +4029,13 @@ class GuideTool(Tool):
         short = re.sub(r"\s+", " ", raw_goal)[:50].strip() or "project"
         thread_name = f"guide: {short}"
         questionnaire = (
-            f"**Guided build — {short}**\n"
+            f"**Guided build - {short}**\n"
             f"<@{message.author.id}> let's nail the spec before I build it:\n"
-            "1) **Purpose / audience** — who is it for, what problem does it solve?\n"
-            "2) **Must-have features** — list 3-5 things it must do\n"
-            "3) **Look & feel** — style, vibe, colors, any reference?\n"
-            "4) **Realtime / backend** — live updates, multiplayer, accounts, or a static page?\n"
-            "5) **Data / persistence** — save state? how long should it live?\n"
+            "1) **Purpose / audience** - who is it for, what problem does it solve?\n"
+            "2) **Must-have features** - list 3-5 things it must do\n"
+            "3) **Look & feel** - style, vibe, colors, any reference?\n"
+            "4) **Realtime / backend** - live updates, multiplayer, accounts, or a static page?\n"
+            "5) **Data / persistence** - save state? how long should it live?\n"
             "Reply in this thread with your answers (numbers are fine). I'll then build it."
         )
         thread = None
@@ -4069,14 +4069,14 @@ class GuideTool(Tool):
                 or getattr(thread, "mention", None)
                 or thread_name
             )
-            result = f"Guide thread created: {url} — questionnaire posted. Waiting for replies in thread {getattr(thread, 'id', '')}."
+            result = f"Guide thread created: {url} - questionnaire posted. Waiting for replies in thread {getattr(thread, 'id', '')}."
             return ToolFailure(result, failure.incident_id) if failure is not None else result
         try:
             await message.channel.send(questionnaire)
         except Exception as e:
             failure = tool_failure("tool.guide", f"Guide questionnaire delivery failed: {e}", exception=e)
             err = str(e)[:200]
-        result = f"Guide posted in channel (no thread: {err or 'DMs have no threads'}) — waiting for replies."
+        result = f"Guide posted in channel (no thread: {err or 'DMs have no threads'}) - waiting for replies."
         return ToolFailure(result, failure.incident_id) if failure is not None else result
 
 
@@ -4122,7 +4122,7 @@ class WebSearchTool(Tool):
         return (
             "Search the live web. Default to this when you are unsure, the "
             "topic changes (news, scores, prices, versions, people), or they "
-            "asked you to check — do not guess from memory. Skip only pure "
+            "asked you to check - do not guess from memory. Skip only pure "
             "banter with nothing to look up. After a hit, fetch_url the page "
             "if you need more than the snippet. Params: query (required), "
             "max_results (optional, default 5, max 10)."
@@ -4141,7 +4141,7 @@ class WebSearchTool(Tool):
             return "Error: query is required"
         if not _DDGS_AVAILABLE:
             return (
-                "Error: web_search is not available in this install — the "
+                "Error: web_search is not available in this install - the "
                 "`ddgs` Python package is missing. Run `pip install ddgs` "
                 "or set ENABLE_WEB_SEARCH=false in .env to silence this."
             )
@@ -4188,7 +4188,7 @@ class WebSearchTool(Tool):
             # the same conversation can recall what was just searched.
             # Off by default in the env var, but defaults ON for new
             # installs. Skipped silently if RAG is unavailable or
-            # disabled — never fails the search.
+            # disabled - never fails the search.
             try:
                 rag_enabled = bool(
                     getattr(self.bot.config, "RAG_WEB_STORE_ENABLED", True)
@@ -4219,7 +4219,7 @@ class WebSearchTool(Tool):
             logger.error(f"Web search error: {e}")
             err = str(e).strip() or type(e).__name__
             # ddgs raises DDGSException("No results found.") instead of
-            # returning []. Treat that as empty, not a tool failure — otherwise
+            # returning []. Treat that as empty, not a tool failure - otherwise
             # the circuit breaker opens and the model learns search is broken.
             if re.search(r"no results", err, re.I):
                 return f"No results found for '{query}'"
@@ -4500,9 +4500,9 @@ class SendMessageTool(Tool):
             "Send a message to the current chat. Default: one call per turn with the full reply. "
             "You can call this more than once if you actually want separate Discord messages; do not split a normal reply. "
             "Content supports Discord markdown: **bold**, *italic*, `code`, ```code blocks```, > quotes, bullet lists. "
-            "Params: content (required), reply (optional bool, default true — Discord "
+            "Params: content (required), reply (optional bool, default true - Discord "
             "quote-reply is on; pass false only for a standalone line with no quote), "
-            "reply_to (optional short quote or who said it, like nah or alice — not an id)."
+            "reply_to (optional short quote or who said it, like nah or alice - not an id)."
         )
 
     @staticmethod
@@ -4815,7 +4815,7 @@ class SendFileTool(Tool):
             "encoding=text|base64 (prefer base64 for code/HTML). "
             "caption (optional) is posted with the attachment, not as a separate message "
             "(max 2000 characters on Discord). "
-            "A path is not delivery — this tool attaches the file. "
+            "A path is not delivery - this tool attaches the file. "
             "__CAPTION_SENT__ means the caption is already posted; do not repeat it."
         )
 
@@ -5051,7 +5051,7 @@ class ShellTool(Tool):
         """Max wall-clock seconds for a shell command. Always > 0; capped at 1h."""
         raw = os.environ.get("DAME_CURIE_SHELL_TIMEOUT", "").strip()
         if not raw:
-            return 600  # 10 min default — was 30s, way too tight for real work
+            return 600  # 10 min default - was 30s, way too tight for real work
         try:
             v = int(raw)
         except ValueError:
@@ -5302,7 +5302,7 @@ class ShellTool(Tool):
 
         The command can be a long multi-line script; echoing it verbatim blows
         past Discord's 2000-char limit once wrapped in a codeblock. Cap the
-        echo so the actual error/output — the useful part — always fits.
+        echo so the actual error/output - the useful part - always fits.
         """
         max_echo = 80
         echo = (
@@ -6654,7 +6654,7 @@ class YouTubeTool(Tool):
             uploaded = entry.get("upload_date") or entry.get("release_date")
             if isinstance(uploaded, str) and len(uploaded) == 8 and uploaded.isdigit():
                 extra.append(f"{uploaded[:4]}-{uploaded[4:6]}-{uploaded[6:]}")
-            meta = f" — {', '.join(extra)}" if extra else ""
+            meta = f" - {', '.join(extra)}" if extra else ""
             block = f"{i}. {etitle}{dur_text}{meta}"
             if watch:
                 block += f"\n   {watch}"
@@ -6957,7 +6957,7 @@ class SendMediaTool(Tool):
         return result
 
 
-# KiloTool removed — host execution bypasses the outer bot container boundary.
+# KiloTool removed - host execution bypasses the outer bot container boundary.
 
 
 class TtsTool(Tool):
@@ -7334,7 +7334,7 @@ class InboxListTool(Tool):
         if not items:
             return "Inbox is empty."
         # Same ordering the planner tail uses, but the tool shows more of each
-        # item — he asked for the list, so give him the whole thing.
+        # item - he asked for the list, so give him the whole thing.
         ordered = store.planner_items(items)
         lines = [f"Inbox ({len(items)} actionable):"]
         lines.extend(
@@ -7564,7 +7564,7 @@ class LeaveVcTool(Tool):
 
 # ---------------------------------------------------------------------------
 # Self-modification tools. These let Dame Curie rewrite its own base
-# personality + per-server prompts at runtime. The runtime load is hot —
+# personality + per-server prompts at runtime. The runtime load is hot -
 # _load_control() reads mtime, so a write to bot_control.json is picked up
 # on the next prompt assembly without a restart. server prompts are read
 # on every prompt build, also hot.
@@ -7576,7 +7576,7 @@ class UpdateBasePersonalityTool(Tool):
 
     This is what the model reads as its tone / do-don'ts / identity safety
     section. The MAXWELL_BASE_KNOWLEDGE block (identity, slang, voice, memes)
-    is ALWAYS-ON and lives in code — it is NOT editable through this tool.
+    is ALWAYS-ON and lives in code - it is NOT editable through this tool.
     This tool only rewrites the per-runtime personality paragraph that lives
     in bot_control.json under `base_personality`.
     """
@@ -7603,7 +7603,7 @@ class UpdateBasePersonalityTool(Tool):
         if len(text) > 4000:
             return (
                 f"Error: text is {len(text)} chars; the soft cap is 4000. "
-                "Tighten the wording — a long personality is a context-killer, "
+                "Tighten the wording - a long personality is a context-killer, "
                 "and the bot doesn't read past the most recent instructions anyway."
             )
         if len(text) < 20:
@@ -7624,7 +7624,7 @@ class UpdateBasePersonalityTool(Tool):
             return f"Error: failed to persist base_personality: {e}"
         return (
             f"base_personality updated. {len(text)} chars written to "
-            f"{store.personality_path}. The change is live on the next turn — no "
+            f"{store.personality_path}. The change is live on the next turn - no "
             "restart needed. MAXWELL_BASE_KNOWLEDGE (in code) was NOT "
             "touched; only the per-runtime personality paragraph was rewritten."
         )
@@ -7634,7 +7634,7 @@ class UpdateServerPromptTool(Tool):
     """Rewrite the per-server custom prompt (same as `!prompt <text>`).
 
     Same effect as the `!prompt <text>` command but invokable from
-    inside an LLM turn — Dame Curie can edit its own per-server instructions
+    inside an LLM turn - Dame Curie can edit its own per-server instructions
     when it has a reason. Pass server_id (numeric snowflake) or pass 'DM'
     for the DM default. Pass empty text to clear the per-server prompt.
     """
@@ -7683,7 +7683,7 @@ class UpdateServerPromptTool(Tool):
         return (
             f"Server prompt updated for server_id={server_id}. "
             f"{len(text_str)} chars written. The change is live on the next "
-            f"turn in that server — no restart needed."
+            f"turn in that server - no restart needed."
         )
 
 
@@ -7752,7 +7752,7 @@ def _chess_is_self(bot, user) -> bool:
 
 
 def _chess_lookup_id(bot, message, uid: str):
-    """Sync cache lookup only — never fetch over the network from a tool helper."""
+    """Sync cache lookup only - never fetch over the network from a tool helper."""
     try:
         uid_int = int(uid)
     except (TypeError, ValueError):
@@ -7777,7 +7777,7 @@ def _chess_resolve_player(message, opponent, bot) -> tuple[str, str]:
     """Who this bot is playing: ``(user_id, display_name)``.
 
     ``opponent`` is a mention, snowflake, or display name. Blank means the
-    asker, unless the message @mentioned exactly one other human — then that
+    asker, unless the message @mentioned exactly one other human - then that
     person is the opponent.
     """
     author = getattr(message, "author", None)
@@ -7789,7 +7789,7 @@ def _chess_resolve_player(message, opponent, bot) -> tuple[str, str]:
             raise ValueError("no opponent")
         if _chess_is_self(bot, user):
             raise ValueError(
-                f"cannot play against {_chess_bot_name(bot)} — pick a human opponent"
+                f"cannot play against {_chess_bot_name(bot)} - pick a human opponent"
             )
         uid = str(getattr(user, "id", "") or "")
         if not uid:
@@ -7917,7 +7917,7 @@ def _chess_state_text(game, bot_name: str | None = None) -> str:
     """
     name = str(bot_name or "").strip() or "Dame Curie"
     lines: list[str] = []
-    lines.append("CHESS BOARD (text — see attached image for the real board):")
+    lines.append("CHESS BOARD (text - see attached image for the real board):")
     lines.append(_chess_board_ascii(game.board))
     lines.append("")
     lines.append(f"FEN: {game.fen}")
@@ -7938,7 +7938,7 @@ def _chess_state_text(game, bot_name: str | None = None) -> str:
 
     if game.bot_turn:
         # Dame Curie's own turn: give him the annotated position, all of it. The
-        # legal list is not truncated here — a move he cannot see is a move he
+        # legal list is not truncated here - a move he cannot see is a move he
         # cannot play, and in a sharp position the cut-off 49th move is
         # sometimes the only one that does not lose.
         notes: list[str] = []
@@ -7955,7 +7955,7 @@ def _chess_state_text(game, bot_name: str | None = None) -> str:
             lines.extend(f"  • {note}" for note in notes)
         moves = annotated or game.legal_san
         lines.append("")
-        lines.append(f"YOUR LEGAL MOVES ({len(moves)}) — play exactly one of these:")
+        lines.append(f"YOUR LEGAL MOVES ({len(moves)}) - play exactly one of these:")
         lines.extend(f"  {item}" for item in moves)
         lines.append("")
         lines.append(
@@ -8007,7 +8007,7 @@ async def _chess_post_board(bot, message, game) -> tuple[str, str, bytes | None]
             cdn_url = sent.attachments[0].url
     except discord.Forbidden:
         logger.warning(
-            "Cannot post chess board in %s — missing permissions",
+            "Cannot post chess board in %s - missing permissions",
             getattr(message.channel, "id", "?"),
         )
     except discord.HTTPException as exc:
@@ -8100,7 +8100,7 @@ class ChessStartTool(Tool):
         name = _chess_bot_name(self.bot)
         return (
             f"Start a chess game in this channel. Pass opponent= to choose who "
-            f"{name} plays — a mention, Discord user id, or display name. Omit "
+            f"{name} plays - a mention, Discord user id, or display name. Omit "
             f"it to play the person who asked, or the single @mentioned human "
             f"in the message. One game per channel; only that opponent may "
             f"move. Posts the starting board image and returns FEN plus the "
@@ -8171,7 +8171,7 @@ class ChessStartTool(Tool):
         )
 
         # Dame Curie plays his own chess. If he has the white side he does NOT get
-        # an engine move dropped in here — the tool returns the annotated
+        # an engine move dropped in here - the tool returns the annotated
         # position and he names his own opening move on the follow-up turn
         # (chess_start is in RESULT_TOOL_NAMES, so that turn always happens).
         _chess_clear_misses(game.game_id)
@@ -8199,14 +8199,14 @@ class ChessStartTool(Tool):
             result += (
                 "\n\nGame started and it is "
                 + name
-                + "'s move — YOUR move. Pick from the legal moves above and "
+                + "'s move - YOUR move. Pick from the legal moves above and "
                 "call chess_move(move='<SAN>') now. Say your move in chat too."
             )
         else:
             result += (
                 "\n\nGame started. It is "
                 + game.player_name
-                + "'s move — prompt them to play."
+                + "'s move - prompt them to play."
             )
         result += " Use chess_move to advance the game."
         return result
@@ -8250,7 +8250,7 @@ class ChessMoveTool(Tool):
             "Advance the chess game by one move. Pass move= in SAN (e4, Nf3, "
             "O-O, exd5, Qh5) or UCI (e2e4, e7e8q). When it is the player's "
             f"turn, relay THEIR move. When it is {name}'s turn, YOU choose "
-            f"{name}'s move — there is no engine playing for you. The result "
+            f"{name}'s move - there is no engine playing for you. The result "
             "lists every legal move annotated with what it captures, whether "
             "it checks or mates, and whether the piece would just be taken; "
             "read it and pick the best one. Posts the updated board image and "
@@ -8344,7 +8344,7 @@ class ChessMoveTool(Tool):
             return f"Error: {error_text}"
 
         # The human just moved and it is now Dame Curie's turn. Do not pick his
-        # move here — chess_move returns its result to the model, so he plays
+        # move here - chess_move returns its result to the model, so he plays
         # it himself on the follow-up turn with the annotated position in hand.
         bot_to_move = respond and game.bot_turn and not game.is_over
 
@@ -8377,15 +8377,15 @@ class ChessMoveTool(Tool):
             tail += "\nThe game is over."
         elif bot_to_move:
             tail += (
-                f"\nIt is {name}'s move NOW — your move. Pick from the legal "
+                f"\nIt is {name}'s move NOW - your move. Pick from the legal "
                 "moves above and call chess_move(move='<SAN>') in this same "
                 "batch. Do not tell the player it is their turn."
             )
         elif not game.bot_turn:
-            tail += "\nIt is now the player's move — tell them it is their turn."
+            tail += "\nIt is now the player's move - tell them it is their turn."
         else:
             tail += (
-                f"\nIt is {name}'s move — pick from the legal moves above and "
+                f"\nIt is {name}'s move - pick from the legal moves above and "
                 "call chess_move(move='<SAN>')."
             )
         return result + tail
@@ -8458,17 +8458,17 @@ class UsageTool(Tool):
     def summarize(self, data: dict) -> str:
         lines = [
             "OpenRouter primary-key usage (USD):",
-            "Windows: current UTC day, week (Monday–Sunday), and month.",
+            "Windows: current UTC day, week (Monday-Sunday), and month.",
         ]
         fields = (
-            ("usage", "OpenRouter credits used — all time"),
-            ("usage_daily", "OpenRouter credits used — day"),
-            ("usage_weekly", "OpenRouter credits used — week"),
-            ("usage_monthly", "OpenRouter credits used — month"),
-            ("byok_usage", "External BYOK usage — all time"),
-            ("byok_usage_daily", "External BYOK usage — day"),
-            ("byok_usage_weekly", "External BYOK usage — week"),
-            ("byok_usage_monthly", "External BYOK usage — month"),
+            ("usage", "OpenRouter credits used - all time"),
+            ("usage_daily", "OpenRouter credits used - day"),
+            ("usage_weekly", "OpenRouter credits used - week"),
+            ("usage_monthly", "OpenRouter credits used - month"),
+            ("byok_usage", "External BYOK usage - all time"),
+            ("byok_usage_daily", "External BYOK usage - day"),
+            ("byok_usage_weekly", "External BYOK usage - week"),
+            ("byok_usage_monthly", "External BYOK usage - month"),
             ("limit", "Key spending cap"),
             ("limit_remaining", "Key remaining cap"),
         )
@@ -8581,7 +8581,7 @@ class ManagePluginTool(Tool):
                 )
                 tools_str = ", ".join(p["tools"]) if p["tools"] else "none"
                 lines.append(
-                    f"• **{p['name']}** (v{p['version']}) — {glob} | {status}\n"
+                    f"• **{p['name']}** (v{p['version']}) - {glob} | {status}\n"
                     f"  {p['description']}\n"
                     f"  *Tools*: `{tools_str}`"
                 )

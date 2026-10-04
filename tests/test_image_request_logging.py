@@ -16,7 +16,7 @@ from bot_tools import ImageGeneratorTool
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 REFERENCE = b"\x89PNG\r\n\x1a\nsynthetic-edit-reference-not-for-console"
 REFERENCE_URI = "data:image/png;base64," + base64.b64encode(REFERENCE).decode()
-LONG_PROMPT = '夜空の竜 🐉 — café e\u0301 "glass" \\ moon\n' * 180 + "EXACT PROMPT TAIL\n"
+LONG_PROMPT = '夜空の竜 🐉 - café e\u0301 "glass" \\ moon\n' * 180 + "EXACT PROMPT TAIL\n"
 START = "Image request start "
 DONE = "Image request done "
 
@@ -323,7 +323,7 @@ def test_dispatcher_redacts_image_result_without_changing_model_result(encoded, 
     bot = SimpleNamespace(tools={tool_name: tool}, _tool_breaker=breaker, _is_admin=lambda actor_id: actor_id == 17)
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=42), author=SimpleNamespace(id=17))
     trace = AsyncMock()
-    monkeypatch.setattr(bot_module, "record_reasoning", trace)
+    monkeypatch.setattr(bot_module, "record_explanation", trace)
     caplog.set_level(logging.INFO, logger="bot")
 
     params = {"prompt": "synthetic dispatcher prompt"} if tool_name == "image_generator" else {"command": "synthetic"}

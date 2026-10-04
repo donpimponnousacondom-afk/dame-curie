@@ -124,9 +124,9 @@ TOOL_PROTOCOL = (
     "tool is the only work and the user should see a reply, send_message in "
     "the same batch; waiting for a turn that never comes is how you go silent.\n"
     "[ends the turn] - nothing after it runs.\n"
-    "## The `reasoning` argument\n"
-    "Each tool has a `reasoning` argument. It is the first argument of the call. "
-    "Write one sentence that gives the reason for the call. Maximum 280 characters. "
+    "## The `explanation` argument\n"
+    "Each tool has an `explanation` argument. It is the first argument of the call. "
+    "Write one plain text sentence that gives the reason for the call. Maximum 280 characters. "
     "The user sees this sentence as a progress line. "
     "The `content` argument of send_message contains only the reply to the user."
 )
@@ -158,9 +158,9 @@ LEAN_TOOL_PROTOCOL = (
     "[returns nothing] - no extra turn, so if a silent tool is the only work "
     "and the user should see a reply, send_message in the same batch. "
     "[ends the turn] - nothing after it runs.\n"
-    "## The `reasoning` argument\n"
-    "Each tool has a `reasoning` argument. It is the first argument of the call. "
-    "Write one sentence that gives the reason for the call. Maximum 280 characters. "
+    "## The `explanation` argument\n"
+    "Each tool has an `explanation` argument. It is the first argument of the call. "
+    "Write one plain text sentence that gives the reason for the call. Maximum 280 characters. "
     "The user sees this sentence as a progress line."
 )
 
@@ -186,7 +186,7 @@ def tool_system_prompt(
             "A call written into the reply text is not a call - never "
             "hand-write tool markup, tags, or argument JSON. "
             "Visible replies go through "
-            "send_message (or no_response). Each call has a `reasoning` argument: "
+            "send_message (or no_response). Each call has an `explanation` argument: "
             "one sentence that gives the reason for the call. "
             "Look things up with web_search / fetch_url when you are unsure "
             "or the topic is current; do not guess from training data.\n" + catalog
@@ -242,8 +242,8 @@ def custom_tool_prompt(names: list[str]) -> str:
         "no XML, no native function-call format.\n"
         f"Tools: {tool_list}\n"
         f"{discovery}"
-        '{"name":"<tool>","arguments":{"reasoning":"<one sentence why>",...}}\n'
-        "`reasoning` is the first arguments key (~280 chars, plain text). "
+        '{"name":"<tool>","arguments":{"explanation":"<one sentence why>",...}}\n'
+        "`explanation` is the first arguments key (~280 chars, plain text). "
         "send_file large payloads: encoding=base64. "
         "JSON line(s) first, then a short user-facing reply - or no JSON when done."
     )

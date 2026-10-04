@@ -1,8 +1,8 @@
-"""`,solo` — lock one server to one channel.
+"""`,solo` - lock one server to one channel.
 
 The promise is narrow and absolute: in a soloed server Maxwell answers in the
 chosen channel and nowhere else, and he does not start anything on his own
-there. Other servers must be untouched — which is the whole reason this is a
+there. Other servers must be untouched - which is the whole reason this is a
 per-guild map instead of the global allowed_channels list.
 """
 

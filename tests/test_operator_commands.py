@@ -142,7 +142,7 @@ def test_error_requires_exact_index_zero_through_nine(operator_case, argument):
     bot, message, dm, store = operator_case
     asyncio.run(handle_error_command(bot, message, argument))
     assert not message.channel.sent
-    assert "0–9" in dm.sent[0]["content"]
+    assert "0-9" in dm.sent[0]["content"]
     assert "0 is newest, 9 is oldest" in dm.sent[0]["content"]
     assert store.get(0) is None
 

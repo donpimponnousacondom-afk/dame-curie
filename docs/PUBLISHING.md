@@ -47,7 +47,7 @@ top level is skipped entirely.
 
 Never published: loose top-level files, first-level dotfiles, `_data`, `_build`, `.env`,
 `.git`, the ownership marker, `.publisher-link`, and anything under a configured
-`private_paths` entry. A dotfile *inside* a site directory **is** published — only
+`private_paths` entry. A dotfile *inside* a site directory **is** published - only
 first-level dotfiles are excluded. That is how a per-site `.htaccess` can be shipped.
 
 Publisher file contents are transported unchanged, without credential-pattern inspection
@@ -60,8 +60,8 @@ SSH and remote-ownership protections remain in force.
 1. **The publisher owns the whole site directory.** Anything present remotely inside a
    site directory it has claimed, but absent from the local source, is **deleted** on the
    next sync. An operator-installed file survives only if it also exists in the local
-   source tree. Files the publisher does not own — other site directories, and anything
-   in `site_root` itself — are left alone.
+   source tree. Files the publisher does not own - other site directories, and anything
+   in `site_root` itself - are left alone.
 2. **The image archive never deletes.** Removing a local image does not remove the
    archived remote copy. Over time the archive accumulates; pruning it is a manual,
    explicit operation.
@@ -117,14 +117,14 @@ The isolation between instances is not uniform, and the difference matters:
   root device/inode pin held in the owning instance's state. Two instances configured
   with the same `image_root` will both write there and silently overwrite same-named
   images and prompt sidecars. The archive is flat by design (one `_images` destination
-  serves all sites), so it cannot be namespaced per site — a distinct `image_root` per
+  serves all sites), so it cannot be namespaced per site - a distinct `image_root` per
   instance is the only separation.
 - **Creation is not restricted.** A second instance pointed at another instance's
   `site_root` can still create *new* directories there, because a claim succeeds for any
   name that does not already exist. Names it never claimed are never removed by it, but
   they will be served.
 
-## Historical claim-preserving V1 handoff — coordinator only
+## Historical claim-preserving V1 handoff - coordinator only
 
 This section records the original migration procedure. The source-authoritative repair
 above supersedes its refusal of stale remote identities and markers. It does not authorize
@@ -196,7 +196,7 @@ completion; they do not retain partial progress after a timeout. The live 31-tar
 observation is not a 50,000-site benchmark. Very large cold inventories need measured
 capacity and possibly bounded/resumable batches before such a deployment.
 
-## Verifying a publication — separate grant required
+## Verifying a publication - separate grant required
 
 These examples access service/private state or the remote host. They are not permitted by the current source/Dirac-remediation assignment. Under a suitable publisher grant, local checks include:
 
@@ -256,14 +256,14 @@ and cannot be.
 `scripts/publisher/static.htaccess` is a static-only template: `Options
 -Indexes -ExecCGI -Includes`, `default-handler`, and `ForceType text/plain` for PHP, CGI,
 Perl, Python, shell and ASP extensions. **No code in this repository references, copies or
-installs it** — a scoped search finds no hit outside the file itself. Its presence proves
+installs it** - a scoped search finds no hit outside the file itself. Its presence proves
 nothing about the remote site's effective policy, and the publisher does not apply it.
 
 The publisher uploads with `--chmod=D755,F755`, so published files land mode 0755
 (executable). It transports bytes and permission bits; it neither enables nor disables
 server-side execution. Whether a site can execute anything is decided by the remote
 host's configuration, by whether it honours per-directory overrides, and by what the
-operator places in that remote root — for example opting out of the static policy by not
+operator places in that remote root - for example opting out of the static policy by not
 deploying that `.htaccess` inside the site directory.
 
 The project provides no PHP/Perl/CGI hosting setup or local web-server feature; Compose publishes no ports. This does not certify the absence of incidental language utilities in inherited distribution packages, or constrain everything an authorized same-UID shell can execute. There is no supported opt-in executable-hosting mode.
@@ -276,4 +276,4 @@ It replaces remote content only at configured local or previously tracked site n
 It does not read
 `DAME_CURIE_PUBLIC_BASE_URL` or `DAME_CURIE_SITE_PUBLIC_BASE_URL`; the latter has no
 reader in production code at all, so configuring it does nothing. Destination selection is
-the TOML only — there are no environment keys for it.
+the TOML only - there are no environment keys for it.

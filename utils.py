@@ -17,14 +17,14 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-# Discord mention regexes — single source of truth
+# Discord mention regexes - single source of truth
 USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 
 # Media URLs (direct file links) found in message text. The bot can't attach
 # these as binary media without a fetch, but the LLM MUST at least see that
-# the message carries a media URL and what type it is — otherwise a message
+# the message carries a media URL and what type it is - otherwise a message
 # like "look at this" + an imgur link reads as pure text.
 MEDIA_URL_RE = re.compile(
     r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%\-]+\.(?:"
@@ -35,7 +35,7 @@ MEDIA_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Discord GIF picker / Tenor / Giphy / imgur .gifv — page URLs, not a file ext.
+# Discord GIF picker / Tenor / Giphy / imgur .gifv - page URLs, not a file ext.
 # These used to reach the model as plain text so it could read the link but
 # never see the animation.
 GIF_PAGE_URL_RE = re.compile(
@@ -470,7 +470,7 @@ def _system_event_annotation(message: Any) -> str | None:
     )
     author = getattr(message, "author", None)
     aname = getattr(author, "display_name", None) if author is not None else None
-    return f"[system: {label}" + (f" — {aname}" if aname else "") + "]"
+    return f"[system: {label}" + (f" - {aname}" if aname else "") + "]"
 
 
 def _thread_annotation(message: Any) -> str | None:
@@ -543,7 +543,7 @@ def _role_subscription_annotation(message: Any) -> str | None:
     months = getattr(sub, "total_months_subscribed", None)
     if months:
         bits.append(f"{months} months")
-    return "[" + " — ".join(bits) + "]"
+    return "[" + " - ".join(bits) + "]"
 
 
 def _purchase_annotation(message: Any) -> str | None:
@@ -704,7 +704,7 @@ def _render_message_annotations(message: Any, raw_content: str = "") -> str:
             if provider_name:
                 line += f" via {provider_name}"
             if desc:
-                line += f" — {desc[:400]}"
+                line += f" - {desc[:400]}"
             if url:
                 line += f" <{url}>"
             if fields:
@@ -798,7 +798,7 @@ def _atomic_json_write_sync(path: Path, data):
     Linux, after a crash between os.replace and the next sync, the
     directory entry for `path` may not be persisted even though the
     inode is on disk. On reboot, the file is "gone" from the
-    directory listing — load_from_disk quietly returns {}. That was
+    directory listing - load_from_disk quietly returns {}. That was
     a silent memory-wipe trigger. fsync'ing the parent dir closes
     the gap.
     """
@@ -806,7 +806,7 @@ def _atomic_json_write_sync(path: Path, data):
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            fd = -1  # fdopen took ownership — don't double-close
+            fd = -1  # fdopen took ownership - don't double-close
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
             f.flush()
             os.fsync(f.fileno())
@@ -831,7 +831,7 @@ def _atomic_text_write_sync(path: Path, text: str):
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            fd = -1  # fdopen took ownership — don't double-close
+            fd = -1  # fdopen took ownership - don't double-close
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -864,7 +864,7 @@ def _fsync_dir(dir_path: Path) -> None:
 # asyncio holds only a WEAK reference to a running task, so a detached
 # create_task() whose handle nobody keeps can be garbage-collected mid-flight.
 # providers.py and tool_progress.py learned this the hard way (dropped progress
-# edits); the same pattern kills background loops — a collected
+# edits); the same pattern kills background loops - a collected
 # _daily_summarizer_loop() means LTM summarization just stops until the next
 # restart, with nothing in the logs. One process-wide strong-ref set, so a task
 # is held until it finishes no matter which module spawned it.
@@ -1000,7 +1000,7 @@ def render_discord_context_text(
     text = CHANNEL_MENTION_RE.sub(replace_channel, text)
     text = ROLE_MENTION_RE.sub(replace_role, text)
 
-    # Timestamp of the message itself — the model needs to know WHEN each
+    # Timestamp of the message itself - the model needs to know WHEN each
     # message happened (recency, "yesterday vs now", dead conversations).
     created = getattr(message, "created_at", None)
     if created is not None:
@@ -1073,7 +1073,7 @@ class FileLock:
     """Exclusive file lock using a *sidecar* lock file + fcntl.flock.
 
     The lock is held on ``{path}.lock``, never on the data file itself. That
-    matters because callers use atomic ``os.replace`` on the data path — locking
+    matters because callers use atomic ``os.replace`` on the data path - locking
     the data inode was broken (replace swaps the inode out from under flock).
 
     On timeout this raises ``FileLockTimeout`` (fail closed) instead of

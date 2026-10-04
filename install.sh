@@ -271,7 +271,7 @@ install_python_deps() {
 configure_env() {
   step "Configuring dame-curie"
   if [ -f .env ] && [ "$RECONFIGURE" != "1" ]; then
-    ok ".env already exists — leaving it unchanged (use --reconfigure to edit it)"
+    ok ".env already exists - leaving it unchanged (use --reconfigure to edit it)"
     return
   fi
   if [ -f .env ] && [ "$RECONFIGURE" = "1" ] && [ "$NONINTERACTIVE" != "1" ]; then

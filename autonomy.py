@@ -1,4 +1,4 @@
-"""AutonomyEngine — Dame Curie's self-directed life loop.
+"""AutonomyEngine - Dame Curie's self-directed life loop.
 
 Runs alongside REM and on_message. Wakes every N seconds, gathers context
 (DMs, channel history, memory, goals, recent events), asks the LLM what to
@@ -6,7 +6,7 @@ do, and executes actions through the existing tool system.
 
 No approval queues. No shadow mode. Dame Curie decides, Dame Curie acts.
 
-ARCHITECTURE — where restraint lives:
+ARCHITECTURE - where restraint lives:
 
 Restraint is enforced mechanically, not by prompting. The planner prompt gives
 Dame Curie full freedom over WHAT to do; autonomy_social decides WHERE and WHEN
@@ -15,8 +15,8 @@ speaking is his turn, and execute() enforces that as a gate.
 This split is the whole design. The earlier arrangement pushed both jobs into
 the prompt ("silence is the default, do_nothing is usually correct"), which
 does not work: a model told to prefer silence prefers it uniformly, so it
-suppresses research, memory, and goal work — none of which anyone can even
-see — while STILL occasionally posting at the wrong moment, because "usually"
+suppresses research, memory, and goal work - none of which anyone can even
+see - while STILL occasionally posting at the wrong moment, because "usually"
 is not a gate. Restraint you can compute belongs in code; freedom belongs in
 the prompt. Don't move either one back.
 
@@ -103,15 +103,15 @@ logger = logging.getLogger(__name__)
 #
 # Those stages always existed but only two of them had names. Observation was
 # `gather_context`, planning was `plan`, and the gate was a block of `continue`
-# statements in the middle of `execute` — so a denied action and a failed
+# statements in the middle of `execute` - so a denied action and a failed
 # action produced the same shape of result, and nothing could report "the plan
 # was fine, policy stopped it". Naming the gate makes denials first-class:
 # they carry a code, they are counted separately from errors in the tick
 # summary, and the gate can be tested without side effects.
 #
 # The gate deliberately runs at execution time, not plan time. The plan is
-# seconds stale by the time it lands — someone starts typing, the live bot
-# answers the same question — and a gate that read the room at plan time would
+# seconds stale by the time it lands - someone starts typing, the live bot
+# answers the same question - and a gate that read the room at plan time would
 # be deciding on a room that no longer exists.
 
 
@@ -285,7 +285,7 @@ def _classify_conversation(
     """(kind, display_name) for a room. kind is guild / dm / group / unknown.
 
     Autonomy used to render every room as `#{name}` and fall back to the
-    snowflake when there was no name — so a DM came out as `#1418...` and a
+    snowflake when there was no name - so a DM came out as `#1418...` and a
     group DM as `#None`, both indistinguishable from a real text channel. The
     planner then posted into them. Classify once, here, and let every context
     section print the result.
@@ -356,7 +356,7 @@ class AutonomyContextIndex:
       unreadable room    -> "X1"    (not addressable at all)
 
     Everything used to share one integer space, and only guild channels were
-    ever listed in AVAILABLE CHANNELS — so a DM that showed up in the event
+    ever listed in AVAILABLE CHANNELS - so a DM that showed up in the event
     feed got a plain number like `channel=3`, the floor block invited the
     planner to speak there, and the "channel post" landed in someone's DM or
     group chat. A number can no longer name a private room: to post in one the
@@ -491,7 +491,7 @@ class AutonomyContextIndex:
             kind = self.kind_by_id.get(cid, self.KIND_UNKNOWN)
             if kind == self.KIND_DM:
                 return None, (
-                    f"{raw} is a DM, not a channel — reply there with "
+                    f"{raw} is a DM, not a channel - reply there with "
                     f"send_dm and the recipient's user id"
                 )
             if kind == self.KIND_UNKNOWN:
@@ -500,7 +500,7 @@ class AutonomyContextIndex:
         digits = self._digits(token)
         if not digits:
             return None, (
-                f"'{raw}' is not a room handle — use channel=N from "
+                f"'{raw}' is not a room handle - use channel=N from "
                 f"AVAILABLE CHANNELS, or a G-handle for a group DM"
             )
         if len(digits) >= 15:
@@ -510,11 +510,11 @@ class AutonomyContextIndex:
             kind = self.kind_by_id.get(digits)
             if kind == self.KIND_DM:
                 return None, (
-                    "that id is a DM channel — use send_dm with target_user_id"
+                    "that id is a DM channel - use send_dm with target_user_id"
                 )
             return digits, ""
         return None, (
-            f"no room numbered {digits} in this context — pick a number "
+            f"no room numbered {digits} in this context - pick a number "
             f"from AVAILABLE CHANNELS"
         )
 
@@ -550,10 +550,10 @@ AUTONOMY_VALID_KINDS = frozenset(
         "do_nothing",
     }
 )
-MAX_ACTIONS_PER_TICK = 3  # reduced from 5 — prevents spam bursts
+MAX_ACTIONS_PER_TICK = 3  # reduced from 5 - prevents spam bursts
 # Tool-loop: after a run_tool returns output, autonomy gets to look at that
 # output and decide a follow-up in the SAME tick, instead of waiting for the
-# next tick (minutes later) to see a 180-char summary. Bounded hard — each
+# next tick (minutes later) to see a 180-char summary. Bounded hard - each
 # round is a real LLM call and every action still runs the normal validation
 # and post-gating.
 MAX_TOOL_LOOP_ROUNDS = 3  # continuation rounds after the initial plan
@@ -586,7 +586,7 @@ CTX_BUDGET_RECENT_ACTIONS = 1200
 CTX_BUDGET_DM_HISTORY = 12000
 CTX_BUDGET_LTM = 800
 CTX_BUDGET_SHARED = 600
-CTX_BUDGET_CHANNELS_MAP = 1600  # bumped from 800 — enriched with topic/recency
+CTX_BUDGET_CHANNELS_MAP = 1600  # bumped from 800 - enriched with topic/recency
 CTX_BUDGET_INBOX = 500
 CTX_BUDGET_TYPING = 800
 
@@ -651,7 +651,7 @@ def _truncate_keep_tail(text: str, budget: int) -> str:
 # The utils imports are aliased to *_shared to avoid clashing with bot.py's
 # local copies; rebind them to the bare names the helper functions below use.
 # Without these, _user_ref() raises NameError, which the channel-activity loop
-# silently swallows via `except Exception: continue` — so autonomy sees NO live
+# silently swallows via `except Exception: continue` - so autonomy sees NO live
 # channel activity. Keep these aliases in sync with the utils import block.
 _coerce_utc_datetime = _coerce_utc_dt_shared  # local alias for backward compat
 _discord_display_name = _discord_display_name_shared
@@ -719,11 +719,11 @@ class SyntheticMessage:
         self.guild = guild
         self.content = content
         self._target_message = target_message
-        self.id = None  # None instead of 0 — 0 is an invalid snowflake
+        self.id = None  # None instead of 0 - 0 is an invalid snowflake
         self.attachments = []
         self.embeds = []
         self.reference = None
-        # tools access these — without them you get AttributeError
+        # tools access these - without them you get AttributeError
         self.mentions = []
         self.role_mentions = []
         self.channel_mentions = []
@@ -756,7 +756,7 @@ class SyntheticMessage:
 
 
 # ---------------------------------------------------------------------------
-# AutonomyStore — JSON-backed persistence
+# AutonomyStore - JSON-backed persistence
 # ---------------------------------------------------------------------------
 
 
@@ -817,7 +817,7 @@ class AutonomyStore(JsonStateStore):
                 # Goal-specific progress watermark for stale detection. Unlike
                 # last_acted_on (bumped for ALL goals on any successful tick as
                 # a "Dame Curie is alive" signal), this ONLY advances when a goal
-                # is explicitly referenced this tick — so staleness reflects
+                # is explicitly referenced this tick - so staleness reflects
                 # "not formally touched" rather than "Dame Curie did anything."
                 "last_progress_at": _utcnow_iso(),
             }
@@ -873,7 +873,7 @@ class AutonomyStore(JsonStateStore):
 # Restraint lives in autonomy_social + execute(), not here. This prompt's job
 # is WHAT to do; the floor gate already makes badly-timed speech impossible.
 # Silence-first wording ("otherwise do_nothing", "often nothing") belongs
-# nowhere in this string — it uniformly kills initiative, including goals.
+# nowhere in this string - it uniformly kills initiative, including goals.
 
 
 def _planner_system_prompt(
@@ -900,10 +900,10 @@ TOOLS:
 ## Conversation & Floor
 Read CONVERSATION FLOOR before deciding to post_channel or send_dm:
 - YOUR TURN (ADDRESSED / OPEN / IDLE): You may speak or take action.
-  * ADDRESSED: Someone talked to you or replied to you (ADDRESSED means someone is waiting on you) — reply naturally and keep the conversation going.
-  * OPEN: The room is active — join if you have something relevant or interesting to say.
+  * ADDRESSED: Someone talked to you or replied to you (ADDRESSED means someone is waiting on you) - reply naturally and keep the conversation going.
+  * OPEN: The room is active - join if you have something relevant or interesting to say.
   * IDLE: IDLE means the room has been quiet; feel free to drop an observation, start a casual thought, follow up on a goal, or ask a question if you feel like chatting.
-- BUSY/HOLDING/COOLDOWN/TYPING: Not your turn right now. TYPING means someone is composing a message — wait for them.
+- BUSY/HOLDING/COOLDOWN/TYPING: Not your turn right now. TYPING means someone is composing a message - wait for them.
 - No YOUR TURN rooms: Don't force channel messages, but you can still run background tools, goals, or update memory.
 
 ## Do
@@ -943,7 +943,7 @@ class AutonomyEngine:
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()  # serializes per-tick sections of state mutation
         # Single-flight generation counter. Two concurrent ticks must never both
-        # run — the old `force release lock on timeout` path was a race that let
+        # run - the old `force release lock on timeout` path was a race that let
         # overlapping ticks share state. A monotonic counter, compared at entry,
         # guarantees at most one tick is in flight.
         self._tick_in_flight = False
@@ -981,7 +981,7 @@ class AutonomyEngine:
         out looking like one.
 
         The first registration fixes a room's kind for the whole tick, so it
-        has to be right the first time — a later section can't renumber a
+        has to be right the first time - a later section can't renumber a
         handle that's already been printed. On the tick right after a restart
         the guild cache is still cold and `get_channel` returns None for real
         channels, so fall back to one fetch rather than writing them off as
@@ -1024,7 +1024,7 @@ class AutonomyEngine:
         idx = getattr(self, "_context_index", None)
         if idx is not None:
             return idx.resolve_channel_ref(raw)
-        # No index means we're outside a real tick — gather_context always
+        # No index means we're outside a real tick - gather_context always
         # builds one before plan() runs. Fall back to the plain digit parse
         # rather than rejecting everything.
         digits = re.sub(r"[^0-9]", "", str(raw or ""))
@@ -1074,7 +1074,7 @@ class AutonomyEngine:
                     topic_snippet = topic[:80].replace("\n", " ") if topic else ""
                     # Recency from the channel's cached last_message_id, which
                     # the gateway already delivered in GUILD_CREATE. This used
-                    # to be `history(limit=1)` — one REST round-trip per text
+                    # to be `history(limit=1)` - one REST round-trip per text
                     # channel, awaited SERIALLY inside a nested guild/channel
                     # loop. Across 21 guilds that is hundreds of sequential
                     # requests before the tick has read a single message, and
@@ -1099,7 +1099,7 @@ class AutonomyEngine:
                         # Recency is a hint; render the channel without it.
                         logger.debug("Could not read last-message age: %s", e)
                     tag_str = f" [{', '.join(tags)}]" if tags else ""
-                    topic_str = f' — "{topic_snippet}"' if topic_snippet else ""
+                    topic_str = f' - "{topic_snippet}"' if topic_snippet else ""
                     recency_str = f" (last msg: {last_msg_ago})" if last_msg_ago else ""
                     ch_map_lines.append(
                         f"  {idx}: #{ch.name}{tag_str}{recency_str}{topic_str}"
@@ -1338,7 +1338,7 @@ class AutonomyEngine:
 
     async def _loop(self):
         consecutive_failures = 0
-        MAX_AUTONOMY_INTERVAL = 86400  # 24h cap — don't let a bad value sleep forever
+        MAX_AUTONOMY_INTERVAL = 86400  # 24h cap - don't let a bad value sleep forever
         while self._running:
             try:
                 control = getattr(self.bot, "_control", None) or {}
@@ -1389,7 +1389,7 @@ class AutonomyEngine:
                 )
             # Randomize the tick so autonomy wakes at irregular, lifelike
             # intervals instead of a metronomic fixed cadence. Jitter ranges
-            # from half to 1.5x the configured interval — e.g. a 300s base
+            # from half to 1.5x the configured interval - e.g. a 300s base
             # becomes anywhere from ~2.5m to ~7.5m. Keeps the min 30s floor.
             sleep_for = _safe_int(base_sleep * random.uniform(0.5, 1.5), 300)
             await asyncio.sleep(max(30, sleep_for))
@@ -1399,7 +1399,7 @@ class AutonomyEngine:
     async def tick(self) -> dict:
         """One autonomy cycle. Skipped if previous tick still running."""
         # Single-flight: bail early if a tick is already running. The legacy
-        # `force release lock after 600s` path was a real race — overlapping
+        # `force release lock after 600s` path was a real race - overlapping
         # ticks could share state and post duplicate messages. The check-and-
         # set is atomic in the asyncio sense (no await between read and write),
         # so two concurrent tick() calls cannot both pass the guard.
@@ -1416,7 +1416,7 @@ class AutonomyEngine:
                 acquired = True
             except asyncio.TimeoutError:
                 logger.error(
-                    "Autonomy tick lock timed out (>30s) — previous state mutation hung; skipping"
+                    "Autonomy tick lock timed out (>30s) - previous state mutation hung; skipping"
                 )
                 # The inner try/finally below resets _tick_in_flight, but a
                 # `return` is NOT caught by `except BaseException`, so without
@@ -1435,7 +1435,7 @@ class AutonomyEngine:
                 # _log_tick cannot leak a reflection stamp into the next one.
                 self._reflect_pending_persist = False
                 # `_tick_in_flight` already blocks overlapping ticks. Do not
-                # hold `_lock` across Discord history / LLM — live replies
+                # hold `_lock` across Discord history / LLM - live replies
                 # and dashboard writes would sit behind a long tick.
                 if acquired:
                     self._lock.release()
@@ -1471,7 +1471,7 @@ class AutonomyEngine:
                         context={"tick_started": tick_start_iso, "user_id": str(getattr(getattr(self.bot, "user", None), "id", ""))},
                     )
                     logger.error(f"Autonomy tick failed: {e}")
-                    # Do not advance last_tick on failure — drain_slice would
+                    # Do not advance last_tick on failure - drain_slice would
                     # skip events the failed tick never planned over.
                     await self.store.patch_state(
                         {
@@ -1545,7 +1545,7 @@ class AutonomyEngine:
         return None
 
     # -----------------------------------------------------------------------
-    # Turn-taking — see autonomy_social for the rules themselves
+    # Turn-taking - see autonomy_social for the rules themselves
     # -----------------------------------------------------------------------
 
     def _floor_settings(self) -> FloorSettings:
@@ -1575,7 +1575,7 @@ class AutonomyEngine:
 
         Off means the planner still SEES the room read (it's useful context)
         but execute() stops enforcing it. That's an escape hatch for debugging,
-        not a mode anyone should run in — with it off, autonomy will eventually
+        not a mode anyone should run in - with it off, autonomy will eventually
         post over a live reply.
         """
         control = getattr(self.bot, "_control", None) or {}
@@ -1638,7 +1638,7 @@ class AutonomyEngine:
     async def _floor_check_live(self, channel_id: str) -> FloorVerdict | None:
         """Re-read a room immediately before speaking into it.
 
-        The plan was made after gather_context and an LLM call — easily tens of
+        The plan was made after gather_context and an LLM call - easily tens of
         seconds ago, during which someone may have spoken or the main bot may
         have started replying. The cached verdict is a stale opinion; this is
         the current one. Returns None if the room can't be read, in which case
@@ -1666,7 +1666,7 @@ class AutonomyEngine:
     async def _floor_gate(self, channel_id: str) -> FloorVerdict:
         """The verdict execute() acts on: live read first, cached as fallback.
 
-        Bounded so a slow Discord fetch can't eat the per-action timeout — a
+        Bounded so a slow Discord fetch can't eat the per-action timeout - a
         gate that hangs is a gate that stops autonomy entirely.
         """
         cid = str(channel_id)
@@ -1678,7 +1678,7 @@ class AutonomyEngine:
         if verdict is None:
             verdict = self._floor_verdicts.get(cid)
         if verdict is None:
-            # No live read, no cached one — a channel this tick never looked
+            # No live read, no cached one - a channel this tick never looked
             # at. Never return None here: that would silently drop the
             # mid-reply check, which is the one guard that must hold even with
             # zero visibility into the room.
@@ -1691,7 +1691,7 @@ class AutonomyEngine:
         return verdict
 
     # -----------------------------------------------------------------------
-    # gather_context — ordered by decision-relevance, per-section budgets
+    # gather_context - ordered by decision-relevance, per-section budgets
     # -----------------------------------------------------------------------
 
     async def gather_context(self) -> str:
@@ -1704,7 +1704,7 @@ class AutonomyEngine:
         ctx_index = AutonomyContextIndex()
         self._context_index = ctx_index
         # Phase timings. gather_context is a long chain of Discord reads and
-        # when it blew its budget the log said only "timed out" — no way to
+        # when it blew its budget the log said only "timed out" - no way to
         # tell which read was responsible. Recorded per phase and logged once
         # at the end so a future regression names itself.
         phase_ms: dict[str, float] = {}
@@ -1719,7 +1719,7 @@ class AutonomyEngine:
         available_channel_lines = await self._collect_available_channels(ctx_index)
         _mark("channel_map")
         # Use system local time so the LLM doesn't see UTC and think it's
-        # night when it's 5pm. No hardcoding offsets — let the OS decide.
+        # night when it's 5pm. No hardcoding offsets - let the OS decide.
         now = datetime.now().astimezone()
 
         # 1. Current time + mood framing
@@ -1729,8 +1729,8 @@ class AutonomyEngine:
         )
 
         # Turn-taking. The CONVERSATION FLOOR block is the single most
-        # decision-relevant thing in this whole context — it's what stops
-        # autonomy from talking over a live reply or over its own last line —
+        # decision-relevant thing in this whole context - it's what stops
+        # autonomy from talking over a live reply or over its own last line -
         # so it sits second, right under the clock. It can only be rendered
         # once channel history has been read further down, so reserve the slot
         # now and fill it at the end. See autonomy_social for the rules.
@@ -1743,7 +1743,7 @@ class AutonomyEngine:
         self._dm_user_by_channel = {}
         self._channel_fetch_cache = {}
 
-        # 2. Active goals (most decision-relevant — what should I work on?)
+        # 2. Active goals (most decision-relevant - what should I work on?)
         active_goals: list = []
         try:
             goals = await self.store.load_goals()
@@ -1758,7 +1758,7 @@ class AutonomyEngine:
                     if age is not None and age >= stale_days:
                         stale_count += 1
                         stale_tag = (
-                            f" [STALE: {age:.0f}d untouched — retire with "
+                            f" [STALE: {age:.0f}d untouched - retire with "
                             f"complete_goal or act to refresh]"
                         )
                     goal_lines.append(
@@ -1767,7 +1767,7 @@ class AutonomyEngine:
                     )
                 if stale_count:
                     goal_lines.append(
-                        f"({stale_count} stale goal(s) above — consider "
+                        f"({stale_count} stale goal(s) above - consider "
                         f"complete_goal to retire, or act on one to refresh.)"
                     )
                 sections.append(
@@ -1882,7 +1882,7 @@ class AutonomyEngine:
             sections.append(f"=== RECENT CONVERSATIONS ===\n(error: {e})")
 
         # 4. Channel activity (what's happening right now?)
-        # Events, watch, recent replies, then auto-channels / memory — not
+        # Events, watch, recent replies, then auto-channels / memory - not
         # just the first 10 auto rooms. Fetch in parallel, keep each room
         # as its own block so a busy #general does not erase the others.
         _mark("goals_events")
@@ -1979,7 +1979,7 @@ class AutonomyEngine:
                 header += (
                     "conversation watch is on in: "
                     + ", ".join(watch_notes)
-                    + " — you are still in those rooms\n"
+                    + " - you are still in those rooms\n"
                 )
             sections.append(
                 _truncate(
@@ -1991,7 +1991,7 @@ class AutonomyEngine:
             sections.append("=== CHANNEL ACTIVITY ===\n(no accessible channels)")
 
         # Auto-invoke the youtube tool for YouTube links seen in recent
-        # channel activity, so the planner has transcript/frames context —
+        # channel activity, so the planner has transcript/frames context -
         # same capability as the normal reply path. Mirrors bot.py's
         # pre_tool_results injection.
         yt_context = await self._gather_youtube_context(ch_lines)
@@ -2134,7 +2134,7 @@ class AutonomyEngine:
         except Exception as e:
             sections.append(f"=== ENGAGEMENT WITH YOUR POSTS ===\n(error: {e})")
 
-        # Periodic reflection nudge — retire stale goals / tidy memory on its
+        # Periodic reflection nudge - retire stale goals / tidy memory on its
         # own cadence. last_reflect_at is stamped in _log_tick when this fires.
         control = getattr(self.bot, "_control", None) or {}
         if control.get("autonomy_reflect_enabled", True):
@@ -2151,7 +2151,7 @@ class AutonomyEngine:
         #
         # The history reads run concurrently and each is bounded, mirroring the
         # channel-activity pass above. Previously this awaited
-        # history(limit=1500) — 15 paginated REST requests — once per private
+        # history(limit=1500) - 15 paginated REST requests - once per private
         # channel, serially, with no timeout: ~20 DMs could burn the entire
         # gather_context budget on its own, and a single hung fetch stalled the
         # whole tick. Formatting still happens serially below so ctx_index
@@ -2217,7 +2217,7 @@ class AutonomyEngine:
                     else room_label
                 )
                 # A DM is a conversation too, and the "don't answer yourself"
-                # rule matters more there than anywhere — there's only one
+                # rule matters more there than anywhere - there's only one
                 # other person to notice. Map recipient -> DM channel so
                 # send_dm can be gated on the same read as a channel post.
                 if recipient is not None:
@@ -2240,12 +2240,12 @@ class AutonomyEngine:
 
                 if is_group:
                     header = (
-                        f"{room_label}{last_msg_age} — group DM, reply with "
+                        f"{room_label}{last_msg_age} - group DM, reply with "
                         f'post_channel target_channel_id="{handle}"'
                     )
                 else:
                     uid = str(getattr(recipient, "id", "")) if recipient else ""
-                    header = f"{room_label}{last_msg_age} — private DM, reply with send_dm" + (
+                    header = f"{room_label}{last_msg_age} - private DM, reply with send_dm" + (
                         f" target_user_id={uid}" if uid else ""
                     )
                 lines = [header]
@@ -2295,7 +2295,7 @@ class AutonomyEngine:
         if dm_blocks:
             sections.append(
                 _truncate(
-                    "=== DIRECT MESSAGES & GROUP DMS (private rooms — NOT in "
+                    "=== DIRECT MESSAGES & GROUP DMS (private rooms - NOT in "
                     "AVAILABLE CHANNELS; never target one with a plain "
                     "channel number) ===\n" + "\n\n".join(dm_blocks[-1500:]),
                     CTX_BUDGET_DM_HISTORY,
@@ -2327,14 +2327,14 @@ class AutonomyEngine:
         except Exception as e:
             sections.append(f"=== LONG-TERM MEMORY ===\n(error: {e})")
 
-        # 9. Available channels map — numbered 1..N so the planner picks by index,
+        # 9. Available channels map - numbered 1..N so the planner picks by index,
         # not by 18-digit snowflakes it routinely garbles.
         if available_channel_lines:
             # Intentionally limit to reduce "everything is a channel post" bias.
             # Autonomy should also do research, memory updates, goals, DMs, reacts etc.
             sections.append(
                 _truncate(
-                    "=== AVAILABLE CHANNELS (server text channels — the ONLY rooms a plain number targets; use the number as target_channel_id; only post when you have a real reason; prefer research/update_memory for knowledge goals) ===\n"
+                    "=== AVAILABLE CHANNELS (server text channels - the ONLY rooms a plain number targets; use the number as target_channel_id; only post when you have a real reason; prefer research/update_memory for knowledge goals) ===\n"
                     + "\n".join(available_channel_lines[:18]),
                     CTX_BUDGET_CHANNELS_MAP,
                 )
@@ -2372,12 +2372,12 @@ class AutonomyEngine:
 
         # Fill the reserved CONVERSATION FLOOR slot now that every room has
         # been read. Channels that were fetched but produced no snapshot still
-        # get a verdict — an empty room is a readable room.
+        # get a verdict - an empty room is a readable room.
         try:
             verdicts = []
             for cid, snapshot in floor_snapshots.items():
-                # Address rooms exactly the way the rest of the context does —
-                # same handle, same spelling — and spell out how to answer in
+                # Address rooms exactly the way the rest of the context does -
+                # same handle, same spelling - and spell out how to answer in
                 # a private one. This block is the first thing the planner
                 # reads, so a label here that looks like a channel number is a
                 # standing invitation to post into a DM.
@@ -2388,12 +2388,12 @@ class AutonomyEngine:
                     label += (
                         f" [reply with send_dm target_user_id={uid}]"
                         if uid
-                        else " [DM — reply with send_dm]"
+                        else " [DM - reply with send_dm]"
                     )
                 elif kind == AutonomyContextIndex.KIND_GROUP:
                     label += " [group DM]"
                 verdict = self._read_floor_for(cid, snapshot, label=label)
-                # Always remember the verdict — the execute-time gate needs it
+                # Always remember the verdict - the execute-time gate needs it
                 # for DM channels too, which never carry a channel index.
                 self._floor_verdicts[cid] = verdict
                 # Only spend prompt space on rooms he could actually post in.
@@ -2421,7 +2421,7 @@ class AutonomyEngine:
                 who = ", ".join(names[:5])
                 verb = "is" if len(names) == 1 else "are"
                 typing_lines.append(
-                    f"{who} {verb} typing in {room} — wait for them to send"
+                    f"{who} {verb} typing in {room} - wait for them to send"
                 )
             if typing_lines:
                 sections.insert(
@@ -2509,7 +2509,7 @@ class AutonomyEngine:
                 )
                 result = await yt_tool.execute(syn, url=url)
                 if result:
-                    # Strip frame image blobs — autonomy is text-only planning.
+                    # Strip frame image blobs - autonomy is text-only planning.
                     result = re.sub(
                         r"__IMAGE_B64__.*?__END_IMAGE_B64__",
                         "[frame available]",
@@ -2619,7 +2619,7 @@ class AutonomyEngine:
         """Age in days since a goal was last *specifically* progressed, for
         stale detection. Prefers last_progress_at (only advances when the goal
         is explicitly referenced by an action) and falls back to created_at.
-        Deliberately does NOT use last_acted_on — that field is bumped for ALL
+        Deliberately does NOT use last_acted_on - that field is bumped for ALL
         active goals on any successful tick as a "Dame Curie is alive" signal, so
         it would make every goal look perpetually fresh and defeat staleness."""
         when = goal.get("last_progress_at") or goal.get("created_at")
@@ -2654,12 +2654,12 @@ class AutonomyEngine:
         return (
             "=== REFLECTION (periodic self-review) ===\n"
             "It's been a bit since you took stock. Self-direct for a moment:\n"
-            "- Review ACTIVE GOALS — retire any that are done or abandoned with "
+            "- Review ACTIVE GOALS - retire any that are done or abandoned with "
             "complete_goal (pass the goal_id).\n"
             "- If something you learned is worth keeping, save it with update_memory.\n"
             "- If no current goal fits where you are, set a new self-chosen objective "
             "with create_goal.\n"
-            "This is a nudge, not a command — HARD RULES still apply."
+            "This is a nudge, not a command - HARD RULES still apply."
         )
 
     async def _find_channel_for_message_id(self, message_id: str) -> str | None:
@@ -2667,7 +2667,7 @@ class AutonomyEngine:
         short-term channel memory. This is the fallback that makes react /
         edit / delete / forward work when the LLM only passed target_message_id
         (e.g. a forum post's starter message) without the matching thread
-        channel id — and when the resolved channel fetch missed."""
+        channel id - and when the resolved channel fetch missed."""
         message_id = str(message_id or "").strip()
         if not message_id:
             return None
@@ -2720,7 +2720,7 @@ class AutonomyEngine:
             "\n\n=== TOOL RESULTS (this tick, just now) ===\n"
             + "\n".join(lines)
             + "\n\nYou ran those yourself moments ago and are seeing the output "
-            "for the first time. Decide what follows FROM it — post what you "
+            "for the first time. Decide what follows FROM it - post what you "
             "found, run another tool to go deeper, or save it. Do NOT re-run a "
             "tool you just ran with the same arguments. If the output already "
             "settled it and nothing is worth doing, return do_nothing."
@@ -2776,8 +2776,8 @@ class AutonomyEngine:
         `gather_context` does many Discord history fetches plus up to three
         YouTube fetches with no per-call timeout; one hung fetch used to stall
         the tick and, through single-flight, the whole autonomy loop, forever.
-        The bound is generous — a real hang is what it catches, not a slow
-        network — and a timeout is raised rather than swallowed so the tick is
+        The bound is generous - a real hang is what it catches, not a slow
+        network - and a timeout is raised rather than swallowed so the tick is
         recorded as failed and `last_tick` is not advanced past events nobody
         planned over.
         """
@@ -2790,7 +2790,7 @@ class AutonomyEngine:
             logger.error(
                 "Autonomy gather_context timed out (>%ss); skipping tick to "
                 "recover the loop. Slowest phases are logged at INFO by "
-                "gather_context — check those to see which read is stalling.",
+                "gather_context - check those to see which read is stalling.",
                 budget,
             )
             raise RuntimeError("gather_context timed out") from None
@@ -2834,7 +2834,7 @@ class AutonomyEngine:
         The third return value is the per-stage tally the tick reports:
         how many actions were planned, how many the gate allowed, and what
         denials it issued, broken down by code. That last part is the thing
-        that used to be invisible — a plan that was entirely denied and a
+        that used to be invisible - a plan that was entirely denied and a
         plan that was empty produced identical logs.
         """
         # Shared across rounds so the one-post-per-channel guard survives the
@@ -2897,7 +2897,7 @@ class AutonomyEngine:
                 break
             feedback = self._tool_loop_feedback(last_round)
             if not feedback:
-                break  # nothing new happened — normal end of the tick
+                break  # nothing new happened - normal end of the tick
 
             loop_context += feedback
             try:
@@ -2980,12 +2980,12 @@ class AutonomyEngine:
                 "base_personality", DEFAULT_CONTROL.get("base_personality", "")
             )
         )
-        # Inject age dynamically — use bot's _get_personality if available
+        # Inject age dynamically - use bot's _get_personality if available
         if hasattr(self.bot, "_get_personality"):
             base_personality = self.bot._get_personality()
 
         # Prompt-cache friendliness: this f-string is built fresh every tick,
-        # and the autonomy loop ticks on a fixed interval — so the ~90 lines
+        # and the autonomy loop ticks on a fixed interval - so the ~90 lines
         # of static rules/examples/schema below get reprocessed from scratch
         # on every single call unless the prefix up to the first difference
         # is byte-identical across ticks. CURRENT CONTEXT and GOALS change
@@ -3005,7 +3005,7 @@ class AutonomyEngine:
         # call the LLM
         try:
             # A system-only messages array is rejected by Claude models with
-            # 400 INVALID_ARGUMENT — they require at least one user turn. The
+            # 400 INVALID_ARGUMENT - they require at least one user turn. The
             # old fallback (ling-3.0-flash) tolerated it, so this only showed
             # up once the fallback became claude-opus-4-6: the primary would
             # return empty, fail over, and the fallback would 400, turning a
@@ -3039,7 +3039,7 @@ class AutonomyEngine:
             )
             # Provider-unavailable soft skip: if the autonomy provider isn't
             # ready (init failed / endpoint down), don't burn an AI slot or count
-            # this as a tick failure — just do_nothing. _get_autonomy_provider
+            # this as a tick failure - just do_nothing. _get_autonomy_provider
             # awaits init, so a transient failure self-heals on the next tick.
             ai_provider = cast(Any, getattr(self.bot, "_get_autonomy_provider", None))
             if callable(ai_provider):
@@ -3093,7 +3093,7 @@ class AutonomyEngine:
                 {"kind": "do_nothing", "reason": "empty LLM response"}
             ], validation_failures
 
-        # extract JSON block — try pure JSON first, then markdown fences, then find/rfind
+        # extract JSON block - try pure JSON first, then markdown fences, then find/rfind
         text = str(raw).strip()
         json_str = None
         # 1. try pure JSON
@@ -3175,7 +3175,7 @@ class AutonomyEngine:
             if not isinstance(action, dict):
                 continue
             kind = str(action.get("kind", "")).strip().lower()
-            # LLM keeps inventing action kind names — map common aliases
+            # LLM keeps inventing action kind names - map common aliases
             _KIND_ALIASES = {
                 "send_message": "post_channel",
                 "send_msg": "post_channel",
@@ -3242,7 +3242,7 @@ class AutonomyEngine:
                     if cid:
                         logger.info(
                             "Autonomy post_channel: reply target msg lives in "
-                            "%s, not %s — routing to the message's channel",
+                            "%s, not %s - routing to the message's channel",
                             reply_ch,
                             cid,
                         )
@@ -3253,7 +3253,7 @@ class AutonomyEngine:
                     == AutonomyContextIndex.KIND_DM
                 ):
                     validation_failures.append(
-                        "post_channel: that room is a DM — use send_dm with "
+                        "post_channel: that room is a DM - use send_dm with "
                         "target_user_id instead"
                     )
                     continue
@@ -3347,7 +3347,7 @@ class AutonomyEngine:
                 # dirac") the reply lands in someone's group chat. Hard
                 # reject: no target -> drop the action and let validation
                 # failures push the LLM toward picking the right channel next
-                # tick. Don't kill the whole plan — other actions in the
+                # tick. Don't kill the whole plan - other actions in the
                 # response can still go through.
                 if tool_name in AUTONOMY_POST_TOOLS and not parsed_action.get(
                     "target_channel_id"
@@ -3433,7 +3433,7 @@ class AutonomyEngine:
         """Which conversation, if any, this action would speak into.
 
         post_channel is the obvious case. A message-sending run_tool is the
-        same act wearing a tool's name, and a DM is a conversation too — a bot
+        same act wearing a tool's name, and a DM is a conversation too - a bot
         that DMs you three times before you answer once is the same failure as
         one that talks over itself in #general. All three resolve to a channel
         id so all three go through one gate.
@@ -3465,7 +3465,7 @@ class AutonomyEngine:
         → execute. It used to be inline in `execute`, mixed in with dispatch,
         which meant a denial and a failure were the same kind of event and
         neither was visible as its own thing. Pulled out, the tick can report
-        "planned 4, allowed 2, denied 2 (floor, tool_blocked)" — and the gate
+        "planned 4, allowed 2, denied 2 (floor, tool_blocked)" - and the gate
         can be tested without executing anything.
 
         It runs immediately before execution rather than at plan time on
@@ -3499,7 +3499,7 @@ class AutonomyEngine:
                 continue
 
             # He is asleep. The live path already refuses to answer people who
-            # talk to him and tells them "the dame is sleeping, back in Xm" — but
+            # talk to him and tells them "the dame is sleeping, back in Xm" - but
             # nothing checked it here, so the tick would post unprompted into
             # a channel or DM someone while that notice was still standing.
             # Speaking only: research, memory and goal work carry on.
@@ -3509,7 +3509,7 @@ class AutonomyEngine:
                         action,
                         False,
                         "asleep",
-                        "you are in a sleep window — not speaking until you wake",
+                        "you are in a sleep window - not speaking until you wake",
                         post_cid,
                     )
                 )
@@ -3518,7 +3518,7 @@ class AutonomyEngine:
             # Same-tick dedup: one plan does not get to post twice into one
             # room. Checked before the floor read so a duplicate costs
             # nothing. Note this deliberately runs even when turn-taking is
-            # disabled — it's structural, not a matter of taste.
+            # disabled - it's structural, not a matter of taste.
             if post_cid in planned_post_channels:
                 logger.info(
                     f"Autonomy skip duplicate post to {post_cid} in same tick/plan"
@@ -3555,7 +3555,7 @@ class AutonomyEngine:
                             False,
                             "floor",
                             f"not your turn in this conversation "
-                            f"[{verdict.state}] — {verdict.reason}",
+                            f"[{verdict.state}] - {verdict.reason}",
                             post_cid,
                         )
                     )
@@ -3564,7 +3564,7 @@ class AutonomyEngine:
             # Claim the room only once it's cleared to speak in. Claiming
             # before the gate would make a *blocked* action consume the
             # slot, and the next action aimed at the same room would come
-            # back "already sent" — which is false, and that string is fed
+            # back "already sent" - which is false, and that string is fed
             # to the planner as feedback next tick.
             planned_post_channels.add(post_cid)
             verdicts.append(GateVerdict(action, True, "ok", "", post_cid))
@@ -3605,7 +3605,7 @@ class AutonomyEngine:
     async def run_allowed(self, verdicts: list[GateVerdict], *, response_metrics=None) -> list[dict]:
         """Execute the actions the gate allowed. One failure doesn't kill the rest.
 
-        Denied actions still produce a result row — the planner reads results
+        Denied actions still produce a result row - the planner reads results
         as feedback, and an action that silently vanished would be re-planned
         next tick forever.
         """
@@ -3811,11 +3811,11 @@ class AutonomyEngine:
         # Last line of defence. Validation resolves handles, but a raw
         # snowflake from a tool arg or a stale config entry can still point at
         # a private room, and a "channel post" that lands in somebody's DM is
-        # the worst version of this bug — send_dm is the only way in.
+        # the worst version of this bug - send_dm is the only way in.
         if isinstance(channel, discord.DMChannel):
             result["result"] = "error"
             result["error"] = (
-                "refused: that id is a DM channel, not a text channel — "
+                "refused: that id is a DM channel, not a text channel - "
                 "use send_dm with target_user_id"
             )
             logger.warning(
@@ -4000,7 +4000,7 @@ class AutonomyEngine:
             if not clean_cid:
                 logger.warning(
                     f"Autonomy run_tool '{tool_name}': target_channel_id '{target_cid}' "
-                    f"could not be resolved — LLM probably passed a channel name. "
+                    f"could not be resolved - LLM probably passed a channel name. "
                     f"Available channels are listed by number in context."
                 )
                 if explicit_target:
@@ -4047,13 +4047,13 @@ class AutonomyEngine:
         # intend. We log it so it's at least diagnosable.
         if channel is None:
             # HARD REFUSAL for posting tools. Auto_channels is bot operator config
-            # (it's the channel(s) that auto-reply to non-mention messages) — it is
+            # (it's the channel(s) that auto-reply to non-mention messages) - it is
             # NOT a default destination for autonomous posts, and historically it
             # has been a Discord group DM ("Z3ki, normalMan, dirac") which is the
             # exact wrong place to drop a reply. Better to error out so the LLM
             # picks a real channel next tick than to broadcast into someone's
             # group chat. Non-posting tools (web_search, fetch_url, memory edits,
-            # etc.) still get the auto_channel fallback below — it doesn't matter
+            # etc.) still get the auto_channel fallback below - it doesn't matter
             # where they "run" because they don't produce a visible message.
             if tool_name in AUTONOMY_POST_TOOLS and not explicit_target:
                 result["result"] = "error"
@@ -4065,7 +4065,7 @@ class AutonomyEngine:
                     f"a target_message_id whose channel can be inferred."
                 )
                 logger.warning(
-                    f"Autonomy run_tool '{tool_name}': blocked — no explicit target, "
+                    f"Autonomy run_tool '{tool_name}': blocked - no explicit target, "
                     f"refusing auto_channels fallback for posting tool"
                 )
                 return
@@ -4115,7 +4115,7 @@ class AutonomyEngine:
         # thread id). When fetch on the resolved channel misses, scan channel
         # memory for a row whose message_id matches, switch to that channel,
         # and retry. Also covers the case where the resolved channel was a
-        # stale fallback (e.g. an auto_channel that's been deleted) — the
+        # stale fallback (e.g. an auto_channel that's been deleted) - the
         # message really lives in a thread the bot never listed by id.
         if target_message is None and clean_mid:
             resolved_cid = await self._find_channel_for_message_id(clean_mid)
@@ -4318,11 +4318,11 @@ class AutonomyEngine:
         # something successful. Asking the LLM to "re-create the goal" to bump
         # the timestamp never worked (0 create_goal actions across 200 ticks),
         # so goals stayed at last_acted_on=null even while Dame Curie was clearly
-        # acting on them. Track it here instead — server-side, reliable.
+        # acting on them. Track it here instead - server-side, reliable.
         #
         # last_acted_on is bumped for ALL active goals on any success (an "alive"
         # signal). last_progress_at is bumped ONLY for goals this tick explicitly
-        # referenced — via a complete_goal with matching goal_id, or a goal id
+        # referenced - via a complete_goal with matching goal_id, or a goal id
         # mentioned in any successful action's reason. last_progress_at is what
         # stale detection reads, so staleness means "not formally touched" rather
         # than "Dame Curie did anything at all."

@@ -1,6 +1,6 @@
 """Member-side onboarding: picking roles/channels in a server.
 
-The submit body is the fussy part — Discord wants a flat list of option
+The submit body is the fussy part - Discord wants a flat list of option
 ids and 400s the whole request on anything else, which is how the old
 auto-onboard silently left the account with no roles.
 """
