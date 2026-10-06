@@ -393,6 +393,30 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
 
 
+def _stored_similarities(blobs: list, query_norm: np.ndarray, dimension: int) -> np.ndarray:
+    """Cosine of each stored blob against the unit query vector, in one pass.
+
+    Returns one float32 per blob. NaN marks a blob that is missing, has the
+    wrong length, holds a non-finite value or is all zeros. Rows are
+    normalized in float64, the same way validate_embedding() does it.
+    """
+    out = np.full(len(blobs), np.nan, dtype=np.float32)
+    usable = [
+        index for index, blob in enumerate(blobs)
+        if isinstance(blob, bytes) and len(blob) == dimension * 4
+    ]
+    if not usable:
+        return out
+    matrix = np.frombuffer(
+        b"".join(blobs[index] for index in usable), dtype=np.float32
+    ).reshape(len(usable), dimension).astype(np.float64)
+    norms = np.linalg.norm(matrix, axis=1)
+    valid = np.isfinite(matrix).all(axis=1) & (norms > 0)
+    sims = (matrix[valid] / norms[valid, None]) @ query_norm.astype(np.float64)
+    out[np.asarray(usable)[valid]] = sims.astype(np.float32)
+    return out
+
+
 def _split_embed_chunks(s: str) -> list[str]:
     """Split text into <=EMBED_MAX_CHARS sentence-boundary chunks.
 
@@ -3141,16 +3165,17 @@ class RAGMemoryManager:
         # ─── score ───────────────────────────────────────────────────
         results = []
         query_norm = validate_embedding(query_vec, self.embed_dim)
-        for row in rows:
-            blob = row["embedding"]
-            if not blob:
-                continue
+        # One matrix product for all rows. The old per-row validate_embedding
+        # call iterated 1024 values in Python per row and blocked the event
+        # loop for about 1 s per 5,000 rows (measured 2026-10-07).
+        similarities = _stored_similarities(
+            [row["embedding"] for row in rows], query_norm, self.embed_dim
+        )
+        for row, raw_sim in zip(rows, similarities):
+            if not np.isfinite(raw_sim):
+                continue  # NaN marks a missing, malformed or zero vector
             try:
-                if not embedding_blob_valid(blob, self.embed_dim):
-                    continue
-                vec = _blob_to_embedding(blob)
-                vec_norm = validate_embedding(vec, self.embed_dim)
-                sim = float(np.dot(query_norm, vec_norm))
+                sim = float(raw_sim)
                 if sim < min_similarity:
                     continue
                 # Downvoted rows are pulled in scoring but pulled down.
