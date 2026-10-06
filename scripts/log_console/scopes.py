@@ -5,6 +5,8 @@ from .recognizers import Envelope, Recognition
 
 SCOPE_KEYS = {"s": "system", "b": "bot", "p": "provider", "d": "discord", "t": "tool",
               "c": "context", "w": "web", "a": "subagent"}
+# Viewer-asserted omission scope: deliberately absent from SCOPE_KEYS so no scope key can hide it.
+VIEWER_SCOPE = "viewer"
 LOGGER_SCOPES = (
     ("jobs", "subagent"), ("discord", "discord"), ("providers", "provider"),
     ("provider_telemetry", "provider"), ("aiohttp", "provider"), ("httpx", "provider"),

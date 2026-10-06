@@ -7,7 +7,7 @@ import aiohttp
 import pytest
 
 from bot_tools import UsageTool
-from providers import OllamaProvider
+from providers import OpenAICompatibleProvider
 from tool_schemas import RESULT_TOOL_NAMES, build_openai_tools
 
 
@@ -20,8 +20,8 @@ def usage_tool(monkeypatch):
     bot = SimpleNamespace(
         ai_provider=provider,
         config=SimpleNamespace(
-            OLLAMA_BASE_URL="https://api.deepseek.com/v1",
-            OLLAMA_API_KEY="synthetic-stale-config-key",
+            OPENAI_BASE_URL="https://api.deepseek.com/v1",
+            OPENAI_API_KEY="synthetic-stale-config-key",
         ),
     )
     data = {
@@ -52,9 +52,9 @@ def usage_tool(monkeypatch):
     session.get.return_value = response
     get_session = AsyncMock(return_value=session)
     monkeypatch.setattr("bot_tools._get_shared_session", get_session)
-    monkeypatch.setenv("OLLAMA_API_KEY", "synthetic-stale-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-stale-env-key")
     monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "synthetic-unrelated-compat-key")
-    monkeypatch.setenv("MAXWELL_USAGE_URL", "https://untrusted.example.invalid/usage")
+    monkeypatch.setenv("DAME_CURIE_USAGE_URL", "https://untrusted.example.invalid/usage")
     return UsageTool(bot), session, response, get_session, data
 
 
@@ -118,7 +118,7 @@ def test_uses_fixed_origin_loaded_key_and_no_redirects(usage_tool, base):
     args, kwargs = session.get.call_args
     assert args == ("https://openrouter.ai/api/v1/key",)
     assert kwargs["headers"] == {
-        "Authorization": "Bearer synthetic-current-key",
+        "Authorization": "Bearer   synthetic-current-key  ",
         "Accept": "application/json",
     }
     assert kwargs["allow_redirects"] is False
@@ -150,7 +150,7 @@ def test_uses_fixed_origin_loaded_key_and_no_redirects(usage_tool, base):
 def test_untrusted_or_non_openrouter_primary_sends_nothing(usage_tool, base):
     tool, session, _, get_session, _ = usage_tool
     tool.bot.ai_provider.base_url = base
-    tool.bot.config.OLLAMA_BASE_URL = "https://openrouter.ai/api/v1"
+    tool.bot.config.OPENAI_BASE_URL = "https://openrouter.ai/api/v1"
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
@@ -176,7 +176,7 @@ def test_missing_loaded_key_never_borrows_environment_or_config(usage_tool, key)
 def test_missing_loaded_provider_does_not_fall_back_to_config(usage_tool):
     tool, session, _, get_session, _ = usage_tool
     del tool.bot.ai_provider
-    tool.bot.config.OLLAMA_BASE_URL = "https://openrouter.ai/api/v1"
+    tool.bot.config.OPENAI_BASE_URL = "https://openrouter.ai/api/v1"
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
@@ -185,26 +185,33 @@ def test_missing_loaded_provider_does_not_fall_back_to_config(usage_tool):
     session.get.assert_not_called()
 
 
-def test_real_provider_uses_primary_not_fallback_or_last_response(usage_tool):
-    tool, session, _, _, _ = usage_tool
-    tool.bot.ai_provider = OllamaProvider(
-        base_url="https://openrouter.ai/api/v1",
-        api_key="synthetic-real-primary",
+@pytest.mark.parametrize("key", ["synthetic-real-primary", ""])
+@pytest.mark.parametrize("base_url", ["https://openrouter.ai/api/v1", "https://api.deepseek.com/v1"])
+def test_real_provider_uses_primary_not_fallback_or_last_response(usage_tool, key, base_url):
+    tool, session, _, get_session, _ = usage_tool
+    tool.bot.ai_provider = OpenAICompatibleProvider(
+        base_url=base_url,
+        api_key=key,
         model="synthetic-primary-model",
         max_tokens=100,
         temperature=0.6,
-        fallback_base_url="https://api.deepseek.com/v1",
-        fallback_api_key="synthetic-fallback-key",
-        fallback_model="synthetic-fallback-model",
     )
     tool.bot.ai_provider._last_usage = {"provider": "fallback", "usage": 999}
 
     result = asyncio.run(tool.execute(SimpleNamespace()))
 
-    assert "OpenRouter credits used — all time: $25.5" in result
-    assert session.get.call_args.kwargs["headers"]["Authorization"] == (
-        "Bearer synthetic-real-primary"
-    )
+    assert tool.bot.ai_provider.api_key == key
+    assert tool.bot.ai_provider.base_url == base_url
+    assert len(tool.bot.ai_provider._endpoints) == 1
+    if base_url == "https://openrouter.ai/api/v1" and key:
+        assert "OpenRouter credits used — all time: $25.5" in result
+        assert session.get.call_args.args == ("https://openrouter.ai/api/v1/key",)
+        assert session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {key}"
+    else:
+        expected = "no API key" if base_url == "https://openrouter.ai/api/v1" else "only a loaded HTTPS OpenRouter primary is supported"
+        assert expected in result
+        get_session.assert_not_awaited()
+        session.get.assert_not_called()
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308, 401, 402, 403, 429, 500])

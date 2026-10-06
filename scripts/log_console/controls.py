@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 from .events import LogEvent
 from .history import EventHistory, HistoryEntry
-from .scopes import SCOPE_KEYS
+from .scopes import SCOPE_KEYS, VIEWER_SCOPE
 
 
 LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -25,6 +25,9 @@ class ConsoleState:
     page: int = 0
 
     def visible(self, event: LogEvent) -> bool:
+        """Viewer-owned omissions stay visible; only the viewer can produce that scope."""
+        if event.scope == VIEWER_SCOPE:
+            return True
         scope = event.scope if event.scope in SCOPE_KEYS.values() else "system"
         return (self.show_ollama or not (event.service or "").startswith("ollama")) and scope in self.enabled_scopes and LEVEL_VALUE.get(event.level or "INFO", 1) >= self.verbosity
 

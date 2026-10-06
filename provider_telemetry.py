@@ -195,6 +195,7 @@ def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
             "eval_count",
             "promptTokenCount",
             "candidatesTokenCount",
+            "totalTokenCount",
             "thoughtsTokenCount",
             "cached_tokens",
             "audio_tokens",

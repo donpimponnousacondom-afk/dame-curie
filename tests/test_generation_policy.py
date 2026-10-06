@@ -13,14 +13,14 @@ def shared_bot():
     bot = MaxwellBot.__new__(MaxwellBot)
     bot.config = SimpleNamespace(
         AUX_BASE_URL="",
-        AUX_API_KEY="",
+        AUX_API_KEY=None,
         AUX_MODEL="",
         AUX_DISABLE_REASONING=True,
         AUTONOMY_BASE_URL="",
-        AUTONOMY_API_KEY="",
+        AUTONOMY_API_KEY=None,
         AUTONOMY_MODEL="",
         AUTONOMY_DISABLE_REASONING=False,
-        OLLAMA_TEMPERATURE=0.6,
+        OPENAI_TEMPERATURE=0.6,
     )
     bot.bot_name = "dame_curie"
     bot._control = {}
@@ -74,10 +74,7 @@ def test_context_watcher_overrides_shared_main_policy(aux_policy, night_fallback
 
     bot.ai_provider.generate_response.assert_awaited_once()
     kwargs = bot.ai_provider.generate_response.await_args.kwargs
-    assert kwargs["temperature"] == 0.2
-    assert kwargs["disable_reasoning"] is expected_disabled
-    assert kwargs["model"] is None
-    assert kwargs.get("prefer_fallback", False) is night_fallback
+    assert kwargs == {"timeout": 60}
     assert bot.ai_provider.temperature == 0.6
     assert bot.ai_provider.disable_reasoning is False
     bot._release_ai_slot.assert_awaited_once()
@@ -90,8 +87,6 @@ def test_ltm_summary_overrides_shared_main_policy(monkeypatch, shared_bot, night
     bot.config.MEMORY_MESSAGE_LIMIT = 100
     bot.config.REM_EVENT_BUFFER_MAX = 10
     bot.config.REM_RUN_HISTORY = 5
-    bot.config.ENABLE_EMAIL_TOOLS = False
-    bot.config.ENABLE_X = False
     bot._night_fallback_active.return_value = night_fallback
     bot.ai_provider.generate_response.return_value = '{"facts": ["root prefers Python"]}'
     memory = SimpleNamespace()
@@ -106,10 +101,7 @@ def test_ltm_summary_overrides_shared_main_policy(monkeypatch, shared_bot, night
     assert facts == ["root prefers Python"]
     bot.ai_provider.generate_response.assert_awaited_once()
     kwargs = bot.ai_provider.generate_response.await_args.kwargs
-    assert kwargs["temperature"] == 0.2
-    assert kwargs["disable_reasoning"] is True
-    assert kwargs["max_tokens"] == 1200
-    assert kwargs.get("prefer_fallback", False) is night_fallback
+    assert kwargs == {}
     assert bot.ai_provider.temperature == 0.6
     assert bot.ai_provider.disable_reasoning is False
 
@@ -117,7 +109,7 @@ def test_ltm_summary_overrides_shared_main_policy(monkeypatch, shared_bot, night
 def test_rem_guard_forwards_aux_policy_on_shared_main(monkeypatch, aux_policy):
     bot, expected_disabled = aux_policy
     bot.config.DATA_DIR = "unused"
-    bot.config.OLLAMA_REM_MODEL = "rem-model"
+    bot.config.OPENAI_REM_MODEL = "rem-model"
     bot.config.REM_RUN_HISTORY = 5
     bot._rem_running = False
     bot.rem_max_turns = 3
@@ -135,9 +127,7 @@ def test_rem_guard_forwards_aux_policy_on_shared_main(monkeypatch, aux_policy):
     runner.assert_awaited_once()
     kwargs = runner.await_args.kwargs
     assert kwargs["provider"] is bot.ai_provider
-    assert kwargs["disable_reasoning"] is expected_disabled
-    assert kwargs["model"] == "rem-model"
-    assert kwargs["max_tokens"] == 8192
+    assert not {"disable_reasoning", "model", "max_tokens", "temperature"} & kwargs.keys()
     assert bot._rem_running is False
     bot._release_ai_slot.assert_awaited_once()
     bot.ai_provider.generate_response.assert_not_awaited()

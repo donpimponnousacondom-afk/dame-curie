@@ -8,7 +8,6 @@ import aiohttp
 import pytest
 
 from bot_tools import (
-    HDImageGeneratorTool,
     ImageGeneratorTool,
     _get_shared_session,
     close_shared_session,
@@ -21,26 +20,23 @@ CDN = "https://cdn.discordapp.com/attachments/10/20/image.png"
 PERMANENT = "https://images.example.invalid/bot/_images/image.png"
 
 
-@pytest.fixture(params=[ImageGeneratorTool, HDImageGeneratorTool], ids=["normal", "hd"])
-def native_image(request, monkeypatch):
-    hd = request.param is HDImageGeneratorTool
-    prefix = "GEMINI_IMAGE" if hd else "IMAGE_GEN"
+@pytest.fixture
+def native_image(monkeypatch):
     config = SimpleNamespace(
-        OLLAMA_BASE_URL="https://chat.example.invalid/v1",
-        OLLAMA_API_KEY="synthetic-chat-key",
-        OLLAMA_MODEL="synthetic-chat-model",
-        OLLAMA_EXTRA_HEADERS={"X-Chat-Secret": "synthetic-chat-only"},
-        OLLAMA_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
-        GEMINI_IMAGE_BASE_URL="https://hd.example.invalid/v1",
-        GEMINI_IMAGE_API_KEY="synthetic-hd-key",
-        IMAGE_GEN_BASE_URL="https://normal.example.invalid/v1",
-        IMAGE_GEN_API_KEY="synthetic-normal-key",
+        OPENAI_BASE_URL="https://chat.example.invalid/v1",
+        OPENAI_API_KEY="synthetic-chat-key",
+        OPENAI_MODEL="synthetic-chat-model",
+        OPENAI_EXTRA_HEADERS={"X-Chat-Secret": "synthetic-chat-only"},
+        OPENAI_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
+        IMAGE_GEN_PROTOCOL="images",
+        IMAGE_GEN_BASE_URL="http://127.0.0.1:8317/v1",
+        IMAGE_GEN_API_KEY="synthetic-native-key",
+        IMAGE_GEN_MODELS={"synthetic-image-a": "Illustration", "synthetic-image-b": "Editing"},
+        IMAGE_GEN_MODEL="synthetic-image-a",
+        IMAGE_GEN_QUALITY="low",
+        IMAGE_GEN_TIMEOUT=300,
     )
-    setattr(config, prefix + "_PROTOCOL", "images")
-    setattr(config, prefix + "_BASE_URL", "http://127.0.0.1:8317/v1")
-    setattr(config, prefix + "_API_KEY", "synthetic-native-key")
-    setattr(config, prefix + "_MODEL", "gpt-image-2.5")
-    tool = request.param(SimpleNamespace(
+    tool = ImageGeneratorTool(SimpleNamespace(
         config=config,
         memory=SimpleNamespace(add_to_channel_memory=AsyncMock()),
         _current_progress_by_channel={},
@@ -70,26 +66,28 @@ def native_image(request, monkeypatch):
     monkeypatch.setattr("bot_tools._persist_public_image", persist)
     return SimpleNamespace(
         tool=tool, message=message, session=session, get_session=get_session,
-        persist=persist, prefix=prefix, hd=hd,
+        persist=persist,
     )
 
 
 @pytest.mark.parametrize("suffix", ["", "/", "/images/generations"])
-@pytest.mark.parametrize("model", [
-    "gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
-])
-def test_native_generation_preserves_profile_and_explicit_delivery(native_image, suffix, model):
+@pytest.mark.parametrize("query", ["", "?region=private#section"])
+@pytest.mark.parametrize("model", ["synthetic-image-a", "synthetic-image-b"])
+def test_native_generation_ignores_extra_overrides_and_delivers(native_image, suffix, query, model):
     case = native_image
-    setattr(case.tool.bot.config, case.prefix + "_BASE_URL", "http://127.0.0.1:8317/v1" + suffix)
-    setattr(case.tool.bot.config, case.prefix + "_MODEL", model)
-    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
+    case.tool.bot.config.IMAGE_GEN_MODEL = model
+    case.tool.bot.config.IMAGE_GEN_BASE_URL = "http://127.0.0.1:8317/v1" + suffix + query
+    result = asyncio.run(case.tool.execute(
+        case.message, auto_send=True, prompt="a red fox", model=model,
+        size="1024x1024", base_url="https://untrusted.example.invalid/v1",
+        api_key="untrusted-credential",
+    ))
 
     case.session.post.assert_called_once()
     args, kwargs = case.session.post.call_args
-    assert args == ("http://127.0.0.1:8317/v1/images/generations",)
+    assert args == ("http://127.0.0.1:8317/v1/images/generations" + query,)
     assert kwargs["json"] == {
-        "model": model, "prompt": "a red fox", "quality": "high" if case.hd else "low",
-        "output_format": "png", "response_format": "b64_json", "n": 1,
+        "model": model, "prompt": "a red fox", "quality": "low",
     }
     assert kwargs["headers"] == {
         "Content-Type": "application/json", "Authorization": "Bearer synthetic-native-key",
@@ -102,38 +100,43 @@ def test_native_generation_preserves_profile_and_explicit_delivery(native_image,
     case.persist.assert_called_once()
     assert case.persist.call_args.args[1] == PNG
     case.tool.bot.memory.add_to_channel_memory.assert_awaited_once()
-    expected = "__IMAGE_SENT__ HD image generated successfully, sent to chat:" if case.hd else "__IMAGE_SENT__ Image sent to chat:"
-    assert result.startswith(expected)
+    assert result.startswith("__IMAGE_SENT__ ")
     assert f"Permanent URL: {PERMANENT}" in result
     assert "Local path: /synthetic/image.png" in result
     assert f"Image URL: {CDN}" in result
     assert "do not resend" in result
 
 
-@pytest.mark.parametrize("quality", ["low", "high", "xhigh", "max", "auto"])
-def test_native_profile_settings_are_sent_without_claiming_response_quality(native_image, quality):
+@pytest.mark.parametrize("quality", [None, "", "low", "high", "xhigh", "max", "auto"])
+@pytest.mark.parametrize("options", [{}, {"n": 1, "output_format": "webp", "response_format": "b64_json", "seed": 0, "provider": {"only": ["configured"]}}])
+def test_native_profile_settings_are_sent_without_claiming_response_quality(native_image, quality, options):
     case = native_image
-    setattr(case.tool.bot.config, case.prefix + "_QUALITY", quality)
-    setattr(case.tool.bot.config, case.prefix + "_TIMEOUT", 600)
+    case.tool.bot.config.IMAGE_GEN_QUALITY = quality
+    case.tool.bot.config.IMAGE_GEN_EXTRA_BODY = options
+    original_options = json.dumps(options, sort_keys=True)
+    case.tool.bot.config.IMAGE_GEN_TIMEOUT = 600
     result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
     assert not result.startswith("Error")
-    assert case.session.post.call_args.kwargs["json"]["quality"] == quality
+    expected = {"model": "synthetic-image-a", "prompt": "a red fox", **options}
+    if quality is not None:
+        expected["quality"] = quality
+    assert case.session.post.call_args.kwargs["json"] == expected
+    assert json.dumps(options, sort_keys=True) == original_options
     assert case.session.post.call_args.kwargs["timeout"].total == 600
     assert "unexpected-provider-size" not in result
     assert "low quality" not in result
 
 
 @pytest.mark.parametrize("base", [None, "", "   ", "/"])
-def test_native_missing_base_never_uses_chat_other_image_profile_or_pollinations(native_image, base):
+def test_native_missing_base_never_uses_chat_configuration(native_image, base):
     case = native_image
     if base is None:
-        delattr(case.tool.bot.config, case.prefix + "_BASE_URL")
+        delattr(case.tool.bot.config, "IMAGE_GEN_BASE_URL")
     else:
-        setattr(case.tool.bot.config, case.prefix + "_BASE_URL", base)
+        setattr(case.tool.bot.config, "IMAGE_GEN_BASE_URL", base)
     result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
     assert result.startswith("Error:")
-    assert case.prefix + "_BASE_URL" in result
-    assert "chat settings are not used" in result
+    assert "IMAGE_GEN_BASE_URL" in result
     case.get_session.assert_not_awaited()
     case.message.channel.send.assert_not_awaited()
 
@@ -142,20 +145,27 @@ def test_native_missing_base_never_uses_chat_other_image_profile_or_pollinations
 def test_native_keyless_endpoint_never_borrows_chat_or_other_image_key(native_image, key):
     case = native_image
     if key is None:
-        delattr(case.tool.bot.config, case.prefix + "_API_KEY")
+        delattr(case.tool.bot.config, "IMAGE_GEN_API_KEY")
     else:
-        setattr(case.tool.bot.config, case.prefix + "_API_KEY", key)
+        setattr(case.tool.bot.config, "IMAGE_GEN_API_KEY", key)
     result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
     assert not result.startswith("Error")
     assert case.session.post.call_args.kwargs["headers"] == {"Content-Type": "application/json"}
 
 
-def test_unknown_image_protocol_fails_before_requests(native_image):
+@pytest.mark.parametrize("mode", ["protocol", "model", "quality", "extra-model", "extra-quality", "extra-prompt"])
+def test_unknown_image_protocol_fails_before_requests(native_image, mode):
     case = native_image
-    setattr(case.tool.bot.config, case.prefix + "_PROTOCOL", "typo")
-    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
+    arguments = {}
+    if mode == "protocol":
+        case.tool.bot.config.IMAGE_GEN_PROTOCOL = "typo"
+    elif mode in {"model", "quality"}:
+        arguments[mode] = "unconfigured"
+    else:
+        case.tool.bot.config.IMAGE_GEN_EXTRA_BODY = {mode.removeprefix("extra-"): "conflicting"}
+    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox", **arguments))
     assert result.startswith("Error:")
-    assert case.prefix + "_PROTOCOL" in result
+    assert "IMAGE_GEN_PROTOCOL" in result if mode == "protocol" else ("match" in result or "conflicts" in result)
     case.get_session.assert_not_awaited()
 
 
@@ -244,47 +254,51 @@ def test_native_cancellation_never_retries(native_image):
     case.message.channel.send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("native_image", [HDImageGeneratorTool], indirect=True)
 @pytest.mark.parametrize("image", [IMAGE_URI, [IMAGE_URI], json.dumps([IMAGE_URI])])
-def test_native_hd_edit_preserves_original_reference_bytes(native_image, monkeypatch, image):
+def test_native_edit_preserves_original_reference_bytes(native_image, image):
     case = native_image
-    shrink = MagicMock(side_effect=AssertionError("native HD must retain reference detail"))
-    monkeypatch.setattr(case.tool, "_shrink", shrink)
-    case.tool.bot.config.GEMINI_IMAGE_MODEL = "gpt-image-2.5-sunburst"
-    case.tool.bot.config.GEMINI_IMAGE_QUALITY = "max"
-    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="make it blue", image=image))
+    case.tool.bot.config.IMAGE_GEN_MODEL = "synthetic-image-b"
+    case.tool.bot.config.IMAGE_GEN_QUALITY = "max"
+    result = asyncio.run(case.tool.execute(
+        case.message, auto_send=True, prompt="make it blue", image=image,
+        model="synthetic-image-b", quality="max",
+    ))
 
-    shrink.assert_not_called()
     case.session.post.assert_called_once()
     args, kwargs = case.session.post.call_args
     assert args == ("http://127.0.0.1:8317/v1/images/edits",)
     assert kwargs["json"] == {
-        "model": "gpt-image-2.5-sunburst", "prompt": "make it blue", "quality": "max",
+        "model": "synthetic-image-b", "prompt": "make it blue", "quality": "max",
         "images": [{"image_url": IMAGE_URI}],
-        "output_format": "png", "response_format": "b64_json", "n": 1,
     }
-    assert result.startswith("__IMAGE_SENT__ HD image edited successfully, sent to chat:")
+    assert result.startswith("__IMAGE_SENT__ ")
     assert "from 1 input image" in result
-    assert "Edited HD image" in case.tool.bot.memory.add_to_channel_memory.await_args.args[1]["content"]
+    assert "Edited image" in case.tool.bot.memory.add_to_channel_memory.await_args.args[1]["content"]
 
 
-@pytest.mark.parametrize("native_image", [HDImageGeneratorTool], indirect=True)
-def test_native_hd_auto_attachments_keep_four_reference_limit(native_image, monkeypatch):
+@pytest.mark.parametrize("image", [None, "", [], "[]"])
+def test_native_auto_attachments_keep_four_reference_limit(native_image, monkeypatch, image):
     case = native_image
     case.message.attachments = [SimpleNamespace(
         url=f"https://example.invalid/{index}.png", content_type="image/png", filename="input.png",
     ) for index in range(6)]
     load = AsyncMock(return_value=(PNG, ""))
     monkeypatch.setattr(case.tool, "_load_one", load)
-    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="combine these"))
-    assert load.await_count == 4
-    assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}] * 4
-    assert "from 4 input images" in result
+    result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="combine these", image=image))
+    if image is None:
+        assert load.await_count == 4
+        assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}] * 4
+        assert "from 4 input images" in result
+        assert case.session.post.call_args.args[0].endswith("/images/edits")
+    else:
+        load.assert_not_awaited()
+        assert "images" not in case.session.post.call_args.kwargs["json"]
+        assert "Image generated" in result
+        assert case.session.post.call_args.args[0].endswith("/images/generations")
     case.session.post.assert_called_once()
 
 
-@pytest.mark.parametrize("native_image", [HDImageGeneratorTool], indirect=True)
-def test_native_hd_reference_failure_does_not_submit_generation(native_image, monkeypatch):
+def test_native_reference_failure_does_not_submit_generation(native_image, monkeypatch):
     case = native_image
     monkeypatch.setattr(case.tool, "_load_one", AsyncMock(return_value=(None, "unavailable reference")))
     result = asyncio.run(case.tool.execute(
@@ -295,8 +309,7 @@ def test_native_hd_reference_failure_does_not_submit_generation(native_image, mo
     case.session.post.assert_not_called()
 
 
-@pytest.mark.parametrize("native_image", [HDImageGeneratorTool], indirect=True)
-def test_native_hd_failed_edit_never_falls_back_to_generation(native_image):
+def test_native_failed_edit_never_falls_back_to_generation(native_image):
     case = native_image
     case.session.post.return_value.text.return_value = "{}"
     result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="change it", image=IMAGE_URI))
@@ -307,49 +320,118 @@ def test_native_hd_failed_edit_never_falls_back_to_generation(native_image):
     case.message.channel.send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("native_image", [HDImageGeneratorTool], indirect=True)
-def test_native_hd_private_reference_remains_forbidden(native_image):
+def test_native_private_http_reference_uses_existing_fetch_rules(native_image, monkeypatch):
     case = native_image
-    result = asyncio.run(case.tool.execute(
-        case.message, prompt="change it", image="http://127.0.0.1:8317/private.png",
-    ))
-    assert "refusing to fetch private/internal URL" in result
-    case.get_session.assert_not_awaited()
+    reference = "http://127.0.0.1:8317/private.png"
+    case.session.get.return_value = case.session.post.return_value
+    monkeypatch.setattr("bot_tools._read_response_limited", AsyncMock(return_value=PNG))
+    result = asyncio.run(case.tool.execute(case.message, prompt="change it", image=reference))
+    assert not result.startswith("Error")
+    case.session.get.assert_called_once()
+    assert case.session.get.call_args.args == (reference,)
+    assert case.session.get.call_args.kwargs["allow_redirects"] is False
+    assert case.session.post.call_args.args == ("http://127.0.0.1:8317/v1/images/edits",)
+    assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}]
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+@pytest.mark.parametrize("linked", [False, True])
+def test_native_local_reference_uses_existing_allowed_image_paths(native_image, tmp_path, allowed, linked):
+    case = native_image
+    case.tool.bot.config.DAME_CURIE_SITE_DIR = str(tmp_path / "site")
+    directory = tmp_path / "site" / "_images" if allowed else tmp_path / "outside"
+    directory.mkdir(parents=True)
+    reference = directory / "reference.png"
+    reference.write_bytes(PNG)
+    if linked:
+        image_dir = tmp_path / "site" / "_images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        alias = image_dir / "linked.png"
+        alias.symlink_to(reference)
+        reference = alias
+    result = asyncio.run(case.tool.execute(case.message, prompt="edit", image=str(reference)))
+    if allowed:
+        assert not result.startswith("Error")
+        assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}]
+    else:
+        assert "outside the allowed image dirs" in result
+        case.get_session.assert_not_awaited()
+        case.session.post.assert_not_called()
+
+
+def test_native_local_reference_retains_file_size_limit(native_image, tmp_path, monkeypatch):
+    case = native_image
+    case.tool.bot.config.DAME_CURIE_SITE_DIR = str(tmp_path)
+    directory = tmp_path / "_images"
+    directory.mkdir()
+    reference = directory / "reference.png"
+    reference.write_bytes(PNG)
+    monkeypatch.setattr("bot_tools.os.path.getsize", lambda path: case.tool.MAX_INPUT_BYTES + 1)
+    result = asyncio.run(case.tool.execute(case.message, prompt="edit", image=str(reference)))
+    assert "file too large" in result
     case.session.post.assert_not_called()
 
 
-def test_real_native_transport_accepts_configured_loopback_endpoint(native_image, monkeypatch):
+def test_native_remote_reference_refuses_redirect(native_image):
     case = native_image
+    case.session.get.return_value = case.session.post.return_value
+    case.session.get.return_value.status = 302
+    result = asyncio.run(case.tool.execute(case.message, prompt="edit", image="https://images.example.invalid/ref.png"))
+    assert "redirects; pass the direct image URL" in result
+    assert case.session.get.call_args.kwargs["allow_redirects"] is False
+    case.session.post.assert_not_called()
+
+
+def test_native_remote_reference_retains_byte_limit(native_image, monkeypatch):
+    case = native_image
+    case.session.get.return_value = case.session.post.return_value
+    read_image = AsyncMock(return_value=PNG)
+    monkeypatch.setattr("bot_tools._read_response_limited", read_image)
+    result = asyncio.run(case.tool.execute(case.message, prompt="edit", image="https://images.example.invalid/ref.png"))
+    assert not result.startswith("Error")
+    read_image.assert_awaited_once_with(case.session.get.return_value, case.tool.MAX_INPUT_BYTES)
+    assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}]
+
+
+@pytest.mark.parametrize("options", [{}, {"response_format": "b64_json", "output_format": "png", "n": 1}])
+@pytest.mark.parametrize("status", [200, 301, 302, 303, 307, 308])
+def test_real_native_transport_accepts_configured_loopback_endpoint(native_image, monkeypatch, options, status):
+    case = native_image
+    case.tool.bot.config.IMAGE_GEN_QUALITY = None
+    case.tool.bot.config.IMAGE_GEN_EXTRA_BODY = options
+    original = dict(options)
     received = []
     monkeypatch.setattr("bot_tools._get_shared_session", _get_shared_session)
 
     async def respond(reader, writer):
         headers = await reader.readuntil(b"\r\n\r\n")
-        length = next(int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
-                      if line.lower().startswith(b"content-length:"))
-        received.append((headers, json.loads(await reader.readexactly(length))))
+        length = next((int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
+                       if line.lower().startswith(b"content-length:")), 0)
+        received.append((headers, json.loads(await reader.readexactly(length)) if length else None))
         body = json.dumps({"data": [{"b64_json": base64.b64encode(PNG).decode()}]}).encode()
-        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        writer.write(f"HTTP/1.1 {status} Synthetic\r\nLocation: /unconfigured-target\r\nContent-Type: application/json\r\nContent-Length: ".encode()
                      + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
         await writer.drain()
         writer.close()
         await writer.wait_closed()
 
     async def generate():
+        await close_shared_session()
         server = await asyncio.start_server(respond, "127.0.0.1", 0)
         async with server:
             port = server.sockets[0].getsockname()[1]
-            setattr(case.tool.bot.config, case.prefix + "_BASE_URL", f"http://127.0.0.1:{port}/v1")
+            setattr(case.tool.bot.config, "IMAGE_GEN_BASE_URL", f"http://127.0.0.1:{port}/v1?region=private")
             result = await case.tool.execute(case.message, auto_send=True, prompt="synthetic local image")
         await close_shared_session()
         return result
 
     result = asyncio.run(generate())
-    assert not result.startswith("Error")
+    assert result.startswith("Error") is (status != 200)
     assert len(received) == 1
     headers, payload = received[0]
-    assert headers.startswith(b"POST /v1/images/generations HTTP/1.1\r\n")
+    assert headers.startswith(b"POST /v1/images/generations?region=private HTTP/1.1\r\n")
     assert b"Authorization: Bearer synthetic-native-key\r\n" in headers
     assert b"synthetic-chat" not in headers
-    assert payload["model"] == "gpt-image-2.5"
-    case.message.channel.send.assert_awaited_once()
+    assert payload == {"model": "synthetic-image-a", "prompt": "synthetic local image", **options}
+    assert options == original
+    assert case.message.channel.send.await_count == (1 if status == 200 else 0)

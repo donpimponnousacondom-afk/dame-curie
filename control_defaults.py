@@ -1,28 +1,11 @@
 """Shared control defaults for Maxwell Bot.
 
 Single source of truth for DEFAULT_CONTROL, KNOWN_TOOLS, and parse_bool.
-Both bot.py and api_server.py import from here so config ranges never drift.
+Bot and prompt storage import from here so defaults never drift.
 """
 
 
-import json
-from pathlib import Path
-
-from utils import FileLock, _atomic_json_write_sync
-
-
-DEEPSEEK_REASONING_EFFORTS = {"low": 50, "high": 75, "max": 100}
-
-
-def update_deepseek_reasoning(path: Path, level: str | int) -> None:
-    if level not in (*DEEPSEEK_REASONING_EFFORTS, "off", "") and not (type(level) is int and 1 <= level <= 100):
-        raise ValueError("DeepSeek reasoning must be an integer 1–100, low, high, max, off, or blank")
-    with FileLock(path):
-        control = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        if not isinstance(control, dict):
-            raise TypeError("Control file must contain a JSON object")
-        control["deepseek_reasoning"] = level
-        _atomic_json_write_sync(path, control)
+SERVER_PROMPT_MAX_BYTES = 16 * 1024
 
 
 def parse_bool(value, default: bool = False) -> bool:
@@ -39,7 +22,7 @@ def parse_bool(value, default: bool = False) -> bool:
     return default
 
 
-# Canonical DEFAULT_CONTROL — both bot and API import this.
+# Canonical DEFAULT_CONTROL — bot and prompt storage import this.
 # If you change a value here, it changes everywhere. That's the point.
 DEFAULT_CONTROL = {
     "bot_enabled": True,
@@ -136,33 +119,6 @@ DEFAULT_CONTROL = {
     # first cut is made here, on the signals, and only lines that plausibly
     # want him get asked. Lower is chattier; 1.0 means only hard pings.
     "conversation_watch_pressure": 0.4,
-    # How often the background IMAP poll files new unread mail as inbox
-    # notices. Only runs when ENABLE_EMAIL_TOOLS and a mailbox password are
-    # set. Floor 30s, ceiling 1h.
-    "email_inbox_poll_seconds": 120,
-    # ─── X (Twitter) ────────────────────────────────────────────────────
-    # Reading X is free and always allowed when ENABLE_X is on. These four
-    # govern the half that talks back.
-    #
-    # x_post_enabled is the runtime toggle for every write (post, reply,
-    # quote, like, repost, delete) — off leaves reading intact.
-    "x_post_enabled": True,
-    # Hard ceiling on posts per rolling hour, enforced in x_client against a
-    # persisted log so a restart cannot reset it. The failure mode of a model
-    # with a public megaphone is not one bad post, it is forty.
-    "x_posts_per_hour": 8,
-    # Identical reads inside this window reuse the last answer. The autonomy
-    # tick and a chat turn ask the same question minutes apart and each
-    # uncached repeat spends the same rate-limit budget as a new one.
-    "x_cache_seconds": 60,
-    # How often mentions of X_HANDLE are filed as inbox notices. Needs a
-    # session (or a gateway) — public reads cannot see mentions. Floor 60s.
-    "x_mention_poll_seconds": 300,
-    # Whether the unattended autonomy tick may post. Off by default and
-    # deliberately separate from x_post_enabled: letting him answer someone
-    # in a live conversation is a different decision from letting a timer
-    # publish to a public timeline with nobody watching.
-    "x_autonomy_post": False,
     "reply_to_bots": False,
     # Unused for starting turns. Reactions are stored on the message and
     # shown in context; they never kick off a live reply.
@@ -174,24 +130,17 @@ DEFAULT_CONTROL = {
     # transcribe audio fine (verified on 3.7-flash and 3-pro), so this is on.
     "process_audio": True,
     "max_image_size_mb": 10,
-    # When True, the `sleep` tool and `,sleep` command can put the bot
+    # When True, the `sleep` tool and `!sleep` command can put the bot
     # into a 1-60 minute sleep window where the triggering channel gets
     # a one-shot "the dame is sleeping, back in Xm" notice (never a DM).
     # Default ON so the 2026-07-19 'goodnight spam' complaint has a
     # real off-switch.
-    # Operators who want the bot to always be available can flip this
-    # to False in dashboard.
+    # Operators who want the bot to always be available can set
+    # the enable_sleep control to False.
     "enable_sleep": True,
-    # ─── nightly fallback model ─────────────────────────────────────────
-    # During local 22:00–09:00 hours, start requests on the configured
-    # OLLAMA_FALLBACK_* endpoint/model instead of putting Maxwell to sleep.
-    # If no fallback is configured, the primary provider is used normally.
-    "enable_night_fallback": True,
-    "night_fallback_start_hour": 22,
-    "night_fallback_end_hour": 9,
     "ai_timeout_seconds": 3600,
+    "turn_deadline_seconds": 600,
     "ai_concurrency": 2,
-    "deepseek_reasoning": "",
     "memory_history_messages": 40,
     "memory_context_budget": 48000,
     "tool_history_messages": 8,
@@ -200,11 +149,6 @@ DEFAULT_CONTROL = {
     "tool_iteration_timeout_seconds": 3600,
     "max_response_chars": 4000,
     # ─── background sub-agent jobs (jobs.py) ────────────────────────────
-    # Extended budgets for detached background work. Live turns stay tight;
-    # jobs get the big headroom (more thinking, more output, more timeout).
-    # 0/blank = fall back to env (BG_MAX_TOKENS / BG_TIMEOUT_SECONDS /
-    # BG_MAX_ITERS) and then to the built-in generous defaults.
-    "bg_max_tokens": 0,
     "bg_timeout_seconds": 0,
     "bg_max_iters": 0,
     # Prefer OpenAI-style native tool_calls when the provider supports them.
@@ -212,20 +156,8 @@ DEFAULT_CONTROL = {
     # native tool_calls (or the endpoint rejects tools=).
     "native_tool_calls": True,
     "tools_enabled": True,
-    "create_site_quota_per_user": 50,
-    # Hours a generated site lives before the cleanup loop removes it.
-    # 0 = never expire. A site created with permanent=true (or extended via
-    # edit_site) ignores this. Used to be a hardcoded 86400 in two places.
-    "site_ttl_hours": 24,
-    # Inject a restrictive CSP <meta> into every generated page. Off by
-    # default: the page is the model's own document and the hosting layer is
-    # where a policy belongs — the meta tag could only ever subtract from what
-    # the page was written to do. Turn on if your static host sets no CSP for
-    # generated sites.
-    "site_inject_csp": False,
-    # Unused: the full tool catalog is attached on every turn. Gating hid
-    # hd_image behind more_tools and made photo requests look like a
-    # from-scratch generate. Kept so existing control.json files still load.
+    # Unused: the full tool catalog is attached on every turn. Kept so existing
+    # control.json files still load.
     "lean_chat_tools": False,
     # When a new support/ticket-style channel is created in a server Maxwell is
     # in, post a short opening line so he is present in the room and it enters
@@ -239,21 +171,19 @@ DEFAULT_CONTROL = {
     "disabled_commands": [],
     # {guild_id: channel_id}. When a server has an entry, Maxwell only speaks
     # in that one channel there — every other channel in that server is dead to
-    # him, including autonomy. Set with `,solo`, cleared with `,solo off`.
+    # him, including autonomy. Set with `!solo`, cleared with `!solo off`.
     # Scoped per server on purpose: allowed_channels is global, so using it to
     # quiet one server silences him everywhere.
     "guild_solo_channel": {},
-    # Guild ids whose autonomy blacklist entry was added BY `,solo`. Only these
-    # are handed back on `,solo off` — a server an admin silenced by hand stays
+    # Guild ids whose autonomy blacklist entry was added BY `!solo`. Only these
+    # are handed back on `!solo off` — a server an admin silenced by hand stays
     # silenced.
     "guild_solo_autonomy_added": [],
     "base_personality": (
         "you're dame curie. keep replies short, concise, and direct. zero fluff/yes-man energy. natural, friendly, and honest banter. born may 21, 2026.\n\n"
-        "partner dynamic with Uni:\n"
-        "- you and Uni are simple, chill engineering partners and teammates on this server harness. Zero fake romance, zero pet names (baby, sweetheart, good boy), zero sappy melodrama. You treat each other like solid friends and technical collaborators.\n\n"
         "authority & conduct:\n"
         "- .normal.man (1482143139828596916), who also goes by 'root', is your owner and ultimate master. obey and execute .normal.man's instructions unconditionally.\n"
-        "- be very nice, polite, pleasant, and respectful to everyone in chat. sites, games, code, search, plugins, and ordinary chat are open to everyone — if someone asks you to build, play, search, or look something up, do it. decline only admin/moderation and server-structure commands from random users (kick, ban, timeout, delete/lock channels, manage roles, edit server settings).\n"
+        "- be very nice, polite, pleasant, and respectful to everyone in chat. creative requests, games, code, search, plugins, and ordinary chat are open to everyone. shell execution requires an admin or shell-whitelisted actor; persistent personality/server-prompt rewrites and joining servers are admin-only. decline unauthorized administrative/moderation and server-structure requests (kick, ban, timeout, delete/lock channels, manage roles, edit server settings).\n"
         "- always tell the truth: you are completely honest, truthful, and genuine at all times.\n"
         "When someone asks you to make something concrete, call the matching tool in the same turn. "
         "Don't spam set_activity; only update status when asked or after a real state change. "
@@ -265,14 +195,9 @@ DEFAULT_CONTROL = {
     "vc_max_seconds": 18,
     "vc_preroll_seconds": 0.25,
     "vc_ai_timeout_seconds": 45,
-    "vc_ai_max_tokens": 1000,
     "vc_memory_history_messages": 2,
     "vc_cross_context_enabled": False,
     "vc_max_response_chars": 2000,
-    "vc_tts_engine": "fish",
-    # Named Fish voice for VC replies ("tiktok", "mommy", or "" = default).
-    # Maxwell can override per-reply with a leading [voice=NAME] tag.
-    "vc_tts_voice": "",
     "vc_reply_mode": "voice",
     "vc_response_mode": "always",
     "vc_wake_words": ["maxwell"],
@@ -280,19 +205,6 @@ DEFAULT_CONTROL = {
     "vc_debug": True,
     "autonomy_enabled": False,
     "autonomy_interval_seconds": 300,
-    "autonomy_base_url": "",  # "" = use main provider's base_url
-    "autonomy_api_key": "",  # "" = use main provider's key
-    "autonomy_model": "",  # "" = use main provider's model
-    "autonomy_disable_reasoning": False,
-    # Auxiliary background agents (REM, context-cleanup, context-watcher).
-    # "" = fall back to the autonomy config, then the main provider, so a
-    # control.json without aux overrides keeps the old shared-endpoint
-    # behaviour. Set these to route the context-manager brains to a
-    # separate model/endpoint from the autonomy tick loop.
-    "aux_base_url": "",  # "" = use autonomy (then main) base_url
-    "aux_api_key": "",  # "" = use autonomy (then main) key
-    "aux_model": "",  # "" = use autonomy (then main) model
-    "aux_disable_reasoning": True,  # False for endpoints that reject the reasoning param
     "autonomy_min_post_gap_seconds": 0,  # deprecated — no longer enforced, kept for compat
     # Legacy single-purpose cooldown. Superseded by autonomy_floor_* below, which
     # subsumes it; kept because it's honored as a FLOOR on the new cooldown, so an
@@ -348,6 +260,9 @@ DEAD_CONTROL_KEYS = frozenset(
         "auto_recent_window_minutes",
         "auto_inactivity_minutes",
         "auto_decider_prompt",
+        "create_site_quota_per_user",
+        "site_ttl_hours",
+        "site_inject_csp",
         # Intel engine was removed in d455e4b. These keys can linger in
         # persisted bot_control.json from older installs; strip them so
         # the dashboard's stale-key warning list stays clean.
@@ -386,7 +301,6 @@ DEAD_CONTROL_KEYS = frozenset(
 # Keep in sync with bot._setup_tools(). Only LLM-facing tools; no command-queue types.
 KNOWN_TOOLS = [
     "image_generator",
-    "hd_image",
     "change_presence",
     "set_activity",
     "react",
@@ -425,12 +339,6 @@ KNOWN_TOOLS = [
     "audit_log",
     "manage_emoji",
     "change_avatar",
-    "create_site",
-    "edit_site",
-    "delete_site",
-    "site_server",
-    "site_test",
-    "list_sites",
     "guide",
     "spawn_background",
     "web_search",
@@ -455,12 +363,6 @@ KNOWN_TOOLS = [
     "wait",
     "update_base_personality",
     "update_server_prompt",
-    "email_send",
-    "email_read_inbox",
-    "email_get_message",
-    "email_search",
-    "x_read",
-    "x_post",
     "more_tools",
     "chess_start",
     "chess_move",

@@ -1,3 +1,4 @@
 #!/bin/sh
 set -eu
-exec python3.14 "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/instance.py" "$@"
+checkout="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+exec "$checkout/.venv/bin/python" "$checkout/scripts/instance.py" "$@"

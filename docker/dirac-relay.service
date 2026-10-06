@@ -1,0 +1,27 @@
+[Unit]
+Description=Dirac V2 to protected V1 Ollama relay
+Documentation=file:/opt/dame-curie/docs/OPERATIONS.md
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Root is required: the relay enters the V2 daemon's network namespace and binds
+# the private outbound-bridge gateway. Its Docker access is read-only (info and
+# inspect) and runs as each mapped service account, not as root.
+#
+# The relay is an embedding-only HTTP boundary, not a tunnel: it forwards
+# POST /api/embed, /api/embeddings and /v1/embeddings and answers every other
+# method, path or framing locally with a 4xx, so Ollama's model-management and
+# destructive routes are unreachable from the bot container.
+#
+# -I -S -B isolates the interpreter: no environment-supplied import path, no
+# site-packages, no bytecode written into the install tree. The relay is stdlib
+# only, so the operator venv interpreter is chosen for a known, pinned version
+# rather than for anything it installs.
+ExecStart=/bin/sh -ec 'exec /opt/dame-curie/.venv/bin/python -I -S -B /opt/dame-curie/scripts/dirac_relay.py --network dame-curie_outbound --engine-pid-file /run/user/$(id -u dame-curie)/docker.pid --v1-container maxwell-curie-ollama-1'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

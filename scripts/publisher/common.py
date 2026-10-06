@@ -4,13 +4,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
-MARKER = ".curie-publisher-owner"
+MARKER = ".dame-curie-publisher-owner"
 EXCLUDED = frozenset({"_data", "_build", ".env", ".git", MARKER, ".publisher-link"})
-CREDENTIAL_MARKERS = (
-    b"-----BEGIN PRIVATE KEY-----", b"-----BEGIN RSA PRIVATE KEY-----",
-    b"-----BEGIN EC PRIVATE KEY-----", b"-----BEGIN OPENSSH PRIVATE KEY-----",
-    b"-----BEGIN DSA PRIVATE KEY-----", b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
-)
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
@@ -27,9 +22,11 @@ class RemoteFailure(PublisherError):
     pass
 
 
-def eligible(name: str, *, top_level: bool = True) -> bool:
+def eligible(name: str, *, top_level: bool = True, marker_namespace: str = "dame-curie") -> bool:
     return not (
-        name in EXCLUDED or name.startswith(".curie-publisher-claim-")
+        name in EXCLUDED or name.startswith(".dame-curie-publisher-claim-")
+        or name == f".{marker_namespace}-publisher-owner"
+        or name.startswith(f".{marker_namespace}-publisher-claim-")
         or top_level and name.startswith(".")
     )
 

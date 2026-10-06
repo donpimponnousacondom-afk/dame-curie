@@ -167,10 +167,13 @@ def test_large_reports_are_complete_utf8_attachments_in_bounded_parts(operator_c
     bot, message, dm, store = operator_case
     body = "BEGIN\n" + "🕊" * 2_000_010 + "\nEND @everyone ```"
     store.record("large", "complete report", details=body)
-    expected = store.get(0).format_report()
+    incident = store.get(0)
+    assert len(incident.details) <= error_reporting._INCIDENT_TEXT_LIMIT
+    assert "diagnostic capture truncated" in incident.details
+    expected = incident.format_report()
     asyncio.run(handle_error_command(bot, message, "0"))
     assert not message.channel.sent
-    assert len(dm.sent) == 3
+    assert len(dm.sent) == 1
     combined = "".join(item["file_bytes"].decode("utf-8") for item in dm.sent)
     assert combined == expected
     for item in dm.sent:
@@ -270,55 +273,6 @@ def test_marked_own_reports_skip_create_edit_raw_edit_and_memory(operator_case):
     bot.memory.add_to_channel_memory.assert_not_awaited()
     bot._mem_kwargs.assert_not_called()
     bot.rem_log.record.assert_not_awaited()
-
-
-@pytest.mark.parametrize("admins,expected_recipients", [({"7", "8"}, ["7", "8"]), (set(), ["99"])])
-def test_global_captcha_notice_stays_private_without_changing_solver_link(operator_case, admins, expected_recipients):
-    bot, message, dm, store = operator_case
-    bot._admins = admins
-    bot.config = SimpleNamespace(CAPTCHA_FALLBACK_USER_ID="99")
-    bot._is_admin = lambda uid: False
-    bot._captcha_recipient_ids = lambda: MaxwellBot._captcha_recipient_ids(bot)
-    bot._captcha_summary = lambda exception: MaxwellBot._captcha_summary(bot, exception)
-    users = {uid: SimpleNamespace(send=AsyncMock()) for uid in expected_recipients}
-    bot._captcha_resolve_user = AsyncMock(side_effect=lambda uid: users[uid])
-    bot._dispatch_plugin_event = Mock()
-    bot._on_message_impl = AsyncMock()
-    bot._generate_response = AsyncMock()
-    bot._inbound_dedup = Mock()
-    bot.memory = SimpleNamespace(add_to_channel_memory=AsyncMock())
-    bot.rem_log = SimpleNamespace(record=AsyncMock())
-    url = "http://127.0.0.1:8790/solve/synthetic-challenge?token=synthetic-solve-token"
-    challenge = SimpleNamespace(
-        errors=["synthetic captcha-required"], service="hcaptcha", sitekey="synthetic-sitekey",
-        rqdata="synthetic-challenge-data @everyone", should_serve_invisible=True,
-    )
-
-    async def run():
-        await MaxwellBot._notify_captcha_link(bot, url, challenge)
-        for index, user in enumerate(users.values()):
-            user.send.assert_awaited_once()
-            call = user.send.await_args
-            payload = call.args[0]
-            assert url in payload and "synthetic-challenge-data" in payload
-            assert payload.endswith("\n" + PRIVATE_ERROR_REPORT_MARKER)
-            assert FOOTER_MARKER not in payload
-            assert not call.kwargs["allowed_mentions"].everyone
-            assert not call.kwargs["allowed_mentions"].users
-            gateway_message = own_message(bot, dm, 90 + index, content=payload)
-            await MaxwellBot.on_message(bot, gateway_message)
-            await MaxwellBot._on_message_impl(bot, gateway_message)
-
-    asyncio.run(run())
-    assert [call.args[0] for call in bot._captcha_resolve_user.await_args_list] == expected_recipients
-    assert not message.channel.sent
-    bot._dispatch_plugin_event.assert_not_called()
-    bot._on_message_impl.assert_not_awaited()
-    bot._generate_response.assert_not_awaited()
-    bot._inbound_dedup.check_and_add.assert_not_called()
-    bot.memory.add_to_channel_memory.assert_not_awaited()
-    bot.rem_log.record.assert_not_awaited()
-    assert store.get(0) is None
 
 
 @pytest.mark.parametrize("content", ["!error 0", "!forward 2"])
@@ -563,18 +517,28 @@ def test_plugin_failure_projects_only_typed_result(operator_case):
 
 def test_help_is_bounded_and_lists_operator_commands(operator_case):
     bot, message, dm, store = operator_case
-    message.content = "!help"
+    bot.command_prefix = "?"
+    message.content = "?help"
     asyncio.run(MaxwellBot._handle_command(bot, message))
     assert all(len(item["content"]) <= 2000 for item in message.channel.sent)
     combined = "".join(item["content"] for item in message.channel.sent)
-    assert "!error 0..9" in combined and "!forward N" in combined
+    assert "?error 0..9" in combined and "?forward N" in combined
     assert FOOTER_MARKER not in combined
+
+    message.channel.sent.clear()
+    message.content = "?job"
+    bot.bg_jobs = SimpleNamespace(get=lambda _job_id: None)
+    asyncio.run(MaxwellBot._handle_command(bot, message))
+    assert message.channel.sent[0]["content"] == "usage: `?job <id>` or `?job cancel <id>`"
 
 
 def test_job_status_does_not_echo_stored_failure_progress(operator_case):
     bot, message, dm, store = operator_case
     message.content = "!job synthetic-job"
-    job = SimpleNamespace(id="synthetic-job", status="error", goal="safe goal", progress="PRIVATE JOB PROGRESS")
+    job = SimpleNamespace(
+        id="synthetic-job", status="error", goal="safe goal", progress="PRIVATE JOB PROGRESS",
+        requested_route="requested main, model=configured",
+    )
     bot.bg_jobs = SimpleNamespace(get=lambda job_id: job)
     asyncio.run(MaxwellBot._handle_command(bot, message))
     assert "PRIVATE JOB PROGRESS" not in message.channel.sent[0]["content"]
@@ -593,27 +557,11 @@ def test_rem_runtime_failure_is_generic_but_already_running_remains_validation(o
     assert [item["content"] for item in message.channel.sent] == ["REM not started: REM is already running"]
 
 
-def test_x_and_vc_real_failures_use_generic_public_projection(operator_case, monkeypatch):
+def test_vc_real_failures_use_generic_public_projection(operator_case, monkeypatch):
     bot, message, dm, store = operator_case
-    bot.x_client = SimpleNamespace(read=AsyncMock(side_effect=RuntimeError("private X error")))
-    asyncio.run(MaxwellBot._handle_x_command(bot, message, "read"))
-    assert message.channel.sent[-1]["content"] == PUBLIC_ERROR_TEXT
-    assert "private X error" in store.get(0).traceback
     bot.config = SimpleNamespace(ENABLE_VC=True)
     monkeypatch.setattr(bot_module, "voice_recv", None)
     monkeypatch.setattr(bot_module, "_voice_recv_import_error", ImportError("private VC import error"))
     asyncio.run(MaxwellBot._handle_vc_command(bot, message, "join"))
     assert message.channel.sent[-1]["content"] == PUBLIC_ERROR_TEXT
     assert "private VC import error" in store.get(0).traceback
-
-
-def test_telegram_boundary_uses_generic_projection_and_preserves_context(operator_case, monkeypatch):
-    bot, message, dm, store = operator_case
-    bot._process_telegram_message_inner = AsyncMock(side_effect=RuntimeError("private Telegram error"))
-    reply = AsyncMock()
-    monkeypatch.setattr(bot_module, "TelegramMessageAdapter", lambda *args: SimpleNamespace(reply=reply))
-    asyncio.run(MaxwellBot._process_telegram_message(bot, {"message_id": 9}, 71, "synthetic", "root", 7, None, "synthetic"))
-    reply.assert_awaited_once_with(PUBLIC_ERROR_TEXT)
-    assert "private Telegram error" in store.get(0).traceback
-    assert store.get(0).context["channel"] == "71"
-    assert store.get(0).context["message"] == "9"

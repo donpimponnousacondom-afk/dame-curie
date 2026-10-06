@@ -24,21 +24,21 @@ case "$SCRIPT_PATH" in
   *) SCRIPT_DIR="$(pwd -P)" ;;
 esac
 
-INSTALL_DIR="${MAXWELL_INSTALL_DIR:-$HOME/maxwell}"
-REPO_URL="${MAXWELL_REPO_URL:-https://github.com/Z3ki/Maxwell-bot.git}"
-BRANCH="${MAXWELL_BRANCH:-main}"
+INSTALL_DIR="${DAME_CURIE_INSTALL_DIR:-$HOME/dame-curie}"
+REPO_URL="${DAME_CURIE_REPO_URL:-}"
+BRANCH="${DAME_CURIE_BRANCH:-main}"
 RECONFIGURE=0
 LOCAL_MODE=0
 NO_EXTRAS=0
-NONINTERACTIVE="${MAXWELL_NONINTERACTIVE:-0}"
-SKIP_SYSTEM_DEPS="${MAXWELL_SKIP_SYSTEM_DEPS:-0}"
+NONINTERACTIVE="${DAME_CURIE_NONINTERACTIVE:-0}"
+SKIP_SYSTEM_DEPS="${DAME_CURIE_SKIP_SYSTEM_DEPS:-0}"
 TTY=""
 OS_FAMILY=""
-PYTHON_BIN="python3"
+PYTHON_BIN=""
 
 usage() {
   cat <<'EOF'
-Maxwell installer
+dame-curie installer
 
 Usage:
   bash install.sh [options]
@@ -48,15 +48,14 @@ Options:
   --reconfigure       Run the configuration wizard even when .env exists.
   --no-extras         Do not install optional Python/system extras.
   --non-interactive   Read all answers from environment variables.
-  --dir <path>        Install/update Maxwell in this directory.
+  --dir <path>        Install/update dame-curie in this directory.
   --local             Configure the current checkout instead of cloning/updating.
 
 Useful environment variables:
-  MAXWELL_INSTALL_DIR, MAXWELL_REPO_URL, MAXWELL_BRANCH,
-  MAXWELL_NONINTERACTIVE=1, MAXWELL_SKIP_SYSTEM_DEPS=1,
-  DISCORD_TOKEN, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_API_KEY,
-  MAXWELL_OWNER_IDS, MAXWELL_ADMIN_PASSWORD,
-  MAXWELL_INSTALL_EXTRAS=yes|no, MAXWELL_INSTALL_DOCKER=yes|no
+  DAME_CURIE_INSTALL_DIR, DAME_CURIE_REPO_URL (required to clone), DAME_CURIE_BRANCH,
+  DAME_CURIE_NONINTERACTIVE=1, DAME_CURIE_SKIP_SYSTEM_DEPS=1,
+  DISCORD_TOKEN, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_API_KEY,
+  DAME_CURIE_OWNER_IDS, DAME_CURIE_INSTALL_EXTRAS=yes|no
 EOF
 }
 
@@ -64,10 +63,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --reconfigure) RECONFIGURE=1 ;;
-    --no-extras) NO_EXTRAS=1; MAXWELL_INSTALL_EXTRAS=no ;;
+    --no-extras) NO_EXTRAS=1; DAME_CURIE_INSTALL_EXTRAS=no ;;
     --non-interactive) NONINTERACTIVE=1 ;;
     --dir) shift; [ "$#" -gt 0 ] || fail "--dir requires a path"; INSTALL_DIR="$1" ;;
-    --local) LOCAL_MODE=1; INSTALL_DIR="$SCRIPT_DIR"; SKIP_SYSTEM_DEPS="${MAXWELL_SKIP_SYSTEM_DEPS:-1}" ;;
+    --local) LOCAL_MODE=1; INSTALL_DIR="$SCRIPT_DIR"; SKIP_SYSTEM_DEPS="${DAME_CURIE_SKIP_SYSTEM_DEPS:-1}" ;;
     *) fail "unknown option: $1 (try --help)" ;;
   esac
   shift
@@ -78,7 +77,7 @@ if [ -r /dev/tty ] && [ -w /dev/tty ]; then
 elif [ "$NONINTERACTIVE" != "1" ]; then
   NONINTERACTIVE=1
   warn "No controlling TTY is available; switching to non-interactive mode."
-  warn "Set DISCORD_TOKEN, OLLAMA_MODEL, and other MAXWELL_* variables, then re-run with --reconfigure if needed."
+  warn "Set DISCORD_TOKEN, OPENAI_BASE_URL, OPENAI_MODEL, and other DAME_CURIE_* variables, then re-run with --reconfigure if needed."
 fi
 
 prompt() {
@@ -138,9 +137,9 @@ run_as_root() {
     "$@"
   else
     if ! command -v sudo >/dev/null 2>&1; then
-      fail "sudo is required to install system packages as a non-root user. Install the packages manually or set MAXWELL_SKIP_SYSTEM_DEPS=1."
+      fail "sudo is required to install system packages as a non-root user. Install the packages manually or set DAME_CURIE_SKIP_SYSTEM_DEPS=1."
     fi
-    warn "Using sudo to install system packages needed by Maxwell. You may be prompted for your password."
+    warn "Using sudo to install system packages needed by dame-curie. You may be prompted for your password."
     sudo "$@"
   fi
 }
@@ -151,20 +150,20 @@ detect_os() {
   if command -v pacman >/dev/null 2>&1; then OS_FAMILY=pacman; return; fi
   if [ "$(uname -s 2>/dev/null || printf unknown)" = "Darwin" ]; then
     if command -v brew >/dev/null 2>&1; then OS_FAMILY=brew; return; fi
-    fail "macOS detected but Homebrew is missing. Install Homebrew plus: git curl python@3.11 (or newer)."
+    fail "macOS detected but Homebrew is missing. Install Homebrew plus: git curl python@3.14."
   fi
   cat >&2 <<EOF
 Unsupported OS/package manager.
-Install these manually, then re-run with MAXWELL_SKIP_SYSTEM_DEPS=1:
-  Required: git curl Python 3.11+ with venv and pip
+Install these manually, then re-run with DAME_CURIE_SKIP_SYSTEM_DEPS=1:
+  Required: git curl Python 3.14 with venv and pip
   Optional extras: ffmpeg, libopus/opus, libsodium, espeak-ng, nodejs
-  Optional shell tool: Docker Engine with a daemon reachable by your user
+  Deployment: separately provisioned private rootless Docker engine for the service account
 EOF
   exit 1
 }
 
 install_core_system_deps() {
-  [ "$SKIP_SYSTEM_DEPS" = "1" ] && { warn "Skipping system package installation (MAXWELL_SKIP_SYSTEM_DEPS=1)."; return; }
+  [ "$SKIP_SYSTEM_DEPS" = "1" ] && { warn "Skipping system package installation (DAME_CURIE_SKIP_SYSTEM_DEPS=1)."; return; }
   detect_os
   step "Installing required system packages"
   case "$OS_FAMILY" in
@@ -176,7 +175,7 @@ install_core_system_deps() {
 }
 
 install_extra_system_deps() {
-  [ "$SKIP_SYSTEM_DEPS" = "1" ] && { warn "Skipping optional system packages (MAXWELL_SKIP_SYSTEM_DEPS=1)."; return; }
+  [ "$SKIP_SYSTEM_DEPS" = "1" ] && { warn "Skipping optional system packages (DAME_CURIE_SKIP_SYSTEM_DEPS=1)."; return; }
   [ -n "$OS_FAMILY" ] || detect_os
   step "Installing optional system packages"
   case "$OS_FAMILY" in
@@ -191,25 +190,31 @@ install_extra_system_deps() {
 }
 
 verify_python() {
-  command -v python3 >/dev/null 2>&1 || fail "python3 not found. Install Python 3.11+ with venv and pip."
-  if ! python3 - <<'PY'
+  for candidate in python3.14 python3; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" - <<'PY'
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)
 PY
-  then
-    fail "Python 3.11+ required; found $(python3 -V 2>&1)."
-  fi
-  PYTHON_BIN=python3
-  ok "$(python3 -V)"
+    then
+      PYTHON_BIN="$candidate"
+      ok "$("$PYTHON_BIN" -V)"
+      return 0
+    fi
+  done
+  fail "Python 3.14 with venv and pip is required; install it as a separate interpreter instead of replacing the system Python."
 }
 
 clone_or_update() {
-  step "Getting Maxwell"
+  step "Getting dame-curie"
   if [ "$LOCAL_MODE" = "1" ]; then
-    [ -f "$INSTALL_DIR/bot.py" ] || fail "--local must be run from a Maxwell checkout."
+    [ -f "$INSTALL_DIR/bot.py" ] || fail "--local must be run from a dame-curie checkout."
     cd "$INSTALL_DIR"
     ok "using local checkout at $INSTALL_DIR"
     return
+  fi
+  if [ -z "$REPO_URL" ]; then
+    fail "DAME_CURIE_REPO_URL must name the source repository to clone; this installer has no implicit upstream default."
   fi
   if [ ! -e "$INSTALL_DIR" ]; then
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
@@ -228,7 +233,7 @@ clone_or_update() {
 }
 
 set_env_value() {
-  SET_ENV_VALUE="$2" "$PYTHON_BIN" scripts/set_env.py .env "$1"
+  SET_ENV_VALUE="$2" ./.venv/bin/python scripts/set_env.py .env "$1"
 }
 
 copy_env_if_needed() {
@@ -242,79 +247,29 @@ copy_env_if_needed() {
 install_python_deps() {
   step "Installing Python dependencies"
   if [ ! -d .venv ]; then
-    "$PYTHON_BIN" -m venv .venv || fail "Could not create .venv. On Debian/Ubuntu, install python3-venv."
+    "$PYTHON_BIN" -m venv .venv || fail "Could not create .venv. Ensure the selected 3.14 interpreter provides venv."
     ok "created .venv"
   fi
-  # shellcheck disable=SC1091
-  . .venv/bin/activate
-  python -m pip install --quiet --upgrade pip
-  python -m pip install --quiet -r requirements.txt
+  ./.venv/bin/python -m pip install --quiet --upgrade pip
+  ./.venv/bin/python -m pip install --quiet -r requirements.txt
   ok "core Python dependencies installed"
 
   printf '  Optional extras unlock: web search (ddgs), YouTube (yt-dlp), voice/VC (PyNaCl + opus), TTS (gTTS/espeak), and video/audio helpers (ffmpeg/node).\n'
   extras_default=no
   [ "$NO_EXTRAS" = "1" ] && extras_default=no
-  extras=$(yes_no "Install optional extras too?" "$extras_default" "${MAXWELL_INSTALL_EXTRAS:-}")
+  extras=$(yes_no "Install optional extras too?" "$extras_default" "${DAME_CURIE_INSTALL_EXTRAS:-}")
   if [ "$extras" = "yes" ]; then
     install_extra_system_deps
-    python -m pip install --quiet -r requirements-optional.txt
-    python -m pip install --quiet --force-reinstall --no-deps 'discord.py-self>=2.0.0'
+    ./.venv/bin/python -m pip install --quiet -r requirements-optional.txt
+    ./.venv/bin/python -m pip install --quiet --force-reinstall --no-deps 'discord.py-self>=2.0.0'
     ok "optional Python extras installed"
   else
     ok "optional extras skipped"
   fi
 }
 
-docker_reachable() {
-  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
-}
-
-install_docker_if_requested() {
-  if docker_reachable; then
-    ok "Docker daemon reachable"
-    return 0
-  fi
-  warn "The shell tool runs commands inside Docker, but Docker is absent or unreachable."
-  docker_choice=$(yes_no "Install/enable Docker for the shell tool?" "no" "${MAXWELL_INSTALL_DOCKER:-}")
-  if [ "$docker_choice" != "yes" ]; then
-    set_env_value ENABLE_SHELL false
-    warn "Set ENABLE_SHELL=false in .env. Re-enable it after Docker works."
-    return 0
-  fi
-  [ "$SKIP_SYSTEM_DEPS" = "1" ] && { warn "Cannot install Docker while MAXWELL_SKIP_SYSTEM_DEPS=1; disabling shell."; set_env_value ENABLE_SHELL false; return 0; }
-  [ -n "$OS_FAMILY" ] || detect_os
-  step "Installing Docker"
-  case "$OS_FAMILY" in
-    apt|dnf)
-      curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-      run_as_root sh /tmp/get-docker.sh
-      rm -f /tmp/get-docker.sh
-      ;;
-    pacman)
-      run_as_root pacman -Sy --needed --noconfirm docker
-      run_as_root systemctl enable --now docker || true
-      ;;
-    brew)
-      warn "Installing Docker Desktop with Homebrew. Start Docker Desktop after installation."
-      brew install --cask docker
-      ;;
-  esac
-  target_user="${USER:-$(id -un 2>/dev/null || printf '')}"
-  if command -v docker >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ] && [ -n "$target_user" ] && getent group docker >/dev/null 2>&1; then
-    run_as_root usermod -aG docker "$target_user" || true
-    warn "Added $target_user to the docker group. Log out and back in before using Docker without sudo."
-  fi
-  if docker_reachable || run_as_root docker info >/dev/null 2>&1; then
-    set_env_value ENABLE_SHELL true
-    ok "Docker daemon is running; shell tool enabled"
-  else
-    set_env_value ENABLE_SHELL false
-    warn "Docker is still not reachable; set ENABLE_SHELL=false. Re-run --reconfigure after fixing Docker."
-  fi
-}
-
 configure_env() {
-  step "Configuring Maxwell"
+  step "Configuring dame-curie"
   if [ -f .env ] && [ "$RECONFIGURE" != "1" ]; then
     ok ".env already exists — leaving it unchanged (use --reconfigure to edit it)"
     return
@@ -325,80 +280,33 @@ configure_env() {
   fi
   copy_env_if_needed
 
-  printf '\n%sStep 1/5: Discord user token%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 1/4: Discord user token%s\n' "$BOLD" "$RESET"
   printf '  This is a self-bot user token. In a browser, open Discord, DevTools, Network, select a discord.com/api request, and copy the authorization header. You can also inspect Application/Local Storage. This may violate Discord ToS.\n'
   token=$(prompt_secret "Discord token (blank to skip)" "${DISCORD_TOKEN:-}")
   if [ -n "$token" ]; then set_env_value DISCORD_TOKEN "$token"; ok "Discord token saved"; else warn "DISCORD_TOKEN left blank; the bot cannot start until you edit .env."; fi
 
-  printf '\n%sStep 2/5: LLM provider%s\n' "$BOLD" "$RESET"
-  base_default="${OLLAMA_BASE_URL:-http://localhost:11434}"
-  model_default="${OLLAMA_MODEL:-qwen3:8b}"
-  api_key_default="${OLLAMA_API_KEY:-}"
-  if [ "$NONINTERACTIVE" != "1" ] && [ -z "${OLLAMA_BASE_URL:-}" ] && [ -z "${OLLAMA_MODEL:-}" ]; then
-    printf '  Choose an OpenAI-compatible provider:\n' > "$TTY"
-    printf '    1) Local Ollama (http://localhost:11434)\n    2) OpenRouter (https://openrouter.ai/api/v1, key from openrouter.ai/keys, free model moonshotai/kimi-k2.6:free)\n    3) OpenAI (https://api.openai.com/v1)\n    4) LM Studio (http://localhost:1234/v1)\n    5) Custom OpenAI-compatible URL\n' > "$TTY"
-    provider=$(prompt "Provider" "1")
-    case "$provider" in
-      1) base_default=http://localhost:11434; model_default=qwen3:8b; api_key_default="" ;;
-      2) base_default=https://openrouter.ai/api/v1; model_default=moonshotai/kimi-k2.6:free ;;
-      3) base_default=https://api.openai.com/v1; model_default=gpt-4.1-mini ;;
-      4) base_default=http://localhost:1234/v1; model_default="local-model"; api_key_default="" ;;
-      5) base_default=$(prompt "Custom base URL" "$base_default"); model_default="" ;;
-      *) warn "Unknown choice; using Local Ollama defaults." ;;
-    esac
-    if [ "$provider" = "1" ]; then
-      ollama_choice=$(yes_no "Install Ollama and pull the selected model?" "no" "")
-      if [ "$ollama_choice" = "yes" ]; then
-        if [ "$(uname -s 2>/dev/null || printf unknown)" = "Linux" ]; then
-          curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
-          sh /tmp/ollama-install.sh
-          rm -f /tmp/ollama-install.sh
-          if command -v ollama >/dev/null 2>&1; then
-            ollama pull "$model_default" || true
-            ollama pull qwen3-embedding:0.6b || true
-          fi
-        else
-          warn "Install Ollama from https://ollama.com/download, then run: ollama pull $model_default"
-        fi
-      fi
-    fi
-  fi
-  base=$(prompt "Provider base URL" "$base_default")
+  printf '\n%sStep 2/4: LLM provider%s\n' "$BOLD" "$RESET"
+  base_default="${OPENAI_BASE_URL:-}"
+  model_default="${OPENAI_MODEL:-}"
+  api_key_default="${OPENAI_API_KEY:-}"
+  printf '  OPENAI_* selects your remote OpenAI-compatible endpoint, not an official OpenAI account or service. No endpoint or model is assumed.\n'
+  base=$(prompt "Remote OpenAI-compatible base URL" "$base_default")
   model=$(prompt "Model name" "$model_default")
-  key=$(prompt_secret "API key (blank for local providers)" "$api_key_default")
-  set_env_value OLLAMA_BASE_URL "$base"
-  if [ -n "$model" ]; then set_env_value OLLAMA_MODEL "$model"; else warn "OLLAMA_MODEL left blank; set it before starting Maxwell."; fi
-  set_env_value OLLAMA_API_KEY "$key"
+  key=$(prompt_secret "Endpoint API key (blank if no bearer is required)" "$api_key_default")
+  set_env_value OPENAI_BASE_URL "$base"
+  if [ -n "$model" ]; then set_env_value OPENAI_MODEL "$model"; else warn "OPENAI_MODEL left blank; set it before starting dame-curie."; fi
+  set_env_value OPENAI_API_KEY "$key"
 
-  printf '\n%sStep 3/5: Owner Discord user ID(s)%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 3/4: Owner Discord user ID(s)%s\n' "$BOLD" "$RESET"
   printf '  Enable Discord Developer Mode, right-click yourself, and choose Copy User ID. Use commas for multiple owners.\n'
-  owner=$(prompt "Owner ID(s), optional" "${MAXWELL_OWNER_IDS:-}")
+  owner=$(prompt "Owner ID(s), optional" "${DAME_CURIE_OWNER_IDS:-}")
   if [ -n "$owner" ]; then
-    set_env_value MAXWELL_OWNER_IDS "$owner"
+    set_env_value DAME_CURIE_OWNER_IDS "$owner"
   else
-    warn "MAXWELL_OWNER_IDS left blank; admin commands will be denied."
+    warn "DAME_CURIE_OWNER_IDS left blank; admin commands will be denied."
   fi
 
-  printf '\n%sStep 4/5: Dashboard credentials%s\n' "$BOLD" "$RESET"
-  printf '  Empty MAXWELL_ADMIN_PASSWORD makes the dashboard/admin API answer 503. Press Enter interactively to generate one.\n'
-  admin_user_default="${MAXWELL_ADMIN_USER:-admin}"
-  admin_user=$(prompt "Dashboard admin username" "$admin_user_default")
-  [ -n "$admin_user" ] || admin_user="admin"
-  set_env_value MAXWELL_ADMIN_USER "$admin_user"
-
-  admin_pw_default="${MAXWELL_ADMIN_PASSWORD:-}"
-  admin_pw=$(prompt_secret "Dashboard admin password" "$admin_pw_default")
-  if [ -z "$admin_pw" ] && [ "$NONINTERACTIVE" != "1" ]; then
-    if command -v openssl >/dev/null 2>&1; then admin_pw=$(openssl rand -hex 16); else admin_pw=$(python3 -c 'import secrets; print(secrets.token_hex(16))'); fi
-    printf '  Generated dashboard password: %s\n' "$admin_pw"
-  fi
-  if [ -n "$admin_pw" ]; then
-    set_env_value MAXWELL_ADMIN_PASSWORD "$admin_pw"
-  else
-    warn "MAXWELL_ADMIN_PASSWORD left blank; dashboard/admin API will answer 503."
-  fi
-
-  printf '\n%sStep 5/5: Optional background loops%s\n' "$BOLD" "$RESET"
+  printf '\n%sStep 4/4: Optional background loops%s\n' "$BOLD" "$RESET"
   printf '  Autonomy and REM spend LLM tokens on timers, so the safe default is off.\n'
   autonomy=$(yes_no "Enable autonomy background actions?" "no" "${ENABLE_AUTONOMY:-}")
   rem=$(yes_no "Enable REM memory consolidation?" "no" "${ENABLE_REM:-}")
@@ -412,73 +320,12 @@ configure_env() {
   else
     set_env_value ENABLE_REM false
   fi
-
-  install_docker_if_requested
-}
-
-write_run_script() {
-  cat > run.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-. .venv/bin/activate
-exec python3 bot.py "$@"
-EOF
-  chmod +x run.sh
-  ok "wrote run.sh"
-}
-
-offer_systemd() {
-  [ "$NONINTERACTIVE" = "1" ] && return 0
-  [ "$(uname -s 2>/dev/null || printf unknown)" = "Linux" ] || return 0
-  choice=$(yes_no "Create a systemd user service for Maxwell?" "no" "")
-  [ "$choice" = "yes" ] || return 0
-  mkdir -p "$HOME/.config/systemd/user"
-  service="$HOME/.config/systemd/user/maxwell.service"
-  cat > "$service" <<EOF
-[Unit]
-Description=Maxwell Discord self-bot
-After=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=$(pwd -P)
-ExecStart=$(pwd -P)/.venv/bin/python3 bot.py
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-  systemctl --user daemon-reload || true
-  ok "wrote $service"
-  printf '  Enable it with: systemctl --user enable --now maxwell\n'
-}
-
-run_doctor() {
-  step "Verifying installation"
-  # shellcheck disable=SC1091
-  . .venv/bin/activate
-  if python3 doctor.py; then
-    ok "doctor.py reports the install is ready to start"
-  else
-    warn "doctor.py found startup blockers. Fix the items above, then run python3 doctor.py again."
-  fi
-  if grep -q '^DISCORD_TOKEN=.' .env && grep -q '^OLLAMA_MODEL=.' .env; then
-    if python3 doctor.py --probe; then
-      ok "live endpoint probe succeeded"
-    else
-      warn "doctor.py --probe failed. Check docs/INSTALL.md troubleshooting for URL/key/model fixes."
-    fi
-  else
-    warn "Skipping live probe because DISCORD_TOKEN or OLLAMA_MODEL is blank."
-  fi
 }
 
 banner_and_confirm() {
-  printf '%sMaxwell installer%s\n' "$BOLD" "$RESET"
-  printf 'Maxwell is a Discord self-bot backed by any OpenAI-compatible LLM. This installer fetches the app, installs dependencies, creates a virtualenv, and walks you through configuration.\n\n'
-  printf '%sWarning:%s Maxwell uses discord.py-self/self_bot=True. Self-bots may violate Discord Terms of Service and can put your account at risk.\n' "$YELLOW" "$RESET"
+  printf '%sdame-curie installer%s\n' "$BOLD" "$RESET"
+  printf 'dame-curie is a Discord self-bot backed by any OpenAI-compatible LLM. This installer fetches the app, installs dependencies, creates a virtualenv in .venv, and walks you through configuration.\n\n'
+  printf '%sWarning:%s dame-curie uses discord.py-self/self_bot=True. Self-bots may violate Discord Terms of Service and can put your account at risk.\n' "$YELLOW" "$RESET"
   if [ "$NONINTERACTIVE" != "1" ]; then
     answer=$(prompt "Type I UNDERSTAND to continue" "")
     [ "$answer" = "I UNDERSTAND" ] || fail "confirmation not received"
@@ -491,9 +338,9 @@ final_summary() {
   step "Done"
   cat <<EOF
   Install path: $(pwd -P)
-  Start the bot: cd $(pwd -P) && ./run.sh
-  Start dashboard/API: cd $(pwd -P) && . .venv/bin/activate && python3 api/api_server.py
-  PM2 alternative: pm2 start ecosystem.config.js && pm2 logs maxwell-bot maxwell-api
+  Checkout dependencies/configuration only; no runtime was provisioned or activated.
+  Deploy the bot only inside its service account's private rootless container.
+  Deployment contract and activation gates: docs/OPERATIONS.md
   Edit configuration later: $(pwd -P)/.env
   Re-run the wizard: ./install.sh --local --reconfigure
   Update later: ./install.sh --local, or git pull --ff-only && ./install.sh --local
@@ -507,9 +354,6 @@ main() {
   clone_or_update
   install_python_deps
   configure_env
-  write_run_script
-  offer_systemd
-  run_doctor
   final_summary
 }
 

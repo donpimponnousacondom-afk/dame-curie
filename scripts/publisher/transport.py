@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from . import guard
-from .common import MARKER, RemoteFailure
+from .common import RemoteFailure
 from .config import Config
 from .state import Site
 
@@ -36,6 +36,7 @@ class Transport:
             "action": action, "site_root": self.config.site_root,
             "image_root": self.config.image_root, "roots": roots,
             "name": name, "token": site.token, "site_identity": site.identity,
+            "marker_namespace": self.config.marker_namespace,
         }
 
     def command(self, request: dict) -> str:
@@ -62,7 +63,8 @@ class Transport:
         if delete:
             if request["action"] != "site" or not request["name"] or not request["token"]:
                 raise RemoteFailure("non-site deletion refused")
-            argv.extend(["--delete-delay", "--filter", f"P /{MARKER}", "--filter", f"H /{MARKER}"])
+            marker_name = f".{request['marker_namespace']}-publisher-owner"
+            argv.extend(["--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}"])
         argv.extend(["--", str(source) + "/", f"{self.config.user}@{self.config.host}:./"])
         self.execute(argv, capture=False)
 

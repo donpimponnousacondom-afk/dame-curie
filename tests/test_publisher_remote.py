@@ -1,3 +1,4 @@
+import contextlib
 import ctypes
 import errno
 import json
@@ -8,11 +9,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from scripts.publisher import guard
-from scripts.publisher.common import MARKER, RemoteFailure, ScanIncomplete
+from scripts.publisher.common import MARKER, PublisherError, RemoteFailure, ScanIncomplete
 from scripts.publisher.config import Config
 from scripts.publisher.mirror import Mirror
 from scripts.publisher.state import Site, State
@@ -115,21 +117,41 @@ class PublisherRemoteTests(unittest.TestCase):
         (self.sites / "index.html").write_bytes(b"future root index")
         (self.sites / "other-bot").mkdir()
         (self.sites / "other-bot/sentinel").write_bytes(b"other")
-        page = self.put("my site/index.html", b"one")
-        removed = self.put("my site/old.js", b"old")
-        self.mirror.reconcile()
-        removed.unlink()
-        page.write_bytes(b"two")
-        self.mirror.reconcile()
-        self.assertEqual((self.sites / "my site/index.html").read_bytes(), b"two")
-        self.assertFalse((self.sites / "my site/old.js").exists())
-        self.assertTrue((self.sites / "my site" / MARKER).exists())
-        shutil.rmtree(page.parent)
-        self.mirror.reconcile()
-        self.assertFalse((self.sites / "my site").exists())
-        self.assertEqual((self.sites / "index.html").read_bytes(), b"future root index")
-        self.assertEqual((self.sites / "other-bot/sentinel").read_bytes(), b"other")
-        self.assertEqual(self.state.sites, {})
+        for namespace in ("dame-curie", "curie"):
+            config = replace(self.config, state=self.root / f"state-{namespace}", marker_namespace=namespace)
+            config.state.mkdir(mode=0o700)
+            transport = LocalSSH(config)
+            with self.subTest(namespace=namespace), contextlib.closing(State(config)) as state:
+                mirror = Mirror(config, state, transport)
+                page = self.put("my site/index.html", b"one")
+                removed = self.put("my site/old.js", b"old")
+                self.put(f"my site/.{namespace}-publisher-owner", b"not a remote marker")
+                mirror.reconcile()
+                marker = self.sites / "my site" / f".{namespace}-publisher-owner"
+                original_bytes, original_stat = marker.read_bytes(), marker.stat()
+                other_namespace = "curie" if namespace == "dame-curie" else "dame-curie"
+                self.assertFalse((marker.parent / f".{other_namespace}-publisher-owner").exists())
+                wrong = transport.request("claim", state.roots, "my site", state.sites["my site"])
+                wrong["marker_namespace"] = other_namespace
+                with self.assertRaises(RemoteFailure):
+                    transport.control(wrong)
+                removed.unlink()
+                page.write_bytes(b"two")
+                mirror.reconcile()
+                self.assertEqual((self.sites / "my site/index.html").read_bytes(), b"two")
+                self.assertFalse((self.sites / "my site/old.js").exists())
+                self.assertEqual(marker.read_bytes(), original_bytes)
+                self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
+                self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+                command = next(command for command in transport.commands if command[0] == "rsync")
+                self.assertIn(f"P /{marker.name}", command)
+                self.assertIn(f"H /{marker.name}", command)
+                shutil.rmtree(page.parent)
+                mirror.reconcile()
+                self.assertFalse((self.sites / "my site").exists())
+                self.assertEqual((self.sites / "index.html").read_bytes(), b"future root index")
+                self.assertEqual((self.sites / "other-bot/sentinel").read_bytes(), b"other")
+                self.assertEqual(state.sites, {})
 
     def test_unmanaged_collision_is_refused_even_when_empty(self):
         self.put("collision/index.html")
@@ -228,9 +250,14 @@ class PublisherRemoteTests(unittest.TestCase):
         self.mirror = Mirror(self.config, self.state, self.transport)
         self.mirror.reconcile()
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"after restart")
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
 
     def test_partial_marker_write_recovers_after_restart(self):
+        self.state.close()
+        self.config = replace(self.config, marker_namespace="curie")
+        self.state = State(self.config)
+        self.transport = LocalSSH(self.config)
+        self.mirror = Mirror(self.config, self.state, self.transport)
         self.put("site/index.html", b"after partial write")
         original = os.write
 
@@ -240,12 +267,15 @@ class PublisherRemoteTests(unittest.TestCase):
         with patch.object(guard.os, "write", side_effect=short_write):
             with self.assertRaises(RemoteFailure):
                 self.mirror.reconcile()
+        token = self.state.sites["site"].token
+        self.assertTrue((self.sites / f".curie-publisher-claim-{token}" / ".curie-publisher-owner").is_file())
         self.state.close()
         self.state = State(self.config)
         self.mirror = Mirror(self.config, self.state, self.transport)
         self.mirror.reconcile()
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"after partial write")
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertIn(token.encode(), (self.sites / "site/.curie-publisher-owner").read_bytes())
+        self.assertFalse(any(path.name.startswith((".dame-curie-publisher-claim-", ".curie-publisher-claim-")) for path in self.sites.iterdir()))
 
     def test_removed_source_cleans_partial_claim_not_unmanaged_canonical(self):
         page = self.put("site/index.html")
@@ -269,7 +299,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual((canonical / "keep").read_bytes(), b"unmanaged")
         self.assertFalse((canonical / MARKER).exists())
         self.assertNotIn("site", self.state.sites)
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
         self.assertEqual((self.images / "later.png").read_bytes(), b"archive still reconciles")
 
     def test_overlapping_cleanup_refuses_publication_before_marker_unlink(self):
@@ -304,7 +334,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual(blocked, [errno.EAGAIN])
         self.assertEqual(errors, [])
         self.assertFalse((self.sites / "site").exists())
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
         self.assertEqual(len(guard.run(claim)["site_identity"]), 2)
         self.assertIn(site.token.encode(), (self.sites / "site" / MARKER).read_bytes())
         self.assertEqual((self.sites / "index.html").read_bytes(), b"unrelated root index")
@@ -346,7 +376,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual(published_mutations, [])
         self.assertIn(site.token.encode(), (self.sites / "site" / MARKER).read_bytes())
         self.assertEqual(len(guard.run(claim)["site_identity"]), 2)
-        self.assertFalse(any(path.name.startswith(".curie-publisher-claim-") for path in self.sites.iterdir()))
+        self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
 
     def test_unsupported_noreplace_has_no_ordinary_rename_fallback(self):
         self.put("site/index.html")
@@ -391,17 +421,47 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertFalse((self.sites / "SHOULD_NOT_EXIST").exists())
 
     def test_pending_transfer_recovers_after_state_reload(self):
+        self.state.close()
+        self.config = replace(self.config, marker_namespace="curie")
+        self.state = State(self.config)
+        self.transport = LocalSSH(self.config)
+        self.mirror = Mirror(self.config, self.state, self.transport)
         self.put("site/index.html", b"first")
         self.transport.fail_action = "site"
         with self.assertRaises(RemoteFailure):
             self.mirror.reconcile()
-        token = self.state.sites["site"].token
+        saved = json.loads(self.state.path.read_text())
+        marker = self.sites / "site/.curie-publisher-owner"
+        marker_bytes, marker_stat = marker.read_bytes(), marker.stat()
+        source = self.root / "migrated-public"
+        shutil.copytree(self.config.source, source)
         self.state.close()
+        self.config = replace(self.config, source=source)
+        with self.assertRaisesRegex(PublisherError, "ownership configuration changed"):
+            State(self.config)
+        projected = dict(saved, source=str(source))
+        projected.pop("marker_namespace")
+        self.state.path.write_text(json.dumps(projected))
+        with self.assertRaisesRegex(PublisherError, "ownership configuration changed"):
+            State(self.config)
+        projected["marker_namespace"] = "curie"
+        projected["source_identity"] = [source.stat().st_dev, source.stat().st_ino]
+        self.state.path.write_text(json.dumps(projected))
         self.state = State(self.config)
-        self.transport.fail_action = ""
+        self.transport = LocalSSH(self.config)
         self.mirror = Mirror(self.config, self.state, self.transport)
-        self.mirror.reconcile()
-        self.assertEqual(self.state.sites["site"].token, token)
+        with patch.object(guard, "prepare_marker", side_effect=AssertionError("existing claim rewritten")) as prepared:
+            self.mirror.reconcile()
+        prepared.assert_not_called()
+        current = json.loads(self.state.path.read_text())
+        self.assertEqual(current, projected)
+        for field in ("target", "roots", "sites"):
+            self.assertEqual(current[field], saved[field])
+        self.assertEqual(marker.read_bytes(), marker_bytes)
+        self.assertEqual(marker.stat().st_ino, marker_stat.st_ino)
+        self.assertEqual(marker.stat().st_mode, marker_stat.st_mode)
+        self.assertEqual(marker.stat().st_uid, marker_stat.st_uid)
+        self.assertFalse((marker.parent / MARKER).exists())
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"first")
 
     def test_lost_first_claim_acknowledgement_recovers_own_marker(self):
@@ -510,13 +570,18 @@ class PublisherRemoteTests(unittest.TestCase):
             guard.run(request)
 
     def test_remote_child_replacement_with_copied_marker_is_refused(self):
+        self.state.close()
+        self.config = replace(self.config, marker_namespace="curie")
+        self.state = State(self.config)
+        self.transport = LocalSSH(self.config)
+        self.mirror = Mirror(self.config, self.state, self.transport)
         self.put("site/index.html")
         self.mirror.reconcile()
         original = self.sites / "site"
-        marker_bytes = (original / MARKER).read_bytes()
+        marker_bytes = (original / ".curie-publisher-owner").read_bytes()
         original.rename(self.sites / "old-site")
         original.mkdir()
-        marker = original / MARKER
+        marker = original / ".curie-publisher-owner"
         marker.write_bytes(marker_bytes)
         marker.chmod(0o600)
         with self.assertRaises(RemoteFailure):
@@ -559,6 +624,13 @@ class PublisherRemoteTests(unittest.TestCase):
         request = self.transport.request("remove", [], "..", Site("token"))
         with self.assertRaises(guard.Refused):
             guard.run(request)
+        for namespace in ("", "../curie", "other"):
+            request = self.transport.request("probe", [], "", Site(""))
+            request["marker_namespace"] = namespace
+            with self.subTest(namespace=namespace), patch.object(guard, "root_directory", side_effect=AssertionError("unsafe namespace")) as opened:
+                with self.assertRaises(guard.Refused):
+                    guard.run(request)
+            opened.assert_not_called()
 
     def test_guard_command_uses_isolated_no_site_python(self):
         request = self.transport.request("probe", [], "", Site(""))
@@ -576,15 +648,21 @@ class PublisherRemoteTests(unittest.TestCase):
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(poison)
         environment["PYTHONUSERBASE"] = str(poison)
-        request = self.transport.request("probe", [], "", Site(""))
-        arguments = shlex.split(self.transport.command(request))
-        result = subprocess.run(
-            [sys.executable, *arguments[1:]], cwd=poison, env=environment,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=10,
-        )
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(len(json.loads(result.stdout)["roots"]), 2)
-        self.assertFalse(sentinel.exists())
+        for namespace in ("dame-curie", "curie"):
+            transport = Transport(replace(self.config, marker_namespace=namespace))
+            site = Site("00000000-0000-4000-8000-000000000001")
+            request = transport.request("claim", [], namespace, site)
+            arguments = shlex.split(transport.command(request))
+            with self.subTest(namespace=namespace):
+                result = subprocess.run(
+                    [sys.executable, *arguments[1:]], cwd=poison, env=environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=10,
+                )
+                self.assertEqual(result.returncode, 0)
+                bound = json.loads(result.stdout)["site_identity"]
+                marker = self.sites / namespace / f".{namespace}-publisher-owner"
+                self.assertEqual(json.loads(marker.read_bytes()), {"token": site.token, "identity": bound})
+                self.assertFalse(sentinel.exists())
 
     def test_uploaded_files_are_executable_but_ownership_marker_stays_private(self):
         source = self.put('permissions/hello.pl', b'print "synthetic";')

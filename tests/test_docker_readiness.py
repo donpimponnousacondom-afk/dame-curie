@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shlex
 import subprocess
 import sys
 import threading
@@ -15,11 +16,28 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "docker/check_embeddings.py"
+EMBEDDING_SETTINGS = (
+    "ENABLE_RAG",
+    "DAME_CURIE_EMBED_MODE",
+    "DAME_CURIE_EMBED_BASE_URL",
+    "EMBED_BASE_URL",
+    "DAME_CURIE_EMBED_MODEL",
+    "EMBED_MODEL",
+    "DAME_CURIE_EMBED_DIM",
+    "DAME_CURIE_EMBED_API_KEY",
+    "EMBED_API_KEY",
+)
 
 
 @pytest.fixture
 def embeddings_server():
-    state = {"vectors": [[0.25] * 1024], "status": 200, "requests": []}
+    state = {
+        "vectors": [[0.25] * 1024],
+        "status": 200,
+        "requests": [],
+        "headers": [],
+        "shape": "ollama",
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -29,11 +47,23 @@ def embeddings_server():
                     json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
                 )
             )
-            assert "Authorization" not in self.headers
+            state["headers"].append(dict(self.headers))
             self.send_response(state["status"])
+            if 300 <= state["status"] < 400:
+                self.send_header("Location", "/unconfigured-target")
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"embeddings": state["vectors"]}).encode())
+            body = (
+                {
+                    "data": [
+                        {"embedding": vector, "index": index}
+                        for index, vector in enumerate(state["vectors"])
+                    ]
+                }
+                if state["shape"] == "openai"
+                else {"embeddings": state["vectors"]}
+            )
+            self.wfile.write(json.dumps(body).encode())
 
         def log_message(self, *_args):
             pass
@@ -48,15 +78,77 @@ def embeddings_server():
             thread.join()
 
 
+def isolate_readiness(monkeypatch, tmp_path, settings):
+    """Point the gate at a synthetic dotenv file with no ambient embedding settings."""
+    for name in EMBEDDING_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("EMBED_MODEL", "qwen3-embedding:0.6b")
+    env_file = tmp_path / "bot.env"
+    env_file.write_text("".join(f"{key}={value}\n" for key, value in settings.items()))
+    monkeypatch.setenv("DAME_CURIE_ENV_FILE", str(env_file))
+
+
+def run_readiness():
+    """Execute the gate the way the Compose entrypoint does."""
+    runpy.run_path(str(CHECKER), run_name="__main__")
+
+
 def test_readiness_requires_real_embedding_without_api_credentials(embeddings_server):
     url, state = embeddings_server
-    runpy.run_path(str(CHECKER))["check_embeddings"](url)
+    runpy.run_path(str(CHECKER))["check_embeddings"](
+        url, "qwen3-embedding:0.6b", 1024
+    )
     assert state["requests"] == [
         (
             "/api/embed",
-            {"model": "qwen3-embedding:0.6b", "input": "readiness", "keep_alive": -1},
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
         )
     ]
+    assert "Authorization" not in state["headers"][0]
+
+
+def test_readiness_external_ollama_form_matches_the_embedding_request(embeddings_server):
+    url, state = embeddings_server
+    runpy.run_path(str(CHECKER))["check_embeddings"](url, "shared-model", 1024)
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "shared-model", "input": "readiness"},
+        )
+    ]
+
+
+@pytest.mark.parametrize("suffix", ["", "?region=private&route=one"])
+def test_readiness_external_openai_form_uses_v1_with_bearer_auth(embeddings_server, suffix):
+    url, state = embeddings_server
+    state["shape"] = "openai"
+    runpy.run_path(str(CHECKER))["check_embeddings"](
+        f"{url}/v1{suffix}", "shared-model", 1024, "test-key"
+    )
+    assert state["requests"] == [
+        (f"/v1/embeddings{suffix}", {"model": "shared-model", "input": "readiness"})
+    ]
+    assert state["headers"][0]["Authorization"] == "Bearer test-key"
+
+
+def test_readiness_omits_ollama_fields_on_a_v1_endpoint(embeddings_server):
+    url, state = embeddings_server
+    state["shape"] = "openai"
+    runpy.run_path(str(CHECKER))["check_embeddings"](
+        f"{url}/v1", "shared-model", 1024
+    )
+    assert state["requests"] == [
+        ("/v1/embeddings", {"model": "shared-model", "input": "readiness"})
+    ]
+
+
+def test_readiness_requires_the_configured_dimension(embeddings_server):
+    url, state = embeddings_server
+    state["vectors"] = [[0.5] * 768]
+    check_embeddings = runpy.run_path(str(CHECKER))["check_embeddings"]
+    check_embeddings(url, "shared-model", 768)
+    with pytest.raises(ValueError, match="1024-dimensional"):
+        check_embeddings(url, "shared-model", 1024)
 
 
 @pytest.mark.parametrize(
@@ -76,28 +168,267 @@ def test_readiness_rejects_unusable_embeddings(embeddings_server, vectors):
     url, state = embeddings_server
     state["vectors"] = vectors
     with pytest.raises(ValueError, match="1024-dimensional"):
-        runpy.run_path(str(CHECKER))["check_embeddings"](url)
+        runpy.run_path(str(CHECKER))["check_embeddings"](
+            url, "qwen3-embedding:0.6b", 1024
+        )
 
 
-def test_readiness_fails_closed_on_ollama_error(embeddings_server):
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308, 500])
+def test_readiness_fails_closed_on_endpoint_error(embeddings_server, status):
     url, state = embeddings_server
-    state["status"] = 500
-    with pytest.raises(HTTPError):
-        runpy.run_path(str(CHECKER))["check_embeddings"](url)
+    state["status"] = status
+    with pytest.raises(HTTPError) as error:
+        runpy.run_path(str(CHECKER))["check_embeddings"](
+            url, "qwen3-embedding:0.6b", 1024
+        )
+    assert error.value.code == status
+    assert state["requests"] == [
+        ("/api/embed", {"model": "qwen3-embedding:0.6b", "input": "readiness"}),
+    ]
 
 
 @pytest.mark.parametrize("setting", ["false", "0", "no", "OFF", '"false" # disabled'])
 def test_readiness_main_skips_http_for_explicit_disabled_rag(
     tmp_path, monkeypatch, setting
 ):
-    env_file = tmp_path / "bot.env"
-    env_file.write_text(f"ENABLE_RAG={setting}\n")
-    monkeypatch.setenv("MAXWELL_ENV_FILE", str(env_file))
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": setting})
     monkeypatch.setenv("ENABLE_RAG", "true")
     transport = Mock(side_effect=AssertionError("disabled readiness attempted HTTP"))
-    monkeypatch.setattr("urllib.request.urlopen", transport)
-    runpy.run_path(str(CHECKER), run_name="__main__")
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", transport)
+    run_readiness()
     transport.assert_not_called()
+
+
+@pytest.mark.parametrize("setting", [None, "", "auto", "true"])
+def test_readiness_main_probes_unless_rag_is_explicitly_disabled(
+    embeddings_server, tmp_path, monkeypatch, setting
+):
+    url, state = embeddings_server
+    settings = {"DAME_CURIE_EMBED_BASE_URL": url}
+    if setting is not None:
+        settings["ENABLE_RAG"] = setting
+    isolate_readiness(monkeypatch, tmp_path, settings)
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "external")
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
+        )
+    ]
+
+
+def test_readiness_main_probes_the_configured_external_endpoint(
+    embeddings_server, tmp_path, monkeypatch
+):
+    url, state = embeddings_server
+    state["shape"] = "openai"
+    isolate_readiness(
+        monkeypatch,
+        tmp_path,
+        {
+            "ENABLE_RAG": "true",
+            "EMBED_BASE_URL": f"{url}/v1",
+            "EMBED_MODEL": "legacy-alias-model",
+            "DAME_CURIE_EMBED_DIM": "1024",
+            "DAME_CURIE_EMBED_API_KEY": "test-key",
+        },
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "external")
+    run_readiness()
+    assert state["requests"] == [
+        ("/v1/embeddings", {"model": "legacy-alias-model", "input": "readiness"})
+    ]
+    assert state["headers"][0]["Authorization"] == "Bearer test-key"
+
+
+def test_readiness_main_prefers_the_dotenv_file_over_the_process_environment(
+    embeddings_server, tmp_path, monkeypatch
+):
+    url, state = embeddings_server
+    isolate_readiness(
+        monkeypatch, tmp_path, {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": url}
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "external")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/unreachable")
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
+        )
+    ]
+
+
+def test_readiness_main_treats_a_bare_dotenv_key_as_no_value(
+    embeddings_server, tmp_path, monkeypatch
+):
+    """A bare KEY line carries no value, so the inherited value still applies, as in config.py."""
+    url, state = embeddings_server
+    isolate_readiness(monkeypatch, tmp_path, {})
+    (tmp_path / "bot.env").write_text(
+        "ENABLE_RAG=true\nDAME_CURIE_EMBED_BASE_URL\n"
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", url)
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
+        )
+    ]
+
+
+@pytest.mark.parametrize("mode", ["local", "external"])
+@pytest.mark.parametrize("setting", ["DAME_CURIE_EMBED_BASE_URL", "DAME_CURIE_EMBED_MODEL"])
+@pytest.mark.parametrize("value", [None, ""])
+def test_readiness_main_requires_an_explicit_external_endpoint(
+    tmp_path, monkeypatch, capsys, mode, setting, value
+):
+    settings = {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": "http://configured.invalid", "DAME_CURIE_EMBED_MODEL": "configured-model"}
+    if value is None:
+        del settings[setting]
+    else:
+        settings[setting] = value
+    isolate_readiness(monkeypatch, tmp_path, settings)
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", mode)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    if value == "":
+        monkeypatch.setenv(setting.removeprefix("DAME_CURIE_"), "configured-alias")
+    transport = Mock(side_effect=AssertionError("readiness used an inferred endpoint"))
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", transport)
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    transport.assert_not_called()
+    assert capsys.readouterr().err.strip() == "embedding readiness failed: ValueError"
+
+
+def test_readiness_cli_reports_a_status_without_the_endpoint(
+    embeddings_server, tmp_path, monkeypatch, capsys
+):
+    url, state = embeddings_server
+    state["status"] = 401
+    isolate_readiness(
+        monkeypatch,
+        tmp_path,
+        {
+            "ENABLE_RAG": "true",
+            "DAME_CURIE_EMBED_BASE_URL": url,
+            "DAME_CURIE_EMBED_API_KEY": "synthetic-secret",
+        },
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err.strip()
+    assert stderr == "embedding readiness failed: HTTPError (HTTP 401)"
+    assert url not in stderr and "synthetic-secret" not in stderr
+
+
+def test_readiness_cli_never_echoes_a_rejected_credential(
+    tmp_path, monkeypatch, capsys
+):
+    """A header value urllib rejects still carries the credential in its own message."""
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/embed")
+    monkeypatch.setenv("DAME_CURIE_EMBED_API_KEY", "synthetic-secret\nX-Forged: 1")
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert stderr.startswith("embedding readiness failed: ")
+    assert len(stderr.strip().splitlines()) == 1
+    assert "synthetic-secret" not in stderr and "X-Forged" not in stderr
+
+
+@pytest.mark.parametrize("url,error_type", [
+    ("http://[::1", "ValueError"),
+    ("http://127.0.0.1:1/synthetic-secret path", "InvalidURL"),
+])
+def test_readiness_cli_never_echoes_an_invalid_endpoint(
+    tmp_path, monkeypatch, capsys, url, error_type
+):
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", url)
+    with pytest.raises(SystemExit) as exit_info:
+        run_readiness()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert stderr.strip() == f"embedding readiness failed: {error_type}"
+    assert "[::1" not in stderr and "http" not in stderr
+    assert "synthetic-secret" not in stderr
+
+
+def test_readiness_cli_keeps_unexpected_errors_visible(tmp_path, monkeypatch):
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/embed")
+    monkeypatch.setattr(
+        "urllib.request.OpenerDirector.open", Mock(side_effect=RuntimeError("unexpected"))
+    )
+    with pytest.raises(RuntimeError, match="unexpected"):
+        run_readiness()
+
+
+def test_readiness_main_probes_the_injected_local_endpoint(
+    embeddings_server, tmp_path, monkeypatch
+):
+    url, state = embeddings_server
+    isolate_readiness(monkeypatch, tmp_path, {"ENABLE_RAG": "true"})
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", url)
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
+        )
+    ]
+
+
+def test_readiness_main_local_mode_honours_the_configured_endpoint(
+    embeddings_server, tmp_path, monkeypatch
+):
+    """A configured endpoint wins over the injected local service URL, as it does for the bot."""
+    url, state = embeddings_server
+    isolate_readiness(
+        monkeypatch, tmp_path, {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_BASE_URL": url}
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", "http://127.0.0.1:1/injected-local")
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
+        )
+    ]
+
+
+def test_readiness_main_keeps_the_deployment_mode_when_bot_env_disagrees(
+    embeddings_server, tmp_path, monkeypatch
+):
+    """Mode is Compose-provided deployment metadata; the private dotenv file cannot flip it."""
+    url, state = embeddings_server
+    isolate_readiness(
+        monkeypatch,
+        tmp_path,
+        {"ENABLE_RAG": "true", "DAME_CURIE_EMBED_MODE": "external"},
+    )
+    monkeypatch.setenv("DAME_CURIE_EMBED_MODE", "local")
+    monkeypatch.setenv("DAME_CURIE_EMBED_BASE_URL", url)
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/api/embed",
+            {"model": "qwen3-embedding:0.6b", "input": "readiness"},
+        )
+    ]
 
 
 @pytest.mark.parametrize("ready", [False, True])
@@ -105,15 +436,15 @@ def test_compose_entrypoint_gates_application_exec(embeddings_server, tmp_path, 
     url, state = embeddings_server
     state["vectors"] = [[0.25] * (1024 if ready else 768)]
     checker = tmp_path / "check_embeddings.py"
-    checker.write_text(CHECKER.read_text().replace("http://ollama:11434", url))
+    checker.write_text(CHECKER.read_text())
     env_file = tmp_path / "bot.env"
-    env_file.write_text("ENABLE_RAG=true\n")
-    entrypoint = yaml.safe_load((ROOT / "compose.yaml").read_text())["x-app"][
+    env_file.write_text(f"ENABLE_RAG=true\nDAME_CURIE_EMBED_BASE_URL={url}\nDAME_CURIE_EMBED_MODEL=qwen3-embedding:0.6b\n")
+    entrypoint = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["bot"][
         "entrypoint"
     ]
     entrypoint = [
         value.replace("$$", "$").replace(
-            "/opt/maxwell/check_embeddings.py", str(checker)
+            "/opt/dame-curie/check_embeddings.py", str(checker)
         )
         for value in entrypoint
     ]
@@ -126,7 +457,12 @@ def test_compose_entrypoint_gates_application_exec(embeddings_server, tmp_path, 
             "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()",
             str(marker),
         ],
-        env={**os.environ, "MAXWELL_ENV_FILE": str(env_file), "ENABLE_RAG": "false"},
+        env={
+            **os.environ,
+            "DAME_CURIE_ENV_FILE": str(env_file),
+            "ENABLE_RAG": "false",
+            "DAME_CURIE_EMBED_MODE": "local",
+        },
         capture_output=True,
         text=True,
         timeout=10,
@@ -153,7 +489,10 @@ def test_one_shot_pull_is_idempotent_and_propagates_failure(
     service = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"][
         "ollama-pull"
     ]
-    command = service["command"][0].replace("$$", "$")
+    startup_log = tmp_path / "ollama-pull.log"
+    command = service["command"][0].replace("$$", "$").replace(
+        "/tmp/ollama-pull.log", shlex.quote(str(startup_log))
+    )
     result = subprocess.run(
         [*service["entrypoint"], command],
         env={
@@ -167,7 +506,7 @@ def test_one_shot_pull_is_idempotent_and_propagates_failure(
         text=True,
         timeout=10,
     )
-    assert result.returncode == pull_exit
+    assert result.returncode == pull_exit, (result.stderr, startup_log.read_text())
     assert (tmp_path / "pulled").exists() is not present
     if not present:
         assert (tmp_path / "pulled").read_text() == "qwen3-embedding:0.6b"

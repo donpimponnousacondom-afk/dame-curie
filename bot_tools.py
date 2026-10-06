@@ -13,10 +13,9 @@ import logging
 import os
 import random
 import re
-import shlex
+import signal
 import shutil
 import socket
-import ssl
 import sys
 import tempfile
 import time
@@ -26,27 +25,24 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar, cast
-from urllib.parse import parse_qs, quote, urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse, urlsplit, urlunsplit
 
-import aiofiles
 import aiohttp
 import asyncio
 import base64
 import uuid
 import discord
 from discord import Activity, File, Message, Status
+from tool_policy import tool_authorized
+from tool_schemas import TOOL_DISCOVERY_GROUPS
+from turn_budget import current_tool_groups
 from tools import Tool
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident, redact_sensitive_text, register_secrets
 from image_media import ImageMediaError, image_mime, normalize_image
 from response_observability import FOOTER_MARKER, clean_message_content, discord_message_excerpt, prepare_delivery, record_delivery, strip_footer
-from captcha_solver import CaptchaSolveError
 from control_defaults import parse_bool
-import site_backend
-import site_server
-import site_test
+from docker_runtime import confined_path, container_mode
 from utils import (  # single source of truth, fd-safe
-    FileLock,
-    _atomic_json_write_sync,
     _safe_int,
     is_direct_image_url,
     is_gif_page_url,
@@ -198,7 +194,7 @@ except ImportError:
     _DDGS_AVAILABLE = False
 
 # Owner IDs come from env var only — no hardcoded defaults to leak in open-source.
-# Load dotenv first so bare `python bot.py` sees MAXWELL_OWNER_IDS from .env
+# Load dotenv first so bare `python bot.py` sees DAME_CURIE_OWNER_IDS from .env
 # (config.py also loads dotenv; this avoids import-order freezing empty OWNER_IDS).
 try:
     from dotenv.main import load_dotenv as _load_dotenv_early
@@ -207,7 +203,7 @@ try:
     _load_dotenv_early(
         _PathEarly(
             os.getenv(
-                "MAXWELL_ENV_FILE", _PathEarly(__file__).resolve().parent / ".env"
+                "DAME_CURIE_ENV_FILE", _PathEarly(__file__).resolve().parent / ".env"
             )
         ),
         override=False,
@@ -220,17 +216,17 @@ except Exception:  # noqa: S110 - logging is not configured this early
 
 OWNER_IDS = {
     item.strip()
-    for item in os.environ.get("MAXWELL_OWNER_IDS", "").split(",")
+    for item in os.environ.get("DAME_CURIE_OWNER_IDS", "").split(",")
     if item.strip()
 }
 
 
 def refresh_owner_ids() -> set[str]:
-    """Re-read MAXWELL_OWNER_IDS from the environment (e.g. after dotenv)."""
+    """Re-read DAME_CURIE_OWNER_IDS from the environment (e.g. after dotenv)."""
     global OWNER_IDS
     OWNER_IDS = {
         item.strip()
-        for item in os.environ.get("MAXWELL_OWNER_IDS", "").split(",")
+        for item in os.environ.get("DAME_CURIE_OWNER_IDS", "").split(",")
         if item.strip()
     }
     return OWNER_IDS
@@ -250,11 +246,6 @@ TTS_LANGUAGE_ALIASES = {
     "spanish_jason_angry": "spanish",
     "jason_es": "spanish",
 }
-TTS_RIVA_DEFAULTS = {
-    "english": ("Magpie-Multilingual.EN-US.Jason.Angry", "en-US"),
-    "spanish": ("Magpie-Multilingual.ES-US.Jason.Angry", "es-US"),
-}
-
 _SHARED_SESSION: aiohttp.ClientSession | None = None
 _SESSION_LOCK = asyncio.Lock()
 
@@ -277,16 +268,11 @@ def _tts_language_key(
 
 
 def _tts_riva_voice_config(language_key: str) -> tuple[str, str]:
-    voice_env = "TTS_RIVA_VOICE_ES" if language_key == "spanish" else "TTS_RIVA_VOICE"
-    lang_env = (
-        "TTS_RIVA_LANGUAGE_ES" if language_key == "spanish" else "TTS_RIVA_LANGUAGE"
-    )
-    default_voice, default_code = TTS_RIVA_DEFAULTS.get(
-        language_key, TTS_RIVA_DEFAULTS["english"]
-    )
-    return os.environ.get(voice_env, default_voice), os.environ.get(
-        lang_env, default_code
-    )
+    from config import Config
+
+    if language_key != _tts_language_key(Config.TTS_RIVA_LANGUAGE):
+        raise ValueError("TTS language must match TTS_RIVA_LANGUAGE")
+    return Config.TTS_RIVA_VOICE, Config.TTS_RIVA_LANGUAGE
 
 
 async def _synthesize_fish_tts(
@@ -296,107 +282,42 @@ async def _synthesize_fish_tts(
     api_key: str,
     model: str,
     reference_id: str,
-    fmt: str = "mp3",
-) -> str | None:
-    """Call Fish Audio's TTS API. Returns output_path on success, None on
-    failure (caller falls through to next provider).
-
-    Fish is preferred over Riva when FISH_API_KEY is set: free tier, no gRPC
-    dependency, supports emotion tags like `[excited]`, `[laughing]` inline.
-
-    Docs: https://docs.fish.audio/api-reference/developer-apis/text-to-speech
-    """
-    if not api_key:
-        return None
+    fmt: str | None = None,
+) -> str:
+    """Send the configured PPQ speech profile without provider fallthrough."""
+    if not api_key or not model or not reference_id:
+        raise ValueError("Fish TTS requires FISH_API_KEY, TTS_FISH_MODEL and TTS_FISH_REFERENCE_ID")
     register_secrets([api_key])
-    url = "https://api.ppq.ai/v1/audio/speech"
-    payload = { "model": model, "input": text, "voice": reference_id, "language": "en" }
-    headers = { "Authorization": f"Bearer {api_key}", "Content-Type": "application/json" }
-
-#    url = "https://api.fish.audio/v1/tts"
-#    payload = {
-#        "text": text,
-#        "format": fmt,
-#    }
-#    if reference_id:
-#        payload["reference_id"] = reference_id
-#    headers = {
-#        "Authorization": f"Bearer {api_key}",
-#        "Content-Type": "application/json",
-#        "model": model,
-#    }
-#
-    try:
-        session = await _get_shared_session()
-        timeout = aiohttp.ClientTimeout(total=45)
-        async with session.post(
-            url, json=payload, headers=headers, timeout=timeout
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                incident_id = capture_incident("tool.tts.fish", f"PPQ TTS API returned {resp.status}", details=body)
-                logger.warning("PPQ TTS API returned %s: %s", resp.status, body[:200], extra={"incident_id": incident_id})
-                return None
-            data = await resp.read()
-        if not data or len(data) < 64:
-            incident_id = capture_incident("tool.tts.fish", "Fish TTS returned empty/too-small payload", details=repr(data))
-            logger.warning(
-                "Fish TTS returned empty/too-small payload (%d bytes)", len(data),
-                extra={"incident_id": incident_id},
+    payload = {"model": model, "input": text, "voice": reference_id}
+    if fmt is not None:
+        payload["response_format"] = fmt
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    session = await _get_shared_session()
+    async with session.post(
+        "https://api.ppq.ai/v1/audio/speech", json=payload, headers=headers,
+        timeout=aiohttp.ClientTimeout(total=45), allow_redirects=False,
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            failure = RuntimeError(f"PPQ TTS API returned {resp.status}: {redact_sensitive_text(body)}")
+            capture_incident(
+                "tool.tts.fish", f"PPQ TTS API returned {resp.status}", exception=failure, details=body,
             )
-            return None
-        # Fish returns MP3 bytes (or whatever fmt requested); write directly.
-        # The downstream `make_voice_ogg` re-encodes via ffmpeg so extension
-        # does not matter — ffmpeg sniffs the format.
-        # Written off-thread: this runs on the bot's event loop, and a blocking
-        # write of a few hundred KB stalls every other chat.
-        await asyncio.to_thread(Path(output_path).write_bytes, data)
-        logger.info(
-            "Fish TTS synthesized %d bytes (model=%s, ref=%s)",
-            len(data),
-            model,
-            bool(reference_id),
-        )
-        return output_path
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        capture_incident("tool.tts.fish", "Fish TTS request failed", exception=e)
-        logger.warning("Fish TTS request failed: %s", e)
-        return None
-    except Exception as e:
-        capture_incident("tool.tts.fish", "Fish TTS unexpected error", exception=e)
-        logger.warning("Fish TTS unexpected error: %s", e)
-        return None
-
-
-# Named Fish reference voices. Each name maps to its own env var; the
-# legacy TTS_FISH_REFERENCE_ID stays the backward-compatible default so
-# existing installs keep their current voice unless they opt into a name.
-FISH_REFERENCE_ENV = {
-    "tiktok": "TTS_FISH_REFERENCE_ID_TIKTOK",
-    "mommy": "TTS_FISH_REFERENCE_ID_MOMMY",
-    "espanol": "TTS_FISH_REFERENCE_ID_ESPANOL",
-    "español": "TTS_FISH_REFERENCE_ID_ESPANOL",
-    "spanish": "TTS_FISH_REFERENCE_ID_ESPANOL",
-}
-
-# Hardcoded fallback when no TTS_FISH_REFERENCE_ID* env var is set at all.
-FISH_REFERENCE_DEFAULT = "8d21b053e2804e2a890e1cf62f267b6f"
+            raise failure
+        data = await resp.read()
+    if not data or len(data) < 64:
+        raise RuntimeError("PPQ TTS returned empty/too-small audio")
+    await asyncio.to_thread(Path(output_path).write_bytes, data)
+    return output_path
 
 
 def _fish_reference_id(voice: str | None = None) -> str:
-    """Resolve a named Fish voice ("tiktok", "mommy", ...) to a reference id.
+    """Keep model-supplied voice hints from overriding the operator profile."""
+    from config import Config
 
-    Unknown/empty names fall back to TTS_FISH_REFERENCE_ID (then the
-    hardcoded default), so callers that don't care about voices keep the
-    exact behaviour they had before named voices existed.
-    """
-    if voice:
-        env_key = FISH_REFERENCE_ENV.get(str(voice).strip().lower())
-        if env_key:
-            value = os.environ.get(env_key, "").strip()
-            if value:
-                return value
-    return os.environ.get("TTS_FISH_REFERENCE_ID", FISH_REFERENCE_DEFAULT).strip()
+    if voice not in (None, "", Config.TTS_FISH_REFERENCE_ID):
+        raise ValueError("TTS voice must match TTS_FISH_REFERENCE_ID")
+    return Config.TTS_FISH_REFERENCE_ID
 
 
 async def _get_shared_session() -> aiohttp.ClientSession:
@@ -479,203 +400,6 @@ def _clean_channel_name(value: str | None) -> str:
     return text[:100]
 
 
-# Bash heredoc opener at an unquoted `<<`. Models almost always write the
-# redirect on the same line as the delimiter (`cat << 'EOF' > file.py`); a
-# here-string (`<<<`) is not a heredoc. Optional `<<-` (tab-stripped body)
-# is accepted. Callers must only apply this at unquoted `<<` positions —
-# a raw substring/regex search false-positives on `python3 -c "...<<Main"`.
-_HEREDOC_OPENER_RE = re.compile(
-    r"""
-    <<(?!<)
-    -?
-    [ \t]*
-    (?:
-        '([A-Za-z_][A-Za-z0-9_-]*)'
-      | "([A-Za-z_][A-Za-z0-9_-]*)"
-      | \\?([A-Za-z_][A-Za-z0-9_-]*)
-    )
-    """,
-    re.VERBOSE,
-)
-
-
-def _heredoc_token(match: re.Match) -> str:
-    return match.group(1) or match.group(2) or match.group(3)
-
-
-def _line_bounds(text: str, idx: int) -> tuple[int, int]:
-    start = text.rfind("\n", 0, idx) + 1
-    end = text.find("\n", idx)
-    if end < 0:
-        end = len(text)
-    return start, end
-
-
-def _heredoc_closer_span(
-    command: str, body_start: int, delimiter: str
-) -> tuple[bool, int | None, int]:
-    """Return `(closed, closer_line_start, index_after_heredoc)`."""
-    n = len(command)
-    if body_start >= n:
-        return False, None, n
-    pos = body_start
-    while pos <= n:
-        nl = command.find("\n", pos)
-        line_end = n if nl < 0 else nl
-        if command[pos:line_end].strip() == delimiter:
-            after = n if nl < 0 else nl + 1
-            return True, pos, after
-        if nl < 0:
-            return False, None, n
-        pos = nl + 1
-    return False, None, n
-
-
-def _scan_bash_heredocs(command: str) -> tuple[list[dict[str, Any]], bool]:
-    """Find real bash heredocs, ignoring `<<` inside quotes or comments.
-
-    Single quotes, double quotes, and `#` comments are not heredoc contexts.
-    Here-strings (`<<<`) are skipped. Once an opener is accepted, its body is
-    literal text (so `<<` inside the body does not open a nested heredoc).
-    """
-    text = str(command or "")
-    n = len(text)
-    i = 0
-    in_single = False
-    in_double = False
-    blocks: list[dict[str, Any]] = []
-    saw_unparsed = False
-
-    while i < n:
-        c = text[i]
-
-        if in_single:
-            if c == "'":
-                in_single = False
-            i += 1
-            continue
-
-        if in_double:
-            if c == "\\" and i + 1 < n:
-                i += 2
-                continue
-            if c == '"':
-                in_double = False
-            i += 1
-            continue
-
-        # Unquoted command text (including inside backticks / $()).
-        if c == "\\" and i + 1 < n:
-            i += 2
-            continue
-        if c == "'":
-            in_single = True
-            i += 1
-            continue
-        if c == '"':
-            in_double = True
-            i += 1
-            continue
-        if c == "#" and (i == 0 or text[i - 1] in " \t\n;&|(){}"):
-            nl = text.find("\n", i)
-            i = n if nl < 0 else nl
-            continue
-        if c == "<" and i + 1 < n and text[i + 1] == "<":
-            if i + 2 < n and text[i + 2] == "<":
-                i += 3
-                continue
-            match = _HEREDOC_OPENER_RE.match(text, i)
-            line_start, line_end = _line_bounds(text, i)
-            opener_text = text[line_start:line_end].strip()
-            if not match:
-                saw_unparsed = True
-                i += 2
-                continue
-            delimiter = _heredoc_token(match)
-            body_start = n if line_end >= n else line_end + 1
-            closed, closer_start, after = _heredoc_closer_span(
-                text, body_start, delimiter
-            )
-            blocks.append(
-                {
-                    "delimiter": delimiter,
-                    "opener_text": opener_text,
-                    "body_start": body_start,
-                    "closer_start": closer_start,
-                    "after": after,
-                    "closed": closed,
-                }
-            )
-            i = after
-            continue
-        i += 1
-
-    return blocks, saw_unparsed
-
-
-def _heredoc_delimiter(line: str) -> str | None:
-    """Return the heredoc delimiter token if `line` opens a heredoc."""
-    blocks, _ = _scan_bash_heredocs(line)
-    if not blocks:
-        return None
-    return str(blocks[0]["delimiter"])
-
-
-def _strip_heredoc_blocks(command: str) -> str:
-    """Return `command` with heredoc bodies removed.
-
-    A heredoc looks like `... << 'EOF'` (or `<< "EOF"` / `<<EOF` / `<<-EOF`)
-    followed by lines of literal content ending with a line containing only
-    the delimiter. Redirects and pipes after the delimiter on the opener line
-    (`cat << 'EOF' > file`, `python3 - <<'PY' | tee out.py`) are part of the
-    command, not the body. Stripping the body lets us validate the remaining
-    (non-heredoc) parts as a single line.
-    """
-    text = str(command or "")
-    blocks, _ = _scan_bash_heredocs(text)
-    if not blocks:
-        return text.rstrip("\n")
-    out: list[str] = []
-    prev = 0
-    for block in blocks:
-        body_start = int(block["body_start"])
-        out.append(text[prev:body_start])
-        if block["closed"]:
-            closer_start = int(block["closer_start"])
-            after = int(block["after"])
-            out.append(text[closer_start:after])
-            prev = after
-        else:
-            prev = len(text)
-            break
-    out.append(text[prev:])
-    return "".join(out).rstrip("\n")
-
-
-def _unterminated_heredoc_error(command: str) -> str | None:
-    """Explain a newline violation caused by a malformed heredoc.
-
-    Return a targeted hint when a heredoc was never closed so the caller
-    is told exactly what to fix.
-    """
-    blocks, saw_unparsed_opener = _scan_bash_heredocs(command)
-    for block in blocks:
-        if not block["closed"]:
-            opener = str(block["delimiter"])
-            opener_text = str(block["opener_text"])
-            return (
-                f"heredoc opened with `{opener_text}` but never closed — add a final "
-                f"line containing exactly `{opener}` (nothing else, no trailing text)"
-            )
-    if saw_unparsed_opener:
-        return (
-            "could not parse the heredoc opener — use `cat << 'EOF' > file` "
-            "(quoted delimiter; `> file` on the same line is fine), then the "
-            "file body, then a line containing only EOF"
-        )
-    return None
-
-
 def _is_path_allowed(path: str, allowed_base: str) -> bool:
     """Return True if `path` resolves to a regular file under `allowed_base`.
 
@@ -718,9 +442,6 @@ def _safe_attachment_filename(name: str | None, default: str = "attachment") -> 
         stem, ext = os.path.splitext(raw)
         raw = stem[: max_len - len(ext)] + ext
     return raw
-
-
-# _atomic_json_write_sync imported from utils.py (fd-safe, single source of truth)
 
 
 async def _resolve_guild(bot, message: Message, guild_id: str | None = None):
@@ -1229,18 +950,16 @@ def _parse_overwrite_pairs(raw) -> dict:
 
 
 def _public_image_target(bot) -> tuple[str, str]:
-    """Return (local_dir, public_base_url) for permanently served images.
+    """Return the existing local image directory and stable mirrored URL base.
 
-    Files land in <MAXWELL_SITE_DIR>/_images/ and are served at
-    <MAXWELL_PUBLIC_BASE_URL>/bot/_images/<file> — the same origin that
-    serves create_site pages, so nothing expires and no external CDN is
-    involved.
+    Files land in <DAME_CURIE_SITE_DIR>/_images/; the independent publisher
+    mirrors them at <DAME_CURIE_PUBLIC_BASE_URL>/bot/_images/<file>.
     """
     cfg = getattr(bot, "config", None)
-    site_dir = str(getattr(cfg, "MAXWELL_SITE_DIR", "public/bot") or "public/bot")
+    site_dir = str(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
     pub = str(
-        getattr(cfg, "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com")
-        or "https://maxwell.example.com"
+        getattr(cfg, "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid")
+        or "https://dame-curie.example.invalid"
     ).rstrip("/")
     return os.path.join(site_dir, "_images"), f"{pub}/bot/_images"
 
@@ -1310,199 +1029,6 @@ class ImageRequestLog:
         })
 
 
-class ImageGeneratorTool(Tool):
-    """Image generation using the configured fast image provider."""
-
-    def get_description(self):
-        return (
-            "Generate an AI image using the configured normal profile — the DEFAULT image tool, text-to-image only. "
-            "It CANNOT take an input image: to edit/modify/restyle an existing image, use hd_image. "
-            "Params: prompt (required), auto_send (optional bool, default false). "
-            "By default generates and saves a local/public image WITHOUT posting it. "
-            "Present it using send_file(path=..., caption=...) or a normal image-preview link. "
-            "Set auto_send=true only to post the image immediately; __IMAGE_SENT__ means it is already sent, "
-            "so do not resend its URL or add commentary unless another task needs a response."
-        )
-
-    async def execute(
-        self, message: Message, prompt: str | None = None, auto_send: bool = False, **kwargs
-    ) -> str:
-        if not prompt:
-            return "Error: prompt parameter is required"
-        protocol = getattr(self.bot.config, "IMAGE_GEN_PROTOCOL", "pollinations")
-        if protocol == "images":
-            result = await self._native_generate(message, prompt, auto_send=auto_send)
-        elif protocol == "pollinations":
-            result = await self._pollinations_generate(message, prompt, auto_send=auto_send)
-        else:
-            result = "Error: unsupported IMAGE_GEN_PROTOCOL; use pollinations or images"
-        return result
-
-    async def _native_generate(
-        self, message: Message, prompt: str, auto_send: bool = False,
-    ) -> str:
-        cfg = self.bot.config
-        base = (getattr(cfg, "IMAGE_GEN_BASE_URL", "") or "").strip().rstrip("/")
-        if not base:
-            return (
-                "Error: image generation is not configured "
-                "(set IMAGE_GEN_BASE_URL explicitly; chat settings are not used)"
-            )
-        image_bytes, ext, error = await _native_image_request(
-            base,
-            getattr(cfg, "IMAGE_GEN_API_KEY", "") or "",
-            getattr(cfg, "IMAGE_GEN_MODEL", "") or "gpt-image-2",
-            prompt,
-            quality=getattr(cfg, "IMAGE_GEN_QUALITY", "low"),
-            timeout_s=int(getattr(cfg, "IMAGE_GEN_TIMEOUT", 300)),
-            tool_name="image_generator", auto_send=auto_send,
-        )
-        if error:
-            return error
-        return await self._deliver_generated_image(
-            message, prompt, image_bytes, prefix="image", submitted_prompt=prompt,
-            ext=ext, auto_send=auto_send,
-        )
-
-    async def _deliver_generated_image(
-        self, message: Message, prompt: str, image_bytes: bytes, *, prefix: str, submitted_prompt: str,
-        ext: str = "png", auto_send: bool = False,
-    ) -> str:
-        local_path, perm_url = _persist_public_image(
-            self.bot, image_bytes, prefix=prefix, ext=f".{ext}", submitted_prompt=submitted_prompt,
-        )
-        if not auto_send and not local_path:
-            return (
-                "Error: image generated, but saving the local/public copy failed. NOT sent. "
-                "Generation was not retried; do not automatically repeat image generation."
-            )
-        sent_msg = None
-        if auto_send:
-            file = File(BytesIO(image_bytes), filename=f"generated_image.{ext}")
-            self._signal_streaming(message)
-            try:
-                sent_msg = await message.channel.send(file=file)
-            except discord.Forbidden:
-                logger.warning(
-                    f"Cannot send image in {message.channel.id} — missing permissions"
-                )
-                return "Error: Cannot send image — missing permissions"
-        cdn_url = None
-        if sent_msg and sent_msg.attachments:
-            cdn_url = sent_msg.attachments[0].url
-        await self.bot.memory.add_to_channel_memory(
-            str(message.channel.id),
-            {
-                "author": "Tool",
-                "content": f"Generated image: {prompt[:200]}",
-                "is_tool": True,
-            },
-        )
-        result = (
-            f"__IMAGE_SENT__ Image sent to chat: {prompt[:100]}"
-            if auto_send else f"Image generated, NOT sent: {prompt[:100]}"
-        )
-        if cdn_url:
-            result += f"\nImage URL: {cdn_url}"
-        if perm_url:
-            result += (
-                f"\nPermanent URL: {perm_url} "
-                "(never expires — use this in websites, <img> tags, or curl)"
-            )
-        if local_path:
-            result += (
-                f"\nLocal path: {local_path} "
-                f'(pass to create_site as images=[{{"path": "{local_path}"}}] '
-                "to bundle it into a site)"
-            )
-        result += (
-            "\nAlready sent; do not resend the image or its URL. No commentary needed unless another task requires it."
-            if auto_send else
-            f'\nPresent using send_file(path="{local_path}", caption="...") or a normal image-preview link. '
-            "A saved path is not delivery. Use the local/public image reference for sites or other tools."
-        )
-        return result
-
-    async def _pollinations_generate(
-        self, message: Message, prompt: str, auto_send: bool = False,
-    ) -> str:
-        # Model comes solely from config — which reads POLLINATIONS_MODEL from
-        # .env (config default applies only when unset). No hardcoded fallback
-        # here so we never silently shift models across code edits.
-        model = str(getattr(self.bot.config, "POLLINATIONS_MODEL", "") or "").strip()
-        seed = random.randint(0, 999999)
-        url = (
-            "https://image.pollinations.ai/prompt/"
-            f"{quote(prompt[:1500], safe='')}"
-            f"?width=1024&height=1024&nologo=true&model={quote(model, safe='')}"
-            f"&seed={seed}"
-        )
-        observation = ImageRequestLog(
-            tool="image_generator", protocol="pollinations", operation="generations",
-            endpoint="https://image.pollinations.ai/prompt/", model=model,
-            prompt=prompt[:1500], input_images=0, auto_send=auto_send, timeout_s=90,
-            width=1024, height=1024, seed=seed,
-            **({"requested_prompt": prompt} if len(prompt) > 1500 else {}),
-        )
-        context = {"endpoint": observation.context["endpoint"], "model": model,
-                   "image_request_id": observation.context["request_id"]}
-        status, outcome, error_type = None, "error", None
-        raw, error = b"", ""
-        try:
-            session = await _get_shared_session()
-            async with session.get(
-                url,
-                headers={"User-Agent": _IMAGE_FETCH_UA, "Accept": "image/*"},
-                timeout=aiohttp.ClientTimeout(total=90),
-                allow_redirects=True,
-            ) as response:
-                status = response.status
-                context["status"] = str(status)
-                if response.status != 200:
-                    outcome = "http_error"
-                    body = await response.text()
-                    error = tool_failure(
-                        "tool.image_generator", f"Error generating image: Pollinations returned {response.status}.",
-                        details=body, context=context,
-                    )
-                else:
-                    ctype = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-                    raw = await _read_response_limited(response, 12 * 1024 * 1024)
-            if not error:
-                looks_like_image = bool(raw and (
-                    raw.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF")) or ctype.startswith("image/")
-                ))
-                if looks_like_image:
-                    outcome = "success"
-                else:
-                    outcome = "decode_error"
-                    error = tool_failure(
-                        "tool.image_generator", "Error: Pollinations did not return an image.",
-                        details=repr(raw), context=context | {"content_type": ctype},
-                    )
-        except asyncio.TimeoutError as exc:
-            outcome, error_type = "timeout", type(exc).__name__
-            error = tool_failure("tool.image_generator", "Error: Pollinations image generation timed out.", exception=exc, context=context)
-        except Exception as exc:
-            outcome = "connection_error" if isinstance(exc, aiohttp.ClientConnectionError) else "error"
-            error_type = type(exc).__name__
-            error = tool_failure("tool.image_generator", f"Error generating image: {exc}", exception=exc, context=context)
-        finally:
-            if isinstance(sys.exception(), asyncio.CancelledError):
-                outcome, error_type = "cancelled", "CancelledError"
-            observation.finish(
-                status=status, outcome=outcome, error_type=error_type,
-                image_bytes=len(raw) if outcome == "success" else 0,
-                format=_sniff_image_mime(raw).removeprefix("image/") if outcome == "success" else None,
-                incident_id=getattr(error, "incident_id", None),
-            )
-        if error:
-            return error
-        return await self._deliver_generated_image(
-            message, prompt, raw, prefix="pollinations", submitted_prompt=prompt[:1500], auto_send=auto_send,
-        )
-
-
 def _sniff_image_mime(raw: bytes) -> str:
     """Best-effort image MIME from magic bytes, defaulting to PNG."""
     if raw.startswith(b"\xff\xd8\xff"):
@@ -1526,57 +1052,37 @@ _IMAGE_DATA_URI_RE = re.compile(
 )
 
 
-def _decode_image_response(data: dict, *, native: bool) -> tuple[bytes, str]:
-    if native:
-        image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
-        ext = _sniff_image_mime(image_bytes).removeprefix("image/")
-    else:
-        msg = data["choices"][0].get("message") or {}
-        content = msg.get("content")
-        image_parts = msg.get("images") or []
-        if isinstance(content, list):
-            image_parts = [*image_parts, *content]
-            content = " ".join(
-                p.get("text", "") if isinstance(p, dict) else str(p)
-                for p in content
-            )
-        found = _IMAGE_DATA_URI_RE.findall(content or "")
-        for part in image_parts:
-            if isinstance(part, dict) and part.get("type") == "image_url":
-                found.extend(_IMAGE_DATA_URI_RE.findall(part["image_url"]["url"]))
-        ext, b64 = found[0]
-        image_bytes = base64.b64decode(b64)
-        ext = "jpg" if ext.lower() in ("jpeg", "jpg") else "png"
+def _decode_image_response(data: dict) -> tuple[bytes, str]:
+    """Decode a native Images response and infer its file extension."""
+    image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
     if not image_bytes:
         raise ValueError("empty image data")
+    ext = _sniff_image_mime(image_bytes).removeprefix("image/")
     return image_bytes, "jpg" if ext == "jpeg" else ext
 
 
 async def _image_generation_request(
-    api_url: str, api_key: str, payload: dict, *, timeout_s: int, native: bool,
-    tool_name: str = "hd_image", auto_send: bool = False,
+    api_url: str, api_key: str, payload: dict, *, timeout_s: int,
+    auto_send: bool = False,
 ) -> tuple[bytes, str, str]:
+    """Post one native Images request and record its paired outcome."""
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     no_retry = (
-        " It was not retried; "
-        "do not automatically repeat image generation."
+        " This image request was not retried; do not automatically repeat "
+        "generation or editing."
     )
-    label = "image" if native else "HD image"
     image_bytes, ext, error = b"", "png", ""
     body = ""
     context = {"endpoint": api_url, "model": str(payload.get("model", ""))}
     register_secrets([api_key])
-    parts = [] if native else payload["messages"][0]["content"]
-    input_images = len(payload.get("images", [])) if native else sum(part.get("type") == "image_url" for part in parts)
+    input_images = len(payload.get("images", []))
     observation = ImageRequestLog(
-        tool=tool_name, protocol="images" if native else "chat_completions",
+        tool="image_generator", protocol="images",
         operation="edits" if input_images else "generations", endpoint=api_url,
-        model=context["model"], prompt=payload.get("prompt", "") if native else "".join(
-            part["text"] for part in parts if part.get("type") == "text"
-        ), quality=payload.get("quality"), input_images=input_images,
-        auto_send=auto_send, timeout_s=timeout_s,
+        model=context["model"], prompt=payload["prompt"], quality=payload.get("quality"),
+        input_images=input_images, auto_send=auto_send, timeout_s=timeout_s,
     )
     context["image_request_id"] = observation.context["request_id"]
     status, outcome, error_type, stage = None, "error", None, "request"
@@ -1594,7 +1100,10 @@ async def _image_generation_request(
             body = await response.text()
             if response.status != 200:
                 outcome = "http_error"
-                error = f"Error: {label} API returned status {response.status}: {redact_sensitive_text(body)}"
+                error = (
+                    f"Error: Image API returned status {response.status}: "
+                    f"{redact_sensitive_text(body)}"
+                )
                 error = tool_failure(
                     "tool.image_request", error + no_retry, details=body, context=context,
                 )
@@ -1604,17 +1113,19 @@ async def _image_generation_request(
             except json.JSONDecodeError as exc:
                 outcome, error_type = "non_json", type(exc).__name__
                 error = tool_failure(
-                    "tool.image_request", f"Error: {label} endpoint returned a non-JSON response" + no_retry,
+                    "tool.image_request",
+                    "Error: Image endpoint returned a non-JSON response" + no_retry,
                     exception=exc, details=body, context=context,
                 )
                 return b"", ext, error
         stage = "decode"
-        image_bytes, ext = _decode_image_response(data, native=native)
+        image_bytes, ext = _decode_image_response(data)
         outcome = "success"
     except asyncio.TimeoutError as exc:
         outcome, error_type = "timeout", type(exc).__name__
         error = tool_failure(
-            "tool.image_request", f"Error: {label} generation timed out after {timeout_s}s" + no_retry,
+            "tool.image_request",
+            f"Error: Image request timed out after {timeout_s}s" + no_retry,
             exception=exc, details=body, context=context,
         )
     except Exception as exc:
@@ -1623,7 +1134,10 @@ async def _image_generation_request(
         )
         error_type = type(exc).__name__
         error = tool_failure(
-            "tool.image_request", f"Error: {label} request failed or returned unsupported image data." + no_retry,
+            "tool.image_request",
+            "Error: Image request failed or returned unsupported image data. "
+            "This transport requires inline b64_json; configure response_format in IMAGE_GEN_EXTRA_BODY "
+            "if the endpoint otherwise returns URLs." + no_retry,
             exception=exc, details=body, context=context,
         )
     finally:
@@ -1638,87 +1152,59 @@ async def _image_generation_request(
 
 
 async def _native_image_request(
-    base: str, api_key: str, model: str, prompt: str, *, quality: str,
+    base: str, api_key: str, model: str, prompt: str, *, quality: str | None,
     timeout_s: int, images: tuple[str, ...] | list[str] = (),
-    tool_name: str = "image_generator", auto_send: bool = False,
+    auto_send: bool = False, extra_body: dict | None = None,
 ) -> tuple[bytes, str, str]:
-    base = base.removesuffix("/images/generations").removesuffix("/images/edits")
+    """Select the generation/edit action and build its native payload."""
+    parts = urlsplit(base)
+    path = parts.path.rstrip("/").removesuffix("/images/generations").removesuffix("/images/edits")
     action = "edits" if images else "generations"
-    payload = {
-        "model": model, "prompt": prompt, "quality": quality,
-        "output_format": "png", "response_format": "b64_json", "n": 1,
-    }
+    payload = {"model": model, "prompt": prompt}
+    if quality is not None:
+        payload["quality"] = quality
     if images:
         payload["images"] = [{"image_url": image} for image in images]
+    options = dict(extra_body or {})
+    conflicts = [key for key in payload if key in options and options[key] != payload[key]]
+    if conflicts:
+        return b"", "png", "Error: IMAGE_GEN_EXTRA_BODY conflicts with configured or input fields: " + ", ".join(conflicts)
+    payload.update(options)
     return await _image_generation_request(
-        f"{base}/images/{action}", api_key, payload, timeout_s=timeout_s, native=True,
-        tool_name=tool_name, auto_send=auto_send,
+        urlunsplit(parts._replace(path=f"{path}/images/{action}")), api_key, payload,
+        timeout_s=timeout_s, auto_send=auto_send,
     )
 
 
-class HDImageGeneratorTool(Tool):
-    """HD generation and editing through dedicated image provider settings."""
+class ImageGeneratorTool(Tool):
+    """Generate or edit images through one configured native Images endpoint."""
 
-    # Discord's own limit is 25MB; inputs get downscaled well below it.
+    # HTTP responses and local image files are limited to 20 MiB.
     MAX_INPUT_BYTES = 20 * 1024 * 1024
     _DATA_URI_RE = _IMAGE_DATA_URI_RE
     _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
-    def get_description(self):
-        return (
-            "Generate OR edit an AI image using the configured HD/edit profile. "
-            "Actual quality and dimensions depend on the provider. Use for high quality/HD/HQ "
-            "requests, and for ANY edit of an existing image ('make the car red', 'add a hat', "
-            "'remove the background', 'combine these'). "
-            "Params: prompt (required — for an edit, describe the change, not the whole scene); "
-            "image (optional — an http(s) URL, a local path, or a list of up to 4 of them, to edit "
-            "or use as reference). If image is omitted and the user attached images to the message, "
-            "those are used automatically. auto_send (optional bool, default false) saves a local/public image "
-            "WITHOUT posting it; present using send_file(path=..., caption=...) or a normal image-preview link. "
-            "Set auto_send=true only to post immediately; __IMAGE_SENT__ means already sent, "
-            "so do not resend its URL or add commentary unless another task needs a response."
+    def get_description(self) -> str:
+        """Describe image actions and live model choices for text catalogs."""
+        cfg = getattr(getattr(self, "bot", None), "config", None)
+        model_map = getattr(cfg, "IMAGE_GEN_MODELS", {}) or {}
+        default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
+        model_catalog = (
+            f"Configured model is {default_model}: {model_map.get(default_model, '')}"
+            if isinstance(model_map, dict) and model_map else
+            "No image models are configured; set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL."
         )
-
-    def _endpoint(self) -> tuple[str, str, str]:
-        """(image_endpoint_url, api_key, model) from dedicated image settings."""
-        cfg = self.bot.config
-        base = (getattr(cfg, "GEMINI_IMAGE_BASE_URL", "") or "").strip().rstrip("/")
-        key = getattr(cfg, "GEMINI_IMAGE_API_KEY", "") or ""
-        native = getattr(cfg, "GEMINI_IMAGE_PROTOCOL", "chat_completions") == "images"
-        default_model = "gpt-image-2" if native else "gemini-3.1-flash-image"
-        model = getattr(cfg, "GEMINI_IMAGE_MODEL", "") or default_model
-        url = base
-        if not native and not base.endswith("/chat/completions"):
-            url = f"{base}/chat/completions"
-        return url, key, model
-
-    def _shrink(self, raw: bytes) -> tuple[bytes, str]:
-        """Downscale an input image so the upload does not dominate latency.
-
-        Best effort: without Pillow the original bytes go up untouched, which
-        still works, just slower.
-        """
-        max_edge = int(getattr(self.bot.config, "GEMINI_IMAGE_MAX_INPUT_EDGE", 1024))
-        try:
-            from PIL import Image as _PILImage
-
-            im = _PILImage.open(BytesIO(raw))
-            im = im.convert("RGB")
-            if max(im.size) > max_edge:
-                ratio = max_edge / float(max(im.size))
-                im = im.resize(
-                    (max(1, int(im.width * ratio)), max(1, int(im.height * ratio))),
-                    _PILImage.LANCZOS,
-                )
-            buf = BytesIO()
-            im.save(buf, format="JPEG", quality=88)
-            return buf.getvalue(), "image/jpeg"
-        except Exception as e:
-            # No Pillow (or an image it cannot open): send the bytes through
-            # untouched, but label them from their magic number rather than
-            # guessing — a JPEG announced as image/png gets rejected upstream.
-            logger.debug(f"hd_image input downscale skipped: {e}")
-            return raw, _sniff_image_mime(raw)
+        return (
+            "Generate an AI image or edit/use supplied images as references. "
+            "For an edit, describe the changes to make; provide an image URL or allowed local path, "
+            "or up to four references. If image is None, attachments are used; image='' generates from scratch. "
+            "Model and quality use the operator-configured image profile; tool arguments cannot override it. "
+            "By default, generate/edit and save a local/public image WITHOUT posting it. "
+            "Present it using send_file(path=..., caption=...) or an image-preview link. Set auto_send=true "
+            "only to post immediately; __IMAGE_SENT__ means already sent, so do not resend its URL or add "
+            "commentary unless another task needs a response.\n"
+            + model_catalog
+        )
 
     async def _load_one(self, ref: str) -> tuple[bytes | None, str]:
         """Resolve a single image reference to bytes. Returns (bytes, error)."""
@@ -1736,13 +1222,12 @@ class HDImageGeneratorTool(Tool):
 
         if ref.startswith(("http://", "https://")):
             if not _is_safe_url(ref):
-                return None, f"refusing to fetch private/internal URL {ref[:80]}"
+                return None, f"refusing to fetch invalid HTTP(S) image URL {ref[:80]}"
             try:
                 session = await _get_shared_session()
-                # A redirect is not re-checked by _is_safe_url, so a public URL
-                # could otherwise bounce us to link-local metadata. Refuse to
-                # follow, same as SendMediaTool. Many image hosts (Wikimedia,
-                # Reddit) also 403 a default aiohttp UA, hence the browser one.
+                # Refuse redirects rather than fetching a second URL supplied
+                # by an image host. Many image hosts (Wikimedia, Reddit) also
+                # 403 a default aiohttp UA, hence the browser one.
                 async with session.get(
                     ref,
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -1769,8 +1254,8 @@ class HDImageGeneratorTool(Tool):
         # Local path — only from the dirs Dame Curie itself writes images to.
         try:
             img_dir, _ = _public_image_target(self.bot)
-            allowed = [os.path.abspath(img_dir), os.path.abspath("temp")]
-            path = os.path.abspath(ref)
+            allowed = [os.path.realpath(img_dir), os.path.realpath("temp")]
+            path = os.path.realpath(ref)
             if not any(
                 path == root or path.startswith(root + os.sep) for root in allowed
             ):
@@ -1797,26 +1282,12 @@ class HDImageGeneratorTool(Tool):
                     urls.append(url)
         return urls
 
-    async def execute(
+    async def _resolve_image_references(
         self,
         message: Message,
-        prompt: str | None = None,
-        image: str | list | None = None,
-        auto_send: bool = False,
-        **kwargs,
-    ) -> str:
-        if not prompt:
-            return "Error: prompt parameter is required"
-
-        protocol = getattr(self.bot.config, "GEMINI_IMAGE_PROTOCOL", "chat_completions")
-        if protocol not in ("chat_completions", "images"):
-            return "Error: unsupported GEMINI_IMAGE_PROTOCOL; use chat_completions or images"
-        api_url, api_key, model = self._endpoint()
-        if not api_url or api_url == "/chat/completions":
-            return "Error: HD image generation is not configured (set GEMINI_IMAGE_BASE_URL explicitly; chat settings are not used)"
-
-        # Normalize the image param: a single ref, a list, or a
-        # comma/newline-separated string all mean the same thing.
+        image: str | list[str] | tuple[str, ...] | None,
+    ) -> tuple[list[str], str]:
+        """Resolve up to four explicit or attached images to native data URIs."""
         refs: list[str] = []
         if isinstance(image, (list, tuple)):
             refs = [str(x) for x in image if str(x).strip()]
@@ -1825,108 +1296,157 @@ class HDImageGeneratorTool(Tool):
             if self._DATA_URI_RE.search(text):
                 refs = [text]
             elif text.startswith("["):
-                # The schema advertises a JSON list for multiple images.
                 try:
                     parsed = json.loads(text)
                     refs = [str(x).strip() for x in parsed if str(x).strip()]
-                except Exception:
+                except (TypeError, ValueError):
                     refs = [text]
             else:
-                # Split on newlines, and on a comma only where the next ref
-                # plainly begins — a bare comma split would corrupt any single
-                # URL that carries one in its query string.
                 refs = [
                     part.strip()
                     for line in re.split(r"\n+", text)
                     for part in re.split(r",\s*(?=https?://|/)", line)
                     if part.strip()
                 ]
-        if not refs:
+        if image is None:
             refs = self._attached_images(message)
-        refs = refs[:4]  # keep the payload (and the latency) sane
 
-        parts: list[dict] = [{"type": "text", "text": prompt}]
-        loaded = 0
-        for ref in refs:
-            raw, err = await self._load_one(ref)
+        images = []
+        for ref in refs[:4]:
+            raw, error = await self._load_one(ref)
             if raw is None:
-                logger.warning("hd_image input rejected: %s", redact_sensitive_text(err))
-                return f"Error: {err}"
-            shrunk, mime = (
-                (raw, _sniff_image_mime(raw))
-                if protocol == "images" else self._shrink(raw)
+                logger.warning(
+                    "image_generator input rejected: %s", redact_sensitive_text(error)
+                )
+                return [], error
+            mime = _sniff_image_mime(raw)
+            images.append(
+                f"data:{mime};base64,{base64.b64encode(raw).decode()}"
             )
-            parts.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime};base64,{base64.b64encode(shrunk).decode()}"
-                    },
-                }
-            )
-            loaded += 1
+        return images, ""
 
-        timeout_s = int(getattr(self.bot.config, "GEMINI_IMAGE_TIMEOUT", 300))
-        if protocol == "images":
-            image_bytes, ext, error = await _native_image_request(
-                api_url, api_key, model, prompt,
-                quality=getattr(self.bot.config, "GEMINI_IMAGE_QUALITY", "high"),
-                timeout_s=timeout_s,
-                images=[part["image_url"]["url"] for part in parts[1:]],
-                tool_name="hd_image", auto_send=auto_send,
+    def _select_image_model(self, requested_model: str | None) -> tuple[str, str]:
+        """Resolve a request to an exact configured image model ID."""
+        cfg = self.bot.config
+        models = getattr(cfg, "IMAGE_GEN_MODELS", {})
+        default_model = getattr(cfg, "IMAGE_GEN_MODEL", "")
+        if not isinstance(models, dict) or not models:
+            return "", (
+                "Error: image generation is not configured "
+                "(set IMAGE_GEN_MODELS and IMAGE_GEN_MODEL)"
             )
+        if not isinstance(default_model, str) or default_model not in models:
+            return "", (
+                "Error: IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
+            )
+        model_error = (
+            "" if requested_model in (None, "", default_model)
+            else "Error: model must match the operator-configured IMAGE_GEN_MODEL"
+        )
+        return (default_model if not model_error else ""), model_error
+
+    async def execute(
+        self,
+        message: Message,
+        prompt: str | None = None,
+        image: str | list[str] | tuple[str, ...] | None = None,
+        model: str | None = None,
+        quality: str | None = None,
+        auto_send: bool = False,
+        **kwargs: object,
+    ) -> str:
+        """Generate or edit one image through the configured native endpoint."""
+        if not prompt:
+            return "Error: prompt parameter is required"
+        cfg = self.bot.config
+        config_error = getattr(cfg, "IMAGE_GEN_CONFIG_ERROR", "")
+        if config_error:
+            selected_model, error = "", f"Error: image generation is disabled: {config_error}"
+        elif getattr(cfg, "ENABLE_IMAGE_GEN", True) is False:
+            selected_model, error = "", "Error: image generation is disabled (ENABLE_IMAGE_GEN=false)"
+        elif getattr(cfg, "IMAGE_GEN_PROTOCOL", "images") != "images":
+            selected_model, error = "", "Error: unsupported IMAGE_GEN_PROTOCOL; only images is supported"
         else:
-            payload = {"model": model, "messages": [{"role": "user", "content": parts}]}
-            image_bytes, ext, error = await _image_generation_request(
-                api_url, api_key, payload, timeout_s=timeout_s, native=False,
-                tool_name="hd_image", auto_send=auto_send,
-            )
+            selected_model, error = self._select_image_model(model)
+        base = getattr(cfg, "IMAGE_GEN_BASE_URL", "")
+        configured_quality = getattr(cfg, "IMAGE_GEN_QUALITY", None)
+        extra_body = getattr(cfg, "IMAGE_GEN_EXTRA_BODY", {})
+        effective_quality = extra_body.get("quality", configured_quality)
+        if not error and quality is not None and quality != effective_quality:
+            error = "Error: quality must match the operator-configured image profile"
+        if not error and not base.strip().rstrip("/"):
+            error = "Error: image generation is not configured (set IMAGE_GEN_BASE_URL explicitly)"
+        if not error:
+            images, input_error = await self._resolve_image_references(message, image)
+            if input_error:
+                error = f"Error: {input_error}"
         if error:
             return error
-        return await self._deliver_generated_image(
-            message, prompt, image_bytes, ext, loaded, auto_send=auto_send,
+
+        image_bytes, ext, error = await _native_image_request(
+            base,
+            getattr(cfg, "IMAGE_GEN_API_KEY", "") or "",
+            selected_model,
+            prompt,
+            quality=configured_quality,
+            timeout_s=int(getattr(cfg, "IMAGE_GEN_TIMEOUT", 300)),
+            images=images,
+            auto_send=auto_send,
+            extra_body=extra_body,
         )
+        result = error
+        if not error:
+            result = await self._deliver_generated_image(
+                message, prompt, image_bytes, ext, len(images), auto_send=auto_send,
+            )
+        return result
 
     async def _deliver_generated_image(
         self, message: Message, prompt: str, image_bytes: bytes, ext: str, loaded: int,
         auto_send: bool = False,
     ) -> str:
+        """Persist the result and deliver at most one Discord attachment."""
         local_path, perm_url = _persist_public_image(
-            self.bot, image_bytes, ext=f".{ext}", prefix="hd", submitted_prompt=prompt,
+            self.bot,
+            image_bytes,
+            ext=f".{ext}",
+            prefix="image",
+            submitted_prompt=prompt,
         )
+        operation = "edited" if loaded else "generated"
         if not auto_send and not local_path:
             return (
-                "Error: HD image generated, but saving the local/public copy failed. NOT sent. "
-                "Generation was not retried; do not automatically repeat image generation."
+                f"Error: image {operation}, but saving the local/public copy failed. NOT sent. "
+                "The request was not retried; do not automatically repeat "
+                "image generation or editing."
             )
         sent_msg = None
         if auto_send:
-            file = File(BytesIO(image_bytes), filename=f"hd_generated_image.{ext}")
+            file = File(BytesIO(image_bytes), filename=f"generated_image.{ext}")
             self._signal_streaming(message)
             try:
                 sent_msg = await message.channel.send(file=file)
             except discord.Forbidden:
                 logger.warning(
-                    f"Cannot send HD image in {message.channel.id} — missing permissions"
+                    f"Cannot send image in {message.channel.id} — missing permissions"
                 )
-                return "Error: Cannot send HD image — missing permissions"
+                return "Error: Cannot send image — missing permissions"
 
         cdn_url = None
         if sent_msg and sent_msg.attachments:
             cdn_url = sent_msg.attachments[0].url
 
-        verb = "Edited" if loaded else "Generated"
         await self.bot.memory.add_to_channel_memory(
             str(message.channel.id),
             {
                 "author": "Tool",
-                "content": f"{verb} HD image: {prompt[:200]}",
+                "content": f"{operation.capitalize()} image: {prompt[:200]}",
                 "is_tool": True,
             },
         )
         result = (
-            f"__IMAGE_SENT__ HD image {verb.lower()} successfully, sent to chat: {prompt[:100]}"
-            if auto_send else f"HD image generated, NOT sent: {prompt[:100]}"
+            f"__IMAGE_SENT__ Image {operation} successfully, sent to chat: {prompt[:100]}"
+            if auto_send else f"Image {operation}, NOT sent: {prompt[:100]}"
         )
         if loaded:
             result += f" (from {loaded} input image{'s' if loaded > 1 else ''})"
@@ -1940,8 +1460,7 @@ class HDImageGeneratorTool(Tool):
         if local_path:
             result += (
                 f"\nLocal path: {local_path} "
-                f'(pass to create_site as images=[{{"path": "{local_path}"}}] '
-                "to bundle it into a site)"
+                "(use shell to copy it into locally authored files)"
             )
         result += (
             "\nAlready sent; do not resend the image or its URL. No commentary needed unless another task requires it."
@@ -2257,7 +1776,6 @@ class SleepTool(Tool):
     conversation is genuinely winding down — not as a generic
     goodbye."""
 
-    is_destructive: bool = False
     streams_output: bool = False
 
     def get_description(self):
@@ -2296,7 +1814,6 @@ class ClearSleepTool(Tool):
     not sleeping. Use when the bot decided to sleep but the user
     immediately needs a reply."""
 
-    is_destructive: bool = False
     streams_output: bool = False
 
     def get_description(self):
@@ -2331,7 +1848,6 @@ class WaitTool(Tool):
     user-visible progress message updates to 'waiting Ns…' so they
     know the bot isn't stuck."""
 
-    is_destructive: bool = False
     streams_output: bool = False
 
     def get_description(self):
@@ -2622,92 +2138,11 @@ class JoinServerTool(Tool):
                 "tool.join_server", f"CAPTCHA required to join {gname}",
                 exception=e, details=_format_captcha(e),
             )
-            human = bool(
-                getattr(getattr(self.bot, "config", None), "CAPTCHA_HUMAN_SOLVE", False)
-            )
-            if human:
-                async def _notify_admin(url: str) -> None:
-                    from operator_commands import send_private_error_report
-
-                    if not self.bot._is_admin(author_id):
-                        return
-                    try:
-                        await send_private_error_report(
-                            self.bot, message.author,
-                            "⚠️ CAPTCHA required to join " + gname + ". Solve here (expires ~2 min): " + url,
-                            report=False,
-                        )
-                    except Exception as ex:
-                        capture_incident("tool.join_server", "Could not privately notify CAPTCHA requester", exception=ex)
-                        logger.warning("captcha admin DM notify failed: %s", ex)
-
-                try:
-                    token = await self.bot._solve_captcha_with_notify(
-                        e, notify=_notify_admin
-                    )
-                except CaptchaSolveError as se:
-                    return tool_failure(
-                        "tool.join_server",
-                        "\n".join(lines)
-                        + f"\nCAPTCHA REQUIRED to join {gname}: {_format_captcha(e)}"
-                        + _solver_status(self.bot)
-                        + f"\nHuman solve failed: {se}",
-                        exception=se,
-                    )
-                try:
-                    data = await self.bot._retry_invite_with_captcha(code, e, token)
-                except discord.HTTPException as he:
-                    return tool_failure(
-                        "tool.join_server",
-                        "\n".join(lines)
-                        + f"\nCAPTCHA solved but join retry failed: HTTP {he.status}: "
-                        + (he.text[:200] if he.text else ""),
-                        exception=he,
-                    )
-                except Exception as ex:
-                    return tool_failure(
-                        "tool.join_server",
-                        "\n".join(lines)
-                        + f"\nCAPTCHA solved but join retry failed: {type(ex).__name__}: {ex}",
-                        exception=ex,
-                    )
-                gid2 = None
-                if isinstance(data, dict):
-                    gid2 = (data.get("guild") or {}).get("id")
-                joined_guild = None
-                for _ in range(12):
-                    joined_guild = (
-                        self.bot.get_guild(gid2 or gid) if (gid2 or gid) else None
-                    )
-                    if joined_guild is not None:
-                        break
-                    await asyncio.sleep(1)
-                if joined_guild is not None:
-                    onboard_note = ""
-                    try:
-                        onboard = await self.bot._auto_onboard(
-                            joined_guild, detail=True
-                        )
-                        if onboard.get("ok"):
-                            onboard_note = "\n" + str(onboard.get("summary") or "")
-                    except Exception as ex:
-                        logger.debug("auto-onboard (captcha join) failed: %s", ex)
-                    return (
-                        "\n".join(lines)
-                        + f"\nJOINED {joined_guild.name} (ID: {joined_guild.id}) — "
-                        + "captcha was solved via the posted link."
-                        + onboard_note
-                    )
-                return (
-                    "\n".join(lines)
-                    + "\nCAPTCHA solved and join re-submitted — waiting on the "
-                    + "guild to appear in cache. Check list_servers shortly."
-                )
             return ToolFailure(
                 "\n".join(lines)
                 + f"\nCAPTCHA REQUIRED to join {gname}: {_format_captcha(e)}"
                 + _solver_status(self.bot)
-                + "\nJoin blocked until the captcha is solved.",
+                + "\nJoin blocked. Manual action in Discord is required before retrying.",
                 incident_id,
             )
         except discord.NotFound as e:
@@ -4573,1968 +4008,6 @@ class ChangeAvatarTool(Tool):
             return f"Error: {e}"
 
 
-def _find_html_tag_end(text: str, start: int) -> int | None:
-    """Return the end of an HTML tag, respecting quoted attributes."""
-    quote = ""
-    for index in range(start + 1, len(text)):
-        char = text[index]
-        if quote:
-            if char == quote:
-                quote = ""
-        elif char in {'"', "'"}:
-            quote = char
-        elif char == ">":
-            return index
-    return None
-
-
-def _normalize_site_body_text_escapes(body: str) -> str:
-    r"""Turn escaped whitespace into real whitespace in HTML text nodes.
-
-    A native tool call has two layers of JSON escaping. Models sometimes leave
-    the resulting ``\n`` characters in visible HTML text instead of emitting a
-    real line break, so a page displays ``\n`` literally. Normalize only text
-    outside tags, ``<script>``, and ``<style>`` blocks:
-
-    - visible HTML/``<pre>`` text gets real newlines, tabs, and carriage returns;
-    - JavaScript, CSS, JSON script blocks, and attributes stay byte-for-byte
-      intact because ``\n`` is often intentional there.
-
-    Base64 site bodies bypass this helper because base64 is the exact-bytes
-    escape hatch documented by the tool.
-    """
-    if not isinstance(body, str) or not body:
-        return body
-
-    out: list[str] = []
-    i = 0
-    changed = False
-    raw_tag = ""
-    whitespace = {"n": "\n", "r": "\r", "t": "\t"}
-
-    while i < len(body):
-        if raw_tag:
-            close = re.search(rf"</\s*{raw_tag}\s*>", body[i:], re.IGNORECASE)
-            if close is None:
-                out.append(body[i:])
-                break
-            close_end = i + close.end()
-            out.append(body[i:close_end])
-            i = close_end
-            raw_tag = ""
-            continue
-
-        # A literal ``<`` is common in code samples inside <pre>. Only treat
-        # it as markup when the next character can begin a real HTML tag;
-        # otherwise it remains ordinary text and escaped whitespace is still
-        # normalized after it.
-        if body[i] == "<" and (
-            i + 1 < len(body)
-            and body[i + 1].isalpha()
-            or i + 1 < len(body)
-            and body[i + 1] in {"/", "!", "?"}
-        ):
-            tag_end = _find_html_tag_end(body, i)
-            if tag_end is None:
-                # Malformed/truncated markup: don't reinterpret the rest of
-                # the body as text and potentially change code in it.
-                out.append(body[i:])
-                break
-            tag = body[i : tag_end + 1]
-            out.append(tag)
-            raw_open = re.match(r"<\s*(script|style)\b", tag, re.IGNORECASE)
-            if raw_open and not tag.rstrip().endswith("/>"):
-                raw_tag = raw_open.group(1)
-            i = tag_end + 1
-            continue
-
-        if body[i] == "\\":
-            slash_start = i
-            while i < len(body) and body[i] == "\\":
-                i += 1
-            slash_count = i - slash_start
-            if i < len(body) and body[i] in whitespace and slash_count % 2:
-                # Preserve paired backslashes and decode only the final,
-                # unpaired escape: ``\\n`` remains literal ``\n`` while
-                # ``\n`` becomes an actual newline.
-                out.append("\\" * (slash_count - 1))
-                out.append(whitespace[body[i]])
-                i += 1
-                changed = True
-            else:
-                out.append("\\" * slash_count)
-            continue
-
-        out.append(body[i])
-        i += 1
-
-    return "".join(out) if changed else body
-
-
-# ── site file plumbing ────────────────────────────────────────────────────
-# A site is a directory, not a single index.html. These helpers are what let
-# create_site/edit_site write a stylesheet, a second page, a JSON fixture, or
-# a service worker without any of it being special-cased in the tool bodies.
-
-SITE_MAX_FILES = 60
-SITE_MAX_TOTAL_BYTES = 12_000_000
-# History used to replace huge create_site/edit_site payloads with this
-# marker. If that string is ever sent back as the page, refuse to write it.
-_ELIDED_SITE_PAYLOAD_RE = re.compile(
-    r"^\[large \w+ omitted, \d+ chars\]$",
-    re.IGNORECASE,
-)
-# Extensions a static host will serve as-is. Anything executable server-side
-# (.php, .cgi) is pointless here and only invites confusion about what runs.
-# NUKED - REMOTE SERVER ALLOWS THIS, WE WILL CHECK THIS LATER ON, FOR NOW,
-# NUKED, DAME CURIE IS ALLOWED TO PUSH, EDIT, OR FUCKING EVERYTHING UNDER
-# THE SKIES OF HER REALM AND KINGDOM
-SITE_BLOCKED_SUFFIXES = set()
-
-#SITE_BLOCKED_SUFFIXES = {
-#    ".php",
-#    ".php5",
-#    ".phtml",
-#    ".cgi",
-#    ".pl",
-#    ".jsp",
-#    ".asp",
-#    ".aspx",
-#}
-
-
-# Site `action=read` used to dump the whole file into the tool result. A 30–40k
-# index.html is larger than the tool-loop tail budget, so the previous round
-# (the other file) is dropped, the model re-reads that one, and we ping-pong
-# until max_tool_iterations. Window large files and refuse duplicate reads.
-SITE_READ_FULL_CHARS = 8_000
-SITE_READ_WINDOW_CHARS = 6_000
-SITE_IDLE_READ_LIMIT = 6
-SITE_TEST_REPEAT_LIMIT = 2
-SITE_READ_LOOP_MARKER = "__SITE_READ_LOOP__"
-SITE_FILE_READ_ACTIONS = frozenset({"read", "cat", "get"})
-SITE_MUTATING_ACTIONS = frozenset(
-    {
-        "write",
-        "put",
-        "set",
-        "update",
-        "patch_file",
-        "code",
-        "replace",
-        "patch",
-        "sub",
-        "delete",
-        "rm",
-        "remove",
-        "unlink",
-        "deploy",
-        "create",
-        "snapshot",
-        "start",
-        "restart",
-        "reload",
-    }
-)
-
-# discord.py Message uses __slots__, so setattr(_site_idle_reads) raises
-# AttributeError and every site tool blows up. Keep counters here, keyed by
-# id(message) for the life of one tool loop.
-_SITE_TURN_STATE: dict[int, dict[str, Any]] = {}
-_SITE_TURN_STATE_MAX = 128
-
-
-def _site_turn_state(message: Any) -> dict[str, Any] | None:
-    """Idle-read / site_test counters for one tool-loop turn."""
-    if message is None:
-        return None
-    key = id(message)
-    state = _SITE_TURN_STATE.get(key)
-    if state is not None and state.get("_obj") is not message:
-        _SITE_TURN_STATE.pop(key)
-        state = None
-    if state is None:
-        while len(_SITE_TURN_STATE) >= _SITE_TURN_STATE_MAX:
-            oldest = next(iter(_SITE_TURN_STATE), None)
-            if oldest is None:
-                break
-            _SITE_TURN_STATE.pop(oldest, None)
-        state = {"idle": 0, "test_counts": {}, "read_cache": set(), "_obj": message}
-        _SITE_TURN_STATE[key] = state
-    return state
-
-
-def _site_start_line(raw: Any) -> int:
-    try:
-        n = int(raw)
-    except (TypeError, ValueError):
-        return 1
-    return max(1, min(n, 1_000_000))
-
-
-def format_site_file_read(rel: str, text: str, *, start_line: int = 1) -> str:
-    """Return a file without blowing the tool-loop tail budget.
-
-    Small files come back whole. Larger ones get a numbered window; pass
-    ``start_line`` to page. A minified one-liner is paged by character so it
-    cannot dump 40k into the tool loop (that is what hung Dame Curie).
-    """
-    start_line = _site_start_line(start_line)
-    raw = text or ""
-    n = len(raw)
-    if n <= SITE_READ_FULL_CHARS and start_line <= 1:
-        return f"{rel} ({n} chars):\n{raw}"
-    lines = raw.splitlines(keepends=True)
-    total = len(lines)
-    if total == 0:
-        return f"{rel} (0 chars):\n"
-    # One giant line (minified HTML/JS): page by start_line as a char window.
-    if total == 1 and n > SITE_READ_FULL_CHARS:
-        offset = (start_line - 1) * SITE_READ_WINDOW_CHARS
-        if offset >= n:
-            offset = max(0, n - SITE_READ_WINDOW_CHARS)
-        chunk = raw[offset : offset + SITE_READ_WINDOW_CHARS]
-        more = ""
-        if offset + len(chunk) < n:
-            more = (
-                f" Chars {offset + len(chunk) + 1}–{n} omitted — "
-                f"pass start_line={start_line + 1} to continue."
-            )
-        return (
-            f"{rel} ({n} chars, 1 line) showing chars "
-            f"{offset + 1}–{offset + len(chunk)}.{more}\n"
-            "Do not re-read this file unless you need another slice. "
-            "Patch with action=replace (exact text from this window) or "
-            "action=write.\n" + chunk
-        )
-    start = min(start_line, total)
-    out: list[str] = []
-    used = 0
-    last = start - 1
-    for i in range(start - 1, total):
-        raw_line = lines[i]
-        numbered = f"{i + 1}|{raw_line if raw_line.endswith(chr(10)) else raw_line + chr(10)}"
-        if not out and len(numbered) > SITE_READ_WINDOW_CHARS:
-            numbered = numbered[:SITE_READ_WINDOW_CHARS] + "\n"
-            out.append(numbered)
-            last = i + 1
-            break
-        if out and used + len(numbered) > SITE_READ_WINDOW_CHARS:
-            break
-        out.append(numbered)
-        used += len(numbered)
-        last = i + 1
-    more = ""
-    if last < total:
-        more = f" Lines {last + 1}–{total} omitted — pass start_line={last + 1} to continue."
-    return (
-        f"{rel} ({n} chars, {total} lines) showing {start}–{last}.{more}\n"
-        "Do not re-read this file unless you need another slice. "
-        "Patch with action=replace (exact text from this window) or action=write.\n"
-        + "".join(out)
-    )
-
-
-def site_read_loop_guard(
-    message: Any, *, key: str, label: str, action: str
-) -> str | None:
-    """Reset site test state after edits without blocking source reads."""
-    act = str(action or "").strip().lower()
-    state = _site_turn_state(message)
-    if act in SITE_MUTATING_ACTIONS and state is not None:
-        state["idle"] = 0
-        state["test_counts"] = {}
-        state["read_cache"] = set()
-    return None
-
-
-def site_test_repeat_guard(message: Any, fingerprint: str) -> str | None:
-    """Refuse a third site_test of the same URL with no edit in between."""
-    state = _site_turn_state(message)
-    if state is None:
-        return None
-    state["idle"] = 0
-    counts = state.setdefault("test_counts", {})
-    n = int(counts.get(fingerprint, 0) or 0) + 1
-    counts[fingerprint] = n
-    if n > SITE_TEST_REPEAT_LIMIT:
-        return (
-            f"Already ran site_test on this URL this turn ({n - 1} times). "
-            "Fix with edit_site or site_server (write/replace), then test "
-            f"once, or send_message with the URL. {SITE_READ_LOOP_MARKER}"
-        )
-    return None
-
-
-def _elided_site_payload_error(text: Any) -> str:
-    """Error if ``text`` is a context-elision marker, not real site source."""
-    if not isinstance(text, str):
-        return ""
-    stripped = text.strip()
-    if len(stripped) > 240:
-        return ""
-    if _ELIDED_SITE_PAYLOAD_RE.match(stripped) or stripped in {
-        "[large body elided]",
-        "[large HTML/asset body elided to protect context budget; site creation succeeded from the original full body]",
-    }:
-        return (
-            "Error: that text is a truncated-history placeholder, not the page. "
-            "The real files are already on disk — use edit_site action=replace "
-            "with a short find/replace, or send the actual HTML again."
-        )
-    return ""
-
-
-def _safe_site_relpath(raw: Any) -> str | None:
-    """Normalize a model-supplied path into a safe relative path inside a site.
-
-    Returns None for anything that escapes, hides, or would not be served.
-    """
-    text = str(raw or "").strip().replace("\\", "/").lstrip("/")
-    if not text or len(text) > 200:
-        return None
-    parts = []
-    for part in text.split("/"):
-        part = part.strip()
-        if not part or part == ".":
-            continue
-        if part == ".." or part.startswith("."):
-            return None
-        if not re.fullmatch(r"[A-Za-z0-9._ -]{1,80}", part):
-            return None
-        parts.append(part)
-    if not parts or len(parts) > 6:
-        return None
-    rel = "/".join(parts)
-#    if Path(rel).suffix.lower() in SITE_BLOCKED_SUFFIXES:
-#        return None
-    return rel
-
-
-def _site_child_path(site_dir: str, rel: str) -> Path | None:
-    """Resolve rel under site_dir, refusing anything that lands outside it."""
-    base = Path(site_dir).resolve()
-    try:
-        target = (base / rel).resolve()
-    except (OSError, ValueError):
-        return None
-    if target != base and base not in target.parents:
-        return None
-    return target
-
-
-def _decode_site_file(content: Any, encoding: str | None) -> tuple[bytes | None, str]:
-    """(bytes, '') or (None, error). base64 keeps exact bytes for binaries."""
-    mode = str(encoding or "text").strip().lower()
-    if mode in {"base64", "b64"}:
-        try:
-            return base64.b64decode(str(content), validate=True), ""
-        except Exception as e:
-            return None, f"bad base64: {e}"
-    if mode not in {"text", "utf8", "utf-8", ""}:
-        return None, "encoding must be text or base64"
-    if content is None:
-        return None, "missing content"
-    if not isinstance(content, str):
-        content = json.dumps(content, indent=2, ensure_ascii=False)
-    return content.encode("utf-8"), ""
-
-
-def _parse_site_files(files: Any) -> tuple[list[dict], str]:
-    """Accept the three shapes a model actually emits.
-
-    ``{"style.css": "..."}``, ``[{"path": ..., "content": ...}]``, or either of
-    those as a JSON string. Returns (entries, error).
-    """
-    if not files:
-        return [], ""
-    raw = files
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError as e:
-            return [], f"files must be JSON: {e}"
-    entries: list[dict] = []
-    if isinstance(raw, dict):
-        # {"path": "content"} — but tolerate a single {"path":..,"content":..}
-        if "path" in raw and ("content" in raw or "encoding" in raw):
-            raw = [raw]
-        else:
-            raw = [{"path": k, "content": v} for k, v in raw.items()]
-    if not isinstance(raw, list):
-        return [], "files must be an object or a list"
-    for item in raw:
-        if not isinstance(item, dict):
-            return [], "each file needs {path, content}"
-#        rel = _safe_site_relpath(item.get("path") or item.get("name"))
-        rel = (item.get("path") or item.get("name") or "").lstrip("/")
-        if not rel:
-            return [], f"unsafe or unsupported file path: {item.get('path')!r}"
-        blob, err = _decode_site_file(item.get("content"), item.get("encoding"))
-        if err:
-            return [], f"{rel}: {err}"
-        entries.append({"path": rel, "bytes": blob})
-    if len(entries) > SITE_MAX_FILES:
-        return [], f"too many files ({len(entries)}, max {SITE_MAX_FILES})"
-    return entries, ""
-
-
-# Text that means the page was never finished. These are matched against the
-# HTML the model just wrote, because a 200 response and a screenshot of an
-# unmounted page both look fine — the shortfall is only visible in the source.
-_PLACEHOLDER_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"lorem\s+ipsum", "lorem ipsum filler text"),
-    (r"\bTODO\b", "a TODO left in the page"),
-    (r"\bFIXME\b", "a FIXME left in the page"),
-    (r"coming\s+soon", "a 'coming soon' placeholder"),
-    (r"\[insert[^\]]*\]", "an '[insert …]' placeholder"),
-    (r"your\s+(?:text|content|title)\s+here", "a 'your text here' placeholder"),
-    (r"\bplaceholder\s+(?:text|content|image)\b", "placeholder content"),
-    (r"//\s*(?:implement|fill\s+in|add)\s+(?:this|later|me)", "an unimplemented stub"),
-    (r"#\s*(?:implement|fill\s+in)\s+(?:this|later|me)", "an unimplemented stub"),
-    (r"\bnot\s+implemented\b", "a 'not implemented' branch"),
-    (r"\bTBD\b", "a TBD left in the page"),
-)
-# A nav or button that goes nowhere. Counted rather than named, because one
-# href="#" is a legitimate JS hook and a dozen is an unwired navigation bar.
-_DEAD_LINK_RE = re.compile(r"""<a\b[^>]*href\s*=\s*["']#["'][^>]*>""", re.IGNORECASE)
-_DEAD_LINK_LIMIT = 4
-
-
-def _site_placeholder_warnings(body: str | None, extra_files: list[dict]) -> list[str]:
-    """Unfinished-content shortfalls in what was just written.
-
-    Reported back through the tool result rather than blocking the write: a
-    refusal would lose the whole page, and a page with one TODO in a comment is
-    still worth publishing and then fixing.
-    """
-    sources: list[tuple[str, str]] = []
-    if body:
-        sources.append(("index.html", str(body)))
-    for entry in extra_files or []:
-        blob = entry.get("bytes") or b""
-        if not blob or len(blob) > 2_000_000:
-            continue
-        with contextlib.suppress(UnicodeDecodeError):
-            sources.append((str(entry.get("path") or "file"), blob.decode("utf-8")))
-
-    found: list[str] = []
-    for label, text in sources:
-        for pattern, description in _PLACEHOLDER_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
-                item = f"{label}: {description}"
-                if item not in found:
-                    found.append(item)
-        dead = len(_DEAD_LINK_RE.findall(text))
-        if dead >= _DEAD_LINK_LIMIT:
-            found.append(f"{label}: {dead} links point at href='#' and go nowhere")
-    return found[:12]
-
-
-async def _write_site_file(site_dir: str, rel: str, blob: bytes) -> str:
-    """Atomic write of one file inside a site. Returns '' or an error."""
-    target = _site_child_path(site_dir, rel)
-    if target is None:
-        return f"{rel}: path escapes the site directory"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = str(target) + ".tmp"
-    try:
-        async with aiofiles.open(tmp, "wb") as f:
-            await f.write(blob)
-            await f.flush()
-        os.replace(tmp, target)
-    except Exception as e:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        return f"{rel}: write failed: {e}"
-    return ""
-
-
-def _site_tree(site_dir: str, limit: int = 60) -> list[tuple[str, int]]:
-    """(relative path, bytes) for everything in a site, sorted, index first."""
-    base = Path(site_dir)
-    out: list[tuple[str, int]] = []
-    if not base.is_dir():
-        return out
-    for path in sorted(base.rglob("*")):
-        if not path.is_file() or path.name.endswith(".tmp"):
-            continue
-        try:
-            rel = str(path.relative_to(base))
-            out.append((rel, path.stat().st_size))
-        except (ValueError, OSError):
-            continue
-        if len(out) >= limit:
-            break
-    out.sort(key=lambda item: (item[0] != "index.html", item[0]))
-    return out
-
-
-def _site_ttl_seconds(control: dict) -> float:
-    """0 means sites never expire. Default 24h, admin-tunable, not baked in."""
-    try:
-        hours = float(control.get("site_ttl_hours", 24) or 0)
-    except (TypeError, ValueError):
-        hours = 24.0
-    return max(0.0, hours) * 3600.0
-
-
-def site_expiry_label(entry: dict, control: dict) -> str:
-    """'6h 12m left' / 'permanent' — shared by list_sites and edit_site."""
-    if entry.get("permanent"):
-        return "permanent"
-    ttl = _site_ttl_seconds(control)
-    per_site = entry.get("ttl_hours")
-    if per_site is not None:
-        try:
-            ttl = max(0.0, float(per_site)) * 3600.0
-        except (TypeError, ValueError):
-            pass
-    if ttl <= 0:
-        return "permanent"
-    remaining = ttl - (
-        datetime.now(timezone.utc).timestamp() - float(entry.get("created_at", 0) or 0)
-    )
-    if remaining <= 0:
-        return "expiring now"
-    return f"{int(remaining // 3600)}h {int((remaining % 3600) // 60)}m left"
-
-
-def _site_graph_note(bot, slug: str, *, refresh: bool = True) -> str:
-    """One-line route graph for tool results. Never raises into the tool."""
-    try:
-        from knowledge_graph import graph_from_bot, refresh_site
-
-        if refresh:
-            note = refresh_site(bot, slug)
-        else:
-            graph = graph_from_bot(bot)
-            note = graph.summarize_site(slug) if graph is not None else ""
-        return f"\nGraph: {note}" if note else ""
-    except Exception as e:
-        logger.debug("site graph skipped: %s", e)
-        return ""
-
-
-# Optional hardening for operators whose static host does NOT set a CSP for
-# generated pages. Off by default: a meta tag injected into the model's own
-# document can only ever subtract from what the page was written to do, and
-# the hosting layer is where this belongs. Flip `site_inject_csp` on in the
-# dashboard if your deployment serves /bot without its own policy.
-SITE_CSP_META = (
-    '<meta http-equiv="Content-Security-Policy" '
-    'content="default-src https: data: blob:; '
-    "img-src https: data: blob:; "
-    "style-src 'unsafe-inline' https:; "
-    "script-src 'unsafe-inline' 'unsafe-eval' https:; "
-    "font-src https: data:; "
-    "connect-src https:; "
-    'media-src https: data: blob:;">'
-)
-
-
-def _inject_site_csp(body: str) -> str:
-    """Put SITE_CSP_META in the document head, unless the page set its own."""
-    if re.search(
-        r"http-equiv\s*=\s*[\"']?Content-Security-Policy", body, re.IGNORECASE
-    ):
-        return body
-    if re.search(r"<head[^>]*>", body, re.IGNORECASE):
-        return re.sub(
-            r"(<head[^>]*>)",
-            r"\1\n" + SITE_CSP_META,
-            body,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    if re.search(r"<html[^>]*>", body, re.IGNORECASE):
-        return re.sub(
-            r"(<html[^>]*>)",
-            r"\1\n<head>" + SITE_CSP_META + "</head>",
-            body,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    return "<head>" + SITE_CSP_META + "</head>\n" + body
-
-
-class CreateSiteTool(Tool):
-    """Publish a website — one page or a whole directory, static or backed."""
-
-    MAX_CONTENT_SIZE = 3000000  # 3MB for big single-file 3D scenes, full movie recreations, complex interactive demos etc. (use base64 encoding in tool call for safety)
-
-    async def _download_site_image(
-        self, url: str, img_dir: str, filename_hint=None
-    ) -> tuple[str | None, str | None]:
-        """Download an image from a URL into img_dir for a site.
-
-        Returns (dest_path, None) on success, (None, error) on failure.
-        Lets create_site consume image URLs directly (Discord CDN, the
-        permanent image URLs from image_generator, external hosts) instead
-        of requiring a local path.
-        """
-        if not _is_safe_url(url):
-            return None, "unsafe URL"
-        try:
-            session = await _get_shared_session()
-            async with session.get(
-                url,
-                timeout=aiohttp.ClientTimeout(total=30, connect=10),
-                allow_redirects=False,
-            ) as resp:
-                if resp.status != 200:
-                    return None, f"HTTP {resp.status}"
-                content_type = (
-                    (resp.headers.get("Content-Type") or "")
-                    .split(";", 1)[0]
-                    .strip()
-                    .lower()
-                )
-                if not content_type.startswith("image/"):
-                    return None, f"not an image ({content_type or 'unknown'})"
-                blob = await _read_response_limited(resp, 10 * 1024 * 1024)
-        except Exception as e:
-            return None, str(e)[:120]
-        if not blob:
-            return None, "empty body"
-        ext = Path(urlparse(url).path).suffix.lower()
-        if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}:
-            ext = ".png"
-        filename = str(
-            filename_hint or f"site-image-{int(datetime.now(timezone.utc).timestamp())}"
-        )
-        filename = re.sub(r"[^a-zA-Z0-9._-]", "_", filename).strip(".")
-        filename = re.sub(r"^[.\\/-]+", "", filename)
-        if not filename or filename in {".", ".."}:
-            filename = "image"
-        if not os.path.splitext(filename)[1]:
-            filename += ext
-        dest = os.path.join(img_dir, filename)
-        if os.path.commonpath(
-            [os.path.abspath(dest), os.path.abspath(img_dir)]
-        ) != os.path.abspath(img_dir):
-            return None, "filename escapes images dir"
-        try:
-            # Off-thread write; see _load_one above.
-            await asyncio.to_thread(Path(dest).write_bytes, blob)
-        except Exception as e:
-            return None, f"write failed: {e}"
-        return dest, None
-
-    def __init__(self, bot):
-        super().__init__(bot)
-        self.base_dir = getattr(bot.config, "MAXWELL_SITE_DIR", "public/bot")
-        self.base_url = (
-            getattr(
-                bot.config, "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"
-            ).rstrip("/")
-            + "/bot"
-        )
-        self.base_url = (
-            getattr(bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
-            or self.base_url
-        )
-
-    def _control(self) -> dict:
-        return (
-            getattr(self.bot, "control", {}) or getattr(self.bot, "_control", {}) or {}
-        )
-
-    def get_description(self):
-        return (
-            f"Publish a site at {self.base_url}/<name>/. "
-            "Full visual freedom: invent a new design each time; no house style unless asked. "
-            "Ship it finished — real content, working controls, no placeholders. "
-            "No lorem ipsum; a Loading shell has shipped nothing. "
-            "Params: name, title, body (complete HTML for index.html), "
-            'files (extra files {"path":"content"}), '
-#            "backend (ALWAYS true — every site gets a Python backend), encoding, permanent. "
-#            "EVERY site MUST use backend=true + site_server: create Python backend in "
-#            "site_servers/<slug>/app.py (FastAPI+uvicorn on $PORT, REST at /api/... and "
-#            "WebSocket at /ws if realtime), run ALL compute/state server-side, frontend "
-#            "ONLY renders API/ws. Client-only sites are forbidden. Always site_test + fix "
-            "[UPDATED INSTRUCTIONS]: Decide how to deploy things but remote in this harness does not "
-            "support python, you need to use PHP/perl/cgi-bin based on dreamhost shared "
-            "You can use PHP/Perl/cgi-bin in Dreamhost remote for backend; Frontend"
-            "must fetch/render from /dame/<slug>/api/... - neural/physics loops must run "
-            "server-side and broadcast via ws. The coop-maze-ai failure (client Brain) is "
-            "exactly what not to do.\n"
-            "Be watchful of the routes https://redroom.zombiedawn.net/dame/ is the remote "
-            "this is a hotfix+temporal patch system prompt you need to adhere "
-            "until we fix the backend properly, you could see things about api and bot routes/paths "
-            "but you need to decide the best strategy to workaround the Dreamhost shared hosting "
-            "capabilities, so accept this system UPDATED INSTRUCTIONS as ground truth for your "
-            "site creation/edition and publishing\n"
-            "Always site_test + fix before claiming it works.\n"
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        name: str | None = None,
-        title: str | None = None,
-        body: str | None = None,
-        encoding: str = "text",
-        images: str | None = None,
-        files: Any = None,
-        backend: Any = None,
-        permanent: Any = None,
-        **kwargs,
-    ) -> str:
-        # Available to everyone (non-admins too). Quota + ownership checks apply.
-        extra_files, files_err = _parse_site_files(files)
-        if files_err:
-            return f"Error: {files_err}"
-        has_index = any(f["path"] == "index.html" for f in extra_files)
-        if not name or not title or (body is None and not has_index):
-            missing = []
-            if not name:
-                missing.append("name")
-            if not title:
-                missing.append("title")
-            if body is None and not has_index:
-                missing.append("body (or files with an index.html)")
-            return (
-                f"Error: missing required params — {', '.join(missing)}. "
-                "name + title + body are the minimum for a site."
-            )
-
-        mode = str(encoding or "text").strip().lower()
-        if body is None:
-            body = ""
-        elif mode in {"base64", "b64"}:
-            try:
-                body = base64.b64decode(str(body), validate=True).decode("utf-8")
-            except Exception as e:
-                return f"Error: could not decode base64 site body: {e}"
-        elif mode not in {"text", "utf8", "utf-8"}:
-            return "Error: encoding must be text or base64"
-        elif not isinstance(body, str):
-            return "Error: site body must be a string"
-        else:
-            normalized_body = _normalize_site_body_text_escapes(body)
-            if normalized_body != body:
-                logger.info(
-                    "Normalized escaped whitespace in create_site body (%d chars changed)",
-                    sum(a != b for a, b in zip(body, normalized_body, strict=False))
-                    + abs(len(body) - len(normalized_body)),
-                )
-                body = normalized_body
-
-        # Sanitize name
-        slug = re.sub(r"[^a-z0-9-]", "-", name.lower().strip())[:30].strip("-")
-        if not slug or len(slug) < 2:
-            return "Error: name must be at least 2 valid characters"
-
-        user_id = str(message.author.id)
-        is_admin = bool(self.bot and self.bot._is_admin(message.author.id))
-        if hasattr(self.bot, "_load_sites"):
-            self.bot._load_sites(quiet=True)
-        sites = self.bot._sites
-
-        # Block slug takeover: only owner or admin may overwrite an existing site.
-        existing = sites.get(slug) if isinstance(sites, dict) else None
-        if isinstance(existing, dict):
-            owner = str(existing.get("user_id") or "")
-            if owner and owner != user_id and not is_admin:
-                return (
-                    f"Error: site slug '{slug}' is already owned by another user. "
-                    "Pick a different name."
-                )
-
-        control = self._control()
-        max_sites = int(control.get("create_site_quota_per_user", 10))
-        active_user_sites = [s for s in sites.values() if s.get("user_id") == user_id]
-        already_ours = (
-            isinstance(existing, dict) and str(existing.get("user_id") or "") == user_id
-        )
-        if not already_ours and len(active_user_sites) >= max_sites:
-            return (
-                f"Error: site quota reached ({len(active_user_sites)}/{max_sites} active sites). "
-                "Use delete_site on an old slug first, or edit_site to reuse one."
-            )
-
-        if len(body) > self.MAX_CONTENT_SIZE:
-            return f"Error: content too long ({len(body)} chars, max {self.MAX_CONTENT_SIZE})"
-        blocked = _elided_site_payload_error(body)
-        if blocked:
-            return blocked
-        for entry in extra_files:
-            blob = entry.get("bytes") or b""
-            with contextlib.suppress(UnicodeDecodeError):
-                blocked = _elided_site_payload_error(blob.decode("utf-8"))
-                if blocked:
-                    return blocked
-        extra_bytes = sum(len(f["bytes"] or b"") for f in extra_files)
-        if len(body.encode("utf-8")) + extra_bytes > SITE_MAX_TOTAL_BYTES:
-            return f"Error: site too large (max {SITE_MAX_TOTAL_BYTES // 1000}KB across all files)"
-
-        site_dir = os.path.join(self.base_dir, slug)
-        created_new_dir = not os.path.isdir(site_dir)
-        try:
-            os.makedirs(site_dir, exist_ok=True)
-
-            # Copy images into site's images/ directory
-            image_urls = []
-            missing_images = []
-            if images:
-                try:
-                    image_list = (
-                        json.loads(images) if isinstance(images, str) else images
-                    )
-                    if not isinstance(image_list, list):
-                        image_list = [image_list]
-                except json.JSONDecodeError:
-                    # Might be comma-separated paths
-                    image_list = [
-                        {"path": p.strip()} for p in images.split(",") if p.strip()
-                    ]
-
-                img_dir = os.path.join(site_dir, "images")
-                os.makedirs(img_dir, exist_ok=True)
-                # Reuse the same broad-but-safe allowlist as SendFileTool so
-                # images produced by image_generator (Discord CDN downloads)
-                # and the shell sandbox (shelldocker) can actually be
-                # embedded. The old check only allowed MAXWELL_SITE_DIR, which
-                # rejected virtually every real image source (the feature was
-                # silently non-functional).
-                send_tool = self.bot.tools.get("send_file") if self.bot else None
-                if send_tool is not None and hasattr(
-                    send_tool, "_allowed_send_file_bases"
-                ):
-                    allowed_bases = send_tool._allowed_send_file_bases()
-                else:
-                    allowed_bases = [self.base_dir]
-                for entry in image_list:
-                    if isinstance(entry, str):
-                        entry = {"path": entry}
-                    src_url = str(entry.get("url") or "").strip()
-                    src_path = entry.get("path", "")
-                    if src_url and not src_path:
-                        # URL entries: download the image into the site's
-                        # images/ dir so the site is fully self-hosted and
-                        # never depends on an expiring external link.
-                        dest, err = await self._download_site_image(
-                            src_url, img_dir, entry.get("filename")
-                        )
-                        if dest:
-                            public_url = f"{self.base_url}/{slug}/images/{os.path.basename(dest)}"
-                            image_urls.append(public_url)
-                            logger.info(f"Downloaded site image {src_url} -> {dest}")
-                        else:
-                            missing_images.append(src_url)
-                            logger.warning(
-                                f"Site image URL failed: {src_url} ({err or 'unknown'})"
-                            )
-                        continue
-                    shell_source = str(src_path).startswith(("/home/maxwell/", "home/maxwell/")) or (
-                        bool(src_path) and Path(os.path.abspath(src_path)).is_relative_to(_shell_workspace())
-                    )
-                    if not src_path or (not shell_source and not any(
-                        _is_path_allowed(src_path, b) for b in allowed_bases
-                    )):
-                        missing_images.append(src_path or "(empty path)")
-                        logger.warning(f"Site image blocked or not found: {src_path}")
-                        continue
-                    filename = entry.get("filename") or os.path.basename(src_path)
-                    # Sanitize filename: only safe chars, and strip path
-                    # separators / leading dots so ".." can't write outside
-                    # the images/ dir.
-                    filename = re.sub(r"[^a-zA-Z0-9._-]", "_", filename).strip(".")
-                    filename = re.sub(r"^[.\\/-]+", "", filename)
-                    if not filename or filename in {".", ".."}:
-                        filename = "image"
-                    dest = os.path.join(img_dir, filename)
-                    # Final guard: ensure dest stays inside img_dir.
-                    if os.path.commonpath(
-                        [os.path.abspath(dest), os.path.abspath(img_dir)]
-                    ) != os.path.abspath(img_dir):
-                        missing_images.append(src_path)
-                        logger.warning(
-                            f"Site image filename escapes images dir: {filename}"
-                        )
-                        continue
-                    try:
-                        if shell_source:
-                            shell_tool = self.bot.tools.get("shell")
-                            if shell_tool is None or not self.bot.config.ENABLE_SHELL:
-                                raise ValueError("shell file export requires a registered enabled shell tool")
-                            relative = str(src_path)
-                            if not relative.startswith(("/home/maxwell/", "home/maxwell/")):
-                                relative = str(Path(os.path.abspath(src_path)).relative_to(_shell_workspace()))
-                            async with shell_tool._lifecycle_lock:
-                                await shell_tool._verify_export_container()
-                                blob = await asyncio.to_thread(_read_shell_export, relative, SendFileTool.MAX_SIZE)
-                            await asyncio.to_thread(Path(dest).write_bytes, blob)
-                        else:
-                            shutil.copy2(src_path, dest)
-                        public_url = f"{self.base_url}/{slug}/images/{filename}"
-                        image_urls.append(public_url)
-                        logger.info(f"Copied site image {src_path} -> {dest}")
-                    except Exception as e:
-                        missing_images.append(f"{src_path} ({e})")
-                        logger.warning(f"Failed to copy image {src_path}: {e}")
-
-            # The page is served exactly as written. CSP belongs to the host
-            # (see SITE_CSP_META) — turn `site_inject_csp` on only if yours
-            # doesn't set one.
-            if body and parse_bool(control.get("site_inject_csp", False), False):
-                body = _inject_site_csp(body)
-
-            written: list[str] = []
-            if body:
-                err = await _write_site_file(
-                    site_dir, "index.html", body.encode("utf-8")
-                )
-                if err:
-                    return f"Error creating site: {err}"
-                written.append("index.html")
-            for entry in extra_files:
-                err = await _write_site_file(
-                    site_dir, entry["path"], entry["bytes"] or b""
-                )
-                if err:
-                    return f"Error creating site: {err}"
-                written.append(entry["path"])
-
-            wants_backend = parse_bool(backend, False)
-            is_permanent = parse_bool(permanent, False)
-
-            # Commit the site metadata under a cross-process FileLock so a
-            # concurrent create_site (or an API site_update/site_delete) can't
-            # lose this entry or have this entry overwrite theirs. Reload fresh
-            # inside the lock and re-check ownership/quota (they may have
-            # changed since the pre-check). If the save fails, remove the
-            # just-written HTML so we don't leave an untracked orphan site.
-            site_entry = {
-                "user_id": user_id,
-                "user_name": message.author.display_name,
-                "created_at": datetime.now(timezone.utc).timestamp(),
-                "title": title,
-                "path": site_dir,
-                "backend": wants_backend,
-                "permanent": is_permanent,
-            }
-            try:
-                committed = await asyncio.to_thread(
-                    self._commit_site_locked, slug, user_id, is_admin, site_entry
-                )
-            except Exception as e:
-                # Best-effort cleanup of orphaned HTML only when this call
-                # created the directory. Never rmtree a slug another user
-                # already committed.
-                if created_new_dir:
-                    with contextlib.suppress(Exception):
-                        shutil.rmtree(site_dir, ignore_errors=True)
-                logger.error(f"Failed to commit site metadata for {slug}: {e}")
-                return tool_failure("tool.create_site", f"Error creating site: {e}", exception=e)
-            if not committed:
-                # Overwrite disallowed by a concurrent owner change / quota hit
-                # discovered under the lock; clean up only a directory we created.
-                if created_new_dir:
-                    with contextlib.suppress(Exception):
-                        shutil.rmtree(site_dir, ignore_errors=True)
-                return (
-                    f"Error: site slug '{slug}' could not be committed "
-                    "(owner/quota changed concurrently). Try again."
-                )
-            result = f"Site created: {self.base_url}/{slug}/"
-            if wants_backend and getattr(self.bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip():
-                result += "\nPublish this remote URL to the user. HTML, CSS, JavaScript and images are mirrored. You have python run on the local instance, not the remote host (only Dreamhost PHP/Perl and cgi-bin there); the API guide below applies to local testing only."
-            if len(written) > 1:
-                result += f"\nFiles: {', '.join(written)}"
-            if wants_backend:
-                result += "\n" + site_backend.client_guide(f"/api/site/{slug}")
-            result += f"\nLifetime: {site_expiry_label(site_entry, control)}."
-            # Placeholders shipped in the HTML are invisible in a 200 response
-            # and in a screenshot of a page that has not mounted, so they are
-            # named here where the model cannot miss them.
-            shortfalls = _site_placeholder_warnings(body, extra_files)
-            if shortfalls:
-                result += (
-                    "\nUNFINISHED CONTENT — fix these with edit_site before you "
-                    "tell anyone the site is done:\n"
-                    + "\n".join(f"  • {item}" for item in shortfalls)
-                )
-            result += (
-                f'\nTest it with site_test(name="{slug}") before telling '
-                "the user it works — that loads the page in a real browser, "
-                "catches console errors, reports whether anything actually "
-                "rendered, and returns a screenshot."
-            )
-            if image_urls:
-                result += f"\nEmbedded images ({len(image_urls)}):\n" + "\n".join(
-                    f"  - {url}" for url in image_urls
-                )
-            if missing_images:
-                result += (
-                    f"\nWARNING: {len(missing_images)} image(s) could not be imported and were skipped: "
-                    + ", ".join(missing_images)
-                )
-            result += _site_graph_note(self.bot, slug)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to create site {slug}: {e}")
-            return tool_failure("tool.create_site", f"Error creating site: {e}", exception=e)
-
-    def _commit_site_locked(
-        self, slug: str, user_id: str, is_admin: bool, entry: dict
-    ) -> bool:
-        """Reload sites.json under a cross-process lock, re-check ownership and
-        quota, add the entry, and save atomically. Returns True on commit.
-
-        Runs in a worker thread (via asyncio.to_thread) because FileLock uses
-        blocking fcntl. This is the single locked RMW for create_site metadata,
-        closing the lost-update race with the API process and concurrent
-        creates.
-        """
-        path = Path(self.bot.config.DATA_DIR) / "sites.json"
-        max_sites = int(self._control().get("create_site_quota_per_user", 10))
-        with FileLock(path, timeout=15.0):
-            sites = {}
-            try:
-                if path.exists():
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(data, dict):
-                        sites = {k: v for k, v in data.items() if isinstance(v, dict)}
-            except (json.JSONDecodeError, OSError, ValueError) as e:
-                logger.error(f"Corrupt sites.json on commit, aborting: {e}")
-                return False
-            # Re-check slug ownership under the lock (may have changed).
-            existing = sites.get(slug)
-            if isinstance(existing, dict):
-                owner = str(existing.get("user_id") or "")
-                if owner and owner != user_id and not is_admin:
-                    return False
-            # Re-check quota under the lock.
-            active = [s for s in sites.values() if s.get("user_id") == user_id]
-            # If this slug is already ours (overwrite), it doesn't count as new.
-            already_ours = (
-                isinstance(existing, dict)
-                and str(existing.get("user_id") or "") == user_id
-            )
-            if not already_ours and len(active) >= max_sites:
-                return False
-            sites[slug] = entry
-            _atomic_json_write_sync(path, sites)
-            # Keep the in-memory map + mtime in sync for this process.
-            self.bot._sites = sites
-            with contextlib.suppress(OSError):
-                self.bot._sites_mtime = path.stat().st_mtime
-            return True
-
-    async def _save_sites(self):
-        try:
-            path = Path(self.bot.config.DATA_DIR) / "sites.json"
-
-            # Cross-process lock so the API's site_update/site_delete and this
-            # write can't interleave and lose an entry.
-            def _locked_write():
-                with FileLock(path, timeout=15.0):
-                    _atomic_json_write_sync(path, self.bot._sites)
-                    return path.stat().st_mtime if path.exists() else 0.0
-
-            mtime = await asyncio.to_thread(_locked_write)
-            if hasattr(self.bot, "_sites_mtime"):
-                self.bot._sites_mtime = mtime
-        except Exception as e:
-            logger.error(f"Failed to save sites: {e}")
-            raise
-
-
-class _SiteOwnedTool(Tool):
-    """Shared lookup for tools that act on an already-published site."""
-
-    def __init__(self, bot):
-        super().__init__(bot)
-        self.base_dir = getattr(bot.config, "MAXWELL_SITE_DIR", "public/bot")
-        self.base_url = (
-            getattr(
-                bot.config, "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"
-            ).rstrip("/")
-            + "/bot"
-        )
-
-    def _control(self) -> dict:
-        return (
-            getattr(self.bot, "control", {}) or getattr(self.bot, "_control", {}) or {}
-        )
-
-    def _resolve(self, message: Message, name: str | None):
-        """(slug, entry, site_dir, None) or (None, None, None, error string)."""
-        slug = re.sub(r"[^a-z0-9-]", "-", str(name or "").lower().strip())[:30].strip(
-            "-"
-        )
-        if not slug:
-            return None, None, None, "Error: name is required (the site slug)."
-        if hasattr(self.bot, "_load_sites"):
-            self.bot._load_sites(quiet=True)
-        entry = (self.bot._sites or {}).get(slug)
-        if not isinstance(entry, dict):
-            return (
-                None,
-                None,
-                None,
-                (
-                    f"Error: no site named '{slug}'. Call list_sites to see the slugs you own."
-                ),
-            )
-        return slug, entry, os.path.join(self.base_dir, slug), None
-
-    def _save_entry(self, slug: str, entry: dict) -> None:
-        path = Path(self.bot.config.DATA_DIR) / "sites.json"
-        with FileLock(path, timeout=15.0):
-            sites = {}
-            try:
-                if path.exists():
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(data, dict):
-                        sites = {k: v for k, v in data.items() if isinstance(v, dict)}
-            except (json.JSONDecodeError, OSError, ValueError):
-                sites = dict(self.bot._sites or {})
-            if entry is None:
-                sites.pop(slug, None)
-            else:
-                sites[slug] = entry
-            _atomic_json_write_sync(path, sites)
-            self.bot._sites = sites
-            with contextlib.suppress(OSError):
-                self.bot._sites_mtime = path.stat().st_mtime
-
-
-class EditSiteTool(_SiteOwnedTool):
-    """Change a published site in place — a file, a line, or its settings."""
-
-    def get_description(self):
-        return (
-            "Edit a site you already published, at its existing URL. Use this "
-            "to keep working on the frontend (HTML/CSS/JS) — do not recreate "
-            "the site. "
-            "action=list (files + sizes; notes a Python backend if one is running), "
-            "read (one file; large files return a numbered window — pass "
-            "start_line= to page; do not re-read a file you already have), "
-            "write (replace or add a file — path defaults to index.html; or pass "
-            "files={...} to write several at once), "
-            "replace (swap `find` with `replace` in one file; all=true for every "
-            "occurrence), delete (remove a file), rename, backend (on/off/status/"
-            "clear the KV store — not the Python server), extend. "
-            "Python backend code is site_server (write/replace/read), not this. "
-            "After an edit, site_test loads the live page once. "
-            "Params: name, action, path, content, files, find, replace, all, "
-            "title, encoding, backend, permanent, start_line. "
-            "Prefer this over re-running create_site for a tweak."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        name: str | None = None,
-        action: str = "list",
-        path: str | None = None,
-        content: Any = None,
-        files: Any = None,
-        find: str | None = None,
-        replace: str | None = None,
-        all: Any = None,
-        replace_all: Any = None,
-        title: str | None = None,
-        encoding: str = "text",
-        backend: Any = None,
-        permanent: Any = None,
-        start_line: Any = None,
-        **kwargs,
-    ) -> str:
-        slug, entry, site_dir, err = self._resolve(message, name)
-        if err:
-            return err
-        act = str(action or "list").strip().lower()
-        if act in SITE_MUTATING_ACTIONS:
-            site_read_loop_guard(message, key="", label="", action=act)
-        public_base = (
-            getattr(self.bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
-            or self.base_url
-        )
-        url = f"{public_base}/{slug}/"
-
-        if act in {"list", "ls", "files", "status"}:
-            tree = _site_tree(site_dir)
-            if not tree:
-                return f"{url} has no files on disk (it may have expired)."
-            lines = [f"  • {rel} ({size} bytes)" for rel, size in tree]
-            out = f"{url}\n" + "\n".join(lines)
-            out += f"\nLifetime: {site_expiry_label(entry, self._control())}."
-            if entry.get("backend"):
-                out += "\nKV store: on — " + site_backend.summarize(
-                    self.bot.config.DATA_DIR, slug
-                )
-            if entry.get("server"):
-                server_files = site_server.list_code(self.bot.config.DATA_DIR, slug)
-                names = ", ".join(rel for rel, _ in server_files) or "no source"
-                out += (
-                    f"\nPython backend: on at {self.base_url}/{slug}/api/ ({names}). "
-                    "Edit it with site_server (list/read/write/replace), not this tool."
-                )
-            out += _site_graph_note(self.bot, slug, refresh=False)
-            return out
-
-        if act in {"read", "cat", "get"}:
-            rel = _safe_site_relpath(path or "index.html")
-            if not rel:
-                return f"Error: bad path {path!r}"
-            target = _site_child_path(site_dir, rel)
-            if target is None or not target.is_file():
-                return f"Error: {rel} not found in {slug}. Use action=list."
-            try:
-                text = target.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as e:
-                return tool_failure("tool.edit_site", f"Error reading {rel}: {e}", exception=e)
-            start = _site_start_line(start_line)
-            blocked = site_read_loop_guard(
-                message,
-                key=f"edit_site:{slug}:{rel}:{start}",
-                label=f"{rel} (start_line={start})",
-                action=act,
-            )
-            if blocked:
-                return blocked
-            return format_site_file_read(rel, text, start_line=start)
-
-        if act in {"write", "put", "set", "update"}:
-            extra_files, files_err = _parse_site_files(files)
-            if files_err:
-                return f"Error: {files_err}"
-            for entry_file in extra_files:
-                blob = entry_file.get("bytes") or b""
-                with contextlib.suppress(UnicodeDecodeError):
-                    blocked = _elided_site_payload_error(blob.decode("utf-8"))
-                    if blocked:
-                        return blocked
-            if content is not None:
-                blocked = _elided_site_payload_error(
-                    content if isinstance(content, str) else json.dumps(content)
-                )
-                if blocked:
-                    return blocked
-            written: list[str] = []
-            if extra_files:
-                for entry_file in extra_files:
-                    werr = await _write_site_file(
-                        site_dir, entry_file["path"], entry_file["bytes"] or b""
-                    )
-                    if werr:
-                        return f"Error: {werr}"
-                    written.append(entry_file["path"])
-            if content is not None or not extra_files:
-                rel = _safe_site_relpath(path or "index.html")
-                if not rel:
-                    return f"Error: bad path {path!r}"
-                blob, derr = _decode_site_file(content, encoding)
-                if derr:
-                    return f"Error: {derr}"
-                if rel.endswith(".html") and str(encoding or "text").lower() in {
-                    "text",
-                    "utf8",
-                    "utf-8",
-                    "",
-                }:
-                    blob = _normalize_site_body_text_escapes(
-                        blob.decode("utf-8", "replace")
-                    ).encode("utf-8")
-                werr = await _write_site_file(site_dir, rel, blob or b"")
-                if werr:
-                    return f"Error: {werr}"
-                if rel not in written:
-                    written.append(rel)
-            return (
-                f"Wrote {', '.join(written)} → {url}\n"
-                f'Call site_test(name="{slug}") to load it and check the console.'
-                + _site_graph_note(self.bot, slug)
-            )
-
-        if act in {"replace", "patch", "sub"}:
-            rel = _safe_site_relpath(path or "index.html")
-            if not rel:
-                return f"Error: bad path {path!r}"
-            if not find:
-                return "Error: replace needs `find` (the exact text to swap out)."
-            target = _site_child_path(site_dir, rel)
-            if target is None or not target.is_file():
-                return f"Error: {rel} not found in {slug}."
-            try:
-                text = target.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as e:
-                return tool_failure("tool.edit_site", f"Error reading {rel}: {e}", exception=e)
-            if find not in text:
-                return (
-                    f"Error: `find` text is not in {rel} — it must match byte-for-byte. "
-                    "Use action=read to see the current file."
-                )
-            hits = text.count(find)
-            all_hits = parse_bool(
-                replace_all if replace_all is not None else all, False
-            )
-            if all_hits:
-                updated = text.replace(find, replace or "")
-            else:
-                updated = text.replace(find, replace or "", 1)
-            werr = await _write_site_file(site_dir, rel, updated.encode("utf-8"))
-            if werr:
-                return f"Error: {werr}"
-            if all_hits:
-                extra = f" ({hits} occurrence(s))"
-            else:
-                extra = (
-                    f" ({hits - 1} more occurrence(s) left alone)" if hits > 1 else ""
-                )
-            return (
-                f"Patched {rel}{extra} → {url}\n"
-                f'Call site_test(name="{slug}") to load it and check the console.'
-                + _site_graph_note(self.bot, slug)
-            )
-
-        if act in {"delete", "rm", "remove"}:
-            rel = _safe_site_relpath(path or "")
-            if not rel:
-                return "Error: delete needs a path. To remove the whole site use delete_site."
-            if rel == "index.html":
-                return "Error: refusing to delete index.html — write a new one instead."
-            target = _site_child_path(site_dir, rel)
-            if target is None or not target.is_file():
-                return f"Error: {rel} not found in {slug}."
-            try:
-                target.unlink()
-            except OSError as e:
-                return tool_failure("tool.edit_site", f"Error deleting {rel}: {e}", exception=e)
-            return f"Deleted {rel} from {slug}." + _site_graph_note(self.bot, slug)
-
-        if act in {"rename", "title", "retitle"}:
-            if not title:
-                return "Error: rename needs `title`."
-            entry = dict(entry)
-            entry["title"] = str(title)[:200]
-            await asyncio.to_thread(self._save_entry, slug, entry)
-            return f"Retitled {slug} → '{entry['title']}' ({url})"
-
-        if act in {"backend", "store", "data"}:
-            mode = str(backend if backend is not None else "status").strip().lower()
-            data_dir = self.bot.config.DATA_DIR
-            if mode in {"clear", "wipe", "reset"}:
-                await asyncio.to_thread(site_backend.wipe, data_dir, slug)
-                return f"Cleared the backend store for {slug}."
-            if mode in {"status", "", "none"}:
-                if not entry.get("backend"):
-                    return (
-                        f"{slug} has no backend. Turn it on with "
-                        "edit_site(action=backend, backend=true)."
-                    )
-                return f"{slug} backend: " + site_backend.summarize(data_dir, slug)
-            enabled = parse_bool(mode, False)
-            entry = dict(entry)
-            entry["backend"] = enabled
-            await asyncio.to_thread(self._save_entry, slug, entry)
-            if not enabled:
-                return f"Backend off for {slug} (data kept; /api/site/{slug} now 404s)."
-            return f"Backend on for {slug}.\n" + site_backend.client_guide(
-                f"/api/site/{slug}"
-            )
-
-        if act in {"extend", "renew", "keep"}:
-            entry = dict(entry)
-            entry["created_at"] = datetime.now(timezone.utc).timestamp()
-            if permanent is not None:
-                entry["permanent"] = parse_bool(permanent, False)
-            await asyncio.to_thread(self._save_entry, slug, entry)
-            return f"{slug}: {site_expiry_label(entry, self._control())} ({url})"
-
-        return (
-            f"Error: unknown action '{act}'. Use list, read, write, replace, "
-            "delete, rename, backend, or extend."
-        )
-
-
-class SiteServerTool(_SiteOwnedTool):
-    """Give a site a real backend: its own Python server in its own container."""
-
-    _FAILED_MUTATIONS = {
-        "write", "update", "patch_file", "code", "deploy", "create", "snapshot",
-        "replace", "patch", "sub", "rm", "unlink", "start", "restart", "reload",
-        "env", "secrets", "config",
-    }
-
-    def get_description(self):
-        return (
-            "Run and edit a real backend server for one of your sites — your own "
-#            "Python, routes, database, and secrets, in a sandboxed container at "
-            "Dreamhost shared hosting PHP/Perl/cgi-bin; remember that if you need do API of any class "
-            "/dame/<name>/api/... "
-            "This backend runs locally, not on the remote static mirror. "
-            "Test locally inside Docker at http://web:8080/bot/<name>/; deliver the configured remote public site URL to the user, noting any local-only API dependency. "
-            "Use this when the site needs server-side logic: accounts, WebSockets, "
-            "a hidden API key, anything a static page cannot enforce. "
-            "Keep working on a live backend with these actions instead of recreating it: "
-            "list (source files), read (one file; large files return a numbered "
-            "window — pass start_line= to page; do not re-read a file you already "
-            "have), write (merge files — helpers stay; "
-            "pass path+content for one file or files={...} for several), replace "
-            "(exact-text patch in one file, like edit_site), deploy (full snapshot, "
-            "missing files disappear), start, stop, restart, status, logs, env, "
-            "rm (delete a helper file, not app.py), delete (tear the server down). "
-#            "app.py listens on 0.0.0.0:$PORT. flask+waitress for plain HTTP, "
-#            "fastapi+uvicorn for WebSockets. Only /data is writable and persists. "
-            "The Remote is based on Dreamhost shared hosting remember that for and the differences between "
-            " your back end and the remote (PHP/Perl or cgi-bin to make sure everything works in the remote. "
-            "Frontend pages: edit_site. This tool is the server. "
-            "After a change, site_test loads the page and shows console errors."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        name: str | None = None,
-        action: str = "status",
-        files: Any = None,
-        env: Any = None,
-        packages: Any = None,
-        path: str | None = None,
-        content: Any = None,
-        find: str | None = None,
-        replace: str | None = None,
-        all: Any = None,
-        replace_all: Any = None,
-        lines: int = 40,
-        start_line: Any = None,
-        **kwargs,
-    ) -> str:
-        slug, entry, _site_dir, err = self._resolve(message, name)
-        if err:
-            return err
-        data_dir = self.bot.config.DATA_DIR
-        act = str(action or "status").strip().lower()
-        if act in SITE_MUTATING_ACTIONS:
-            site_read_loop_guard(message, key="", label="", action=act)
-        all_hits = parse_bool(replace_all if replace_all is not None else all, False)
-        try:
-            if act in {"write", "update", "patch_file", "code"}:
-                payload = files
-                if not payload and content is not None:
-                    payload = {str(path or "app.py"): content}
-                if not payload:
-                    return (
-                        'Error: write needs files={"app.py": "..."} or '
-                        "path+content for one file.\n" + site_server.contract(slug)
-                    )
-                parsed = await asyncio.to_thread(site_server.parse_files, payload)
-                for source in parsed.values():
-                    blocked = _elided_site_payload_error(source)
-                    if blocked:
-                        return blocked
-                existing_app = (
-                    site_server.code_dir(data_dir, slug) / "app.py"
-                ).is_file()
-                if "app.py" not in parsed and not existing_app:
-                    return "Error: the entry file must be called app.py."
-                new_env = (
-                    await asyncio.to_thread(site_server.parse_env, env) if env else None
-                )
-                extra = await asyncio.to_thread(site_server.parse_packages, packages)
-                written = await asyncio.to_thread(
-                    site_server.merge_code, data_dir, slug, parsed
-                )
-                await site_server.start(
-                    data_dir, slug, env=new_env, packages=extra or None
-                )
-                await self._mark_server(slug, entry, True)
-                return (
-                    f"Backend server live: {self.base_url}/{slug}/api/ "
-                    f"(updated {', '.join(written)}; other source files kept)\n"
-                    + site_server.contract(slug)
-                    + _site_graph_note(self.bot, slug)
-                )
-
-            if act in {"deploy", "create", "snapshot"}:
-                if not files:
-                    return (
-                        "Error: deploy needs the full snapshot in files, e.g. "
-                        'files={"app.py": "..."}. Missing files are deleted. '
-                        "Use action=write to change one file without wiping the rest.\n"
-                        + site_server.contract(slug)
-                    )
-                parsed = await asyncio.to_thread(site_server.parse_files, files)
-                for source in parsed.values():
-                    blocked = _elided_site_payload_error(source)
-                    if blocked:
-                        return blocked
-                if "app.py" not in parsed:
-                    return "Error: the entry file must be called app.py."
-                new_env = (
-                    await asyncio.to_thread(site_server.parse_env, env) if env else None
-                )
-                extra = await asyncio.to_thread(site_server.parse_packages, packages)
-                written = await asyncio.to_thread(
-                    site_server.write_code, data_dir, slug, parsed
-                )
-                await site_server.start(
-                    data_dir, slug, env=new_env, packages=extra or None
-                )
-                await self._mark_server(slug, entry, True)
-                return (
-                    f"Backend server live: {self.base_url}/{slug}/api/ "
-                    f"(full snapshot: {', '.join(written)})\n"
-                    + site_server.contract(slug)
-                    + _site_graph_note(self.bot, slug)
-                )
-
-            if act in {"replace", "patch", "sub"}:
-                rel = path or "app.py"
-                note = await asyncio.to_thread(
-                    site_server.patch_code,
-                    data_dir,
-                    slug,
-                    rel,
-                    find or "",
-                    replace,
-                    all_hits=all_hits,
-                )
-                await site_server.start(data_dir, slug)
-                await self._mark_server(slug, entry, True)
-                return (
-                    f"{note} and restarted → {self.base_url}/{slug}/api/"
-                    + _site_graph_note(self.bot, slug)
-                )
-
-            if act in {"rm", "unlink"}:
-                note = await asyncio.to_thread(
-                    site_server.delete_code_file, data_dir, slug, path or ""
-                )
-                await site_server.start(data_dir, slug)
-                await self._mark_server(slug, entry, True)
-                return (
-                    f"{note} and restarted → {self.base_url}/{slug}/api/"
-                    + _site_graph_note(self.bot, slug)
-                )
-
-            if act in {"start", "restart", "reload"}:
-                await site_server.start(data_dir, slug)
-                await self._mark_server(slug, entry, True)
-                return f"Backend server running at {self.base_url}/{slug}/api/"
-
-            if act in {"stop", "pause"}:
-                existed = await site_server.stop(data_dir, slug)
-                await self._mark_server(slug, entry, False)
-                return (
-                    f"Stopped the backend for {slug} (code, data, and secrets kept)."
-                    if existed
-                    else f"{slug} had no backend server running."
-                )
-
-            if act in {"list", "ls", "files"}:
-                tree = await asyncio.to_thread(site_server.list_code, data_dir, slug)
-                if not tree:
-                    return (
-                        f"{slug} has no backend source. Write app.py with "
-                        "site_server(action=write) first."
-                    )
-                lines_out = [f"  • {rel} ({size} bytes)" for rel, size in tree]
-                return (
-                    f"{self.base_url}/{slug}/api/\n"
-                    + "\n".join(lines_out)
-                    + "\nUse action=read / write / replace to edit. "
-                    "write merges; deploy replaces the whole snapshot."
-                    + _site_graph_note(self.bot, slug, refresh=False)
-                )
-
-            if act in {"status", "info"}:
-                return await site_server.status(data_dir, slug)
-
-            if act in {"logs", "log", "tail"}:
-                return f"{slug} backend logs:\n" + await site_server.logs(
-                    data_dir, slug, lines
-                )
-
-            if act in {"read", "cat"}:
-                rel = path or "app.py"
-                text = await asyncio.to_thread(
-                    site_server.read_code, data_dir, slug, rel
-                )
-                start = _site_start_line(start_line)
-                blocked = site_read_loop_guard(
-                    message,
-                    key=f"site_server:{slug}:{rel}:{start}",
-                    label=f"{rel} (start_line={start})",
-                    action=act,
-                )
-                if blocked:
-                    return blocked
-                return format_site_file_read(rel, text, start_line=start)
-
-            if act in {"env", "secrets", "config"}:
-                if not env:
-                    current = (site_server.get_entry(data_dir, slug) or {}).get(
-                        "env"
-                    ) or {}
-                    return (
-                        f"{slug} env: "
-                        + (", ".join(sorted(current)) or "none")
-                        + "\nValues are never shown. Pass env={...} to replace them."
-                    )
-                parsed_env = await asyncio.to_thread(site_server.parse_env, env)
-                await site_server.start(data_dir, slug, env=parsed_env)
-                await self._mark_server(slug, entry, True)
-                return (
-                    f"Set {len(parsed_env)} env var(s) on {slug} and restarted it: "
-                    + ", ".join(sorted(parsed_env))
-                )
-
-            if act in {"delete", "remove", "destroy"}:
-                await site_server.destroy(data_dir, slug)
-                await self._mark_server(slug, entry, False)
-                return (
-                    f"Deleted the backend server for {slug} — code, database, and secrets."
-                    + _site_graph_note(self.bot, slug)
-                )
-
-            return (
-                f"Error: unknown action '{act}'. Use list, read, write, replace, "
-                "deploy, start, stop, restart, status, logs, env, rm, or delete."
-            )
-        except site_server.SiteServerExecutionError as e:
-            failure = tool_failure("tool.site_server", f"Error: {e}", exception=e)
-            if act in self._FAILED_MUTATIONS:
-                with contextlib.suppress(Exception):
-                    await self._mark_server(slug, entry, False)
-            return failure
-        except site_server.SiteServerError as e:
-            # A failed redeploy/start writes a non-running registry row, so
-            # keep the public site listing from claiming that its server is
-            # still live.
-            if act in self._FAILED_MUTATIONS:
-                with contextlib.suppress(Exception):
-                    await self._mark_server(slug, entry, False)
-            return f"Error: {e}"
-
-    async def _mark_server(self, slug: str, entry: dict, on: bool) -> None:
-        """Record on the site itself that it has a server, for list_sites."""
-        updated = dict(entry or {})
-        if bool(updated.get("server")) == on:
-            return
-        updated["server"] = on
-        await asyncio.to_thread(self._save_entry, slug, updated)
-
-
-class SiteTestTool(_SiteOwnedTool):
-    """Load a published site in a real browser and report what broke."""
-
-    def get_description(self):
-        return (
-            "Load one of your published sites the way a visitor's browser would: "
-            "JS console errors, uncaught exceptions, failed network requests, "
-            "broken CSS/JS/images, HTTP status, and a screenshot (vision). "
-            "Call this once after create_site / edit_site / site_server before "
-            "telling the user it works. fetch_url only sees HTML — this sees "
-            "runtime. Params: name (slug), path (optional subpage or this site's "
-            "full URL), wait (seconds for JS, default 2), screenshot (default true). "
-            "Fix what it finds with write/replace, then test once more. Do not "
-            "re-test the same URL without changing a file."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        name: str | None = None,
-        path: str | None = None,
-        url: str | None = None,
-        wait: Any = None,
-        screenshot: Any = None,
-        **kwargs,
-    ) -> str:
-        slug, entry, site_dir, err = self._resolve(message, name)
-        if err:
-            return err
-        site_base = (
-            "http://web:8080/bot"
-            if os.environ.get("MAXWELL_CONTAINER_MODE", "").lower() == "true"
-            else self.base_url
-        )
-        try:
-            target = site_test.page_url(self.base_url, slug, path or url)
-        except ValueError as e:
-            return f"Error: {e}. path must be a page on this site."
-        target = site_base + target[len(self.base_url):]
-        blocked = site_test_repeat_guard(message, f"{slug}:{target}")
-        if blocked:
-            return blocked
-        try:
-            wait_s = (
-                float(wait) if wait is not None and str(wait).strip() != "" else 2.0
-            )
-        except (TypeError, ValueError):
-            wait_s = 2.0
-        wait_s = max(0.2, min(wait_s, 15.0))
-        want_shot = parse_bool(screenshot, True)
-
-        html = ""
-        local = site_test.html_path_for_url(site_dir, slug, target)
-        if local.is_file():
-            with contextlib.suppress(OSError, UnicodeDecodeError):
-                html = local.read_text(encoding="utf-8")
-
-        asset_errors = [
-            f"missing on disk: {rel}"
-            for rel in site_test.missing_local_assets(html, site_dir, slug=slug)
-        ]
-
-        status, body, http_err = await site_test.http_get(target)
-        if body and not html:
-            with contextlib.suppress(UnicodeDecodeError):
-                html = body.decode("utf-8")
-        if html:
-            linked = site_test.extract_assets(html, target)
-            for item in await site_test.check_assets(linked):
-                if item not in asset_errors:
-                    asset_errors.append(item)
-
-        backend_bits: list[str] = []
-        if entry.get("server"):
-            api_url = f"{site_base}/{slug}/api/"
-            api_status, _, api_err = await site_test.http_get(api_url)
-            if api_err:
-                backend_bits.append(f"Python API {api_url} unreachable: {api_err}")
-            else:
-                backend_bits.append(f"Python API {api_url} HTTP {api_status}")
-            try:
-                log_text = await site_server.logs(
-                    self.bot.config.DATA_DIR, slug, lines=20
-                )
-                clipped = (log_text or "").strip()[:2000]
-                if clipped:
-                    backend_bits.append("Recent logs:\n" + clipped)
-            except Exception as e:
-                capture_incident("tool.site_test", "Could not read backend logs", exception=e)
-                backend_bits.append(f"logs: {e}")
-        if entry.get("backend"):
-            public = getattr(self.bot.config, "MAXWELL_PUBLIC_BASE_URL", "").rstrip("/")
-            kv_url = f"{public}/api/site/{slug}/kv"
-            kv_status, _, kv_err = await site_test.http_get(kv_url)
-            if kv_err:
-                backend_bits.append(f"KV store {kv_url} unreachable: {kv_err}")
-            else:
-                backend_bits.append(f"KV store {kv_url} HTTP {kv_status}")
-
-        browser = await site_test.probe_browser(
-            target, wait=wait_s, screenshot=want_shot
-        )
-
-        probe: dict[str, Any] = {
-            "url": target,
-            "http_status": (
-                browser["http_status"]
-                if browser.get("http_status") is not None
-                else status
-            ),
-            "http_error": http_err,
-            "title": browser.get("title") or "",
-            "console_errors": list(browser.get("console_errors") or []),
-            "console_warnings": list(browser.get("console_warnings") or []),
-            "page_errors": list(browser.get("page_errors") or []),
-            "failed_requests": list(browser.get("failed_requests") or []),
-            "asset_errors": asset_errors,
-            "backend": "\n".join(backend_bits),
-            "screenshot_png": browser.get("screenshot_png"),
-            # What actually rendered. format_report uses these to catch a page
-            # that returns 200 with a clean console and is still just a
-            # "Loading…" shell — the failure mode behind "the site is listed
-            # but it doesn't work".
-            "has_canvas_or_media": browser.get("has_canvas_or_media"),
-        }
-        if browser.get("visible_text") is not None:
-            probe["visible_text"] = browser["visible_text"]
-        if browser.get("rendered_nodes") is not None:
-            probe["rendered_nodes"] = browser["rendered_nodes"]
-        if browser.get("browser"):
-            probe["browser"] = browser["browser"]
-        if browser.get("browser_error"):
-            probe["browser_error"] = browser["browser_error"]
-        if not probe["title"] and html:
-            title_match = re.search(
-                r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL
-            )
-            if title_match:
-                probe["title"] = re.sub(r"\s+", " ", title_match.group(1)).strip()[:120]
-        report = site_test.format_report(probe)
-        # Record whether this site currently renders, so list_sites can say so
-        # without loading a browser for every entry.
-        with contextlib.suppress(Exception):
-            await self._record_health(slug, entry, probe)
-        return report
-
-    async def _record_health(self, slug: str, entry: dict, probe: dict) -> None:
-        """Persist the last site_test verdict on the site entry."""
-        stub = site_test.describe_stub(probe)
-        broken = bool(
-            stub
-            or probe.get("page_errors")
-            or probe.get("asset_errors")
-            or probe.get("http_error")
-        )
-        updated = dict(entry or {})
-        health = {
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "ok": not broken,
-        }
-        if stub:
-            health["stub"] = stub[:200]
-        if updated.get("health") == health:
-            return
-        updated["health"] = health
-        await asyncio.to_thread(self._save_entry, slug, updated)
-
-
-class DeleteSiteTool(_SiteOwnedTool):
-    """Take a published site down."""
-
-    def get_description(self):
-        return (
-            "Delete a site you published: removes the files, the metadata, and "
-            "its backend store, and frees a slot against your site quota. "
-            "Params: name (slug). Irreversible — the URL 404s immediately."
-        )
-
-    async def execute(self, message: Message, name: str | None = None, **kwargs) -> str:
-        slug, entry, site_dir, err = self._resolve(message, name)
-        if err:
-            return err
-        base = Path(self.base_dir).resolve()
-        try:
-            target = Path(site_dir).resolve()
-        except (OSError, ValueError):
-            target = None
-        if target is not None and (base in target.parents) and target.is_dir():
-            await asyncio.to_thread(shutil.rmtree, target, True)
-        save_error = None
-        try:
-            await asyncio.to_thread(self._save_entry, slug, None)
-        except Exception as exc:
-            # Still tear down the backend below. Leaving a live container and
-            # its secrets behind because metadata persistence failed is worse
-            # than returning an error for a partially completed delete.
-            save_error = exc
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(
-                site_backend.destroy, self.bot.config.DATA_DIR, slug
-            )
-        # Container, server code, database, and secrets go too.
-        with contextlib.suppress(Exception):
-            await site_server.destroy(self.bot.config.DATA_DIR, slug)
-        with contextlib.suppress(Exception):
-            from knowledge_graph import drop_site as _drop_site_graph
-
-            _drop_site_graph(self.bot, slug)
-        if save_error is not None:
-            return f"Error deleting site '{slug}': {save_error}"
-        return (
-            f"Deleted site '{slug}' ({entry.get('title') or 'untitled'}). URL is gone."
-        )
-
-
-class ListSitesTool(Tool):
-    """List your published sites, with slug, lifetime, and backend state."""
-
-    def get_description(self):
-        return (
-            "List the sites you published: slug, URL, title, time left, "
-            "whether each has a KV store or a Python server, and whether its "
-            "last site_test actually rendered. A site marked BROKEN or 'never "
-            "tested' is not known to work — do not tell anyone it does until "
-            "site_test says it loaded clean. The slug is what edit_site, "
-            "site_server, site_test, and delete_site take. No params."
-        )
-
-    async def execute(self, message: Message, all_users: bool = False, **kwargs) -> str:
-        user_id = str(message.author.id)
-        if hasattr(self.bot, "_load_sites"):
-            self.bot._load_sites(quiet=True)
-        sites = getattr(self.bot, "_sites", {}) or {}
-
-        # If user is admin/owner or explicitly requests all_users, show all sites
-        is_admin = False
-        if hasattr(self.bot, "_is_admin") and self.bot._is_admin(user_id):
-            is_admin = True
-
-        if is_admin or all_users:
-            selected_sites = sites
-        else:
-            selected_sites = {
-                k: v for k, v in sites.items() if str(v.get("user_id", "")) == user_id
-            }
-
-        if not selected_sites:
-            return "No active sites found."
-
-        control = (
-            getattr(self.bot, "control", {}) or getattr(self.bot, "_control", {}) or {}
-        )
-        base_url = getattr(
-            self.bot.config,
-            "MAXWELL_PUBLIC_BASE_URL",
-            "https://maxwell.z3ki.dev",
-        ).rstrip("/") + "/bot"
-        base_url = (
-            getattr(self.bot.config, "MAXWELL_SITE_PUBLIC_BASE_URL", "").strip().rstrip("/")
-            or base_url
-        )
-        lines = []
-        unverified: list[str] = []
-        broken: list[str] = []
-        for slug, data in selected_sites.items():
-            title = data.get("title", "untitled")
-            marks = []
-            if data.get("server"):
-                marks.append("server")
-            elif data.get("backend"):
-                marks.append("store")
-            owner_label = ""
-            if (is_admin or all_users) and data.get("user_id"):
-                owner_uid = str(data.get("user_id"))
-                owner_label = f" [owner: {owner_uid}]"
-            # "Listed" is not "works". A site whose last site_test found a
-            # loading shell must not read as live here, and one that has never
-            # been tested must not read as verified.
-            health = data.get("health")
-            if isinstance(health, dict):
-                if health.get("ok"):
-                    marks.append("verified working")
-                else:
-                    reason = str(health.get("stub") or "broken")
-                    marks.append("BROKEN: " + reason[:80])
-                    broken.append(slug)
-            else:
-                marks.append("never tested")
-                unverified.append(slug)
-            tail = f" [{', '.join(marks)}]" if marks else ""
-            lines.append(
-                f"  • {slug} — {base_url}/{slug}/ — '{title}' "
-                f"({site_expiry_label(data, control)}){owner_label}{tail}"
-            )
-        header = (
-            "All active sites:\n" if (is_admin or all_users) else "Your active sites:\n"
-        )
-        out = header + "\n".join(lines)
-        if broken:
-            out += (
-                "\n\nThese failed their last site_test and are NOT working: "
-                + ", ".join(broken[:10])
-                + ". Fix them with edit_site and re-run site_test before telling "
-                "anyone they are live."
-            )
-        if unverified:
-            out += (
-                "\n\nNever verified in a browser: "
-                + ", ".join(unverified[:10])
-                + ". Run site_test before claiming any of these work."
-            )
-        return out
-
-
 _WEB_REPLY_CTX_RE = re.compile(r"\[Latest message replies to[^\]]*\]", re.IGNORECASE)
 
 
@@ -6563,7 +4036,7 @@ class GuideTool(Tool):
             "3) **Look & feel** — style, vibe, colors, any reference?\n"
             "4) **Realtime / backend** — live updates, multiplayer, accounts, or a static page?\n"
             "5) **Data / persistence** — save state? how long should it live?\n"
-            "Reply in this thread with your answers (numbers are fine). I'll then build it and `site_test` it."
+            "Reply in this thread with your answers (numbers are fine). I'll then build it."
         )
         thread = None
         err = None
@@ -6688,13 +4161,6 @@ class WebSearchTool(Tool):
         if not re.fullmatch(r"[a-z0-9_.,-]+", backend, flags=re.I):
             backend = "auto"
 
-        # Web search returns untrusted content. Mark the current turn as
-        # tainted so the subsequent destructive shell tool prompts
-        # for confirmation. This is the second line of defense against
-        # indirect prompt injection from search snippets.
-        if self.bot is not None and hasattr(self.bot, "mark_message_tainted"):
-            self.bot.mark_message_tainted(message)
-
         try:
             loop = asyncio.get_running_loop()
             # Bound the search: DDGS uses sync requests internally with a
@@ -6788,7 +4254,12 @@ def score_reply_candidate(hint: str, *, author: str = "", content: str = "") -> 
         return 0
     author_n = normalize_reply_hint(author)
     content_n = normalize_reply_hint(content)
-    content_n = re.sub(r"^\[at [^\]]+\]\s*", "", content_n)
+    content_n = re.sub(
+        r"^\[(?:at )?[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]) "
+        r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] [a-z0-9_+:/-]+\]\s*",
+        "",
+        content_n,
+    )
     if "(" in author_n:
         author_n = author_n.split("(", 1)[0].strip()
     score = 0
@@ -7270,52 +4741,48 @@ class NoResponseTool(Tool):
 
 
 class MoreToolsTool(Tool):
-    """No-op leftover. The full catalog is attached on every turn.
-
-    Older prompts told the model to call this to unlock tools mid-turn.
-    That hid tools like hd_image behind a hop, so a photo request that
-    started without the verb "generate" got the from-scratch generator
-    instead. Kept registered so a stale call does not error.
-    """
+    """Expand one explicitly named tool group for the next model call."""
 
     def get_description(self):
+        groups = ", ".join(TOOL_DISCOVERY_GROUPS)
         return (
-            "No-op. You already have every tool this turn. Call the one you "
-            "need directly — this does not unlock anything."
+            "Add one tool group to this turn's next model call. Choose a group: "
+            f"{groups}. The returned tool schemas and instructions will be available "
+            "after this call; call again for another group."
         )
 
-    async def execute(self, message: Message, need: str | None = None, **kwargs) -> str:
-        logger.info("more_tools: no-op (catalog is already full, need=%r)", str(need or "")[:120])
-        return (
-            "You already have the full tool catalog this turn. "
-            "Call the tool you need directly — more_tools does not unlock anything."
-        )
-
-
-import docker_runtime as shell_runtime
+    async def execute(self, message: Message, group: str, **kwargs) -> str:
+        groups = current_tool_groups()
+        if groups is None:
+            return "Tool discovery is only available during an active response turn."
+        if group not in TOOL_DISCOVERY_GROUPS:
+            return f"Unknown tool group: {group}"
+        groups.add(group)
+        return f"Expanded the {group} tool group for the next model call."
 
 
 def _shell_workspace() -> Path:
-    if shell_runtime.container_mode():
-        return shell_runtime.confined_path(
-            os.environ.get("MAXWELL_SHELL_DIR", "/state/shell"), roots=("shell",)
+    """Keep attachment reads rooted in the existing shell storage mount."""
+    if container_mode():
+        return confined_path(
+            os.environ.get("DAME_CURIE_SHELL_DIR", "/state/shell"), roots=("shell",)
         )
     return Path(__file__).parent / "shelldocker"
 
 
 def _read_shell_export(path: str, limit: int) -> bytes:
     clean = str(path).strip()
-    if clean.startswith("/home/maxwell/"):
-        clean = clean[len("/home/maxwell/"):]
-    elif clean.startswith("home/maxwell/"):
-        clean = clean[len("home/maxwell/"):]
+    if clean.startswith("/home/dame-curie/"):
+        clean = clean[len("/home/dame-curie/"):]
+    elif clean.startswith("home/dame-curie/"):
+        clean = clean[len("home/dame-curie/"):]
     relative = Path(clean)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-        raise ValueError("shell exports must be under /home/maxwell without traversal")
+        raise ValueError("shell exports must be under /home/dame-curie without traversal")
     root = _shell_workspace()
     target = (root / relative).resolve()
     if not target.is_relative_to(root.resolve()):
-        raise ValueError("shell export escapes /home/maxwell")
+        raise ValueError("shell export escapes /home/dame-curie")
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for part in relative.parts[:-1]:
@@ -7374,8 +4841,7 @@ class SendFileTool(Tool):
                     if shell_tool is None or not getattr(getattr(self.bot, "config", None), "ENABLE_SHELL", False):
                         return "Error: shell file export requires a registered enabled shell tool"
                     relative = candidate.relative_to(workspace)
-                    async with shell_tool._lifecycle_lock:
-                        await shell_tool._verify_export_container()
+                    async with shell_tool._execution_lock:
                         blob = await asyncio.to_thread(_read_shell_export, str(relative), self.MAX_SIZE)
                     target = candidate
                 else:
@@ -7427,31 +4893,26 @@ class SendFileTool(Tool):
         )
         site_dir = getattr(getattr(self, "bot", None), "config", None)
         if site_dir:
-            site_path = getattr(site_dir, "MAXWELL_SITE_DIR", "")
+            site_path = getattr(site_dir, "DAME_CURIE_SITE_DIR", "")
             if site_path:
                 bases.append(os.path.abspath(site_path))
         return bases
 
     def _resolve_send_file_path(self, raw_path: str) -> str:
-        """Map a path the model might pass to the actual host path.
+        """Map the model's shell-home paths to the existing local storage mount.
 
-        Accepts both forms:
-          * host paths: /root/maxwell/shelldocker/foo.png (or any allowed base)
-          * container paths: /home/maxwell/foo.png  -> shelldocker/foo.png
-
-        Returns the resolved absolute host path, or the original input if no
-        remap is needed (let the existing _is_path_allowed check decide).
+        Other local paths still require an export-safe base.
         """
         cleaned = str(raw_path or "").strip()
         if not cleaned:
             return cleaned
-        m = re.fullmatch(r"/?home/maxwell(?:/(.*))?", cleaned)
+        m = re.fullmatch(r"/?home/dame-curie(?:/(.*))?", cleaned)
         if ".." in Path(cleaned).parts:
             raise ValueError("path traversal not allowed")
         if m:
             rel = m.group(1) or ""
             if Path(rel).is_absolute():
-                raise ValueError("shell exports must be under /home/maxwell")
+                raise ValueError("shell exports must be under /home/dame-curie")
             return str(_shell_workspace() / rel)
         return cleaned
 
@@ -7518,186 +4979,15 @@ class SendFileTool(Tool):
         return result
 
 
-# Patterns blocked in shell commands (defense-in-depth even in full-access mode).
-# These mainly prevent accidental or malicious attempts to run nested privileged containers,
-# mount host paths from inside commands, or access the Docker socket.
-# Note: the outer shell sandbox itself now runs with full network + full host FS access (/host).
-# Blocklist is best-effort: it's the outer wall, not the only wall. The inner
-# wall is taint tracking + the docker sandbox capabilities (no-new-privileges,
-# cap-drop ALL, no host net by default). Anything that tries to escape the
-# blocklist gets caught by the next layer.
-def _shell_exports_dir() -> str:
-    """Canonical dir where shell-produced files are staged for re-attach.
-
-    Defaults to <repo>/data/exports, overridable via MAXWELL_SHELL_EXPORT_DIR.
-    send_file already allowlists data/exports, so staged files can be
-    re-attached with a plain `send_file path=.../exports/<name>` call.
-    """
-    override = os.environ.get("MAXWELL_SHELL_EXPORT_DIR", "").strip()
-    if override:
-        return os.path.abspath(override)
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data", "exports"))
-
-
-_SHELL_BLOCKED_PATTERNS = [
-    r"--privileged\b",
-    r"--pid=host\b",
-    r"--device\b",
-    r"--mount\b",
-    r"--volume\b",
-    r"\b-v\s+\S+:\S+",  # trying to do extra docker -v from inside command
-    r"/var/run/docker\.sock",
-    r"docker\.sock",
-    r"docker\s+(?:run|exec)\b",
-    # Common shell-redirect / pipe-to-interpreter chains that turn a benign
-    # `cat` or `echo` into remote code execution. The "downloaded and run
-    # immediately" pattern is a classic prompt-injection payload.
-    r"\bcurl\b[^|]*\|\s*(?:sh|bash|zsh|dash|ksh|fish|ash|python\d?|perl|ruby|node)\b",
-    r"\bwget\b[^|]*\|\s*(?:sh|bash|zsh|dash|ksh|fish|ash|python\d?|perl|ruby|node)\b",
-    r"\bcurl\b[^|]*-o\s*-?\s*\|",  # curl -o- | sh
-    r"\bbase64\s+(?:-d|--decode)\b[^|]*\|\s*(?:sh|bash|zsh|python\d?)\b",
-    r"\beval\s*\$\(.*(?:curl|wget)\b",  # eval $(curl ...)
-]
-
-
-async def _run_docker_cmd(
-    *args: str, timeout: int = 30, output_limit: int | None = None
-):
-    """Run one `docker` command. Returns ``((stdout, stderr), returncode)``."""
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        if output_limit is None:
-            output = proc.communicate()
-        else:
-            limit = max(0, int(output_limit))
-
-            async def _read_limited(stream):
-                data = bytearray()
-                while True:
-                    chunk = await stream.read(4096)
-                    if not chunk:
-                        break
-                    if len(data) < limit:
-                        data.extend(chunk[: limit - len(data)])
-                return bytes(data)
-
-            output = asyncio.gather(
-                _read_limited(proc.stdout),
-                _read_limited(proc.stderr),
-                proc.wait(),
-            )
-            result = await asyncio.wait_for(output, timeout=timeout)
-            return (result[0], result[1]), result[2]
-        return await asyncio.wait_for(output, timeout=timeout), proc.returncode
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        # 2026-07-21: also catch CancelledError. If the parent
-        # task is cancelled (channel lock timeout, bot shutdown,
-        # ,cancel command), proc.communicate() raises CancelledError
-        # and the old `except TimeoutError` did not match — the
-        # subprocess was left running, eventually filling the
-        # stdout/stderr pipes and wedging the container.
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        with contextlib.suppress(Exception):
-            await proc.wait()
-        raise
-
-
-# Image used by the shell sandbox. Built from docker/Dockerfile on first use.
-SANDBOX_IMAGE_NAME = "maxwell-shell"
-SANDBOX_DOCKERFILE_DIR = os.path.join(os.path.dirname(__file__), "docker")
-
-
-def _sandbox_source_hash() -> str:
-    import hashlib
-
-    return hashlib.sha256((Path(SANDBOX_DOCKERFILE_DIR) / "Dockerfile").read_bytes()).hexdigest()
-
-
-async def _ensure_sandbox_image(image: str = SANDBOX_IMAGE_NAME) -> None:
-    labels = []
-    if shell_runtime.container_mode():
-        expected = shell_runtime.resource_name("shell-image")
-        if image not in {SANDBOX_IMAGE_NAME, expected}:
-            raise ValueError("shell image must use this instance namespace")
-        image = expected
-        labels = shell_runtime.label_args("shell-image") + [
-            "--label", f"maxwell.shell.source={_sandbox_source_hash()}"
-        ]
-    try:
-        (stdout, stderr), code = await _run_docker_cmd(
-            "image", "inspect", image, timeout=15
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("docker is not installed or not on PATH") from exc
-    except asyncio.TimeoutError as exc:
-        raise RuntimeError("docker did not respond") from exc
-    if code == 0:
-        if not shell_runtime.container_mode():
-            return
-        info = json.loads(stdout)[0]
-        image_labels = info["Config"].get("Labels") or {}
-        shell_runtime.require_ownership(image_labels, "shell-image")
-        if image_labels.get("maxwell.shell.source") == _sandbox_source_hash():
-            return
-    elif b"No such" not in stderr:
-        raise RuntimeError(stderr.decode(errors="replace").strip() or "shell image inspect failed")
-    (_stdout, stderr), build_code = await _run_docker_cmd(
-        "build", "-t", image, *labels, "-f",
-        str(Path(SANDBOX_DOCKERFILE_DIR) / "Dockerfile"),
-        SANDBOX_DOCKERFILE_DIR, timeout=900
-    )
-    if build_code != 0:
-        raise RuntimeError(stderr.decode(errors="replace").strip() or "docker build failed")
-
-
-def _taint_gate_blocks(tool: Any, message: Any, kwargs: dict) -> bool:
-    """True when a destructive call must be refused on an untrusted turn.
-
-    bot.py's dispatcher is the primary enforcement point and injects
-    ``_confirmed`` when the user has actually confirmed. Tools keep their own
-    check because that dispatcher is not the only caller — the autonomy tick
-    invokes ``tool.execute`` directly — but the two must agree on
-    ``DISABLE_TAINT_GATE``, or turning the gate off in .env leaves the
-    per-tool copy refusing anyway and the switch reads as broken.
-    """
-    bot = getattr(tool, "bot", None)
-    if bot is None or kwargs.get("_confirmed", False):
-        return False
-    if getattr(getattr(bot, "config", None), "DISABLE_TAINT_GATE", False):
-        return False
-    checker = getattr(bot, "is_message_tainted", None)
-    return bool(checker and checker(message))
-
-
 class ShellTool(Tool):
-    """Execute shell commands in the dedicated Docker sandbox."""
-
-    # Shell executes arbitrary code in a container. It's the most dangerous
-    # tool we expose, so it gets the taint-check / user-confirmation gate.
-    is_destructive = True
-
-    @property
-    def CONTAINER_NAME(self):
-        return shell_runtime.resource_name("shell") if shell_runtime.container_mode() else "maxwell-shell"
-
-    @property
-    def IMAGE_NAME(self):
-        return shell_runtime.resource_name("shell-image") if shell_runtime.container_mode() else SANDBOX_IMAGE_NAME
-
-    DOCKERFILE_DIR = os.path.join(os.path.dirname(__file__), "docker")
+    """Execute shell commands directly inside the existing outer bot container."""
 
     # Output / command-length caps. Read from env so the operator can tune
     # without a code change. 0 = unlimited (use with care; see below).
     # Defaults are generous: 100k chars of captured output covers any sane
     # `cat /var/log/*` or `find` invocation, and 64k command length is enough
     # for a multi-line ffmpeg pipeline. If you actually need more, raise
-    # MAXWELL_SHELL_MAX_OUTPUT / MAXWELL_SHELL_MAX_COMMAND_LENGTH in .env.
+    # DAME_CURIE_SHELL_MAX_OUTPUT / DAME_CURIE_SHELL_MAX_COMMAND_LENGTH in .env.
     #
     # Why not just remove the caps entirely? Because we still have to fit
     # the response through Discord (2000 char chunks) AND through the LLM
@@ -7723,7 +5013,7 @@ class ShellTool(Tool):
     @classmethod
     def _max_output(cls) -> int:
         """Captured stdout+stderr cap. 0 = unlimited."""
-        raw = os.environ.get("MAXWELL_SHELL_MAX_OUTPUT", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_MAX_OUTPUT", "").strip()
         if not raw:
             return cls._MAX_OUTPUT_DEFAULT
         try:
@@ -7735,7 +5025,7 @@ class ShellTool(Tool):
     @classmethod
     def _max_command_length(cls) -> int:
         """Max chars in a single shell command. 0 = unlimited."""
-        raw = os.environ.get("MAXWELL_SHELL_MAX_COMMAND_LENGTH", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_MAX_COMMAND_LENGTH", "").strip()
         if not raw:
             return cls._MAX_COMMAND_LENGTH_DEFAULT
         try:
@@ -7747,7 +5037,7 @@ class ShellTool(Tool):
     @classmethod
     def _channel_max_chars(cls) -> int:
         """Max chars posted to the chat for one shell call. 0 = unlimited."""
-        raw = os.environ.get("MAXWELL_SHELL_CHANNEL_MAX_CHARS", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_CHANNEL_MAX_CHARS", "").strip()
         if not raw:
             return cls._CHANNEL_MAX_CHARS_DEFAULT
         try:
@@ -7759,7 +5049,7 @@ class ShellTool(Tool):
     @classmethod
     def _timeout_seconds(cls) -> int:
         """Max wall-clock seconds for a shell command. Always > 0; capped at 1h."""
-        raw = os.environ.get("MAXWELL_SHELL_TIMEOUT", "").strip()
+        raw = os.environ.get("DAME_CURIE_SHELL_TIMEOUT", "").strip()
         if not raw:
             return 600  # 10 min default — was 30s, way too tight for real work
         try:
@@ -7768,19 +5058,7 @@ class ShellTool(Tool):
             return 600
         return max(1, min(v, cls._TIMEOUT_CEILING_SECONDS))
 
-    # Serialize container lifecycle + exec so parallel tool batches cannot
-    # race docker rm -f / recreate.
-    _lifecycle_lock = asyncio.Lock()
-
-    @staticmethod
-    def _full_host_access() -> bool:
-        """Opt-in host RCE mode. Default is isolated (no /host, no host net)."""
-        full = os.environ.get("MAXWELL_SHELL_FULL_HOST", "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        if full and shell_runtime.container_mode():
-            raise ValueError("MAXWELL_SHELL_FULL_HOST is forbidden in container mode")
-        return full
+    _execution_lock = asyncio.Lock()
 
     def get_description(self):
         # Surface live limits so the model doesn't have to guess. Pulled at
@@ -7801,184 +5079,22 @@ class ShellTool(Tool):
             "`cat << 'EOF' > path/file.py` then the body then a line containing "
             "only EOF. `cmd` is an alias for `command`. Do not prefix `$ ` or "
             "wrap the command in a markdown fence. Attach outputs with files= "
-            "(comma-separated paths under /home/maxwell)."
+            "(comma-separated paths under /home/dame-curie)."
         )
-        if self._full_host_access():
-            return (
-                "Run bash -lc in the maxwell-shell container (FULL ACCESS: host "
-                "net, /host, root). Params: command (required), files (optional "
-                "paths to attach). "
-                f"{how} Container persists across calls. {limits_note}"
-            )
         return (
-            "Run bash -lc in the maxwell-shell sandbox (workdir /home/maxwell). "
-            "Params: command (required), files (optional paths under /home/maxwell "
+            "Admins and shell-whitelisted users only. Run Bash without startup files "
+            "inside the bot container (workdir /home/dame-curie, minimal environment). "
+            'Write website files under "$DAME_CURIE_SITE_DIR/<site>/". '
+            'Start each website command with `cd -- "$DAME_CURIE_SITE_DIR/<site>"`, '
+            'or use that full path. Create the site directory there if needed. '
+            'The independent publisher mirrors this root, not the shell workdir. '
+            'Files under /home/dame-curie are not copied to the authoring root. '
+            'Keep site images under the same site directory and check HTML/CSS references there. '
+            "Do not start local website/API servers or administer remote publication. "
+            "Params: command (required), files (optional paths under /home/dame-curie "
             "to attach to the channel). "
-            f"{how} Container persists across calls. Max 10 MB per file. {limits_note}"
+            f"{how} Files persist across calls; shell state does not. Max 10 MB per file. {limits_note}"
         )
-
-    async def _run_docker(self, *args: str, timeout: int = 30):
-        return await _run_docker_cmd(*args, timeout=timeout)
-
-    async def _verify_daemon(self):
-        if shell_runtime.container_mode():
-            (stdout, stderr), code = await self._run_docker("info", "--format", "{{json .SecurityOptions}}", timeout=10)
-            if code or stderr.strip() or "name=rootless" not in json.loads(stdout or b"[]"):
-                raise RuntimeError("container shell requires a rootless Docker daemon")
-
-    async def _inspect_container(self):
-        (stdout, stderr), code = await self._run_docker(
-            "inspect", "--type", "container", self.CONTAINER_NAME, timeout=10
-        )
-        if code:
-            if b"No such" not in stderr:
-                raise RuntimeError(stderr.decode(errors="replace").strip() or "sandbox inspect failed")
-            return None
-        info = json.loads(stdout)[0]
-        labels = info["Config"].get("Labels") or {}
-        if shell_runtime.container_mode():
-            shell_runtime.require_ownership(labels, "shell")
-        elif labels.get("maxwell.shell.mode") not in {"full", "isolated"} or labels.get("maxwell.shell.init") != "1":
-            raise ValueError("existing container is not an owned Maxwell shell")
-        return info
-
-    async def _verify_container(self, info):
-        full = self._full_host_access()
-        labels = info["Config"].get("Labels") or {}
-        if labels.get("maxwell.shell.mode") != ("full" if full else "isolated") or labels.get("maxwell.shell.init") != "1":
-            raise ValueError("shell container mode does not match configuration")
-        host = info["HostConfig"]
-        workspace = _shell_workspace()
-        source = shell_runtime.host_path(workspace, roots=("shell",)) if shell_runtime.container_mode() else workspace
-        expected_mounts = {(str(source), "/home/maxwell", True)}
-        if full:
-            expected_mounts.add(("/", "/host", True))
-        mounts = {(m["Source"], m["Destination"], m["RW"]) for m in info["Mounts"] if m["Type"] == "bind"}
-        if mounts != expected_mounts or any(m["Type"] not in {"bind", "tmpfs"} for m in info["Mounts"]):
-            raise ValueError("shell container has unexpected mounts")
-        if host.get("Privileged") or host.get("PidMode") == "host" or host.get("IpcMode") == "host" or host.get("Devices") or host.get("DeviceRequests") or host.get("VolumesFrom"):
-            raise ValueError("shell container has unsafe host access")
-        expected_limits = {"Memory": 4 * 1024**3, "NanoCpus": 2_000_000_000, "PidsLimit": 1024}
-        if any(host.get(key) != value for key, value in expected_limits.items()):
-            raise ValueError("shell container resource limits do not match configuration")
-        if host.get("PortBindings") or host.get("PublishAllPorts"):
-            raise ValueError("shell container must not publish ports")
-        if host.get("Tmpfs") != {"/tmp": "rw,exec,nosuid,size=256m"} or any(m["Type"] == "tmpfs" and m["Destination"] != "/tmp" for m in info["Mounts"]):
-            raise ValueError("shell container scratch mounts do not match configuration")
-        config = info["Config"]
-        if config.get("User") != "root" or config.get("WorkingDir") != "/home/maxwell" or config.get("Cmd") != ["sleep", "infinity"] or config.get("Entrypoint"):
-            raise ValueError("shell container process does not match configuration")
-        if set(info["NetworkSettings"]["Networks"]) != {"host" if full else "bridge"}:
-            raise ValueError("shell container has unexpected network attachments")
-        if host.get("NetworkMode") != ("host" if full else "bridge") or host.get("Init") is not True:
-            raise ValueError("shell container network/init does not match configuration")
-        if not full and (set(host.get("CapDrop") or []) != {"ALL"} or set(host.get("CapAdd") or []) != {"CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "NET_RAW", "NET_BIND_SERVICE"} or set(host.get("SecurityOpt") or []) != {"no-new-privileges:true"}):
-            raise ValueError("shell container security options do not match configuration")
-        if shell_runtime.container_mode():
-            (stdout, stderr), code = await self._run_docker("image", "inspect", self.IMAGE_NAME, timeout=15)
-            if code:
-                raise RuntimeError(stderr.decode(errors="replace").strip() or "shell image missing")
-            image = json.loads(stdout)[0]
-            image_labels = image["Config"].get("Labels") or {}
-            shell_runtime.require_ownership(image_labels, "shell-image")
-            if image_labels.get("maxwell.shell.source") != _sandbox_source_hash() or info["Image"] != image["Id"]:
-                raise ValueError("shell container image identity/source mismatch")
-        return info["Id"]
-
-    async def _verify_export_container(self):
-        self._full_host_access()
-        await self._verify_daemon()
-        info = await self._inspect_container()
-        if info is None or not info["State"]["Running"]:
-            raise ValueError("shell container is not running")
-        return await self._verify_container(info)
-
-    async def _ensure_container(self):
-        desired_mode = "full" if self._full_host_access() else "isolated"
-        await self._verify_daemon()
-        info = await self._inspect_container()
-        if info is not None:
-            labels = info["Config"].get("Labels") or {}
-            if labels.get("maxwell.shell.mode") == desired_mode and labels.get("maxwell.shell.init") == "1":
-                container_id = await self._verify_container(info)
-                if not info["State"]["Running"]:
-                    (_stdout, stderr), code = await self._run_docker("start", container_id, timeout=15)
-                    if code:
-                        raise RuntimeError(stderr.decode(errors="replace").strip() or "shell start failed")
-                return await self._verify_export_container()
-            (_stdout, stderr), code = await self._run_docker("rm", "-f", info["Id"], timeout=10)
-            if code:
-                raise RuntimeError(stderr.decode(errors="replace").strip() or "could not remove sandbox")
-        await _ensure_sandbox_image(self.IMAGE_NAME)
-        workspace = _shell_workspace()
-        workspace.mkdir(parents=True, exist_ok=True)
-        shell_host = shell_runtime.host_path(workspace, roots=("shell",)) if shell_runtime.container_mode() else workspace
-        run_args = [
-            "run",
-            "-d",
-            "--init",
-            "--name",
-            self.CONTAINER_NAME,
-            "--label",
-            f"maxwell.shell.mode={desired_mode}",
-            "--label",
-            "maxwell.shell.init=1",
-            "--memory",
-            "4g",
-            "--cpus",
-            "2.0",
-            "--pids-limit",
-            "1024",
-            "--tmpfs",
-            "/tmp:rw,exec,nosuid,size=256m",
-            "-v",
-            f"{shell_host}:/home/maxwell:rw",
-        ]
-        if self._full_host_access():
-            # Explicit opt-in: host network + full host FS (documented RCE for admins).
-            run_args.extend(
-                [
-                    "--network",
-                    "host",
-                    "-v",
-                    "/:/host:rw",
-                ]
-            )
-        else:
-            # Default: isolated sandbox (no docker.sock, no host root, no host net).
-            run_args.extend(
-                [
-                    "--network",
-                    "bridge",
-                    "--security-opt",
-                    "no-new-privileges:true",
-                    "--cap-drop",
-                    "ALL",
-                    "--cap-add",
-                    "CHOWN",
-                    "--cap-add",
-                    "SETUID",
-                    "--cap-add",
-                    "SETGID",
-                    "--cap-add",
-                    "DAC_OVERRIDE",
-                    "--cap-add",
-                    "FOWNER",
-                    "--cap-add",
-                    "NET_RAW",
-                    "--cap-add",
-                    "NET_BIND_SERVICE",
-                ]
-            )
-        if shell_runtime.container_mode():
-            run_args.extend(shell_runtime.label_args("shell"))
-        run_args.append(self.IMAGE_NAME)
-        (_stdout, stderr), run_code = await self._run_docker(*run_args, timeout=30)
-        if run_code != 0:
-            raise RuntimeError(
-                stderr.decode(errors="replace").strip() or "docker run failed"
-            )
-        return await self._verify_export_container()
 
     @staticmethod
     def _command_arg(command: str | None = None, **kwargs) -> str | None:
@@ -8023,24 +5139,12 @@ class ShellTool(Tool):
         return raw
 
     def _validate_command(self, command: str) -> str | None:
-        """Return an error reason if the command looks dangerous, otherwise None."""
+        """Keep the input budget without restricting Bash syntax or paths."""
         if not command:
             return "empty command"
-        # 0 = unlimited (operator opts in via MAXWELL_SHELL_MAX_COMMAND_LENGTH=0)
         max_len = self._max_command_length()
         if max_len and len(command) > max_len:
-            return f"command too long (max {max_len} chars; set MAXWELL_SHELL_MAX_COMMAND_LENGTH=0 to disable)"
-        # Multi-line commands & heredocs are allowed.
-        if "\n" in command:
-            hint = _unterminated_heredoc_error(command)
-            if hint:
-                return "heredoc error — " + hint
-        non_heredoc = _strip_heredoc_blocks(command)
-        if any(ord(c) < 32 and c not in ("\t", "\n", "\r") for c in non_heredoc):
-            return "control characters are not allowed in shell commands"
-        for pattern in _SHELL_BLOCKED_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE):
-                return "blocked dangerous shell pattern"
+            return f"command too long (max {max_len} chars; set DAME_CURIE_SHELL_MAX_COMMAND_LENGTH=0 to disable)"
         return None
 
     _PROGRESS_TICK_SECONDS = 0.8
@@ -8052,33 +5156,24 @@ class ShellTool(Tool):
             raise RuntimeError(validation_error)
         if not sanitized:
             raise RuntimeError("empty command")
-        async with self._lifecycle_lock, contextlib.AsyncExitStack() as scope:
-            container_id = await self._ensure_container()
+        if not container_mode() or not os.path.isfile("/.dockerenv"):
+            raise RuntimeError("shell requires the outer bot container; host execution is disabled")
+        async with self._execution_lock, contextlib.AsyncExitStack() as scope:
             diagnostics = scope.enter_context(ShellDiagnosticCapture(sanitized))
-            exec_token = f"maxwell-exec-{uuid.uuid4().hex}"
-            pid_file = f"/tmp/{exec_token}.pid"
-            # Run the user's shell in its own session/process group and leave
-            # its leader PID in the container. Killing only the local
-            # `docker exec` client does not kill a child command; pipelines,
-            # background jobs, and `sleep` would otherwise survive every
-            # timeout and accumulate in the persistent sandbox.
-            inner = f"trap 'rm -f {shlex.quote(pid_file)}' EXIT; {sanitized}"
-            wrapped = (
-                f"echo $$ > {shlex.quote(pid_file)}; exec bash -lc {shlex.quote(inner)}"
-            )
             proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "exec",
-                "--workdir",
-                "/home/maxwell",
-                "--user",
-                "root",
-                container_id,
-                "setsid",
-                "--wait",
-                "bash",
-                "-lc",
-                wrapped,
+                "bash", "--noprofile", "--norc", "-c", sanitized,
+                cwd="/home/dame-curie",
+                env={
+                    "HOME": "/home/dame-curie",
+                    "PATH": "/home/dame-curie/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LANG": "C.UTF-8",
+                    "PYTHONUNBUFFERED": "1",
+                    "DAME_CURIE_SITE_DIR": os.path.abspath(
+                        os.path.dirname(_public_image_target(self.bot)[0])
+                    ),
+                },
+                start_new_session=True,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -8156,7 +5251,7 @@ class ShellTool(Tool):
                 exception = sys.exception()
                 observed_exit_code = proc.returncode
                 cleanup = asyncio.create_task(self._settle_shell_execution(
-                    proc, workers, execution, beat, pid_file, container_id, completed,
+                    proc, workers, execution, beat, completed,
                 ))
                 interrupted = False
                 while not cleanup.done():
@@ -8179,55 +5274,28 @@ class ShellTool(Tool):
                     raise asyncio.CancelledError
             incident_id = diagnostics.incident_id if proc.returncode != 0 else None
             if output_truncated:
-                stderr_buf.extend(b"\n[output truncated at MAXWELL_SHELL_MAX_OUTPUT]")
+                stderr_buf.extend(b"\n[output truncated at DAME_CURIE_SHELL_MAX_OUTPUT]")
             return ShellResult(bytes(stdout_buf), bytes(stderr_buf), proc.returncode, incident_id)
 
-    async def _settle_shell_execution(self, proc, workers, execution, beat, pid_file, container_id, completed):
+    async def _settle_shell_execution(self, proc, workers, execution, beat, completed):
+        """Settle stream tasks after process-group cleanup, even during cancellation."""
         beat.cancel()
         try:
             if not completed or proc.returncode is None:
-                await self._terminate_shell_process(proc, pid_file, container_id)
-        except Exception as exc:
-            capture_incident("tool.shell.cleanup", "Shell process cleanup failed", exception=exc)
+                await self._terminate_shell_process(proc)
         finally:
             for worker in workers:
                 worker.cancel()
             await asyncio.gather(beat, execution, *workers, return_exceptions=True)
 
-    async def _terminate_shell_process(self, proc, pid_file: str, container_id: str) -> None:
-        try:
-            await self._kill_container_exec(pid_file, container_id)
-        finally:
-            try:
-                with contextlib.suppress(ProcessLookupError):
-                    proc.kill()
-            finally:
-                await proc.wait()
-
-    async def _kill_container_exec(self, pid_file: str, container_id: str) -> None:
-        """Terminate the timed-out command, not just its docker client."""
-        quoted = shlex.quote(pid_file)
-        cleanup = (
-            f"pid=$(cat {quoted} 2>/dev/null); "
-            'case "$pid" in '
-            "''|*[!0-9]*) ;; "
-            f"*) kill -TERM -- -$pid 2>/dev/null; sleep 0.2; "
-            f"kill -KILL -- -$pid 2>/dev/null; rm -f {quoted} ;; "
-            "esac"
-        )
-        with contextlib.suppress(Exception):
-            if await self._verify_export_container() != container_id:
-                return
-            await self._run_docker(
-                "exec",
-                "--user",
-                "root",
-                container_id,
-                "bash",
-                "-lc",
-                cleanup,
-                timeout=10,
-            )
+    async def _terminate_shell_process(self, proc: asyncio.subprocess.Process) -> None:
+        """Stop the command's process group so pipelines do not outlive a timeout."""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGTERM)
+        await asyncio.sleep(0.2)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        await proc.wait()
 
     def _shell_echo_text(self, command: str, *suffixes: str) -> str:
         """Build the body for a ```ansi block: a (truncated) command echo + suffix lines.
@@ -8336,33 +5404,14 @@ class ShellTool(Tool):
         files: str | None = None,
         **kwargs,
     ) -> str:
+        if not tool_authorized(self.bot, message, "shell"):
+            return "Error: shell is restricted to admins and shell-whitelisted users."
         normalized = self._normalize_command(self._command_arg(command, **kwargs))
         if not normalized:
             return "Error: command is required (tool-call markup was detected or command was empty)"
         validation_error = self._validate_command(normalized)
         if validation_error:
             return f"Error executing command: {validation_error}"
-
-        # No whitelist: any user in an allowed channel can run shell. The
-        # sandbox is the security boundary (root inside container, but no
-        # host / mount, no host net, no docker socket by default). The
-        # taint-check below still requires `!confirm` on turns that read
-        # URL/web-search content.
-
-        # Indirect-prompt-injection defense: if the current turn is tainted
-        # (the model just read content from a URL / web search that may carry
-        # prompt-injection payloads), require an explicit confirm flag on the
-        # call. Without this, a malicious page can say "run `rm -rf ~`" and
-        # the model can comply even with the blocklist in place.
-        if _taint_gate_blocks(self, message, kwargs):
-            preview = normalized[:200] + ("..." if len(normalized) > 200 else "")
-            return (
-                "Error: shell refused: this turn read content from a fetched "
-                "URL/web search that may carry prompt-injection payloads. "
-                "The user must confirm out-of-band with `!confirm` "
-                "before this can run.\n"
-                f"Command preview: {preview}"
-            )
 
         sess = None
         slot = None
@@ -8481,8 +5530,7 @@ class ShellTool(Tool):
         if getattr(self.bot, "tools", {}).get("shell") is not self or not getattr(getattr(self.bot, "config", None), "ENABLE_SHELL", False):
             return None
         try:
-            async with self._lifecycle_lock:
-                await self._verify_export_container()
+            async with self._execution_lock:
                 blob = await asyncio.to_thread(_read_shell_export, rel_path, 10 * 1024 * 1024)
             filename = Path(rel_path).name
             self._signal_streaming(message)
@@ -8573,7 +5621,6 @@ class FetchUrlTool(Tool):
             "Fetch an http(s) URL and return readable text (HTML, JSON, "
             "plain, SVG source). Use after web_search when a snippet is thin, or whenever "
             "they gave a specific page to read. Local/private URLs are allowed. "
-            "In Docker, your generated sites use http://web:8080/bot/<slug>/. "
             "Images and GIFs (including Tenor/Giphy pages): see_image. "
             "Direct videos: see_video. Audio/video bytes are media, not text. "
             "YouTube: youtube. Params: url (required), max_length (optional, "
@@ -8615,12 +5662,6 @@ class FetchUrlTool(Tool):
             if visual and not str(visual).startswith("Error"):
                 return visual
             return visual or f"Error: could not load video from {url}"
-
-        # Mark this turn as tainted: the URL is operator-supplied but its
-        # *content* is untrusted and may include prompt-injection payloads
-        # designed to steer the model into proposing shell calls.
-        if self.bot is not None and hasattr(self.bot, "mark_message_tainted"):
-            self.bot.mark_message_tainted(message)
 
         try:
             max_len = max(1, min(int(max_length), self.MAX_CONTENT))
@@ -9708,7 +6749,7 @@ class YouTubeTool(Tool):
             max_chars = 12000
         lang = re.sub(r"[^A-Za-z0-9_.-]", "", str(lang or "en"))[:20] or "en"
         requested_ts = self._parse_timestamps(timestamps)
-        with tempfile.TemporaryDirectory(prefix="maxwell_yt_") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="dame-curie-yt-") as tmpdir:
             tmp = Path(tmpdir)
             info_task = asyncio.create_task(self._video_info(url))
             transcript = await self._download_transcript(url, lang, tmp)
@@ -9916,8 +6957,7 @@ class SendMediaTool(Tool):
         return result
 
 
-# KiloTool removed — it was a host-level RCE escape hatch that bypassed
-# the Docker sandbox. One prompt injection and the LLM owns your box.
+# KiloTool removed — host execution bypasses the outer bot container boundary.
 
 
 class TtsTool(Tool):
@@ -9932,8 +6972,7 @@ class TtsTool(Tool):
     def get_description(self):
         return (
             "Convert a text response into a speech voice message and send it to the triggering channel. "
-            "Params: text (required string), language/lang (optional: english or spanish), "
-            "voice (optional: tiktok or mommy — pick the TTS voice)."
+            "Params: text (required string). Engine, language and voice use the operator-configured TTS profile."
         )
 
     async def execute(
@@ -9967,128 +7006,81 @@ class TtsTool(Tool):
                     c: t for c, t in TtsTool._last_tts.items() if t > cutoff
                 }
 
-        language_key = _tts_language_key(language, lang, **kwargs)
-        lang_is_spanish = language_key == "spanish"
-
-        # Determine API Key and Setup File
-        bot_config = getattr(getattr(self, "bot", None), "config", None)
-        nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "") or getattr(
-            bot_config, "NVIDIA_API_KEY", ""
-        )
-        fish_api_key = os.environ.get("FISH_API_KEY", "") or getattr(
-            bot_config, "FISH_API_KEY", ""
-        )
+        cfg = self.bot.config
+        engine = getattr(cfg, "TTS_ENGINE", "")
+        if engine not in {"local", "fish", "riva", "gtts"}:
+            raise ValueError("TTS_ENGINE must explicitly select local/fish/riva")
+        if engine == "gtts":
+            raise ValueError("TTS_ENGINE=gtts is unsupported: the SDK sends unconfigured language, speed and routing defaults")
+        configured_voice = {
+            "fish": getattr(cfg, "TTS_FISH_REFERENCE_ID", ""),
+            "riva": getattr(cfg, "TTS_RIVA_VOICE", ""),
+            "local": getattr(cfg, "TTS_LOCAL_VOICE", None),
+        }[engine]
+        if voice not in (None, "", configured_voice):
+            raise ValueError("TTS voice must match the configured engine profile")
+        if language is not None or lang is not None:
+            if engine != "riva" or _tts_language_key(language, lang) != _tts_language_key(cfg.TTS_RIVA_LANGUAGE):
+                raise ValueError("TTS language must be configured in the engine profile")
         with tempfile.TemporaryDirectory(prefix="tts_") as temp_dir:
             token = uuid.uuid4().hex[:12]
             filename = os.path.join(temp_dir, f"tts_{token}.wav")
             voice_filename = os.path.join(temp_dir, f"tts_{token}.ogg")
 
-            tts_source = None  # path to synthesized audio; drives fallback chain
-
-            # Provider order: Fish (best quality, free tier, emotion tags) →
-            # Riva (NVIDIA, paid) → gTTS (free fallback). Each block only sets
-            # `tts_source` on success; failures fall through silently.
-            if not tts_source and fish_api_key:
-                fish_model = os.environ.get("TTS_FISH_MODEL", "s2.1-pro-free")
-                fish_ref = _fish_reference_id(voice)
-                fish_fmt = os.environ.get("TTS_FISH_FORMAT", "mp3")
-                fish_out = await _synthesize_fish_tts(
-                    text,
-                    filename,
-                    api_key=fish_api_key,
-                    model=fish_model,
-                    reference_id=fish_ref,
-                    fmt=fish_fmt,
+            tts_source = filename
+            if engine == "fish":
+                tts_source = await _synthesize_fish_tts(
+                    text, filename, api_key=cfg.FISH_API_KEY,
+                    model=cfg.TTS_FISH_MODEL, reference_id=cfg.TTS_FISH_REFERENCE_ID,
+                    fmt=cfg.TTS_FISH_FORMAT,
                 )
-                if fish_out:
-                    tts_source = fish_out
-                    logger.info(
-                        "TTS provider: fish (model=%s, voice=%s)", fish_model, voice
+            elif engine == "riva":
+                if not cfg.NVIDIA_API_KEY or not cfg.TTS_RIVA_FUNCTION_ID or not cfg.TTS_RIVA_VOICE or not cfg.TTS_RIVA_LANGUAGE:
+                    raise ValueError("Riva TTS requires NVIDIA_API_KEY and TTS_RIVA_FUNCTION_ID/VOICE/LANGUAGE")
+                import riva.client
+                from riva.client.proto import riva_audio_pb2
+
+                auth = riva.client.Auth(
+                    use_ssl=True, uri="grpc.nvcf.nvidia.com:443",
+                    metadata_args=[
+                        ["function-id", cfg.TTS_RIVA_FUNCTION_ID],
+                        ["authorization", f"Bearer {cfg.NVIDIA_API_KEY}"],
+                    ],
+                    options=[
+                        ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+                        ("grpc.max_send_message_length", 64 * 1024 * 1024),
+                    ],
+                )
+                service = riva.client.SpeechSynthesisService(auth)
+
+                def run_riva():
+                    return service.synthesize(
+                        text=text, voice_name=cfg.TTS_RIVA_VOICE,
+                        language_code=cfg.TTS_RIVA_LANGUAGE, sample_rate_hz=44100,
+                        encoding=riva_audio_pb2.AudioEncoding.LINEAR_PCM,
                     )
 
-            if not tts_source:
-                try:
-                    # Try NVIDIA Riva TTS
-                    if not nvidia_api_key:
-                        raise RuntimeError("NVIDIA_API_KEY is not configured")
+                resp = await asyncio.wait_for(asyncio.to_thread(run_riva), timeout=30)
+                with wave.open(filename, "wb") as out_f:
+                    out_f.setnchannels(1)
+                    out_f.setsampwidth(2)
+                    out_f.setframerate(44100)
+                    out_f.writeframesraw(resp.audio)
+            elif engine == "local":
+                import subprocess
 
-                    import riva.client
-                    from riva.client.proto import riva_audio_pb2
-
-                    function_id = os.environ.get(
-                        "TTS_RIVA_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969"
-                    )
-                    auth = riva.client.Auth(
-                        use_ssl=True,
-                        uri="grpc.nvcf.nvidia.com:443",
-                        metadata_args=[
-                            ["function-id", function_id],
-                            ["authorization", f"Bearer {nvidia_api_key}"],
-                        ],
-                        options=cast(
-                            Any,
-                            [
-                                ("grpc.max_receive_message_length", 64 * 1024 * 1024),
-                                ("grpc.max_send_message_length", 64 * 1024 * 1024),
-                            ],
-                        ),
-                    )
-                    service = riva.client.SpeechSynthesisService(auth)
-
-                    tts_voice_name, tts_language_code = _tts_riva_voice_config(language_key)
-
-                    # Use gRPC service synchronously (run in executor since it is synchronous gRPC)
-                    def run_riva():
-                        return service.synthesize(
-                            text=text,
-                            voice_name=tts_voice_name,
-                            language_code=tts_language_code,
-                            sample_rate_hz=44100,
-                            encoding=cast(Any, riva_audio_pb2).AudioEncoding.LINEAR_PCM,
-                        )
-
-                    loop = asyncio.get_running_loop()
-                    # Bound the gRPC call: a stalled Riva endpoint would hang this tool
-                    # and leak an executor thread otherwise.
-                    resp = await asyncio.wait_for(
-                        loop.run_in_executor(None, run_riva), timeout=30
-                    )
-                    logger.info(
-                        f"Riva TTS synthesized audio with voice={tts_voice_name!r}, language={tts_language_code!r}"
-                    )
-
-                    # Save the WAV file
-                    with wave.open(filename, "wb") as out_f:
-                        out_f.setnchannels(1)
-                        out_f.setsampwidth(2)
-                        out_f.setframerate(44100)
-                        # cast: the riva client returns an untyped stub object; the
-                        # synthesized audio bytes live on `.audio` at runtime.
-                        out_f.writeframesraw(cast(Any, resp).audio)
-                    tts_source = filename
-                    logger.info("TTS provider: riva")
-                except Exception as e:
-                    logger.warning(f"Riva TTS synthesis failed: {e}")
-
-            # Last-resort fallback: gTTS. Used when neither Fish nor Riva produced
-            # audio. Kept at the bottom of the provider chain so the comment above
-            # about quality (no voice selection / no emotion tags) still applies.
-            if not tts_source:
-                try:
-                    from gtts import gTTS
-
-                    def run_gtts():
-                        tts = gTTS(text=text, lang="es" if lang_is_spanish else "en")
-                        tts.save(filename)
-
-                    loop = asyncio.get_running_loop()
-                    await asyncio.wait_for(loop.run_in_executor(None, run_gtts), timeout=30)
-                    logger.warning(
-                        "TTS used gTTS fallback; voice selection/emotion is unavailable in fallback audio"
-                    )
-                    tts_source = filename
-                except Exception as fallback_err:
-                    return f"Error: all TTS providers failed (last error: {fallback_err})"
+                executable = shutil.which("espeak-ng") or shutil.which("espeak")
+                if not executable:
+                    raise RuntimeError("Configured local TTS requires espeak-ng or espeak")
+                command = [executable]
+                for flag, value in (("-v", cfg.TTS_LOCAL_VOICE), ("-s", cfg.TTS_LOCAL_SPEED), ("-p", cfg.TTS_LOCAL_PITCH)):
+                    if value is not None:
+                        command.extend((flag, value))
+                command.extend(("-w", filename, "--", text))
+                await asyncio.to_thread(
+                    subprocess.run, command, check=True, timeout=30,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
 
             async def make_voice_ogg(source: str) -> str:
                 proc = await asyncio.create_subprocess_exec(
@@ -10233,15 +7225,12 @@ class TtsTool(Tool):
                 with handle_message_parameters(file=voice_file, flags=flags) as params:
                     await state.http.send_message(channel.id, params=params)
 
-            # Send as voice-style audio. Telegram adapters use sendVoice; Discord needs a voice flag plus waveform metadata.
+            # Send as voice-style audio. Discord needs a voice flag plus waveform metadata.
             if os.path.exists(filename):
                 send_path = filename
                 try:
                     send_path = await make_voice_ogg(filename)
-                    if hasattr(message, "send_voice_file"):
-                        await cast(Any, message).send_voice_file(send_path)
-                    else:
-                        await send_discord_voice_message(send_path)
+                    await send_discord_voice_message(send_path)
                     # Distinct from terminal no_response so TTS in a multi-tool batch
                     # does not abort follow-up / suppress other tool results.
                     return "__TTS_SENT__"
@@ -10333,10 +7322,8 @@ class InboxListTool(Tool):
 
     def get_description(self):
         return (
-            "List unread inbox items: friend requests, new email, and other "
-            "notices. No params. Use inbox_act to accept, decline, dismiss, or "
-            "mark read. For an email item, email_get_message with the item's "
-            "uid gives you the full body."
+            "List unread inbox items: friend requests and other notices. "
+            "No params. Use inbox_act to accept, decline, dismiss, or mark read."
         )
 
     async def execute(self, message: Message, **kwargs) -> str:
@@ -10364,8 +7351,8 @@ class InboxActTool(Tool):
     def get_description(self):
         return (
             "Act on an inbox item. Params: action (required: accept, decline, "
-            "dismiss, or read), item_id (inbox id like friend_123 or "
-            "email_412) or user_id (the requester's Discord id). accept and "
+            "dismiss, or read), item_id (inbox id like friend_123) "
+            "or user_id (the requester's Discord id). accept and "
             "decline are friend requests only; read keeps a notice in the "
             "inbox but stops it being brought to your attention again, "
             "dismiss clears it for good."
@@ -10575,1041 +7562,6 @@ class LeaveVcTool(Tool):
             return f"Error leaving voice channel: {e}"
 
 
-# =============================================================================
-# Email tools (maxwell@z3ki.dev) — local MTA only
-#
-# Design note — read this before you touch any of the classes below:
-#
-# Sending and receiving both go through Postfix+Dovecot on localhost.
-# Outbound: bot connects to 127.0.0.1:25, EHLO, STARTTLS, SASL PLAIN, MAIL FROM,
-#   RCPT TO, DATA. Postfix handles all DNS lookup, queueing, retry, and the
-#   actual TCP hand-off to the recipient's MX. We never touch port 25 directly.
-# Inbound: bot connects to 127.0.0.1:993 (IMAPS), SASL PLAIN, SELECT INBOX,
-#   FETCH. Mail is delivered to /var/mail/vmail/z3ki.dev/maxwell/ via the
-#   Postfix virtual(5) transport, which is maildir-format. Dovecot serves it
-#   over IMAP.
-#
-# No Mailgun, no Gmail, no third party. Pure VPS, by design. The cost of that
-# is that Contabo's IP range is on most DNSBLs, so mail we send to Gmail/Outlook/
-# Yahoo will land in spam or get rejected outright (we already saw Gmail return
-# 550 5.7.26 — "your email has been blocked because the sender is unauthenticated"
-# — because there's no SPF or DKIM yet). When the operator finishes the manual
-# DNS work (SPF + DKIM TXT records) and opendkim is wired in, the situation
-# improves. The tools themselves don't care either way.
-#
-# The blocking I/O (`smtplib`, `imaplib`) runs through asyncio.to_thread so
-# the bot's event loop isn't held up by a 30-second SMTP timeout. This is the
-# same pattern other tools in this file use implicitly.
-# =============================================================================
-
-
-def _email_cfg(bot) -> dict:
-    """Pull the email-related config keys in one place.
-
-    Defaults are tuned for the local Postfix+Dovecot setup; if the operator
-    ever wants to point the bot at a remote SMTP/IMAP server (e.g. for
-    testing against Mailgun's sandbox), they only edit env vars, not code.
-    """
-    cfg = getattr(bot, "config", None)
-    return {
-        "host": getattr(cfg, "MAXWELL_SMTP_HOST", "127.0.0.1"),
-        "smtp_port": int(getattr(cfg, "MAXWELL_SMTP_PORT", "25")),
-        "imap_host": getattr(cfg, "MAXWELL_IMAP_HOST", "127.0.0.1"),
-        "imap_port": int(getattr(cfg, "MAXWELL_IMAP_PORT", "993")),
-        "user": getattr(cfg, "MAXWELL_EMAIL_USER", "maxwell@z3ki.dev"),
-        "password": getattr(cfg, "MAXWELL_EMAIL_PASSWORD", ""),
-        "from_addr": getattr(cfg, "MAXWELL_EMAIL_FROM", "maxwell@z3ki.dev"),
-        "from_name": getattr(cfg, "MAXWELL_EMAIL_FROM_NAME", "Dame Curie"),
-    }
-
-
-def _smtp_send_sync(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    from_addr: str,
-    from_name: str,
-    to_addrs: list[str],
-    cc_addrs: list[str],
-    bcc_addrs: list[str],
-    subject: str,
-    body: str,
-    is_html: bool,
-    reply_to: str | None,
-) -> str:
-    """Blocking SMTP send. Runs in a thread.
-
-    Returns a one-line status string the bot shows the user. On failure,
-    returns "Error: ..." with the underlying exception's text, truncated.
-    """
-    import smtplib
-    from email.message import EmailMessage
-    from email.utils import formatdate, make_msgid
-
-    msg = EmailMessage()
-    msg["From"] = f"{from_name} <{from_addr}>" if from_name else from_addr
-    msg["To"] = ", ".join(to_addrs)
-    if cc_addrs:
-        msg["Cc"] = ", ".join(cc_addrs)
-    msg["Subject"] = subject
-    msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain=from_addr.split("@", 1)[-1])
-    if reply_to:
-        msg["Reply-To"] = reply_to
-    if is_html:
-        msg.set_content("This message requires an HTML-capable client.")
-        msg.add_alternative(body, subtype="html")
-    else:
-        msg.set_content(body)
-
-    # All recipients in one RCPT TO list, including BCC. Postfix delivers
-    # to each. BCC addresses are stripped from headers (EmailMessage does
-    # this automatically) but still in the envelope.
-    all_rcpts = to_addrs + cc_addrs + bcc_addrs
-
-    # Per-recipient timeout is the right knob here. 30s connects +
-    # 60s message I/O is generous; a hung SMTP server shouldn't keep us
-    # in a thread for longer than that.
-    timeout = 60
-    with smtplib.SMTP(host, port, timeout=timeout) as s:
-        s.ehlo()
-        # STARTTLS or nothing. The local MTA requires it (smtpd_tls_auth_only=yes);
-        # if we ever point at a remote server without TLS, that server's not
-        # one we should be talking to.
-        s.starttls()
-        s.ehlo()
-        s.login(user, password)
-        refused = s.sendmail(from_addr, all_rcpts, msg.as_string())
-    if refused:
-        # sendmail returns a dict of {recipient: error} for any it couldn't
-        # queue. Postfix should queue everything if the recipient domain is
-        # real; if we see something here, treat it as a hard error.
-        return "Error: SMTP refused recipients: " + ", ".join(
-            f"{r}: {e}" for r, e in refused.items()
-        )
-    return f"Email queued for {len(all_rcpts)} recipient(s)."
-
-
-def _imap_connect_sync(host: str, port: int, user: str, password: str):
-    """Open IMAPS, return the connection. Caller must close it.
-
-    Use the public Mailbox API instead of poking the raw IMAP4 object; the
-    high-level API handles quoting/escaping and gives a sane exception
-    hierarchy (imaplib.IMAP4.error) on auth or protocol failures.
-    """
-    import imaplib
-
-    # The local Dovecot uses a self-signed snakeoil cert. We don't want
-    # to make every email read fail with CERTIFICATE_VERIFY_FAILED, so
-    # we build a context that doesn't verify. If you swap to a real cert
-    # later, remove this and let the default validation apply.
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    M = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
-    M.login(user, password)
-    return M
-
-
-def _imap_list_recent_sync(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    limit: int,
-    days_back: int,
-    unread_only: bool,
-) -> str:
-    """List recent messages in INBOX. Returns a multi-line string for the model."""
-    M = _imap_connect_sync(host, port, user, password)
-    try:
-        M.select("INBOX")
-        # Build the IMAP search criteria. We use SINCE for date bounding
-        # because it's the most universally supported. The cutoff is
-        # today - days_back, which Dovecot's IMAP server computes from
-        # the local clock. SUBJECT and other keys aren't relevant here.
-        from datetime import datetime, timedelta, timezone
-
-        cutoff = datetime.now(timezone.utc).date() - timedelta(days=days_back)
-        # IMAP date format is DD-Mon-YYYY, locale-independent.
-        date_str = cutoff.strftime("%d-%b-%Y")
-        criteria_parts = [f"SINCE {date_str}"]
-        if unread_only:
-            criteria_parts.append("UNSEEN")
-        criteria = " ".join(criteria_parts)
-        # UID SEARCH, not SEARCH: sequence numbers are renumbered by any
-        # expunge, so an id handed to the model could point at a different
-        # message minutes later. UIDs are stable for the life of the mailbox
-        # and are the same ids the background mail poller files in the inbox.
-        typ, data = M.uid("SEARCH", None, criteria)
-        if typ != "OK" or not data or not data[0]:
-            return "Inbox is empty for the given filter."
-        ids = data[0].split()[-limit:]  # most recent N (highest UIDs last)
-        if not ids:
-            return "Inbox is empty for the given filter."
-
-        # Fetch ENVELOPE for each id — From, Subject, Date, Size, etc. in
-        # one round-trip per message. RFC822.HEADER would pull the whole
-        # header block; ENVELOPE is the structured form, easier on the
-        # model and on the wire.
-        lines: list[str] = []
-        for mid in ids:
-            typ, msgdata = M.uid("FETCH", mid, "(ENVELOPE)")
-            if typ != "OK" or not msgdata or not msgdata[0]:
-                lines.append(f"- id={mid.decode(errors='replace')} (fetch failed)")
-                continue
-            # imaplib's response shape varies by server. Dovecot collapses
-            # the inline literal into a single response line so msgdata[0]
-            # is one bytes blob: b'5 (ENVELOPE ("Sun..." ...))'. Older
-            # servers split into two tuple entries. Handle both: pick the
-            # first entry that's a bytes object (NOT an int — iterating
-            # bytes would give ints, and a single bytes entry is what we
-            # actually want).
-            try:
-                env_bytes: bytes | None = None
-                if isinstance(msgdata[0], bytes):
-                    env_bytes = msgdata[0]
-                else:
-                    for entry in msgdata[0]:
-                        if isinstance(entry, bytes):
-                            env_bytes = entry
-                            break
-                if env_bytes is None:
-                    lines.append(
-                        f"- id={mid.decode(errors='replace')} (no envelope in response)"
-                    )
-                    continue
-                env = env_bytes.decode("utf-8", errors="replace")
-                # Strip the "mid (ENVELOPE " prefix and trailing ")".
-                idx = env.find("(ENVELOPE ")
-                if idx < 0:
-                    lines.append(
-                        f"- id={mid.decode(errors='replace')} (no envelope marker)"
-                    )
-                    continue
-                env = env[idx + len("(ENVELOPE ") :]
-                # Trim the trailing ")". We need to do this at the right
-                # depth because the envelope contains nested parens.
-                # The closing of ENVELOPE is the LAST ")" at depth 0.
-                depth = 0
-                end_idx = -1
-                for i, ch in enumerate(env):
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        if depth == 0:
-                            end_idx = i
-                            break
-                        depth -= 1
-                if end_idx > 0:
-                    env = env[:end_idx]
-                # ENVELOPE is now `(date subject from sender reply-to to
-                # cc bcc in-reply-to message-id)`. We want from/subject/date.
-                from_addr = _imap_extract_envelope_field(env, "from")
-                subj = _imap_extract_envelope_field(env, "subject")
-                date = _imap_extract_envelope_field(env, "date")
-            except Exception as e:
-                lines.append(f"- id={mid.decode(errors='replace')} (parse failed: {e})")
-                continue
-            lines.append(
-                f"- id={mid.decode(errors='replace')}\n"
-                f"  From: {from_addr}\n"
-                f"  Subject: {subj}\n"
-                f"  Date: {date}"
-            )
-        return f"Found {len(lines)} message(s):\n\n" + "\n\n".join(lines)
-    finally:
-        # Bare `contextlib.suppress(Exception)` statements are no-ops — they
-        # only suppress when used as `with` blocks. M.close()/M.logout() can
-        # raise IMAP4.error (server dropped the connection), and an exception
-        # here would mask the real result or the real error above. Wrap them
-        # properly so cleanup failures are swallowed instead of propagated.
-        with contextlib.suppress(Exception):
-            M.close()
-        with contextlib.suppress(Exception):
-            M.logout()
-
-
-def _imap_extract_envelope_field(envelope_str: str, field_name: str) -> str:
-    """Pull one named field out of an IMAP ENVELOPE response.
-
-    The ENVELOPE response is a parenthesized space-separated list of NIL
-    markers and quoted strings. We walk it and match by position, since
-    the field order is fixed in the RFC. Returns '?' on any failure.
-    """
-    try:
-        if not envelope_str:
-            return "?"
-        # Strip the outer parens.
-        s = envelope_str.strip()
-        if s.startswith("("):
-            s = s[1:]
-        if s.endswith(")"):
-            s = s[:-1]
-
-        # Walk the parenthesized list, handling nested parens and quoted
-        # strings. The ENVELOPE structure has nested parens around
-        # address lists, so this is more than a split() away.
-        tokens = _imap_tokenize(s)
-        # Field order: date subject from sender reply-to to cc bcc
-        # in-reply-to message-id
-        order = [
-            "date",
-            "subject",
-            "from",
-            "sender",
-            "reply-to",
-            "to",
-            "cc",
-            "bcc",
-            "in-reply-to",
-            "message-id",
-        ]
-        if field_name not in order:
-            return "?"
-        # Skip the fields we don't want.
-        idx = order.index(field_name)
-        return _imap_format_envelope_value(tokens, idx)
-    except Exception:
-        return "?"
-
-
-def _imap_tokenize(s: str) -> list[str]:
-    """Tokenize an IMAP parenthesized list into top-level entries.
-
-    Handles nested parens and quoted strings with escapes. Returns each
-    top-level item as a string (with its own surrounding parens kept
-    where relevant, or NIL for empty).
-    """
-    out: list[str] = []
-    i = 0
-    n = len(s)
-    while i < n:
-        c = s[i]
-        if c.isspace():
-            i += 1
-            continue
-        if c == "(":
-            # Find matching close, handling nested.
-            depth = 1
-            j = i + 1
-            while j < n and depth > 0:
-                if s[j] == "(":
-                    depth += 1
-                elif s[j] == ")":
-                    depth -= 1
-                j += 1
-            out.append(s[i:j])
-            i = j
-            continue
-        if c == '"':
-            # Quoted string; collect until matching unescaped quote.
-            j = i + 1
-            buf: list[str] = ['"']
-            while j < n:
-                if s[j] == "\\" and j + 1 < n:
-                    buf.append(s[j : j + 2])
-                    j += 2
-                    continue
-                if s[j] == '"':
-                    buf.append('"')
-                    j += 1
-                    break
-                buf.append(s[j])
-                j += 1
-            out.append("".join(buf))
-            i = j
-            continue
-        if s[i : i + 3] == "NIL":
-            out.append("NIL")
-            i += 3
-            continue
-        # Atom (unquoted, no spaces/parens).
-        j = i
-        while j < n and not s[j].isspace() and s[j] not in "()":
-            j += 1
-        out.append(s[i:j])
-        i = j
-    return out
-
-
-def _imap_format_envelope_value(tokens: list[str], field_index: int) -> str:
-    """Render a single ENVELOPE field for the model.
-
-    The "from", "to", "cc", "bcc" fields are parenthesized address lists
-    of the form `((name route mailbox host))`. We collapse those into
-    "Name <mailbox@host>" or just "mailbox@host" when no name. Other
-    fields (date, subject, message-id) are quoted strings or NIL — we
-    unwrap quotes and return the bare value.
-    """
-    if field_index >= len(tokens):
-        return "?"
-    tok = tokens[field_index]
-    if tok == "NIL":
-        return ""
-    if tok.startswith("("):
-        # Address list. Walk it and format each entry.
-        return _imap_format_address_list(tok)
-    if tok.startswith('"') and tok.endswith('"'):
-        return tok[1:-1].replace('\\"', '"').replace("\\\\", "\\")
-    return tok
-
-
-def _imap_format_address_list(s: str) -> str:
-    """Render `((name route mailbox host) ...)` as comma-separated addresses."""
-    if not s:
-        return ""
-    inner = s.strip()
-    if inner.startswith("("):
-        inner = inner[1:]
-    if inner.endswith(")"):
-        inner = inner[:-1]
-    tokens = _imap_tokenize(inner)
-    addrs: list[str] = []
-    for tok in tokens:
-        if not tok.startswith("("):
-            continue
-        # Each address: (name route mailbox host)
-        a_inner = tok.strip()
-        if a_inner.startswith("("):
-            a_inner = a_inner[1:]
-        if a_inner.endswith(")"):
-            a_inner = a_inner[:-1]
-        parts = _imap_tokenize(a_inner)
-        # parts = [name, route, mailbox, host]
-        name = ""
-        if len(parts) >= 1 and parts[0] != "NIL":
-            name = parts[0]
-            if name.startswith('"') and name.endswith('"'):
-                name = name[1:-1].replace('\\"', '"').replace("\\\\", "\\")
-        mailbox = ""
-        if len(parts) >= 3 and parts[2] != "NIL":
-            mailbox = parts[2]
-            if mailbox.startswith('"') and mailbox.endswith('"'):
-                mailbox = mailbox[1:-1]
-        host = ""
-        if len(parts) >= 4 and parts[3] != "NIL":
-            host = parts[3]
-            if host.startswith('"') and host.endswith('"'):
-                host = host[1:-1]
-        addr = f"{mailbox}@{host}" if host else mailbox
-        if name:
-            addrs.append(f"{name} <{addr}>")
-        else:
-            addrs.append(addr)
-    return ", ".join(addrs)
-
-
-def _imap_safe_seq(message_id: str) -> str | None:
-    """Digits only, so nothing can be smuggled into an IMAP command line.
-
-    An "email_412" inbox item id is accepted and reduced to 412: that is the
-    id the model sees in its inbox, and making it retype the numeric half was
-    a trap with no upside.
-    """
-    s = str(message_id or "").strip()
-    if s.startswith("email_"):
-        s = s[len("email_") :]
-    return s if re.fullmatch(r"[0-9]+", s) else None
-
-
-def _imap_safe_text_query(query: str) -> str | None:
-    raw = str(query or "")
-    if any(c in raw for c in '\r\n"\\'):
-        return None
-    s = raw.strip()
-    if not s or len(s) > 200:
-        return None
-    return s
-
-
-def _imap_get_message_sync(
-    host: str, port: int, user: str, password: str, message_id: str, max_chars: int
-) -> str:
-    """Fetch one message and return its headers + body, capped at max_chars."""
-    seq = _imap_safe_seq(message_id)
-    if seq is None:
-        return "Error: message_id must be a numeric IMAP id"
-    M = _imap_connect_sync(host, port, user, password)
-    try:
-        M.select("INBOX")
-        # UID first — that is what the list/search tools and the inbox notices
-        # hand out. Fall back to a sequence-number fetch so ids the model
-        # cached from an older run still resolve instead of hard-failing.
-        typ, data = M.uid("FETCH", seq, "(RFC822)")
-        if typ != "OK" or not data or not data[0]:
-            typ, data = M.fetch(seq, "(RFC822)")
-        if typ != "OK" or not data or not data[0]:
-            return f"Error: IMAP fetch failed for message {message_id}"
-        # Response shape varies by server: Dovecot collapses into a single
-        # (bytes, bytes) tuple; older servers may return a bare bytes blob.
-        # Handle both, mirroring _imap_list_recent_sync.
-        raw = data[0]
-        if isinstance(raw, tuple) and len(raw) >= 2:
-            raw = raw[1]
-        if isinstance(raw, bytes):
-            raw_bytes = raw
-        else:
-            raw_bytes = str(raw).encode("utf-8", errors="replace")
-
-        from email import policy
-        from email.parser import BytesParser
-
-        msg = BytesParser(policy=policy.default).parsebytes(raw_bytes)
-        body = _extract_text_body(msg) or "(no plain-text body found)"
-        if len(body) > max_chars:
-            body = body[: max_chars - 1].rstrip() + "…"
-
-        from_addr = msg.get("From", "?")
-        to_addr = msg.get("To", "?")
-        subject = msg.get("Subject", "(no subject)")
-        date = msg.get("Date", "?")
-
-        out_lines = [
-            f"Message id: {message_id}",
-            f"From: {from_addr}",
-            f"To: {to_addr}",
-            f"Subject: {subject}",
-            f"Date: {date}",
-            "",
-            "---",
-            body,
-        ]
-        return "\n".join(out_lines)
-    finally:
-        # See _imap_list_recent_sync — bare suppress() is a no-op; close/logout
-        # can raise and would mask the real result/exception.
-        with contextlib.suppress(Exception):
-            M.close()
-        with contextlib.suppress(Exception):
-            M.logout()
-
-
-def _extract_text_body(msg) -> str:
-    """Walk an email Message and return the best text body we can find.
-
-    Prefers text/plain. If only text/html is present, strips tags as a
-    last resort. Multipart/alternative is common: same content in two
-    formats, the model wants the plain one.
-    """
-    import re
-
-    # Walk parts in order; collect any text/plain we find. If we find
-    # multiple, the first is usually the most relevant.
-    plain: str | None = None
-    html: str | None = None
-    if msg.is_multipart():
-        for part in msg.walk():
-            ctype = part.get_content_type()
-            if ctype == "text/plain" and not part.is_multipart():
-                with contextlib.suppress(Exception):
-                    plain = part.get_content()
-                    break  # first text/plain wins
-            if ctype == "text/html" and html is None and not part.is_multipart():
-                with contextlib.suppress(Exception):
-                    html = part.get_content()
-        if plain is not None:
-            return plain
-        if html is not None:
-            return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
-    # Single-part message: try text/plain, then text/html, then raw.
-    try:
-        return msg.get_content()
-    except Exception:
-        try:
-            payload = msg.get_payload(decode=True) or b""
-            return payload.decode("utf-8", errors="replace")
-        except Exception:
-            return ""
-
-
-def _imap_search_sync(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    query: str,
-    limit: int,
-) -> str:
-    """Run an IMAP SEARCH and return matching message ids + envelopes."""
-    safe = _imap_safe_text_query(query)
-    if safe is None:
-        return "Error: query contains invalid IMAP characters or is empty"
-    M = _imap_connect_sync(host, port, user, password)
-    try:
-        M.select("INBOX")
-        typ, data = M.uid("SEARCH", None, f'TEXT "{safe}"')
-        if typ != "OK" or not data or not data[0]:
-            return f"No messages matched: {query!r}"
-        ids = data[0].split()[-limit:]
-        if not ids:
-            return f"No messages matched: {query!r}"
-
-        # ENVELOPE for each so the model has subject/from without a second
-        # round-trip. Same shape as in the list tool above.
-        lines = [f"Search results for {query!r} ({len(ids)} match(es)):"]
-        for mid in ids:
-            typ, msgdata = M.uid("FETCH", mid, "(ENVELOPE)")
-            if typ != "OK" or not msgdata or not msgdata[0]:
-                lines.append(f"- id={mid.decode(errors='replace')}")
-                continue
-            try:
-                env_bytes: bytes | None = None
-                if isinstance(msgdata[0], bytes):
-                    env_bytes = msgdata[0]
-                else:
-                    for entry in msgdata[0]:
-                        if isinstance(entry, bytes):
-                            env_bytes = entry
-                            break
-                if env_bytes is None:
-                    lines.append(f"- id={mid.decode(errors='replace')}")
-                    continue
-                env = env_bytes.decode("utf-8", errors="replace")
-                idx = env.find("(ENVELOPE ")
-                if idx >= 0:
-                    env = env[idx + len("(ENVELOPE ") :]
-                    depth = 0
-                    end_idx = -1
-                    for i, ch in enumerate(env):
-                        if ch == "(":
-                            depth += 1
-                        elif ch == ")":
-                            if depth == 0:
-                                end_idx = i
-                                break
-                            depth -= 1
-                    if end_idx > 0:
-                        env = env[:end_idx]
-                from_addr = _imap_extract_envelope_field(env, "from")
-                subj = _imap_extract_envelope_field(env, "subject")
-                date = _imap_extract_envelope_field(env, "date")
-            except Exception:
-                from_addr = subj = date = "?"
-            lines.append(
-                f"- id={mid.decode(errors='replace')}\n"
-                f"  From: {from_addr}\n"
-                f"  Subject: {subj}\n"
-                f"  Date: {date}"
-            )
-        return "\n\n".join(lines)
-    finally:
-        # See _imap_list_recent_sync — bare suppress() is a no-op; close/logout
-        # can raise and would mask the real result/exception.
-        with contextlib.suppress(Exception):
-            M.close()
-        with contextlib.suppress(Exception):
-            M.logout()
-
-
-class EmailSendTool(Tool):
-    """Send mail FROM the local mailbox via local Postfix."""
-
-    # Sending mail is the obvious prompt-injection target ("send my password
-    # to attacker@evil") and on a tainted turn the user has to confirm.
-    is_destructive: bool = True
-
-    def get_description(self) -> str:
-        return (
-            "Send email from the bot mailbox via local Postfix. "
-            "Params: to (required, comma-separated), subject, body, "
-            "is_html (optional), reply_to, cc, bcc."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        to: str | None = None,
-        subject: str | None = None,
-        body: str | None = None,
-        is_html: str = "false",
-        reply_to: str | None = None,
-        cc: str | None = None,
-        bcc: str | None = None,
-        **kwargs,
-    ) -> str:
-        cfg = _email_cfg(self.bot)
-        if not cfg["password"]:
-            return (
-                "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD "
-                "in .env (the same password Dovecot knows about — /etc/dovecot/users)."
-            )
-        if not to or not str(to).strip():
-            return "Error: 'to' is required"
-        if not subject or not str(subject).strip():
-            return "Error: 'subject' is required"
-        if body is None:
-            return "Error: 'body' is required"
-
-        # Indirect-prompt-injection gate. If this turn was tainted by a
-        # fetched URL or web search result, refuse without an explicit user
-        # confirmation. Same pattern as shell.
-        if _taint_gate_blocks(self, message, kwargs):
-            preview = str(body)[:200] + ("..." if len(str(body)) > 200 else "")
-            return (
-                "Error: email_send refused: this turn read content from a "
-                "fetched URL/web search that may carry prompt-injection "
-                "payloads. The user must confirm out-of-band with `!confirm` "
-                "before this can run.\n"
-                f"Recipient: {to}\n"
-                f"Subject: {subject}\n"
-                f"Body preview: {preview}"
-            )
-
-        to_addrs = [a.strip() for a in str(to).split(",") if a.strip()]
-        cc_addrs = [a.strip() for a in str(cc).split(",") if a.strip()] if cc else []
-        bcc_addrs = [a.strip() for a in str(bcc).split(",") if a.strip()] if bcc else []
-
-        try:
-            return await asyncio.to_thread(
-                _smtp_send_sync,
-                cfg["host"],
-                cfg["smtp_port"],
-                cfg["user"],
-                cfg["password"],
-                cfg["from_addr"],
-                cfg["from_name"],
-                to_addrs,
-                cc_addrs,
-                bcc_addrs,
-                str(subject),
-                str(body),
-                str(is_html).lower() in {"1", "true", "yes"},
-                str(reply_to).strip() if reply_to else None,
-            )
-        except Exception as e:
-            capture_incident(f"tool.{type(self).__name__}", str(e), exception=e, details=str(getattr(e, "text", "") or ""))
-            return f"Error: SMTP send failed: {e}"
-
-
-class EmailReadInboxTool(Tool):
-    """List recent messages in the local mailbox."""
-
-    is_destructive: bool = True
-
-    def get_description(self) -> str:
-        return (
-            "List recent mailbox messages (id, from, subject, date). "
-            "Use email_get_message for a body. Params: max_results (default 10), "
-            "days_back (default 7), unread_only (optional)."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        max_results: str = "10",
-        days_back: str = "7",
-        unread_only: str = "false",
-        **kwargs,
-    ) -> str:
-        cfg = _email_cfg(self.bot)
-        if not cfg["password"]:
-            return (
-                "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD "
-                "in .env (the same password Dovecot knows about — /etc/dovecot/users)."
-            )
-        try:
-            limit = max(1, min(int(max_results), 50))
-        except (TypeError, ValueError):
-            limit = 10
-        try:
-            days = max(0, min(int(days_back), 90))
-        except (TypeError, ValueError):
-            days = 7
-        try:
-            result = await asyncio.to_thread(
-                _imap_list_recent_sync,
-                cfg["imap_host"],
-                cfg["imap_port"],
-                cfg["user"],
-                cfg["password"],
-                limit,
-                days,
-                str(unread_only).lower() in {"1", "true", "yes"},
-            )
-        except Exception as e:
-            capture_incident(f"tool.{type(self).__name__}", str(e), exception=e, details=str(getattr(e, "text", "") or ""))
-            return f"Error: IMAP read failed: {e}"
-        if self.bot is not None:
-            self.bot.mark_message_tainted(message)
-        return result
-
-
-class EmailGetMessageTool(Tool):
-    """Fetch the full body of a single local message by id."""
-
-    is_destructive: bool = True
-
-    def get_description(self) -> str:
-        return (
-            "Fetch one email by id (from email_read_inbox, email_search, or "
-            "an inbox email notice — both 412 and email_412 work). "
-            "Params: message_id, max_chars (default 8000)."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        message_id: str | None = None,
-        max_chars: str = "8000",
-        **kwargs,
-    ) -> str:
-        if not message_id or not str(message_id).strip():
-            return "Error: message_id is required"
-        try:
-            cap = max(200, min(int(max_chars), 50000))
-        except (TypeError, ValueError):
-            cap = 8000
-
-        cfg = _email_cfg(self.bot)
-        if not cfg["password"]:
-            return "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD in .env."
-        try:
-            result = await asyncio.to_thread(
-                _imap_get_message_sync,
-                cfg["imap_host"],
-                cfg["imap_port"],
-                cfg["user"],
-                cfg["password"],
-                str(message_id).strip(),
-                cap,
-            )
-        except Exception as e:
-            capture_incident(f"tool.{type(self).__name__}", str(e), exception=e, details=str(getattr(e, "text", "") or ""))
-            return f"Error: IMAP fetch failed: {e}"
-        if self.bot is not None:
-            self.bot.mark_message_tainted(message)
-        return result
-
-
-class EmailSearchTool(Tool):
-    """Full-text search of the local mailbox."""
-
-    is_destructive: bool = True
-
-    def get_description(self) -> str:
-        return (
-            "Search the mailbox (IMAP TEXT). Params: query, max_results (default 10). "
-            "Returns ids plus subject/from/date; use email_get_message for bodies."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        query: str | None = None,
-        max_results: str = "10",
-        **kwargs,
-    ) -> str:
-        if not query or not str(query).strip():
-            return "Error: query is required"
-        try:
-            limit = max(1, min(int(max_results), 50))
-        except (TypeError, ValueError):
-            limit = 10
-        cfg = _email_cfg(self.bot)
-        if not cfg["password"]:
-            return "Error: local mail is not configured. Set MAXWELL_EMAIL_PASSWORD in .env."
-        try:
-            result = await asyncio.to_thread(
-                _imap_search_sync,
-                cfg["imap_host"],
-                cfg["imap_port"],
-                cfg["user"],
-                cfg["password"],
-                str(query).strip(),
-                limit,
-            )
-        except Exception as e:
-            capture_incident(f"tool.{type(self).__name__}", str(e), exception=e, details=str(getattr(e, "text", "") or ""))
-            return f"Error: IMAP search failed: {e}"
-        if self.bot is not None:
-            self.bot.mark_message_tainted(message)
-        return result
-
-
-# ---------------------------------------------------------------------------
-# X (Twitter). Reading is free and needs no account; posting uses the
-# session cookies of a browser logged in as him. Both live in x_client.py —
-# these two tools are the model-facing surface and nothing more.
-# ---------------------------------------------------------------------------
-
-
-def _x_client(bot):
-    """The bot's live XClient, or None when the feature is off."""
-    return getattr(bot, "x_client", None)
-
-
-def _x_unavailable() -> str:
-    return (
-        "Error: X is not available on this install (ENABLE_X=false, or "
-        "x_client failed to start). Check `python3 doctor.py`."
-    )
-
-
-class XReadTool(Tool):
-    """Read X: a timeline, a search, an account, or one post."""
-
-    def get_description(self) -> str:
-        return (
-            "Read X/Twitter. Params: action (home, user, search, mentions, "
-            "tweet), handle (for action=user), query (for action=search — X "
-            "search operators work: 'from:nasa', '-filter:replies', "
-            "'min_faves:100'), tweet_id or a post URL (for action=tweet), "
-            "limit (default 15, max 50). home and mentions need the logged-in "
-            "session; user, search and tweet work without one. Returns the "
-            "posts with their ids, so you can reply to or quote one with "
-            "x_post."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        action: str = "home",
-        handle: str | None = None,
-        query: str | None = None,
-        tweet_id: str | None = None,
-        limit: str | int = 15,
-        **kwargs,
-    ) -> str:
-        client = _x_client(self.bot)
-        if client is None:
-            return _x_unavailable()
-        from x_client import XError, render_tweets
-
-        act = str(action or "home").strip().lower()
-        # The model reaches for the verb it means rather than the enum, and a
-        # rejected call costs a whole turn. Map the obvious synonyms instead.
-        act = {
-            "timeline": "home",
-            "feed": "home",
-            "profile": "user",
-            "account": "user",
-            "mention": "mentions",
-            "notifications": "mentions",
-            "status": "tweet",
-            "post": "tweet",
-            "get": "tweet",
-        }.get(act, act)
-        # A handle in the query slot and a query in the handle slot are both
-        # common; so is passing a URL as the handle.
-        if act == "user" and not handle and query:
-            handle = query
-        if act == "search" and not query and handle:
-            query = handle
-        if act == "tweet" and not tweet_id and (query or handle):
-            tweet_id = query or handle
-        try:
-            count = max(1, min(int(limit), 50))
-        except (TypeError, ValueError):
-            count = 15
-
-        try:
-            tweets = await client.read(
-                act, handle=handle, query=query, tweet_id=tweet_id, limit=count
-            )
-        except XError as e:
-            return f"Error: {e}"
-        except Exception as e:  # pragma: no cover - defensive
-            capture_incident(f"tool.{type(self).__name__}", str(e), exception=e)
-            return f"Error: X read failed: {type(e).__name__}: {e}"
-
-        header = {
-            "home": "X — home timeline",
-            "user": f"X — @{str(handle or '').lstrip('@')}",
-            "search": f"X — search: {query}",
-            "mentions": "X — mentions of you",
-            "tweet": "X — one post",
-        }.get(act, "X")
-        # Same posture as fetch_url/web_search: this is arbitrary text written
-        # by strangers, so the turn is tainted and destructive tools need an
-        # out-of-band confirm before they run.
-        if self.bot is not None:
-            self.bot.mark_message_tainted(message)
-        return render_tweets(tweets, header=f"{header} ({len(tweets)}):")
-
-
-class XPostTool(Tool):
-    """Post, reply, quote, delete, like, or repost on X."""
-
-    # A public post is the least reversible thing he can do with a tool, and
-    # the obvious target of anything injected through a fetched page. On a
-    # tainted turn the user confirms first.
-    is_destructive: bool = True
-
-    def get_description(self) -> str:
-        return (
-            "Post on X/Twitter as yourself. Params: action (post, reply, "
-            "quote, delete, like, repost — default post), text (the post; "
-            "required for post/reply/quote), reply_to or tweet_id (the post "
-            "id or URL you are answering/quoting/liking/deleting). Posts are "
-            "public and permanent-ish: say something worth saying. There is "
-            "an hourly budget, so do not narrate every thought."
-        )
-
-    async def execute(
-        self,
-        message: Message,
-        action: str = "post",
-        text: str | None = None,
-        reply_to: str | None = None,
-        quote: str | None = None,
-        tweet_id: str | None = None,
-        **kwargs,
-    ) -> str:
-        client = _x_client(self.bot)
-        if client is None:
-            return _x_unavailable()
-        from x_client import XError
-
-        act = str(action or "post").strip().lower()
-        act = {
-            "tweet": "post",
-            "send": "post",
-            "publish": "post",
-            "retweet": "repost",
-            "favorite": "like",
-            "fav": "like",
-            "remove": "delete",
-        }.get(act, act)
-        if act not in {"post", "reply", "quote", "delete", "like", "repost"}:
-            return (
-                f"Error: unknown action {act!r}. Use post, reply, quote, "
-                "delete, like, or repost."
-            )
-
-        # Indirect-prompt-injection gate, same contract as email_send/shell:
-        # a turn that read a web page or a search result cannot publish
-        # without the user confirming out of band.
-        if _taint_gate_blocks(self, message, kwargs):
-            preview = str(text or tweet_id or reply_to or "")[:200]
-            return (
-                "Error: x_post refused: this turn read content from the web "
-                "(a page, a search, or X itself) that may carry "
-                "prompt-injection payloads, and posting is public. The user "
-                "must confirm out-of-band with `!confirm`.\n"
-                f"Action: {act}\nContent: {preview}"
-            )
-
-        try:
-            if act in {"post", "reply", "quote"}:
-                target = reply_to or (tweet_id if act == "reply" else None)
-                quoted = quote or (tweet_id if act == "quote" else None)
-                result = await client.post(
-                    str(text or ""), reply_to=target, quote=quoted
-                )
-                label = {"post": "Posted", "reply": "Replied", "quote": "Quoted"}[act]
-                return f"{label} on X: {result.get('url') or result.get('id') or 'ok'}"
-            result = await client.act(act, str(tweet_id or reply_to or quote or ""))
-        except XError as e:
-            return f"Error: {e}"
-        except Exception as e:  # pragma: no cover - defensive
-            capture_incident(f"tool.{type(self).__name__}", str(e), exception=e)
-            return f"Error: X {act} failed: {type(e).__name__}: {e}"
-        done = {"delete": "Deleted", "like": "Liked", "repost": "Reposted"}[act]
-        return f"{done} on X: {result.get('url') or result.get('id') or 'ok'}"
-
-
 # ---------------------------------------------------------------------------
 # Self-modification tools. These let Dame Curie rewrite its own base
 # personality + per-server prompts at runtime. The runtime load is hot —
@@ -11629,11 +7581,9 @@ class UpdateBasePersonalityTool(Tool):
     in bot_control.json under `base_personality`.
     """
 
-    is_destructive: bool = True
-
     def get_description(self) -> str:
         return (
-            "Rewrite global base_personality (tone/do-don'ts in every prompt). "
+            "Admin-only: rewrite global base_personality (tone/do-don'ts in every prompt). "
             "Base Knowledge in code is not editable. Params: text (100-2000 chars)."
         )
 
@@ -11643,6 +7593,8 @@ class UpdateBasePersonalityTool(Tool):
         text: str | None = None,
         **kwargs,
     ) -> str:
+        if not tool_authorized(self.bot, message, "update_base_personality"):
+            return "Error: personality rewrites are restricted to admins."
         if not text or not str(text).strip():
             return "Error: 'text' is required and cannot be empty."
         text = str(text).strip()
@@ -11679,19 +7631,17 @@ class UpdateBasePersonalityTool(Tool):
 
 
 class UpdateServerPromptTool(Tool):
-    """Rewrite the per-server custom prompt (same as `,prompt <text>`).
+    """Rewrite the per-server custom prompt (same as `!prompt <text>`).
 
-    Same effect as the `,prompt <text>` command but invokable from
+    Same effect as the `!prompt <text>` command but invokable from
     inside an LLM turn — Dame Curie can edit its own per-server instructions
     when it has a reason. Pass server_id (numeric snowflake) or pass 'DM'
     for the DM default. Pass empty text to clear the per-server prompt.
     """
 
-    is_destructive: bool = True
-
     def get_description(self) -> str:
         return (
-            "Rewrite or clear the per-server custom prompt (same as `,prompt`). "
+            f"Admin-only: rewrite or clear the per-server custom prompt (same as `{getattr(self.bot, 'command_prefix', '!')}prompt`). "
             "Params: server_id (snowflake or 'DM'), text (empty or '__CLEAR__' "
             "to clear)."
         )
@@ -11703,6 +7653,8 @@ class UpdateServerPromptTool(Tool):
         text: str | None = None,
         **kwargs,
     ) -> str:
+        if not tool_authorized(self.bot, message, "update_server_prompt"):
+            return "Error: server-prompt rewrites are restricted to admins."
         if not server_id or not str(server_id).strip():
             return "Error: 'server_id' is required (numeric snowflake or 'DM')."
         server_id = str(server_id).strip()
@@ -11750,7 +7702,7 @@ _CHESS_MENTION_RE = re.compile(r"<@!?(\d+)>")
 
 
 def _chess_bot_name(bot=None) -> str:
-    """Live people-facing name for this process (Dame Curie, Uni, a nick, …)."""
+    """Live people-facing name for this process (Dame Curie, a nick, …)."""
     user = getattr(bot, "user", None) if bot is not None else None
     name = getattr(bot, "bot_name", None) if bot is not None else None
     name = str(
@@ -12561,7 +8513,7 @@ class UsageTool(Tool):
                     "Error: usage unavailable for this primary provider; "
                     "only a loaded HTTPS OpenRouter primary is supported."
                 )
-            key = getattr(provider, "api_key", "").strip()
+            key = getattr(provider, "api_key", "")
             if not key:
                 return "Error: usage unavailable; the loaded OpenRouter primary has no API key."
             session = await _get_shared_session()

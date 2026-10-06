@@ -21,7 +21,7 @@ def command_report():
     bot = SimpleNamespace(
         _control={"footer_enabled": True}, _split_response=MaxwellBot._split_response,
         _is_admin=lambda uid: True, config=SimpleNamespace(ENABLE_VC=True),
-        x_client=SimpleNamespace(status=lambda: detail, budget=SimpleNamespace(check=AsyncMock(return_value=""))),
+        command_prefix="!",
         _vc_get_client=lambda guild, channel: None, _vc_is_listening=lambda vc: False,
         memory=SimpleNamespace(get_relevant_shared_context=AsyncMock(return_value=facts), list_shared_context=AsyncMock(return_value=facts)),
         _rem_status=AsyncMock(return_value=status), rem_store=SimpleNamespace(load_runs=AsyncMock(return_value=runs)),
@@ -33,7 +33,6 @@ def command_report():
 
 @pytest.mark.parametrize("footer_enabled", [False, True])
 @pytest.mark.parametrize("handler,args,heading", [
-    ("_handle_x_command", "status", "X:"),
     ("_handle_vc_command", "status", "connected: False\nchannel: none\nlistening: False"),
     ("_handle_context_command", "", "Relevant context facts"),
     ("_handle_context_command", "all", "Recent context facts"),
@@ -63,7 +62,6 @@ def test_dense_reports_emit_balanced_bounded_code_blocks(command_report, footer_
     ("_handle_context_command", "", "No shared context facts."),
     ("_handle_rem_command", "audit", "No REM runs yet."),
     ("_handle_autonomy_command", "log", "No autonomy actions yet."),
-    ("_handle_x_command", "budget", "X budget: room to post"),
 ])
 def test_short_command_responses_stay_plain(command_report, handler, args, expected):
     bot, message = command_report
@@ -78,4 +76,4 @@ def test_link_and_command_help_keeps_inline_markdown(command_report):
     bot, message = command_report
     asyncio.run(MaxwellBot._handle_vc_command(bot, message, "help"))
     content = message.channel.send.await_args.args[0]
-    assert "`,vc join`" in content and "```" not in content
+    assert "`!vc join`" in content and "```" not in content

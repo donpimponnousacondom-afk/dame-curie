@@ -3,7 +3,7 @@
 Design note — optional features
 -------------------------------
 Maxwell only *requires* two things: a Discord token and an OpenAI-compatible
-model endpoint. Everything else (voice, YouTube, web search, TTS, email,
+model endpoint. Everything else (voice, YouTube, web search, TTS,
 video frames, RAG embeddings) is optional and gated behind an ``ENABLE_*``
 switch.
 
@@ -14,10 +14,10 @@ Those switches are tri-state:
     auto   -> DEFAULT. Turn the feature on only if its dependency is
               actually present on this machine.
 
-"auto" is what makes a bare ``git clone`` + ``pip install -r
+"auto" is what makes a bare ``git clone`` + ``.venv/bin/python -m pip install -r
 requirements.txt`` work: features whose system package, Python package or
 API key is missing quietly stay off instead of erroring on first use, and
-``python3 doctor.py`` explains every decision.
+``.venv/bin/python doctor.py`` explains every decision.
 """
 
 import math
@@ -30,12 +30,12 @@ from typing import ClassVar
 
 from dotenv.main import load_dotenv
 
+from provider_settings import parse_provider_settings
+
 APP_ROOT = Path(__file__).resolve().parent
-ENV_FILE = Path(os.getenv("MAXWELL_ENV_FILE", APP_ROOT / ".env"))
-# .env is the SOURCE OF TRUTH — always override whatever PM2/the shell
-# injected. PM2 caches the env from first start and `--update-env` does
-# NOT re-read the .env file, so without override=True every restart kept
-# stale values (e.g. the old OLLAMA_FALLBACK_MODEL) forever.
+ENV_FILE = Path(os.getenv("DAME_CURIE_ENV_FILE", APP_ROOT / ".env"))
+INHERITED_ENVIRONMENT = dict(os.environ)
+# Runtime configuration overrides the inherited process environment.
 load_dotenv(ENV_FILE, override=True)
 
 
@@ -107,6 +107,29 @@ def _first_env(*names: str, default: str = "") -> str:
     return default
 
 
+def _image_config_error(protocol: str, base_url: str, models: dict, model: str) -> str:
+    """Name unusable image settings without disclosing configured values."""
+    error = ""
+    if protocol != "images":
+        error = "IMAGE_GEN_PROTOCOL must be 'images'; other image protocols are unsupported"
+    elif not base_url.strip().rstrip("/"):
+        error = "set IMAGE_GEN_BASE_URL to the native Images endpoint"
+    elif not models:
+        error = "set IMAGE_GEN_MODELS to a JSON object of exact model IDs and descriptions"
+    elif any(
+        not isinstance(model_id, str)
+        or not model_id.strip()
+        or model_id != model_id.strip()
+        or not isinstance(description, str)
+        or not description.strip()
+        for model_id, description in models.items()
+    ):
+        error = "IMAGE_GEN_MODELS must map exact non-empty model IDs to non-empty descriptions"
+    elif model not in models:
+        error = "IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
+    return error
+
+
 # --- optional-feature detection -------------------------------------------
 # Every check below is cheap and runs once, at import: find_spec() does NOT
 # execute the module, and shutil.which() is a PATH scan. Restart to re-detect
@@ -127,7 +150,7 @@ def _has_binary(name: str) -> bool:
     """True if ``name`` is runnable: on PATH, or beside this interpreter.
 
     The second case matters for venv installs started by absolute
-    interpreter path (PM2 does exactly that): the venv's bin/ holds the
+    interpreter path: the venv's bin/ holds the
     console scripts but is not on PATH.
     """
     if not name:
@@ -183,57 +206,13 @@ def _feature_env(
 
 class Config:
     DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-    TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
-    TELEGRAM_WEBHOOK_PORT = _int_env(
-        "TELEGRAM_WEBHOOK_PORT", 8443, min_value=1024, max_value=65535
-    )
 
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", ""))
-    # No default model on purpose: a hardcoded one that your endpoint does
-    # not serve fails later, as an opaque 404 from the provider. Empty fails
-    # at startup with a sentence that says what to do.
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
-    OLLAMA_REM_MODEL = os.getenv("OLLAMA_REM_MODEL") or OLLAMA_MODEL
-    # max_tokens = max *output* tokens per completion (not context window).
-    # minimax-m3 allows huge context but caps output ~131072; 8192 is a sane default.
-    OLLAMA_MAX_TOKENS = _int_env(
-        "OLLAMA_MAX_TOKENS", 16384, min_value=1, max_value=131072
-    )
-    OLLAMA_TEMPERATURE = _float_env("OLLAMA_TEMPERATURE", 0.6, min_value=0.0)
-    OLLAMA_TOP_P = _float_env("OLLAMA_TOP_P", 0.95, min_value=0.0, max_value=1.0)
-    OLLAMA_TOP_K = _int_env("OLLAMA_TOP_K", 20, min_value=0)
-    OLLAMA_DISABLE_REASONING = _bool_env("OLLAMA_DISABLE_REASONING", False)
-    OLLAMA_EXTRA_HEADERS = _json_env("OLLAMA_EXTRA_HEADERS", strict=True)
-    OLLAMA_EXTRA_BODY = _json_env("OLLAMA_EXTRA_BODY", strict=True)
-    OLLAMA_FALLBACK_BASE_URL = os.getenv("OLLAMA_FALLBACK_BASE_URL", "").strip()
-    OLLAMA_FALLBACK_API_KEY = os.getenv("OLLAMA_FALLBACK_API_KEY", "").strip()
-    OLLAMA_FALLBACK_MODEL = os.getenv("OLLAMA_FALLBACK_MODEL", "").strip()
-    OLLAMA_FALLBACK_DISABLE_REASONING = _bool_env(
-        "OLLAMA_FALLBACK_DISABLE_REASONING", True
-    )
-    # Optional vision/omni model for image/video (and audio, if enabled) turns.
-    # Text-only primaries like deepseek-v4-flash 400 on image_url; when this is
-    # set, media requests go here first. Blank base/key inherit the primary.
-    OLLAMA_VISION_BASE_URL = os.getenv("OLLAMA_VISION_BASE_URL", "").strip()
-    OLLAMA_VISION_API_KEY = os.getenv("OLLAMA_VISION_API_KEY", "").strip()
-    OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "").strip()
-    OLLAMA_VISION_DISABLE_REASONING = _bool_env("OLLAMA_VISION_DISABLE_REASONING", True)
-    OLLAMA_RETRY_ATTEMPTS = _int_env(
-        "OLLAMA_RETRY_ATTEMPTS", 5, min_value=1, max_value=10
-    )
-    # Up to this many remaining attempts can recover empty HTTP 200 content
-    # with a different endpoint and non-streaming request. The total attempt
-    # budget is not extended.
-    OLLAMA_EMPTY_RESPONSE_RETRIES = _int_env(
-        "OLLAMA_EMPTY_RESPONSE_RETRIES", 2, min_value=0, max_value=5
-    )
+    locals().update(parse_provider_settings(os.environ, require_primary=False))
 
     # Toggle for "omni" (audio+vision capable) model input. On by default:
     # Gemini behind the current proxy transcribes wav/mp3; endpoints that
     # 400 on input_audio fall back to text-only via the media-incapable path.
-    # Dashboard process_audio can still turn it off at runtime.
+    # The process_audio control can still turn it off at runtime.
     ENABLE_AUDIO_INPUT = _feature_env("ENABLE_AUDIO_INPUT", default=True)
 
     # -------------------------------------------------------------------------
@@ -245,16 +224,39 @@ class Config:
     # time; restart to re-detect.
     # -------------------------------------------------------------------------
 
+    IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "images").strip().lower()
+    IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "")
+    IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "")
+    IMAGE_GEN_CONFIG_ERROR = ""
+    IMAGE_GEN_EXTRA_BODY = {}
+    try:
+        IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
+        IMAGE_GEN_EXTRA_BODY = _json_env("IMAGE_GEN_EXTRA_BODY", strict=True)
+    except ValueError as error:
+        IMAGE_GEN_MODELS = {}
+        IMAGE_GEN_CONFIG_ERROR = str(error)
+    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "")
+    IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY")
+    IMAGE_GEN_TIMEOUT = _int_env(
+        "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
+    )
+    IMAGE_GEN_CONFIG_ERROR = IMAGE_GEN_CONFIG_ERROR or _image_config_error(
+        IMAGE_GEN_PROTOCOL, IMAGE_GEN_BASE_URL, IMAGE_GEN_MODELS, IMAGE_GEN_MODEL
+    )
+
     # No external dependency — pure code paths, on by default.
     ENABLE_IMAGE_INPUT = _feature_env("ENABLE_IMAGE_INPUT")
     ENABLE_FETCH_URL = _feature_env("ENABLE_FETCH_URL")
-    ENABLE_CREATE_SITE = _feature_env("ENABLE_CREATE_SITE")
     ENABLE_AVATAR = _feature_env("ENABLE_AVATAR")
-    ENABLE_TELEGRAM = _feature_env("ENABLE_TELEGRAM")
     ENABLE_AUTONOMY = _feature_env("ENABLE_AUTONOMY")
-    # image_generator uses Pollinations (free, keyless); hd_image requires a
-    # dedicated GEMINI_IMAGE_BASE_URL and returns a clear error when unset.
-    ENABLE_IMAGE_GEN = _feature_env("ENABLE_IMAGE_GEN")
+    # One usable configured native Images endpoint handles generation and edits.
+    ENABLE_IMAGE_GEN = _feature_env(
+        "ENABLE_IMAGE_GEN", lambda error=IMAGE_GEN_CONFIG_ERROR: not error,
+        off_text="auto: off, image profile is not configured",
+    )
+    if IMAGE_GEN_CONFIG_ERROR:
+        ENABLE_IMAGE_GEN = False
+        FEATURE_REASONS["ENABLE_IMAGE_GEN"] = f"disabled: {IMAGE_GEN_CONFIG_ERROR}"
 
     # Needs a system binary or Python package.
     ENABLE_VIDEO_INPUT = _feature_env(
@@ -272,18 +274,16 @@ class Config:
         lambda: _has_module("discord.ext.voice_recv") and _has_module("nacl"),
         needs="discord-ext-voice-recv + PyNaCl",
     )
-    # TTS works through any one of: Fish (key), NVIDIA Riva (key), gTTS
-    # (package), espeak (binary). Off only when none of them exist.
+    # TTS requires Fish/Riva credentials or a local espeak binary.
     ENABLE_TTS = _feature_env(
         "ENABLE_TTS",
         lambda: bool(
             os.getenv("FISH_API_KEY", "").strip()
             or os.getenv("NVIDIA_API_KEY", "").strip()
-            or _has_module("gtts")
             or _has_binary("espeak-ng")
             or _has_binary("espeak")
         ),
-        needs="a TTS engine (espeak-ng, gTTS, or a Fish/NVIDIA key)",
+        needs="a supported TTS engine (espeak-ng or a Fish/NVIDIA key)",
     )
     # Playing TTS into a voice channel additionally needs ffmpeg.
     ENABLE_TTS_VC = _feature_env(
@@ -291,47 +291,14 @@ class Config:
         lambda _tts=ENABLE_TTS: _tts and _has_binary("ffmpeg"),
         needs="ffmpeg + a TTS engine",
     )
-    # Maxwell Companion / Partner
-    GF_DISCORD_TOKEN = os.getenv("GF_DISCORD_TOKEN", "").strip()
-    GF_USER_ID = os.getenv("GF_USER_ID", "1496154562715848763").strip()
-    MAXWELL_USER_ID = os.getenv("MAXWELL_USER_ID", "1545541390392369165").strip()
-    PARTNER_USER_ID = os.getenv("PARTNER_USER_ID", "").strip()
-    # Partner-to-partner replies are intentionally finite.  A human message
-    # resets the budget; silence resets it after the configured window.
-    PARTNER_MAX_AUTO_TURNS = _int_env(
-        "PARTNER_MAX_AUTO_TURNS", 2, min_value=1, max_value=20
-    )
-    PARTNER_TURN_WINDOW_SECONDS = _float_env(
-        "PARTNER_TURN_WINDOW_SECONDS", 60.0, min_value=5.0, max_value=3600.0
-    )
-    BOT_PERSONA_TYPE = os.getenv("BOT_PERSONA_TYPE", "maxwell").strip().lower()
+    DAME_CURIE_USER_ID = os.getenv("DAME_CURIE_USER_ID", "1545541390392369165").strip()
     CREATOR_NAME = os.getenv("CREATOR_NAME", ".normal.man").strip() or ".normal.man"
     CREATOR_ID = os.getenv("CREATOR_ID", "1482143139828596916").strip() or "1482143139828596916"
     BOT_NAME = os.getenv("BOT_NAME", "Dame Curie").strip() or "Dame Curie"
-    PARTNER_NAME = os.getenv("PARTNER_NAME", "Uni").strip() or "Uni"
 
-    # Email needs a real mailbox. Without a password the four tools could
-    # only ever answer "not configured", so auto keeps them unregistered.
-    ENABLE_EMAIL_TOOLS = _feature_env(
-        "ENABLE_EMAIL_TOOLS",
-        lambda: bool(os.getenv("MAXWELL_EMAIL_PASSWORD", "").strip()),
-        on_text="auto: MAXWELL_EMAIL_PASSWORD is set",
-        off_text="auto: off, no MAXWELL_EMAIL_PASSWORD",
-    )
-
-    # X (Twitter). Reading is free and needs no account at all — X's own
-    # embed backend and any Nitter/RSSHub instance serve public profiles,
-    # posts and searches — so `auto` is on. Posting needs the session
-    # cookies below; without them the read half still works and x_post says
-    # what is missing.
-    # No detector: there is no dependency to find. Public reads need no
-    # credentials at all, so `auto` means on and posting simply stays
-    # unavailable until X_AUTH_TOKEN/X_CT0 are set.
-    ENABLE_X = _feature_env("ENABLE_X")
-
-    # Host access. Kept on by default for parity with older installs, but
-    # this is THE security-relevant switch: `shell` runs commands as the bot
-    # user. validate() warns loudly at startup so it is never a surprise.
+    # Shell stays on by default inside the outer bot container, sharing the
+    # bot user's permissions and mounted state rather than an inner sandbox.
+    # validate() warns at startup about that access.
     ENABLE_SHELL = _feature_env("ENABLE_SHELL")
 
     # RAG vector memory. Needs a reachable embedding endpoint (see
@@ -341,61 +308,32 @@ class Config:
     RAG_WEB_STORE_ENABLED = _bool_env("RAG_WEB_STORE_ENABLED", True)
 
     # -------------------------------------------------------------------------
-    # Embeddings for RAG memory. Defaults target a local Ollama, but any
-    # OpenAI-compatible /v1/embeddings endpoint works — set EMBED_BASE_URL
+    # Embeddings for RAG memory. Configure local Ollama or an
+    # OpenAI-compatible /v1/embeddings endpoint — set EMBED_BASE_URL
     # to e.g. https://api.openai.com/v1 with EMBED_MODEL/EMBED_DIM to match.
     # -------------------------------------------------------------------------
-    EMBED_BASE_URL = _first_env(
-        "MAXWELL_EMBED_BASE_URL", "EMBED_BASE_URL", default="http://localhost:11434"
-    ).rstrip("/")
-    EMBED_MODEL = _first_env(
-        "MAXWELL_EMBED_MODEL", "EMBED_MODEL", default="qwen3-embedding:0.6b"
-    )
-    EMBED_API_KEY = _first_env("MAXWELL_EMBED_API_KEY", "EMBED_API_KEY")
-    EMBED_DIM = _int_env("MAXWELL_EMBED_DIM", 1024, min_value=8, max_value=16384)
+    EMBED_BASE_URL = os.getenv("DAME_CURIE_EMBED_BASE_URL", os.getenv("EMBED_BASE_URL", ""))
+    EMBED_MODEL = os.getenv("DAME_CURIE_EMBED_MODEL", os.getenv("EMBED_MODEL", ""))
+    EMBED_API_KEY = os.getenv("DAME_CURIE_EMBED_API_KEY", os.getenv("EMBED_API_KEY", ""))
+    EMBED_DIM = _int_env("DAME_CURIE_EMBED_DIM", 1024, min_value=8, max_value=16384)
 
-    # When false (default), shell refuses to run on a turn
-    # that read untrusted fetched content (URLs, web search) without an
-    # out-of-band `!confirm` from an admin. This blocks indirect prompt
-    # injection from turning a fetched page into a shell command.
-    # Set to true to skip the gate entirely — the model can call shell
-    # after fetch_url/web_search without confirmation. Only do this if
-    # you trust the model fully (single-user homelab install).
-    DISABLE_TAINT_GATE = _bool_env("DISABLE_TAINT_GATE", False)
+    TTS_ENGINE = os.getenv("TTS_ENGINE", "").strip().lower()
+    FISH_API_KEY = os.getenv("FISH_API_KEY", "")
+    TTS_FISH_MODEL = os.getenv("TTS_FISH_MODEL", "")
+    TTS_FISH_REFERENCE_ID = os.getenv("TTS_FISH_REFERENCE_ID", "")
+    TTS_FISH_FORMAT = os.getenv("TTS_FISH_FORMAT")
+    TTS_RIVA_FUNCTION_ID = os.getenv("TTS_RIVA_FUNCTION_ID", "")
+    TTS_RIVA_VOICE = os.getenv("TTS_RIVA_VOICE", "")
+    TTS_RIVA_LANGUAGE = os.getenv("TTS_RIVA_LANGUAGE", "")
+    TTS_LOCAL_VOICE = os.getenv("TTS_LOCAL_VOICE")
+    TTS_LOCAL_SPEED = os.getenv("TTS_LOCAL_SPEED")
+    TTS_LOCAL_PITCH = os.getenv("TTS_LOCAL_PITCH")
 
-    # TTS engine selection. local / riva / gtts / auto. Undocumented before
-    # 2026-07-21 — used to fall through a chain in bot._synthesize_tts_wav.
-    TTS_ENGINE = os.getenv("TTS_ENGINE", "auto").strip().lower()
-
-    # Optional secondary auth fallback for the primary LLM endpoint.
-    OPENAI_COMPAT_API_KEY = os.getenv("OPENAI_COMPAT_API_KEY", "").strip()
-
-    AUTONOMY_BASE_URL = os.getenv("AUTONOMY_BASE_URL", "").strip()
-    AUTONOMY_API_KEY = os.getenv(
-        "AUTONOMY_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", "")
-    ).strip()
-    AUTONOMY_MODEL = os.getenv("AUTONOMY_MODEL", "").strip()
-    AUTONOMY_DISABLE_REASONING = _bool_env("AUTONOMY_DISABLE_REASONING", False)
-
-    # Auxiliary background agents (REM, context-cleanup, context-watcher).
-    # These are the "context manager" brains — separate from the autonomy
-    # tick loop so they can run on a different (e.g. cheaper/faster) model
-    # than autonomy. Defaults fall back to the autonomy config, which in
-    # turn falls back to the main OLLAMA_* provider, so a fresh install
-    # with no AUX_* vars behaves exactly as before (all background agents
-    # shared one endpoint).
-    AUX_BASE_URL = os.getenv("AUX_BASE_URL", "").strip()
-    AUX_API_KEY = os.getenv(
-        "AUX_API_KEY", os.getenv("OPENAI_COMPAT_API_KEY", "")
-    ).strip()
-    AUX_MODEL = os.getenv("AUX_MODEL", "").strip()
-    AUX_DISABLE_REASONING = _bool_env("AUX_DISABLE_REASONING", True)
-
-    # Live tool progress messages. OFF by default: a per-server `,progress on`
-    # opts a server in, and MAXWELL_PROGRESS_MESSAGES=true enables it for every
-    # server as a baseline. `,progress off` silences a noisy server even under
+    # Live tool progress messages. OFF by default: a per-server `!progress on`
+    # opts a server in, and DAME_CURIE_PROGRESS_MESSAGES=true enables it for every
+    # server as a baseline. `!progress off` silences a noisy server even under
     # the env baseline; DMs never get them. See tool_progress.py.
-    PROGRESS_MESSAGES = _bool_env("MAXWELL_PROGRESS_MESSAGES", False)
+    PROGRESS_MESSAGES = _bool_env("DAME_CURIE_PROGRESS_MESSAGES", False)
 
     # Custom streaming tool-call protocol. Native OpenAI-style tools= doesn't
     # stream incrementally on some providers (notably Ollama cloud's
@@ -406,8 +344,8 @@ class Config:
     # own line ({"name": "...", "arguments": {...}}) and parses it from the
     # text stream AS IT STREAMS. Tool name lands in the progress UI at
     # ~12% of stream time vs ~88% for native. OFF by default to keep native
-    # behavior; turn on with MAXWELL_CUSTOM_TOOL_CALLS=true in .env.
-    CUSTOM_TOOL_CALLS = _bool_env("MAXWELL_CUSTOM_TOOL_CALLS", False)
+    # behavior; turn on with DAME_CURIE_CUSTOM_TOOL_CALLS=true in .env.
+    CUSTOM_TOOL_CALLS = _bool_env("DAME_CURIE_CUSTOM_TOOL_CALLS", False)
 
     # Discord join-captcha handling. Discord sometimes challenges an invite
     # accept (or other API action) with an hCaptcha — surfaced by the library
@@ -422,65 +360,11 @@ class Config:
         "CAPTCHA_SOLVER_TIMEOUT", 180, min_value=10, max_value=600
     )
 
-    # Human-in-the-loop captcha solving. When CAPTCHA_SOLVER_SERVICE is unset
-    # (or fails), the bot hosts a one-shot hCaptcha solve page and DMs the
-    # link to the owner (any CAPTCHA hit: joins, DM gates, phone checks).
-    # The token is bound to Discord's sitekey+rqdata, not the solver, so
-    # anyone who opens the link can complete it. CAPTCHA_FALLBACK_USER_ID is
-    # DM'd when no admin is resolvable.
-    CAPTCHA_HUMAN_SOLVE = _bool_env("CAPTCHA_HUMAN_SOLVE", True)
-    CAPTCHA_HUMAN_HOST = os.getenv("CAPTCHA_HUMAN_HOST", "127.0.0.1").strip()
-    CAPTCHA_HUMAN_PORT = _int_env(
-        "CAPTCHA_HUMAN_PORT", 8790, min_value=1, max_value=65535
-    )
-    CAPTCHA_FALLBACK_USER_ID = os.getenv("CAPTCHA_FALLBACK_USER_ID", "").strip()
-
-    POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "MarcosFRG/sdxl-lightning")
-    IMAGE_GEN_PROTOCOL = os.getenv("IMAGE_GEN_PROTOCOL", "pollinations").strip().lower()
-    IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "").strip()
-    IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "").strip()
-    IMAGE_GEN_MODEL = os.getenv("IMAGE_GEN_MODEL", "gpt-image-2").strip()
-    IMAGE_GEN_QUALITY = os.getenv("IMAGE_GEN_QUALITY", "low").strip()
-    IMAGE_GEN_TIMEOUT = _int_env(
-        "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
-    )
-
     NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
-    NVIDIA_IMAGE_URL = os.getenv(
-        "NVIDIA_IMAGE_URL",
-        "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev",
-    )
     # NVIDIA Riva ASR (Parakeet) for live VC transcription. Whisper is too
     # slow for this path; VC utterances go through Riva then the text model.
-    ASR_RIVA_FUNCTION_ID = os.getenv(
-        "ASR_RIVA_FUNCTION_ID", "1598d209-5e27-4d3c-8079-4751568b1081"
-    ).strip()
-    ASR_RIVA_LANGUAGE = os.getenv("ASR_RIVA_LANGUAGE", "en-US").strip() or "en-US"
-
-    # Legacy ChatGPT2API image endpoint. Kept only so an existing .env does
-    # not error on load — hd_image no longer uses it (that host dropped every
-    # image model and now 404s on /v1/images/generations).
-    GPT_IMAGE_URL = os.getenv("GPT_IMAGE_URL", "")
-    GPT_IMAGE_API_KEY = os.getenv("GPT_IMAGE_API_KEY", "")
-
-    GEMINI_IMAGE_PROTOCOL = os.getenv(
-        "GEMINI_IMAGE_PROTOCOL", "chat_completions"
-    ).strip().lower()
-    GEMINI_IMAGE_QUALITY = os.getenv("GEMINI_IMAGE_QUALITY", "high").strip()
-    GEMINI_IMAGE_BASE_URL = os.getenv("GEMINI_IMAGE_BASE_URL", "").strip()
-    GEMINI_IMAGE_API_KEY = os.getenv("GEMINI_IMAGE_API_KEY", "").strip()
-    GEMINI_IMAGE_MODEL = (
-        os.getenv("GEMINI_IMAGE_MODEL", "").strip() or "gemini-3.1-flash-image"
-    )
-    # Input images are downscaled to this longest edge before upload. Payload
-    # size dominates latency on this endpoint: a 629KB input took 89s where
-    # the same edit with a 64KB input took 20s.
-    GEMINI_IMAGE_MAX_INPUT_EDGE = _int_env(
-        "GEMINI_IMAGE_MAX_INPUT_EDGE", 1024, min_value=256, max_value=4096
-    )
-    GEMINI_IMAGE_TIMEOUT = _int_env(
-        "GEMINI_IMAGE_TIMEOUT", 300, min_value=30, max_value=900
-    )
+    ASR_RIVA_FUNCTION_ID = os.getenv("ASR_RIVA_FUNCTION_ID", "")
+    ASR_RIVA_LANGUAGE = os.getenv("ASR_RIVA_LANGUAGE", "")
 
     MEMORY_MESSAGE_LIMIT = _int_env(
         "MEMORY_MESSAGE_LIMIT", 2000, min_value=1, max_value=10000
@@ -499,84 +383,23 @@ class Config:
     )
     REM_RUN_HISTORY = _int_env("REM_RUN_HISTORY", 50, min_value=1, max_value=1000)
 
-    DATA_DIR = os.getenv(
-        "DATA_DIR",
-        "data_gf" if os.getenv("BOT_PERSONA_TYPE", "").strip().lower()
-        in {"gf", "mommy", "mommy_gf", "luna", "mommygf"} else "data",
-    )
-    MAXWELL_PROMPTS_DIR = os.getenv("MAXWELL_PROMPTS_DIR", "").strip()
+    DATA_DIR = os.getenv("DATA_DIR", "data")
+    DAME_CURIE_PROMPTS_DIR = os.getenv("DAME_CURIE_PROMPTS_DIR", "").strip()
     LOGS_DIR = os.getenv("LOGS_DIR", os.getenv("LOGS", "logs"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 
-    MAXWELL_SITE_DIR = os.getenv("MAXWELL_SITE_DIR", "public/bot")
-    MAXWELL_PUBLIC_BASE_URL = os.getenv(
-        "MAXWELL_PUBLIC_BASE_URL", "https://maxwell.example.com"
+    DAME_CURIE_SITE_DIR = os.getenv("DAME_CURIE_SITE_DIR", "public/bot")
+    DAME_CURIE_PUBLIC_BASE_URL = os.getenv(
+        "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
     )
-    MAXWELL_SITE_PUBLIC_BASE_URL = os.getenv("MAXWELL_SITE_PUBLIC_BASE_URL", "").strip()
-    MAXWELL_API_HOST = os.getenv("MAXWELL_API_HOST", "127.0.0.1")
-    MAXWELL_API_PORT = _int_env("MAXWELL_API_PORT", 8765, min_value=1, max_value=65535)
-    MAXWELL_CORS_ORIGIN = os.getenv(
-        "MAXWELL_CORS_ORIGIN", MAXWELL_PUBLIC_BASE_URL.rstrip("/")
-    )
+    DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
 
-    # Local mail (maxwell@z3ki.dev). Bot talks to local Postfix for
-    # outbound and local Dovecot for inbound; no third-party relay. The
-    # default host/port values match the Postfix+Dovecot setup documented
-    # in email_integration/README.md. Override the env vars only if you
-    # intentionally point the bot at a different mail server (debugging,
-    # testing against a sandbox, etc.).
-    MAXWELL_SMTP_HOST = os.getenv("MAXWELL_SMTP_HOST", "127.0.0.1").strip()
-    MAXWELL_SMTP_PORT = _int_env("MAXWELL_SMTP_PORT", 25, min_value=1, max_value=65535)
-    MAXWELL_IMAP_HOST = os.getenv("MAXWELL_IMAP_HOST", "127.0.0.1").strip()
-    MAXWELL_IMAP_PORT = _int_env("MAXWELL_IMAP_PORT", 993, min_value=1, max_value=65535)
-    MAXWELL_EMAIL_USER = os.getenv("MAXWELL_EMAIL_USER", "").strip()
-    MAXWELL_EMAIL_PASSWORD = os.getenv("MAXWELL_EMAIL_PASSWORD", "").strip()
-    # Blank From: falls back to the mailbox itself — one less thing to fill in.
-    MAXWELL_EMAIL_FROM = (
-        os.getenv("MAXWELL_EMAIL_FROM", "").strip() or MAXWELL_EMAIL_USER
-    )
-    MAXWELL_EMAIL_FROM_NAME = os.getenv("MAXWELL_EMAIL_FROM_NAME", "Maxwell").strip()
-    # Senders whose mail is never filed as an inbox notice. Comma-separated;
-    # a full address, or a leading-dot domain (".google.com") for it and its
-    # subdomains. Empty by default: which machine mail matters is the
-    # operator's call. A DMARC aggregate report is pure telemetry, but a
-    # MAILER-DAEMON bounce means something he sent did not arrive, and a
-    # heuristic cannot tell those apart. The mail itself is untouched — it
-    # stays on the server and the email_* tools still read it.
-    # -------------------------------------------------------------------------
-    # X (Twitter). Two cookies out of a logged-in browser tab are the whole
-    # of the write credential; everything else has a working default.
-    # X_BACKEND pins the backend order ("cookies", "api", "rss",
-    # "syndication", or a comma-separated subset); auto tries them in that
-    # order and takes the first that answers.
-    # -------------------------------------------------------------------------
-    X_BACKEND = os.getenv("X_BACKEND", "auto").strip() or "auto"
-    X_AUTH_TOKEN = os.getenv("X_AUTH_TOKEN", "").strip()
-    X_CT0 = os.getenv("X_CT0", "").strip()
-    X_HANDLE = os.getenv("X_HANDLE", "").strip().lstrip("@")
-    X_API_BASE_URL = os.getenv("X_API_BASE_URL", "").strip().rstrip("/")
-    X_API_KEY = os.getenv("X_API_KEY", "").strip()
-    X_API_KEY_HEADER = os.getenv("X_API_KEY_HEADER", "Authorization").strip()
-    X_API_PATHS = _json_env("X_API_PATHS")
-    X_RSS_BASE_URL = os.getenv("X_RSS_BASE_URL", "").strip().rstrip("/")
-    X_RSS_PATHS = _json_env("X_RSS_PATHS")
-    X_SYNDICATION = _bool_env("X_SYNDICATION", True)
-    X_MAX_CHARS = _int_env("X_MAX_CHARS", 280, min_value=1, max_value=25000)
-    X_TIMEOUT_SECONDS = _int_env("X_TIMEOUT_SECONDS", 20, min_value=5, max_value=120)
-    X_GRAPHQL_FILE = os.getenv("X_GRAPHQL_FILE", "").strip()
-
-    MAXWELL_EMAIL_IGNORE_SENDERS = os.getenv(
-        "MAXWELL_EMAIL_IGNORE_SENDERS", ""
-    ).strip()
-
-    # Admin / owner allowlists. Re-exported here so Config is the single
+    # Owner allowlist. Re-exported here so Config is the single
     # source of truth; bot_tools.refresh_owner_ids() still does a runtime
     # reload but the initial parse lives here.
-    MAXWELL_ADMIN_USER = os.getenv("MAXWELL_ADMIN_USER", "admin").strip()
-    MAXWELL_ADMIN_PASSWORD = os.getenv("MAXWELL_ADMIN_PASSWORD", "").strip()
-    MAXWELL_OWNER_IDS: ClassVar[set[str]] = {
+    DAME_CURIE_OWNER_IDS: ClassVar[set[str]] = {
         item.strip()
-        for item in os.getenv("MAXWELL_OWNER_IDS", "").split(",")
+        for item in os.getenv("DAME_CURIE_OWNER_IDS", "").split(",")
         if item.strip()
     }
 
@@ -593,13 +416,9 @@ class Config:
         ("ENABLE_WEB_SEARCH", "web search"),
         ("ENABLE_FETCH_URL", "fetch_url"),
         ("ENABLE_YOUTUBE", "YouTube"),
-        ("ENABLE_CREATE_SITE", "site generation"),
         ("ENABLE_AVATAR", "avatar changes"),
-        ("ENABLE_EMAIL_TOOLS", "email tools"),
-        ("ENABLE_X", "X (Twitter)"),
-        ("ENABLE_SHELL", "shell (docker sandbox)"),
+        ("ENABLE_SHELL", "shell (outer container)"),
         ("ENABLE_RAG", "RAG vector memory"),
-        ("ENABLE_TELEGRAM", "Telegram transport"),
         ("ENABLE_AUTONOMY", "autonomy engine"),
         ("REM_ENABLED", "REM dreaming pass"),
     )
@@ -618,26 +437,25 @@ class Config:
 
     @classmethod
     def validate(cls):
-        # The only two hard requirements. Anything else has a default or
-        # degrades to "feature off", which is the whole point of the
-        # ENABLE_*=auto design.
+        # Discord token and explicit remote endpoint/model are required.
+        # Other features default or degrade to "feature off", which is the
+        # point of the ENABLE_*=auto design.
         if not cls.DISCORD_TOKEN:
             raise ValueError(
                 "DISCORD_TOKEN is required. Run ./setup.sh, or set it in .env, "
                 "then start the bot again."
             )
-        if not cls.OLLAMA_BASE_URL:
+        if not cls.OPENAI_BASE_URL:
             raise ValueError(
-                "OLLAMA_BASE_URL is required — point it at any OpenAI-compatible "
-                "endpoint (local Ollama, OpenRouter, LM Studio, ...)."
+                "OPENAI_BASE_URL is required — set your remote OpenAI-compatible "
+                "chat endpoint explicitly; no vendor or endpoint is assumed."
             )
-        if not cls.OLLAMA_MODEL:
+        if not cls.OPENAI_MODEL:
             raise ValueError(
-                "OLLAMA_MODEL is required — set the model name your endpoint serves."
+                "OPENAI_MODEL is required — set the model name your endpoint serves."
             )
-        if cls.OLLAMA_MAX_TOKENS < 1:
-            raise ValueError("OLLAMA_MAX_TOKENS must be >= 1")
-
+        if cls.OPENAI_MAX_TOKENS is not None and cls.OPENAI_MAX_TOKENS < 1:
+            raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
         # Soft warnings — these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is
         # confusing without a hint. Log via the standard logging facility
@@ -646,40 +464,22 @@ class Config:
 
         _log = logging.getLogger("maxwell.config")
 
-        if not cls.MAXWELL_ADMIN_PASSWORD:
+        if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(
-                "MAXWELL_ADMIN_PASSWORD is empty — the admin API will return "
-                "503 on every request. Set a real password in .env."
-            )
-        if not cls.MAXWELL_OWNER_IDS:
-            _log.warning(
-                "MAXWELL_OWNER_IDS is empty — admin commands (`,prompt`, "
-                "`,clearmem`, `,autonomy`, `,rem`, etc.) will be denied to "
+                "DAME_CURIE_OWNER_IDS is empty — admin commands (`!prompt`, "
+                "`!clearmem`, `!autonomy`, `!rem`, etc.) will be denied to "
                 "everyone. Set your Discord user ID in .env."
-            )
-        if cls.ENABLE_EMAIL_TOOLS and not cls.MAXWELL_EMAIL_PASSWORD:
-            _log.warning(
-                "ENABLE_EMAIL_TOOLS=true but MAXWELL_EMAIL_PASSWORD is empty — "
-                "the email tools will return a 'not configured' error on every "
-                "call. Either set MAXWELL_EMAIL_PASSWORD or set "
-                "ENABLE_EMAIL_TOOLS=false."
-            )
-        if cls.ENABLE_TELEGRAM and cls.TELEGRAM_TOKEN:
-            _log.info(
-                "TELEGRAM_TOKEN is set — Telegram polling will auto-start. "
-                "Set ENABLE_TELEGRAM=false to suppress without removing the token."
             )
         if cls.ENABLE_SHELL:
             _log.warning(
-                "ENABLE_SHELL is on — the model can run commands on this host "
-                "as the bot user. Set ENABLE_SHELL=false in .env if you did "
-                "not mean to grant that."
+                "ENABLE_SHELL is on — the model can run commands inside the bot container "
+                "with the bot's permissions and mounted state. Set ENABLE_SHELL=false "
+                "in .env if you did not mean to grant that."
             )
         # TTS engine sanity check
-        if cls.TTS_ENGINE not in {"auto", "local", "riva", "gtts", "fish"}:
+        if cls.TTS_ENGINE not in {"local", "riva", "fish"}:
             _log.warning(
-                "TTS_ENGINE=%r is not one of auto/local/riva/gtts/fish — falling "
-                "back to 'auto' behaviour.",
+                "TTS_ENGINE=%r must explicitly select local/riva/fish; TTS requests will fail.",
                 cls.TTS_ENGINE,
             )
 

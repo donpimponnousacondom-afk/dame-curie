@@ -1,6 +1,9 @@
 """Welcome/system events, presence, clips, and extra media types in context."""
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from bot import MaxwellBot
 from tool_schemas import RESULT_TOOL_NAMES, result_contract
@@ -35,10 +38,18 @@ def test_welcome_join_is_a_visible_system_event():
     assert "[system:" in text
 
 
-def test_ordinary_replies_are_not_labeled_system():
+@pytest.mark.parametrize(
+    "created_at",
+    [
+        None,
+        datetime(2026, 10, 2, 12, 34, 56, tzinfo=timezone.utc),
+        datetime(2026, 10, 2, 12, 34, 56, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+    ],
+)
+def test_ordinary_replies_are_not_labeled_system(created_at):
     msg = SimpleNamespace(
         type="MessageType.reply",
-        content="hey",
+        content="[note] hey",
         author=SimpleNamespace(display_name="Bob", id=2),
         attachments=[],
         embeds=[],
@@ -48,11 +59,18 @@ def test_ordinary_replies_are_not_labeled_system():
         mentions=[],
         channel_mentions=[],
         role_mentions=[],
-        created_at=None,
+        created_at=created_at,
         guild=None,
     )
     assert message_is_discord_system_event(msg) is False
-    assert "[system:" not in render_discord_context_text(msg)
+    text = render_discord_context_text(msg)
+    expected = (
+        f"[{created_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}] [note] hey"
+        if created_at is not None
+        else "[note] hey"
+    )
+    assert text == expected
+    assert "[system:" not in text
 
 
 def test_clip_and_voice_attachments_are_annotated():

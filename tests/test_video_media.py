@@ -48,7 +48,7 @@ def test_fetch_url_rejects_audio_payload_as_text(monkeypatch):
         return "https://cdn.example/clip.mp3", "audio/mpeg", b"\xff\xfe\x00\x01"
 
     monkeypatch.setattr("bot_tools._fetch_public_url", fetch)
-    bot = SimpleNamespace(mark_message_tainted=lambda *_args: None)
+    bot = SimpleNamespace()
     result = asyncio.run(
         FetchUrlTool(bot).execute(_message(), url="https://cdn.example/clip.mp3")
     )

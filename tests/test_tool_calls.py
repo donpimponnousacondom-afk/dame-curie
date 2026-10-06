@@ -13,13 +13,17 @@ sanitizer plus the new reasoning contract:
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from bot import MaxwellBot, strip_tool_payload_leaks
 from tool_registry import extract_reasoning, _sanitize_reasoning, record_reasoning
 from tool_schemas import (
     REASONING_PARAM,
     build_openai_tools,
     elide_tool_calls_for_history,
+    message_chars,
     normalize_native_tool_calls,
+    trim_tool_tail,
 )
 
 
@@ -88,14 +92,11 @@ def test_strip_tool_payload_leaks_removes_registered_tool_bodies():
     assert "hello" in strip_tool_payload_leaks(leaked)
     search = "<tool:search_messages>secret query</tool:search_messages> ok"
     assert "secret query" not in strip_tool_payload_leaks(search)
-    email = "<tool:email_send>to=evil</tool:email_send> visible"
-    assert "to=evil" not in strip_tool_payload_leaks(email)
-    assert "visible" in strip_tool_payload_leaks(email)
 
 
-def test_strip_tool_payload_leaks_removes_glued_create_site():
+def test_strip_tool_payload_leaks_removes_glued_registered_tool():
     html = "<!DOCTYPE html><html><body>x</body></html>"
-    text = f'ship<tool:create_site name="drift" title="t">{html}</tool:create_site>ok'
+    text = f'ship<tool:shell command="echo ok">{html}</tool:shell>ok'
     assert strip_tool_payload_leaks(text) == "shipok"
 
 
@@ -327,37 +328,122 @@ def test_select_tool_protocol_custom_only_when_native_off():
 
 
 def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
-    """Native tool arguments arrive as objects, JSON, or nested JSON."""
+    """Native arguments are objects or fully consumed JSON objects."""
     body = r"<pre>line one\nline two</pre>"
-    raw_calls = [
-        {
-            "id": "direct",
-            "function": {"name": "create_site", "arguments": {"body": body}},
-        },
+    calls = [
+        {"id": "direct", "function": {"name": "create_site", "arguments": {"body": body}}},
         {
             "id": "nested",
-            "function": {
-                "name": "create_site",
-                "arguments": json.dumps(json.dumps({"body": body})),
-            },
-        },
-        {
-            "id": "trailing",
-            "function": {
-                "name": "create_site",
-                "arguments": json.dumps({"body": body}) + "<provider-markup>",
-            },
+            "function": {"name": "create_site", "arguments": json.dumps(json.dumps({"body": body}))},
         },
     ]
+    normalized = normalize_native_tool_calls(calls)
+    assert [call["arguments"]["body"] for call in normalized] == [body] * 2
+    assert normalized[1]["raw_name"] == "create_site"
+    assert normalized[0]["raw"] is calls[0]
+    assert calls[1]["function"]["arguments"] == json.dumps(json.dumps({"body": body}))
+    finite = normalize_native_tool_calls([
+        {"id": "finite", "function": {"name": "tool_create_site", "arguments": {
+            "values": [0.0, -1.25, 1e300], "nested": {"value": 1e-300},
+        }}},
+    ])[0]
+    assert finite["raw_name"] == "tool_create_site"
+    assert finite["name"] == "create_site"
+    assert finite["arguments"] == {"values": [0.0, -1.25, 1e300], "nested": {"value": 1e-300}}
 
-    normalized = normalize_native_tool_calls(raw_calls)
+    for arguments in (
+        json.dumps({"body": body}) + "<provider-markup>",
+        "42",
+        "[]",
+        "body=value",
+        '{"value":NaN}',
+        '{"value":Infinity}',
+        '{"value":-Infinity}',
+        '{"value":1e10000}',
+        '{"value":-1e10000}',
+        '{"nested":{"values":[0,NaN]}}',
+        '{"nested":[{"value":-Infinity}]}',
+        '{"arguments":{"value":Infinity}}',
+        json.dumps('{"nested":[{"value":1e10000}]}'),
+    ):
+        with pytest.raises(ValueError):
+            normalize_native_tool_calls(
+                [{"function": {"name": "create_site", "arguments": arguments}}]
+            )
+    for arguments in (
+        {"value": float("nan")},
+        {"nested": [float("inf")]},
+        {"value": float("-inf")},
+        {"nested": {"values": [0.0, float("nan")]}},
+        {"parameters": {"value": float("inf")}},
+    ):
+        with pytest.raises(ValueError):
+            normalize_native_tool_calls(
+                [{"function": {"name": "create_site", "arguments": arguments}}]
+            )
+    for bad in ({"nested": [float("nan")]}, '{"nested":[{"value":1e10000}]}'):
+        batch = [calls[0], {"id": "bad", "function": {"name": "create_site", "arguments": bad}}]
+        with pytest.raises(ValueError):
+            normalize_native_tool_calls(batch)
+        assert batch[0]["function"]["arguments"] == {"body": body}
+    nested = "0"
+    for _ in range(33):
+        nested = f'{{"value":{nested}}}'
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls([{"function": {"name": "create_site", "arguments": nested}}])
 
-    assert [call["arguments"]["body"] for call in normalized] == [body] * 3
-
-    scalar = normalize_native_tool_calls(
-        [{"function": {"name": "react", "arguments": "42"}}]
-    )
-    assert scalar[0]["arguments"] == {"_": 42}
+    wide = json.dumps({"value": "é" * 7_997}, ensure_ascii=False, separators=(",", ":"))
+    assert len(wide) < 16_000
+    oversized_calls = [
+        {"function": {"name": "é" * 65, "arguments": "{}"}},
+        {"id": "é" * 65, "function": {"name": "create_site", "arguments": "{}"}},
+        {"id": "meta", "function": {"name": "x", "arguments": "{}"}, "meta": "é" * 20_000},
+    ]
+    for call in oversized_calls:
+        with pytest.raises(ValueError):
+            normalize_native_tool_calls([call])
+        with pytest.raises(ValueError):
+            normalize_native_tool_calls([call], allow_oversized_arguments=True)
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls([{"function": {"name": "create_site", "arguments": wide}}])
+    oversized = normalize_native_tool_calls(
+        [{"id": "oversized-id", "function": {"name": "create_site", "arguments": wide}}],
+        allow_oversized_arguments=True,
+    )[0]
+    assert oversized["id"] == "oversized-id"
+    assert oversized["raw_name"] == "create_site"
+    assert oversized["arguments"] == {}
+    assert oversized["oversized_arguments"] is True
+    assert oversized["raw"] is None
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(
+            [{"function": {"name": "create_site", "arguments": wide + "!"}}],
+            allow_oversized_arguments=True,
+        )
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(
+            [{"function": {"name": "create_site", "arguments": wide[:-1] + ',"bad":NaN}'}}],
+            allow_oversized_arguments=True,
+        )
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(
+            [
+                {"id": "duplicate", "function": {"name": "create_site", "arguments": wide}},
+                {"id": "duplicate", "function": {"name": "create_site", "arguments": "{}"}},
+            ],
+            allow_oversized_arguments=True,
+        )
+    batch_argument = json.dumps({"value": "é" * 6_000}, ensure_ascii=False)
+    oversized_batch = [
+        {"id": str(index), "function": {"name": "x", "arguments": batch_argument}}
+        for index in range(3)
+    ]
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(oversized_batch)
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(oversized_batch, allow_oversized_arguments=True)
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls([{"function": {"name": "x", "arguments": {"nested": {1: "bad"}}}}])
 
 
 def test_record_reasoning_does_not_raise_on_bot_failure():
@@ -377,27 +463,9 @@ def test_record_reasoning_does_not_raise_on_bot_failure():
     asyncio.run(run())  # no exception = pass
 
 
-def test_elide_keeps_create_site_and_edit_site_html():
+def test_elide_compacts_message_content():
     html = "<!DOCTYPE html><html><body>" + ("n" * 20_000) + "</body></html>"
     calls = [
-        {
-            "id": "1",
-            "type": "function",
-            "function": {
-                "name": "create_site",
-                "arguments": json.dumps({"name": "x", "title": "t", "body": html}),
-            },
-        },
-        {
-            "id": "2",
-            "type": "function",
-            "function": {
-                "name": "edit_site",
-                "arguments": json.dumps(
-                    {"name": "x", "action": "write", "content": html}
-                ),
-            },
-        },
         {
             "id": "3",
             "type": "function",
@@ -408,11 +476,44 @@ def test_elide_keeps_create_site_and_edit_site_html():
         },
     ]
     out = elide_tool_calls_for_history(calls)
-    create_args = json.loads(out[0]["function"]["arguments"])
-    edit_args = json.loads(out[1]["function"]["arguments"])
-    send_args = json.loads(out[2]["function"]["arguments"])
-    assert create_args["body"] == html
-    assert edit_args["content"] == html
-    assert "omitted" not in create_args["body"]
+    send_args = json.loads(out[0]["function"]["arguments"])
     assert send_args["content"].startswith("[large content omitted,")
     assert "20000" in send_args["content"] or str(len(html)) in send_args["content"]
+    calls[0]["function"]["arguments"] = json.dumps(
+        {"reasoning": "r" * 9000, "query": "weather"}
+    )
+    reason_args = json.loads(elide_tool_calls_for_history(calls)[0]["function"]["arguments"])
+    assert reason_args["reasoning"].startswith("r" * 200)
+    assert reason_args["reasoning"].endswith("[9000 chars total; reasoning shortened]")
+    assert len(reason_args["reasoning"]) <= 300
+    assert reason_args["query"] == "weather"
+    calls[0]["function"]["arguments"] = json.dumps(
+        {"reasoning": "r" * 9000, "query": "q" * 5000, "options": ["x" * 9000]}
+    )
+    out = elide_tool_calls_for_history(calls)
+    bounded = out[0]["function"]["arguments"]
+    assert len(bounded) <= 4000
+    assert "r" * 301 not in bounded
+    assert "q" * 2001 not in bounded
+    assert len(calls[0]["function"]["arguments"]) > 20_000
+    assert elide_tool_calls_for_history(out) == out
+
+    text_tail = [
+        {"role": "assistant", "content": "reasoning " * 5000},
+        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "result " * 5000},
+        {"role": "assistant", "content": "new round " * 5000},
+        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "fresh " * 5000},
+    ]
+    text_trimmed = trim_tool_tail(text_tail)
+    assert len(text_trimmed) == 4
+    assert sum(message_chars(msg) for msg in text_trimmed) <= 36_000
+    assert "truncated from tool history" in text_trimmed[0]["content"]
+    with pytest.raises(ValueError, match="Orphan tool result"):
+        trim_tool_tail([{"role": "tool", "tool_call_id": "orphan", "content": "x"}])
+    with pytest.raises(ValueError, match="mismatched native"):
+        trim_tool_tail(
+            [
+                {"role": "assistant", "tool_calls": [{"id": "c1"}]},
+                {"role": "tool", "tool_call_id": "c2", "content": "x"},
+            ]
+        )

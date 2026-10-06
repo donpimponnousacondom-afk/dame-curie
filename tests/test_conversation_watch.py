@@ -3,6 +3,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from autonomy import _reply_relation_bit
 from bot import MaxwellBot
 from concurrency_safety import KeyedLocks
@@ -48,8 +50,6 @@ def _bot(*, watch_seconds=180, debounce_seconds=0.05, watch_enabled=True):
     bot._watch_burst_prompt_lines = MaxwellBot._watch_burst_prompt_lines.__get__(bot)
     bot._message_addresses_self = MaxwellBot._message_addresses_self.__get__(bot)
     bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._is_partner_message = MaxwellBot._is_partner_message.__get__(bot)
-    bot._partner_reply_budget = MaxwellBot._partner_reply_budget.__get__(bot)
     bot._content_without_self_mention = (
         MaxwellBot._content_without_self_mention.__get__(bot)
     )
@@ -114,6 +114,79 @@ def _plain_followup(
         guild=SimpleNamespace(me=None, get_member=lambda _uid: None),
         reference=reference,
     )
+
+
+@pytest.fixture
+def role_ping() -> tuple[SimpleNamespace, SimpleNamespace]:
+    bot = _bot(watch_seconds=0, watch_enabled=False)
+    message = _plain_followup(content="<@&700> everyone ready?")
+    message.id = 101
+    message.role_mentions = [SimpleNamespace(id=700)]
+    member = SimpleNamespace(id=bot.user.id, roles=[SimpleNamespace(id=100), SimpleNamespace(id=700)])
+    message.guild = SimpleNamespace(id=100, me=member, get_member=lambda uid: member if uid == bot.user.id else None)
+    return bot, message
+
+
+def test_assigned_role_ping_dispatches_with_conversation_watch_disabled(role_ping) -> None:
+    bot, message = role_ping
+    handled = []
+
+    async def handle(message, content=None):
+        handled.append(content)
+
+    bot._handle_message = handle
+
+    async def run():
+        assert bot._should_live_reply(message)
+        signal = bot._watch_address_signal(message)
+        assert signal.direct and not signal.soft
+        await bot._maybe_live_reply(message, message.content)
+        await _drain(bot)
+        assert handled == [message.content]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("case", ["unassigned", "unknown_member", "not_a_real_mention", "bot_author", "default_role"])
+def test_role_ping_requires_human_mention_and_actual_membership(role_ping, case) -> None:
+    bot, message = role_ping
+    if case == "unassigned":
+        message.guild.me.roles = [SimpleNamespace(id=100)]
+    elif case == "unknown_member":
+        message.guild.me = None
+        message.guild.get_member = lambda uid: None
+    elif case == "not_a_real_mention":
+        message.role_mentions = []
+    elif case == "bot_author":
+        message.author.bot = True
+    else:
+        message.role_mentions = [SimpleNamespace(id=100)]
+    assert not bot._directly_addressed(message)
+    assert not bot._should_live_reply(message)
+
+
+def test_role_membership_uses_current_guild_member_cache(role_ping) -> None:
+    bot, message = role_ping
+    member = message.guild.me
+    message.guild.me = None
+    assert bot._directly_addressed(message)
+    member.roles = []
+    assert not bot._directly_addressed(message)
+
+
+def test_group_role_ping_does_not_interrupt_a_running_turn(role_ping) -> None:
+    bot, message = role_ping
+    cid = str(message.channel.id)
+    bot._active_requests[cid] = SimpleNamespace(done=lambda: False)
+    bot._active_request_user[cid] = str(message.author.id)
+
+    async def run():
+        assert bot._directly_addressed(message)
+        assert not bot._should_interrupt_inflight(message)
+        message.mentions = [bot.user]
+        assert bot._should_interrupt_inflight(message)
+
+    asyncio.run(run())
 
 
 async def _drain(bot, spins=400):
@@ -734,47 +807,3 @@ def test_typing_expires_and_ignores_self_and_bots():
     assert [p["id"] for p in MaxwellBot._typing_in_channel(bot, channel.id)] == ["7"]
     bot._typing_users[str(channel.id)]["7"]["expires_at"] = 0
     assert MaxwellBot._typing_in_channel(bot, channel.id) == []
-
-
-def test_partner_self_accounts_hit_a_finite_reply_budget():
-    bot = _bot()
-    bot._partner_ids = {"1496154562715848763", str(bot.user.id)}
-    bot._partner_max_auto_turns = 2
-    bot._partner_turn_window = 60.0
-    handled = []
-
-    async def handle(message, content=None):
-        handled.append(content or message.content)
-
-    bot._handle_message = handle
-
-    async def run():
-        for text in ("first", "second", "third"):
-            message = _plain_followup(
-                content=text,
-                author_id=1496154562715848763,
-                display_name="Uni",
-            )
-            # Self-bot accounts commonly arrive with bot=False.
-            message.author.bot = False
-            message.mentions = [bot.user]
-            await MaxwellBot._maybe_live_reply(bot, message, text)
-            await _drain(bot)
-
-        assert handled == ["first", "second"]
-        assert bot._partner_turns[str(message.channel.id)] == 2
-
-        human = _plain_followup(content="continue", author_id=7, display_name="Alice")
-        MaxwellBot._reset_partner_reply_budget_for_human(bot, human)
-        fresh = _plain_followup(
-            content="fresh",
-            author_id=1496154562715848763,
-            display_name="Uni",
-        )
-        fresh.author.bot = False
-        fresh.mentions = [bot.user]
-        await MaxwellBot._maybe_live_reply(bot, fresh, fresh.content)
-        await _drain(bot)
-        assert handled == ["first", "second", "fresh"]
-
-    asyncio.run(run())

@@ -1,10 +1,14 @@
 """Per-call Discord presentation, delivered-message measurements, and build identity."""
 
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import logging
 import os
 import platform
 import re
@@ -16,6 +20,31 @@ from urllib.parse import urlsplit
 
 from provider_telemetry import CallMetrics
 from utils import FileLock, _atomic_json_write_sync
+
+
+logger = logging.getLogger(__name__)
+
+# Which operator input a delivered message belongs to. The turn handler sets it
+# inside the turn's own task, so everything that turn awaits or spawns inherits
+# it; record_delivery reads it. Empty means the delivery belongs to no observed
+# input.
+TURN_INPUT: ContextVar[str] = ContextVar("turn_input", default="")
+
+# True while the bot posts one of its own notices — a sleep gate, a public error.
+# A notice is a real message in the channel but never the model's answer, so the
+# turn observer records it as evidence and not as output. Set only around the
+# send, by notice_send.
+NOTICE_SEND: ContextVar[bool] = ContextVar("notice_send", default=False)
+
+
+@contextmanager
+def notice_send() -> Iterator[None]:
+    """Mark the sends inside this block as the bot's own notices."""
+    token = NOTICE_SEND.set(True)
+    try:
+        yield
+    finally:
+        NOTICE_SEND.reset(token)
 
 
 FOOTER_MARKER = "\u2063\u2060\u2063\u2060"
@@ -269,6 +298,20 @@ def record_delivery(
         if registry is None:
             registry = bot._delivery_measurements = DeliveryMeasurements()
         registry.record(str(channel_id), str(message_id), metrics)
+    observer = getattr(bot, "_turn_observer", None)
+    input_id = TURN_INPUT.get()
+    if (
+        observer is not None
+        and input_id
+        and platform == "discord"
+        and message_id is not None
+        and channel_id is not None
+    ):
+        try:
+            observer.delivered(input_id, str(channel_id), str(message_id), NOTICE_SEND.get())
+        except Exception:
+            # Optional instrumentation may never cost a real delivery.
+            logger.exception("turn observer delivery hook failed")
 
 
 def format_runtime_provider(provider) -> str:
@@ -327,6 +370,19 @@ def format_debug(
     )
 
 
+PROVENANCE_IMAGE = "image"
+PROVENANCE_CHECKOUT = "checkout"
+PROVENANCE_UNKNOWN = "unknown"
+
+MANIFEST_FILENAME = "build_provenance.json"
+MANIFEST_TEXT_FIELDS = ("commit", "branch", "date", "subject")
+MANIFEST_FIELDS = (*MANIFEST_TEXT_FIELDS, "dirty")
+
+
+class ImageManifestError(ValueError):
+    """A manifest is present next to the running source but is not usable."""
+
+
 @dataclass(frozen=True)
 class RunningBuild:
     commit: str
@@ -336,13 +392,25 @@ class RunningBuild:
     dirty: bool | None
     started_at: str
     python: str
+    provenance: str = PROVENANCE_CHECKOUT
 
     def format(self) -> str:
         dirty = "unknown" if self.dirty is None else "yes" if self.dirty else "no"
+        if self.provenance == PROVENANCE_IMAGE:
+            label = "image (committed tree, baked manifest)"
+            source = "image build manifest"
+        elif self.provenance == PROVENANCE_CHECKOUT:
+            label = "checkout at boot, not necessarily this image"
+            source = "checkout at boot"
+        else:
+            label = "unknown; no image manifest and no readable checkout"
+            source = "unknown"
         return "\n".join(
             [
-                f"Checkout at boot: {self.commit[:12]} ({self.commit})",
-                f"Branch: {self.branch} | dirty at startup: {dirty}",
+                f"Provenance: {label}",
+                f"Source: {source}",
+                f"Commit: {self.commit[:12]} ({self.commit})",
+                f"Branch: {self.branch} | dirty: {dirty}",
                 f"Commit date: {self.date}",
                 f"Subject: {self.subject}",
                 f"Process started: {self.started_at}",
@@ -385,16 +453,79 @@ def read_startup_git_snapshot(path: str) -> dict[str, str | bool]:
     return snapshot
 
 
+def _utc_iso(value: datetime) -> str:
+    """Normalize recorded commit times without inventing a timezone for naive input."""
+    if value.tzinfo is None:
+        raise ValueError("build provenance date has no timezone")
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def read_image_manifest(path: Path) -> dict[str, str | bool]:
+    """Parse the identity the image baked in at build time.
+
+    Every field is required and typed: a wrong value here means the operator must
+    know, not that the report quietly degrades to a checkout or to unknown.
+    """
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ImageManifestError("image manifest is not a JSON object")
+    missing = [
+        field
+        for field in MANIFEST_FIELDS
+        if field not in manifest or manifest[field] in (None, "")
+    ]
+    if missing:
+        raise ImageManifestError(f"image manifest is missing {', '.join(missing)}")
+    if any(not isinstance(manifest[field], str) for field in MANIFEST_TEXT_FIELDS):
+        raise ImageManifestError("image manifest text field is not a string")
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest["commit"]):
+        raise ImageManifestError("image manifest commit is not a full hex revision")
+    if type(manifest["dirty"]) is not bool:
+        raise ImageManifestError("image manifest dirty is not a JSON boolean")
+    try:
+        date = _utc_iso(datetime.fromisoformat(manifest["date"]))
+    except ValueError as error:
+        raise ImageManifestError(
+            "image manifest date is not an ISO 8601 instant"
+        ) from error
+    return {**manifest, "date": date}
+
+
 def capture_running_build(root: Path) -> RunningBuild:
+    """Freeze the identity of what is actually running, once, at process start.
+
+    The image's own manifest, a fixed name next to the source the process is
+    running, wins over every mutable source: no environment variable selects it,
+    the build environment cannot claim it and the local checkout cannot replace
+    it. A manifest that is present but unusable fails the boot loudly. Only an
+    absent manifest falls back, and that fallback is labelled as a checkout when
+    it actually reads one and unknown when it reads nothing.
+    """
     started_at = datetime.now(timezone.utc).isoformat()
-    socket_path = os.getenv("MAXWELL_STARTUP_GIT_SOCKET", "").strip()
+    manifest_path = root / MANIFEST_FILENAME
+    if manifest_path.exists():
+        manifest = read_image_manifest(manifest_path)
+        return RunningBuild(
+            **manifest,
+            started_at=started_at,
+            python=platform.python_version(),
+            provenance=PROVENANCE_IMAGE,
+        )
+    socket_path = os.getenv("DAME_CURIE_STARTUP_GIT_SOCKET", "").strip()
     if socket_path:
         snapshot = read_startup_git_snapshot(socket_path)
-        return RunningBuild(**snapshot, started_at=started_at, python=platform.python_version())
+        return RunningBuild(
+            **snapshot,
+            started_at=started_at,
+            python=platform.python_version(),
+            provenance=PROVENANCE_CHECKOUT,
+        )
     commit = branch = date = subject = "unknown"
     dirty = None
+    provenance = PROVENANCE_UNKNOWN
     git = shutil.which("git")
     if git and (root / ".git").exists():
+        provenance = PROVENANCE_CHECKOUT
         result = subprocess.run(
             [git, "-C", str(root), "log", "-1", "--format=%H%n%cI%n%s"],
             capture_output=True,
@@ -403,7 +534,7 @@ def capture_running_build(root: Path) -> RunningBuild:
         )
         if result.returncode == 0:
             commit, date, subject = result.stdout.rstrip("\n").split("\n", 2)
-            date = datetime.fromisoformat(date).astimezone(timezone.utc).isoformat()
+            date = _utc_iso(datetime.fromisoformat(date))
         result = subprocess.run(
             [git, "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
@@ -421,5 +552,6 @@ def capture_running_build(root: Path) -> RunningBuild:
         if result.returncode == 0:
             dirty = bool(result.stdout.strip())
     return RunningBuild(
-        commit, branch, date, subject, dirty, started_at, platform.python_version()
+        commit, branch, date, subject, dirty, started_at, platform.python_version(),
+        provenance,
     )

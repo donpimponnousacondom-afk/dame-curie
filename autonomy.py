@@ -24,7 +24,7 @@ MAINTAINER NOTES:
 - Don't reintroduce a silence-first planner prompt. It buys nothing: the floor
   gate already makes badly-timed speech impossible, and the prompt-level version
   only costs initiative.
-- Autonomy exposes every dashboard-enabled tool. If a tool needs a real
+- Autonomy applies the runtime tool controls. If a tool needs a real
   Discord message, SyntheticMessage has to point at target_message_id. Yes,
   this is more annoying. The user explicitly asked for all tools.
 - The context budget is PER-SECTION now, not global truncation. The old
@@ -59,6 +59,7 @@ from error_reporting import capture_incident
 from control_defaults import (
     DEFAULT_CONTROL,
 )  # noqa: E402
+from tool_policy import tool_authorized  # noqa: E402
 from utils import (  # noqa: E402
     JsonStateStore,
     _atomic_json_write_sync,
@@ -596,7 +597,7 @@ _DM_HISTORY_TIMEOUT = 20
 # Research tools are never available to the unattended tick. Curiosity-as-a-
 # drive turned every quiet interval into web_search + update_memory on random
 # engine trivia. Extra denials: AUTONOMY_DISABLED_TOOLS=shell,delete_channel
-# Dashboard tools_enabled / disabled_tools still apply on top of this.
+# Runtime tools_enabled / disabled_tools controls still apply on top of this.
 AUTONOMY_RESEARCH_TOOLS = frozenset({"web_search", "fetch_url", "youtube"})
 # Unattended ticks must not kick/ban/timeout/purge or reshape a server.
 AUTONOMY_DESTRUCTIVE_TOOLS = frozenset(
@@ -1263,7 +1264,7 @@ class AutonomyEngine:
                     control.get("autonomy_blocked_servers", []) or []
                 ):
                     return False
-                # `,solo` locks a server to one channel. Setting it also
+                # `!solo` locks a server to one channel. Setting it also
                 # blacklists the guild above, but enforce the lock here too:
                 # the promise is "nowhere but that channel", and it should not
                 # depend on two settings staying in sync.
@@ -1289,26 +1290,29 @@ class AutonomyEngine:
         return True
 
     def _autonomy_tool_allowed(self, name: str) -> bool:
-        """Check if autonomy can use a tool, respecting dashboard controls.
+        """Check if autonomy can use a tool, respecting runtime controls.
 
         CRITICAL: without this, autonomy bypasses tools_enabled/disabled_tools.
         The LLM was calling shell/kilo/create_channel through autonomy even when
         the admin disabled them in the dashboard. Don't remove this gate.
         Hard safety denials from AUTONOMY_DISABLED_TOOLS (including research
         tools) are enforced first.
+
+        The tick's actor is the synthetic author id ``autonomy``, exactly as
+        ``_exec_run_tool`` builds it, so the shared actor policy decides here
+        too: a privileged tool autonomy is not authorized to execute is not
+        advertised to the planner, not validated and not gated as available.
         """
         if name in AUTONOMY_DISABLED_TOOLS:
             return False
         control = getattr(self.bot, "_control", None) or {}
-        if name == "x_post" and not control.get("x_autonomy_post", False):
-            # Reading X unattended is research; posting to a public timeline
-            # unattended is a different decision, and it gets its own switch
-            # rather than riding on x_post_enabled (which is about whether he
-            # can post at all, including when someone asked him to).
-            return False
         if not control.get("tools_enabled", True):
             return False
-        return name not in set(control.get("disabled_tools", []) or [])
+        disabled = name in set(control.get("disabled_tools", []) or [])
+        actor = SimpleNamespace(id="autonomy")
+        return not disabled and tool_authorized(
+            self.bot, SimpleNamespace(author=actor), name
+        )
 
     # -- lifecycle (idempotent) --
 
@@ -3042,8 +3046,6 @@ class AutonomyEngine:
                 ai_provider = await ai_provider()  # type: ignore
             else:
                 ai_provider = cast(Any, getattr(self.bot, "ai_provider", None))
-            if not callable(getattr(ai_provider, "generate_response", None)):
-                ai_provider = cast(Any, getattr(self.bot, "ai_provider", None))
             if (
                 ai_provider is not None
                 and getattr(ai_provider, "available", None) == False  # noqa: E712
@@ -3054,33 +3056,10 @@ class AutonomyEngine:
             # tick and must not take turns against every live room.
             await self.bot._acquire_ai_slot(timeout=timeout, key="autonomy")
             try:
-                # Pass the configured autonomy model as override so even the main
-                # provider runs a different model if autonomy_model is set.
-                control = getattr(self.bot, "_control", None) or {}
-                autonomy_model = str(control.get("autonomy_model", "") or "")
-                # Honor autonomy_disable_reasoning per-call so it takes effect even
-                # when reusing the main provider (no autonomy_base_url). The
-                # provider lets a per-call False override the endpoint default.
-                autonomy_disable_reasoning = bool(
-                    control.get("autonomy_disable_reasoning", False)
-                )
-                night_kwargs = {}
-                night_kwargs_resolver = getattr(
-                    self.bot, "_night_fallback_kwargs", None
-                )
-                if callable(night_kwargs_resolver):
-                    night_kwargs = night_kwargs_resolver(ai_provider)
                 assert ai_provider is not None  # narrowed by callable check above
                 raw_response = await ai_provider.generate_response(
                     messages,
                     timeout=timeout,
-                    model=autonomy_model or None,
-                    # Autonomy only generates a short JSON plan; cap max_tokens so
-                    # we don't blow past an autonomy model's output limit (e.g.
-                    # minimax-m3 caps at 131072) and waste quota/tokens.
-                    max_tokens=8192,
-                    disable_reasoning=autonomy_disable_reasoning,
-                    **night_kwargs,
                 )
             finally:
                 await self.bot._release_ai_slot()
@@ -3153,7 +3132,11 @@ class AutonomyEngine:
             if json_str is None and candidates:
                 json_str = candidates[0][1]
         if json_str is None:
-            logger.warning(f"Autonomy planner returned no JSON. Raw: {text[:500]}")
+            logger.warning(
+                "Autonomy planner returned no JSON (%s chars, no object/candidate); "
+                "raw output withheld",
+                len(text),
+            )
             return [
                 {"kind": "do_nothing", "reason": "no JSON in LLM response"}
             ], validation_failures
@@ -3162,7 +3145,10 @@ class AutonomyEngine:
             parsed = json.loads(json_str)
         except json.JSONDecodeError as e:
             logger.warning(
-                f"Autonomy planner JSON parse failed: {e}. Raw: {json_str[:500]}"
+                "Autonomy planner JSON parse failed: %s (candidate %s chars); "
+                "raw output withheld",
+                e,
+                len(json_str),
             )
             return [
                 {"kind": "do_nothing", "reason": "invalid JSON from planner"}
@@ -3592,7 +3578,7 @@ class AutonomyEngine:
         """Gate then run. Kept as one call for the many callers that want both.
 
         The tick uses the stages separately so it can report what the gate
-        decided; everything else (tests, `,autonomy run`, the tool loop's
+        decided; everything else (tests, `!autonomy run`, the tool loop's
         mechanical-skip path) wants plan-in, results-out.
         """
         verdicts = await self.policy_gate(actions, planned_post_channels)

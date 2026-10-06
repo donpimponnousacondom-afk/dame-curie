@@ -1,23 +1,23 @@
-"""Ollama AI Provider for Maxwell Bot"""
+"""OpenAI-compatible remote inference provider for Dame Curie."""
 
 import asyncio
 import contextlib
 import copy
 import json
 import logging
-import os
 import re
 import sys
 import time
 import traceback
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass
+from functools import wraps
+from typing import Concatenate
 from urllib.parse import urlsplit
 
 import aiohttp
 
-from control_defaults import DEEPSEEK_REASONING_EFFORTS
-from error_reporting import capture_incident, register_secrets
+from error_reporting import capture_incident, redact_sensitive_text, register_secrets
 from image_media import normalize_image_part
 from provider_telemetry import (
     CallMetrics,
@@ -26,7 +26,12 @@ from provider_telemetry import (
     build_call_metrics,
     local_encoding,
     merge_usage,
+    reasoning_content,
+    reported_count,
+    reported_usage,
+    token_count,
 )
+from turn_budget import TurnBudgetExceeded, current_foreground_turn
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +43,7 @@ from utils import _spawn_background as _fire_and_forget  # noqa: E402
 
 # Matches the `reasoning` string value inside a (possibly partial) tool-call
 # arguments JSON. Models emit reasoning as the FIRST field, well before any
-# huge field like create_site's `body`, so once this regex matches the value's
+# huge field like send_file's `content`, so once this regex matches the value's
 # closing quote is in hand and we can surface the reasoning to the live
 # progress message without waiting for the rest of the stream.
 _PARTIAL_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -96,7 +101,7 @@ _CUSTOM_TOOL_OPEN_RE = re.compile(r'\{\s*"name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"
 # Opener-match failure recovery threshold. If the brace counter can't find
 # a balanced close inside this many characters after a `{"name":` match,
 # we give up on this opener and look for the next one. Prevents a single
-# pathological opener (think: create_site's HTML body with embedded
+# pathological opener (think: HTML file contents with embedded
 # unbalanced `'{"name": "...' substrings from a prior tool's args, or
 # a stray `"` inside CSS that strands the string-state counter) from
 # silently disabling extraction for the rest of the stream.
@@ -241,7 +246,7 @@ class _CustomToolCallBuffer:
             end = _find_balanced_json_end(self._buf, m.start())
             if end is None:
                 # Opener mid-JSON. Hold unless the held region is huge (unescaped
-                # quotes in create_site HTML, CSS `{`, etc.) — then skip the
+                # quotes in embedded HTML, CSS `{`, etc.) — then skip the
                 # false opener so a later valid tool call can still parse.
                 if len(self._buf) - m.start() > _GIVE_UP_BYTES:
                     self._released_len = m.start() + 1
@@ -314,8 +319,8 @@ def _find_balanced_json_end(text: str, start: int) -> int | None:
     (i.e. the stream hasn't delivered the closing brace yet).
 
     Counts ``{``/``}`` while correctly ignoring braces that appear inside
-    JSON string literals (which can happen for things like ``"body": "{...}"``
-    in a create_site body that contains CSS with braces).
+    JSON string literals (which can happen for things like ``"content": "{...}"``
+    in file contents containing CSS with braces).
     """
     depth = 0
     in_str = False
@@ -520,7 +525,7 @@ def _escape_body_slice(
 def _safe_parse_tool_call_candidate(candidate: str):
     """Parse a candidate tool-call JSON, with one repair pass for the
     common failure mode of unescaped ``"`` characters in embedded HTML
-    (``create_site`` body fields with ``target="_blank"``, ``href="..."``,
+    (``body`` fields with ``target="_blank"``, ``href="..."``,
     etc).
 
     Returns the parsed dict on success, ``None`` if it cannot be parsed
@@ -623,14 +628,115 @@ def _extract_partial_reasoning(arguments: str) -> str:
         return raw
 
 
+_PROVIDER_DIAGNOSTIC_BODY_LIMIT = 64 * 1024
+_SSE_LENGTH_DRAIN_BYTES = 64 * 1024
+_SSE_LENGTH_DRAIN_SECONDS = 1.0
+_MAX_PARTIAL_CONTENT_CHARS = 16 * 1024
+_MAX_VALID_PROVIDER_TOKEN_COUNT = 2**53 - 1
+
+
+def _explicit_output_tokens(response: dict) -> int | None:
+    """Accept only consistent, validated provider-reported output counters."""
+    counts: list[int] = []
+    for source, keys in (
+        (response.get("usage"), ("completion_tokens", "output_tokens", "eval_count")),
+        (response, ("eval_count", "completion_tokens", "output_tokens")),
+    ):
+        if isinstance(source, dict):
+            for key in keys:
+                if key in source:
+                    count = token_count(source[key])
+                    if count is None:
+                        return None
+                    counts.append(count)
+    gemini = response.get("usageMetadata")
+    if isinstance(gemini, dict) and {
+        "candidatesTokenCount", "thoughtsTokenCount"
+    } & gemini.keys():
+        candidates = token_count(gemini.get("candidatesTokenCount"))
+        thoughts = token_count(gemini.get("thoughtsTokenCount"))
+        if candidates is None or thoughts is None:
+            return None
+        combined = candidates + thoughts
+        if combined > _MAX_VALID_PROVIDER_TOKEN_COUNT:
+            return None
+        counts.append(combined)
+    if counts and all(count == counts[0] for count in counts):
+        return counts[0]
+    return None
+
+
 class _ProviderDiagnostics:
     def __init__(self):
         self.attempts: list[str] = []
         self.current: dict = {}
         self.body = bytearray()
+        self.body_bytes_seen = 0
+        self.body_truncated = False
         self.response_text = ""
+        self.response_text_chars_seen = 0
+        self.response_text_truncated = False
         self.failed = False
         self.first_exception: BaseException | None = None
+
+    def append_body(self, chunk: bytes) -> None:
+        self.body_bytes_seen += len(chunk)
+        if (
+            not self.body_truncated
+            and len(self.body) + len(chunk) <= _PROVIDER_DIAGNOSTIC_BODY_LIMIT
+        ):
+            self.body.extend(chunk)
+        elif not self.body_truncated:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            prefix_size = max(0, head_size - len(self.body))
+            head = bytes(self.body[:head_size]) + chunk[:prefix_size]
+            remainder = chunk[prefix_size:]
+            tail = (
+                remainder[-tail_size:]
+                if len(remainder) >= tail_size
+                else (bytes(self.body[head_size:]) + remainder)[-tail_size:]
+            )
+            self.body = bytearray(head + tail)
+            self.body_truncated = True
+        else:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            tail = (
+                chunk[-tail_size:]
+                if len(chunk) >= tail_size
+                else (bytes(self.body[head_size:]) + chunk)[-tail_size:]
+            )
+            self.body = bytearray(self.body[:head_size] + tail)
+
+    def body_text(self) -> str:
+        if not self.body_truncated:
+            return self.body.decode(self.body_encoding, errors="replace")
+        head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+        omitted = self.body_bytes_seen - len(self.body)
+        marker = f"\n[... {omitted} response bytes omitted from provider diagnostics ...]\n"
+        return (
+            self.body[:head_size].decode(self.body_encoding, errors="replace")
+            + marker
+            + self.body[head_size:].decode(self.body_encoding, errors="replace")
+        )
+
+    def capture_text(self, text: str) -> None:
+        self.response_text_chars_seen = len(text)
+        if len(text) <= _PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+            self.response_text = text
+            return
+        head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+        tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+        self.response_text = (
+            text[:head_size]
+            + (
+                f"\n[... {len(text) - head_size - tail_size} response characters "
+                "omitted from provider diagnostics ...]\n"
+            )
+            + text[-tail_size:]
+        )
+        self.response_text_truncated = True
 
     def begin(self, endpoint, path: str, attempt: int, maximum: int, data: dict, timeout: int):
         self.finish_attempt()
@@ -638,7 +744,7 @@ class _ProviderDiagnostics:
         self.current = {
             "attempt": f"{attempt}/{maximum}",
             "endpoint": endpoint.name,
-            "url": f"{endpoint.base_url}/{path}",
+            "url": normalize_base_url(endpoint.base_url, path),
             "model": data.get("model", endpoint.model),
             "timeout_seconds": timeout,
             "parameters": copy.deepcopy({key: value for key, value in data.items() if key != "messages"}),
@@ -656,9 +762,35 @@ class _ProviderDiagnostics:
                 for message in data.get("messages", [])
             ],
         }
+        metadata = redact_sensitive_text(json.dumps({
+            "source": "configured-profile", "endpoint": endpoint.name,
+            "hostname": urlsplit(endpoint.base_url).hostname, "route": path,
+            "model": self.current["model"],
+            "parameter_count": len(self.current["parameters"]),
+            "parameters": {
+                key: {"type": type(value).__name__, "count": len(value) if isinstance(value, (str, list, dict)) else None}
+                for key, value in self.current["parameters"].items()
+            },
+        }, ensure_ascii=False))
+        if len(metadata) > _PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            metadata = (
+                metadata[:head_size]
+                + f"\n[... {len(metadata) - head_size - tail_size} metadata characters omitted ...]\n"
+                + metadata[-tail_size:]
+            )
+        logger.info(
+            "Provider request settings %s",
+            "\n".join(metadata[index:index + 4096] for index in range(0, len(metadata), 4096)),
+        )
         self.body = bytearray()
+        self.body_bytes_seen = 0
+        self.body_truncated = False
         self.body_encoding = "utf-8"
         self.response_text = ""
+        self.response_text_chars_seen = 0
+        self.response_text_truncated = False
         self.http_response = None
 
     def response(self, resp):
@@ -681,16 +813,16 @@ class _ProviderDiagnostics:
     def json_response(self, resp, result: object):
         cached_body = getattr(resp, "_body", None)
         if isinstance(cached_body, bytes):
-            self.body.extend(cached_body)
             self.body_encoding = resp.get_encoding()
+            self.append_body(cached_body)
         else:
-            self.response_text = json.dumps(result, ensure_ascii=False, default=str)
+            self.capture_text(json.dumps(result, ensure_ascii=False, default=str))
 
     def failure(self, summary: str, exception: BaseException | None = None):
         self.failed = True
         cached_body = getattr(self.http_response, "_body", None)
         if not self.body and not self.response_text and isinstance(cached_body, bytes):
-            self.body.extend(cached_body)
+            self.append_body(cached_body)
             if isinstance(exception, UnicodeDecodeError):
                 self.body_encoding = exception.encoding
         self.current.setdefault("failures", []).append(summary)
@@ -707,10 +839,13 @@ class _ProviderDiagnostics:
     def finish_attempt(self):
         if self.current:
             self.current["elapsed_ms"] = (time.perf_counter() - self.started_s) * 1000
+            self.current["response_body_bytes_observed"] = self.body_bytes_seen
+            self.current["response_body_capture_truncated"] = self.body_truncated or self.response_text_truncated
+            self.current["response_body_capture_chars_observed"] = self.response_text_chars_seen
             exceptions = self.current.pop("exceptions", [])
             record = json.dumps(self.current, ensure_ascii=False, indent=2, default=str)
             if self.current.get("failures"):
-                body = self.response_text or self.body.decode(self.body_encoding, errors="replace")
+                body = self.response_text or self.body_text()
                 record += "\nReceived response body (observed text only):\n" + body
             if exceptions:
                 record += "\nUnderlying exception context:\n" + "\n".join(exceptions)
@@ -746,8 +881,8 @@ async def _read_sse_response(
     If ``on_tool_call_name`` is provided, it's awaited the first time a
     tool_call delta arrives with a function name. This lets the caller
     update a live progress message mid-stream — e.g. show
-    "create_site: …" while the model is still generating the tool arguments
-    (the HTML body), instead of waiting for the entire response to finish.
+    "send_file: …" while the model is still generating the tool arguments
+    (the file content), instead of waiting for the entire response to finish.
 
     If ``on_token`` is provided, it's called (fire-and-forget, NEVER awaited
     inline) on every content and reasoning delta so the caller can show a
@@ -851,19 +986,53 @@ async def _read_sse_response(
     buf = b""
     byte_count = data_count = malformed_count = choice_count = 0
     error_event = False
-    async for raw_chunk in resp.content.iter_any():
-        if done:
+    length_limited = False
+    length_drain_deadline = 0.0
+    length_drain_bytes = 0
+    length_drain_timed_out = False
+    stream = aiter(resp.content.iter_any())
+    while not done:
+        try:
+            if length_limited and length_drain_bytes >= _SSE_LENGTH_DRAIN_BYTES:
+                break
+            if length_limited:
+                remaining_time = (
+                    length_drain_deadline - asyncio.get_running_loop().time()
+                )
+                if remaining_time <= 0:
+                    length_drain_timed_out = True
+                    break
+                raw_chunk = await asyncio.wait_for(anext(stream), timeout=remaining_time)
+            else:
+                raw_chunk = await anext(stream)
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            if not length_limited:
+                raise
+            length_drain_timed_out = True
+            break
+        except aiohttp.ClientError as error:
+            if not length_limited:
+                raise
+            if incident is not None:
+                incident.failure("Provider length-response usage drain interrupted", error)
             break
         byte_count += len(raw_chunk)
         if incident is not None:
-            incident.body.extend(raw_chunk)
+            incident.append_body(raw_chunk)
+        if length_limited:
+            remaining_bytes = _SSE_LENGTH_DRAIN_BYTES - length_drain_bytes
+            raw_chunk = raw_chunk[:remaining_bytes]
+            length_drain_bytes += len(raw_chunk)
         buf += raw_chunk
         while b"\n" in buf and not done:
             line, buf = buf.split(b"\n", 1)
             line = line.strip()
             if not line:
-                if error_event:
+                if error_event and not length_limited:
                     raise ProviderUpstreamError(None)
+                error_event = False
                 continue
             if line.startswith(b"event:"):
                 error_event = line[6:].strip() == b"error"
@@ -872,7 +1041,7 @@ async def _read_sse_response(
                 continue
             payload = line[5:].lstrip()
             if payload == b"[DONE]":
-                if error_event:
+                if error_event and not length_limited:
                     raise ProviderUpstreamError(None)
                 done = True
                 break
@@ -884,17 +1053,27 @@ async def _read_sse_response(
             except ValueError as e:
                 if incident is not None:
                     incident.failure("Provider stream contains malformed JSON", e)
-                if error_event:
+                if error_event and not length_limited:
                     raise ProviderUpstreamError(payload.decode("utf-8", errors="replace")) from None
                 malformed_count += 1
                 continue
-            if error_event or isinstance(obj, dict) and (obj.get("error") is not None or obj.get("type") == "error"):
-                raise ProviderUpstreamError(obj.get("error", obj) if isinstance(obj, dict) else obj)
+            if not length_limited and (
+                error_event
+                or isinstance(obj, dict)
+                and (obj.get("error") is not None or obj.get("type") == "error")
+            ):
+                raise ProviderUpstreamError(
+                    obj.get("error", obj) if isinstance(obj, dict) else obj
+                )
             if not isinstance(obj, dict):
+                if length_limited:
+                    continue
                 raise ProviderResponseError(
                     f"Provider stream has non-object JSON: data_frames={data_count}"
                 )
             for choice in obj.get("choices", []) or []:
+                if length_limited:
+                    break
                 choice_count += 1
                 idx = choice.get("index", 0)
                 # Ensure the choices slot for this index exists.
@@ -932,10 +1111,9 @@ async def _read_sse_response(
                 # `reasoning_content`; Ollama cloud's minimax-m3 emits a
                 # `reasoning` field on the same delta. Treat both the same
                 # way so the bot's existing reasoning handler picks them up.
-                for rkey in ("reasoning_content", "reasoning"):
-                    rval = delta.get(rkey)
-                    if rval is not None:
-                        reasoning_parts.append(rval)
+                reason = reasoning_content(delta)
+                if reason:
+                    reasoning_parts.append(reason)
                 # Per-token progress callback (fire-and-forget, NEVER awaited
                 # inline). A slow Discord edit must not back-pressure the SSE
                 # read — that would stall the upstream provider and add visible
@@ -954,16 +1132,11 @@ async def _read_sse_response(
                 # harmless.
                 if on_token is not None:
                     tok_content = visible_content_delta
-                    tok_reason = ""
-                    for rkey in ("reasoning_content", "reasoning"):
-                        rv = delta.get(rkey)
-                        if rv:
-                            tok_reason = rv
-                            break
+                    tok_reason = reasoning_content(delta)
                     # 2026-07-21: when the custom buffer is mid-JSON
                     # (model is emitting a bare-JSON tool call), DON'T
                     # surface the raw content as a progress preview.
-                    # The raw text is JSON like 'name create_site ,
+                    # The raw text is JSON like 'name send_file ,
                     # arguments reason ing ...' which fills the
                     # progress buffer with unreadable fragments. The
                     # bot's _on_tool_call_name callback (bridged from
@@ -1056,7 +1229,7 @@ async def _read_sse_response(
                             # Surface the model's reasoning mid-stream so the
                             # progress message shows intent (not a static
                             # "generating…") during long argument generation
-                            # (e.g. create_site's HTML body). Reasoning is
+                            # (e.g. send_file's content). Reasoning is
                             # usually the first field emitted, so it completes
                             # well before the big fields. Fires once per call.
                             if on_tool_call_name is not None and not slot.get(
@@ -1076,6 +1249,14 @@ async def _read_sse_response(
                                             await cb(*args)
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
+                    if finish_reason == "length":
+                        length_limited = True
+                        length_drain_deadline = (
+                            asyncio.get_running_loop().time() + _SSE_LENGTH_DRAIN_SECONDS
+                        )
+                        length_drain_bytes = min(len(buf), _SSE_LENGTH_DRAIN_BYTES)
+                        if len(buf) > _SSE_LENGTH_DRAIN_BYTES:
+                            buf = buf[:_SSE_LENGTH_DRAIN_BYTES]
             # Some providers stream usage in the final frame (Anthropic-style
             # models on OpenRouter do this; OpenAI does it when
             # stream_options.include_usage=true).
@@ -1097,9 +1278,12 @@ async def _read_sse_response(
         f"bytes={byte_count} data_frames={data_count} choices={choice_count} "
         f"malformed_frames={malformed_count} done={done} trailing_bytes={len(buf)}"
     )
-    if error_event:
+    if incident is not None and length_limited:
+        incident.current["usage_drain_complete"] = done
+        incident.current["usage_drain_timed_out"] = length_drain_timed_out
+    if error_event and not length_limited:
         raise ProviderUpstreamError(None)
-    if buf.strip() and not done:
+    if buf.strip() and not done and not length_limited:
         raise ProviderResponseError(f"Provider stream has an unterminated tail: {diagnostics}")
     if malformed_count:
         logger.warning("Provider stream skipped malformed frames: %s", diagnostics)
@@ -1119,25 +1303,18 @@ async def _read_sse_response(
     # stripped out (the model wrote them as a single line; the user sees
     # the surrounding reply without the raw JSON).
     if custom_buffer is not None:
-        custom_buffer.drain()
-        if custom_buffer.completed:
-            # Append custom-extracted calls to any native ones. Native
-            # tool_calls (if any) are already accumulated; this just
-            # adds the bare-JSON ones we parsed out of the text.
+        if not length_limited:
+            custom_buffer.drain()
+        if custom_buffer.completed and not length_limited:
             for tc in custom_buffer.completed:
                 tool_calls_by_index[len(tool_calls_by_index)] = tc
-            # Rebuild visible content from the buffer's text_parts (with
-            # JSON objects stripped), overriding the raw content_parts
-            # we accumulated.
-            # Always rebuild from the buffer, including when text_parts is
-            # empty (JSON-only tool turn). Gating on truthiness left the raw
-            # JSON in content_parts for the instructed "JSON line first" shape.
+        if custom_buffer.completed or length_limited:
             content_parts = ["".join(custom_buffer.text_parts)]
 
     # Sort tool calls by their index so the order matches the model's intent.
     # Strip the internal callback-tracking flags ("_name_sent"/"_reasoning_sent")
     # so they never leak into the tool_calls we hand back to the provider.
-    tool_calls_list = [
+    tool_calls_list = [] if length_limited else [
         {
             k: v
             for k, v in tool_calls_by_index[idx].items()
@@ -1160,18 +1337,10 @@ async def _read_sse_response(
         "finish_reason": finish_reason,
     }
     merged["__first_token_s__"] = observation.first_token_s
+    if length_limited:
+        merged["__usage_drain_complete__"] = done
     return merged
 
-
-# When an endpoint returns a 429 (rate-limited / usage-exhausted), we temporarily
-# steer traffic away from it for this long instead of retrying it in the same
-# request. This avoids hammering a shared upstream pool (e.g. OpenRouter's
-# pooled free keys) that is already rate-limiting us, which only makes the
-# limit worse. Override via OLLAMA_ENDPOINT_COOLDOWN_SECONDS.
-DEFAULT_ENDPOINT_COOLDOWN_SECONDS = 60.0
-# Reserve up to this many remaining attempts for non-streaming recovery
-# when HTTP 200 responses contain no assistant content or tool call.
-DEFAULT_EMPTY_RESPONSE_RETRIES = 2
 
 USAGE_EXHAUSTED_MESSAGE = (
     "The api is down cuz yall drained the usage and im not rich so wait like 2 hours"
@@ -1238,14 +1407,57 @@ class ProviderRequestError(RuntimeError):
 
 
 class ProviderResponseError(RuntimeError):
-    """A malformed HTTP 200 response, not a native-tool rejection."""
+    """A malformed or incomplete HTTP 200 response, not a native-tool rejection."""
+
+
+class ProviderIncompleteResponseError(ProviderResponseError):
+    def __init__(
+        self,
+        *,
+        partial_content: str,
+        finish_reason: str | None,
+        usage: dict[str, int],
+        metrics: CallMetrics,
+        classification: str,
+    ):
+        self.partial_content = partial_content[:_MAX_PARTIAL_CONTENT_CHARS]
+        self.partial_content_truncated = len(partial_content) > _MAX_PARTIAL_CONTENT_CHARS
+        self.finish_reason = finish_reason[:80] if isinstance(finish_reason, str) else None
+        self.usage = dict(usage)
+        self.metrics = metrics
+        self.classification = classification
+        self.incident_details = json.dumps(
+            {
+                "classification": classification,
+                "finish_reason": self.finish_reason,
+                "usage": self.usage,
+                "metrics": asdict(metrics),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+        messages = {
+            "output_token_limit": "The provider stopped at the output token limit.",
+            "reasoning_only": "The provider returned reasoning without an answer.",
+        }
+        super().__init__(messages[classification])
 
 
 class ProviderUpstreamError(ProviderResponseError):
     """An explicit HTTP 200 upstream failure with content-free diagnostics."""
 
     def __init__(self, error: object):
-        self.incident_details = json.dumps(error, ensure_ascii=False, default=str)
+        incident_details = json.dumps(error, ensure_ascii=False, default=str)
+        if len(incident_details) > _PROVIDER_DIAGNOSTIC_BODY_LIMIT:
+            head_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT // 2
+            tail_size = _PROVIDER_DIAGNOSTIC_BODY_LIMIT - head_size
+            omitted = len(incident_details) - head_size - tail_size
+            incident_details = (
+                incident_details[:head_size]
+                + f"\n[... {omitted} diagnostic characters omitted ...]\n"
+                + incident_details[-tail_size:]
+            )
+        self.incident_details = incident_details
         details = error if isinstance(error, dict) else {}
         known_labels = {
             "rate_limit_exceeded", "rate_limit_error", "concurrency_limit_exceeded",
@@ -1508,164 +1720,66 @@ def _is_media_unsupported_error(status: int, error_text: str) -> bool:
     return False
 
 
-# "invalid temperature: only 0.6 is allowed for this model" (Console Go via
-# OpenRouter). Deterministic — retrying the same payload burns every attempt
-# and then falls back for no reason, so parse the demanded value and resend.
-_TEMPERATURE_CONSTRAINT_RE = re.compile(
-    r"temperature[^.]{0,80}?only\s+([0-9]*\.?[0-9]+)\s+is\s+allowed",
-    re.IGNORECASE,
-)
-_TEMPERATURE_RANGE_RE = re.compile(
-    r"temperature[^.]{0,80}?(?:must be|should be)[^.]{0,40}?"
-    r"(?:between|in)\s+\[?\s*([0-9]*\.?[0-9]+)\s*(?:,|and|-)\s*([0-9]*\.?[0-9]+)",
-    re.IGNORECASE,
-)
-
-
-def _required_temperature(status: int, error_text: str) -> float | None:
-    """Extract the temperature an endpoint demands from a 400 body."""
-    if status != 400:
-        return None
-    text = error_text or ""
-    if "temperature" not in text.lower():
-        return None
-    match = _TEMPERATURE_CONSTRAINT_RE.search(text)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
-    match = _TEMPERATURE_RANGE_RE.search(text)
-    if match:
-        try:
-            low, high = float(match.group(1)), float(match.group(2))
-        except ValueError:
-            return None
-        if low > high:
-            low, high = high, low
-        # Aim at the middle of the accepted band rather than an endpoint,
-        # which providers sometimes treat as exclusive.
-        return round((low + high) / 2, 3)
-    return None
-
-
-def _strip_media_parts(chat_messages: list[dict]) -> bool:
-    """Flatten multimodal content back to plain text. True if anything changed.
-
-    Last resort when every endpoint rejects the attachments: sending the text
-    alone beats dropping the user's message on the floor.
-    """
-    changed = False
-    for msg in chat_messages:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        texts = [
-            str(part.get("text", ""))
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        dropped = len(content) - len(texts)
-        merged = "\n".join(t for t in texts if t).strip()
-        if dropped > 0:
-            merged = (
-                f"{merged}\n[{dropped} attachment(s) omitted — "
-                "no available model could accept them]"
-            ).strip()
-        msg["content"] = merged
-        changed = True
-    return changed
-
-
 @dataclass(frozen=True)
 class ProviderEndpoint:
     name: str
     base_url: str
     model: str
     api_key: str = ""
-    disable_reasoning: bool = False
 
 
-def normalize_base_url(base_url: str) -> str:
-    """Normalize an OpenAI-compatible base URL to the API root.
-
-    Requests are built as ``{base_url}/chat/completions``, so the base has
-    to include the API path segment. Everyone pastes the bare host
-    ("http://localhost:11434", "https://api.openai.com"), which then 404s in
-    a way that looks like a broken bot rather than a missing "/v1". If the
-    URL carries no path at all we add the conventional one; a URL that
-    already has a path (/v1, /v2, /api/v1, ...) is left exactly as given.
-    """
-    base = (base_url or "").strip().rstrip("/")
-    if not base:
-        return base
-    _, _, rest = base.partition("://")
-    if not rest:  # no scheme: treat the whole thing as a host
-        rest = base
-    if "/" in rest:  # already carries a path — the operator's business
-        return base
-    return f"{base}/v1"
+def normalize_base_url(base_url: str, path: str = "") -> str:
+    if not isinstance(base_url, str) or not base_url or any(char.isspace() for char in base_url):
+        raise ValueError("base_url must be an http(s) URL without whitespace")
+    parts = urlsplit(base_url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ValueError("base_url must be an http(s) URL with a hostname")
+    if path:
+        root, fragment_separator, fragment = base_url.partition("#")
+        root, query_separator, query = root.partition("?")
+        base_url = f"{root}{'' if root.endswith('/') else '/'}{path}{query_separator}{query}{fragment_separator}{fragment}"
+    return base_url
 
 
-def deepseek_reasoning_transport(base_url: str, model: str) -> str:
-    host = urlsplit(base_url).hostname or ""
-    
-    # Matches 'deepseek' followed anywhere by 'flash' (case-insensitive, handles slashes/hyphens/etc)
-    is_deepseek_flash = bool(re.search(r"deepseek.*flash", model, re.IGNORECASE))
-    
-    if not is_deepseek_flash:
-        return ""
-        
-    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
-        return "openrouter"
-    if host == "api.deepseek.com" or host.endswith(".deepseek.com"):
-        return "deepseek"
-        
-    return ""
+def track_provider_activity[**P, R](
+    operation: Callable[Concatenate[OpenAICompatibleProvider, P], Awaitable[R]],
+) -> Callable[Concatenate[OpenAICompatibleProvider, P], Awaitable[R]]:
+    """Keep idle reload from closing transports used outside the bot's AI semaphore."""
+    @wraps(operation)
+    async def tracked(provider: OpenAICompatibleProvider, *args: P.args, **kwargs: P.kwargs) -> R:
+        provider.active_requests += 1
+        try:
+            return await operation(provider, *args, **kwargs)
+        finally:
+            provider.active_requests -= 1
 
-# Deprecated because is stupid
-def _deepseek_reasoning_transport(base_url: str, model: str) -> str:
-    
-    host = urlsplit(base_url).hostname
-    if host == "openrouter.ai" and model == "deepseek/deepseek-v4.1-flash":
-        return "openrouter"
-    if host == "api.deepseek.com" and model in {
-        "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
-    }:
-        return "deepseek"
-    return ""
+    return tracked
 
 
-class OllamaProvider:
+class OpenAICompatibleProvider:
     """OpenAI-compatible LLM Provider with multimodal support using /v1/chat/completions"""
 
     def __init__(
         self,
         base_url: str,
         model: str,
-        max_tokens: int,
-        temperature: float,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         api_key: str = "",
-        disable_reasoning: bool = False,
-        fallback_base_url: str = "",
-        fallback_model: str = "",
-        fallback_api_key: str = "",
-        fallback_disable_reasoning: bool = True,
         retry_attempts: int = 5,
         enable_audio_input: bool = False,
-        vision_base_url: str = "",
-        vision_model: str = "",
-        vision_api_key: str = "",
-        vision_disable_reasoning: bool = True,
-        empty_response_retries: int | None = None,
-        top_p: float = 0.95,
-        top_k: int = 20,
+        empty_response_retries: int = 2,
+        top_p: float | None = None,
+        top_k: int | None = None,
         extra_headers: dict[str, str] | None = None,
         extra_body: dict[str, object] | None = None,
-        reasoning_control: Callable[[], str | int] | None = None,
     ):
         local_encoding()
-        self.reasoning_control = reasoning_control
+        self.active_requests = 0
+        if extra_body is not None and not isinstance(extra_body, dict):
+            raise ValueError("OPENAI_EXTRA_BODY must be a JSON object")
+        if extra_headers is not None and not isinstance(extra_headers, dict):
+            raise ValueError("OPENAI_EXTRA_HEADERS must be a JSON object")
         self.extra_headers = dict(extra_headers or {})
         self.extra_body = copy.deepcopy(extra_body or {})
         self.base_url = normalize_base_url(base_url)
@@ -1674,369 +1788,82 @@ class OllamaProvider:
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
-        self.api_key = api_key.strip()
-        register_secrets((self.api_key, fallback_api_key.strip(), vision_api_key.strip()))
-        self.retry_attempts = max(1, retry_attempts)
-        if empty_response_retries is None:
-            try:
-                empty_response_retries = int(
-                    os.getenv(
-                        "OLLAMA_EMPTY_RESPONSE_RETRIES",
-                        str(DEFAULT_EMPTY_RESPONSE_RETRIES),
-                    )
-                    or DEFAULT_EMPTY_RESPONSE_RETRIES
-                )
-            except (TypeError, ValueError):
-                empty_response_retries = DEFAULT_EMPTY_RESPONSE_RETRIES
-        self.empty_response_retries = max(0, min(int(empty_response_retries), 5))
-        self.enable_audio_input = bool(enable_audio_input)
-        self._endpoints = [
-            ProviderEndpoint(
-                "primary", self.base_url, self.model, self.api_key, disable_reasoning
-            ),
-        ]
-        if fallback_base_url and fallback_model:
-            self._endpoints.append(
-                ProviderEndpoint(
-                    "fallback",
-                    normalize_base_url(fallback_base_url),
-                    fallback_model,
-                    fallback_api_key.strip(),
-                    fallback_disable_reasoning,
-                )
-            )
-        # Appended last so text routing can keep treating index 1 as fallback.
-        vision_model = (vision_model or "").strip()
-        if vision_model:
-            self._endpoints.append(
-                ProviderEndpoint(
-                    "vision",
-                    normalize_base_url(vision_base_url or self.base_url),
-                    vision_model,
-                    (vision_api_key or self.api_key).strip(),
-                    vision_disable_reasoning,
-                )
-            )
+        self.api_key = api_key
+        register_secrets((self.api_key,))
+        if type(retry_attempts) is not int or retry_attempts < 1:
+            raise ValueError("retry_attempts must be a positive integer")
+        if type(empty_response_retries) is not int or empty_response_retries < 0:
+            raise ValueError("empty_response_retries must be a non-negative integer")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("model must not be blank")
+        self.retry_attempts = retry_attempts
+        self.empty_response_retries = empty_response_retries
+        self.enable_audio_input = enable_audio_input
+        self._endpoints = [ProviderEndpoint("primary", self.base_url, self.model, self.api_key)]
+        self._headers()
+        self._request_payload(self._endpoints[0], [])
         self._session = None
         self.available = False
         self._last_usage: dict = {}
         self._last_tool_calls: list = []
         self._last_assistant_message: dict | None = None
-        # Per-endpoint learned max *output* token cap (name -> cap). Set when a
-        # 400 "maximum output tokens" is observed, and applied proactively on
-        # the next call to that endpoint so we don't waste a round-trip on the
-        # 400 again. Scoped per-endpoint (NOT on the shared instance) so one
-        # model's small output cap doesn't cripple other endpoints/concurrent
-        # requests that previously got mutated via self.max_tokens.
-        self._endpoint_output_caps: dict[str, int] = {}
-        # Same idea for models that accept exactly one temperature (Console Go
-        # rejects anything but 0.6 with a 400). Learned once, applied up front.
-        self._endpoint_temperatures: dict[str, float] = {}
-        self._stream_usage_unsupported: set[str] = set()
-        # Endpoints that have proven they cannot accept attachments (e.g. a
-        # text-only fallback like inclusionai/ling-3.0-flash 404ing with "No
-        # endpoints found that support image input"). Remembered across calls
-        # so every subsequent image turn skips them instead of re-paying for
-        # the same round-trip. Whether an endpoint's model is multimodal does
-        # not change between requests, so this never needs to expire.
-        self._media_incapable: set[str] = set()
-        # Per-endpoint rate-limit cooldown: name -> monotonic expiry. While an
-        # endpoint is cooling, _attempt_endpoint steers to an alternative (if
-        # any) so a rate-limited upstream isn't retried immediately.
-        self._endpoint_cooldown: dict[str, float] = {}
-        try:
-            self._cooldown_seconds = float(
-                os.getenv(
-                    "OLLAMA_ENDPOINT_COOLDOWN_SECONDS",
-                    str(DEFAULT_ENDPOINT_COOLDOWN_SECONDS),
-                )
-                or DEFAULT_ENDPOINT_COOLDOWN_SECONDS
-            )
-        except (TypeError, ValueError):
-            self._cooldown_seconds = DEFAULT_ENDPOINT_COOLDOWN_SECONDS
 
-    def _headers(self, endpoint: ProviderEndpoint = None) -> dict[str, str]:
-        api_key = self.api_key if endpoint is None else endpoint.api_key
-        extras = self.extra_headers if endpoint is None or endpoint.name == "primary" else {}
-        headers = {
-            key: value for key, value in extras.items()
-            if not api_key or key.lower() != "authorization"
-        }
+    def _headers(self, endpoint: ProviderEndpoint | None = None) -> dict[str, str]:
+        if endpoint is not None and endpoint != self._endpoints[0]:
+            raise ValueError("Endpoint conflicts with configured provider profile")
+        api_key = self.api_key
+        headers = self.extra_headers.copy()
+        if any(not isinstance(key, str) or not isinstance(value, str) for key, value in headers.items()):
+            raise ValueError("OPENAI_EXTRA_HEADERS keys and values must be strings")
+        names = [key.lower() for key in headers]
+        if len(names) != len(set(names)):
+            raise ValueError("OPENAI_EXTRA_HEADERS contains conflicting header names")
+        if api_key and "authorization" in names:
+            raise ValueError("OPENAI_API_KEY conflicts with OPENAI_EXTRA_HEADERS Authorization")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
-
-    def _endpoint_named(self, name: str) -> ProviderEndpoint | None:
-        for ep in self._endpoints:
-            if ep.name == name:
-                return ep
-        return None
-
-    def _reasoning_content_is_answer(
-        self,
-        endpoint: ProviderEndpoint | None,
-        message: dict,
-    ) -> bool:
-        """Return True only when this provider's reasoning_content holds a real
-        user-facing answer rather than internal chain-of-thought.
-
-        A null `content` + non-empty `reasoning_content` is ambiguous: some
-        models (DeepSeek-family) put the actual answer in reasoning_content;
-        an interrupted/cut-off reasoning model (grok, ollama-native,
-        minimax-m3) leaves only scratchpad there with no answer at all.
-        Promoting scratchpad to content is what leaked the bot's reasoning to
-        Discord. We only trust reasoning_content as an answer for the models
-        that are known to ship text that way; for everything else we let the
-        empty-response retry/fallback take over.
-        """
-        model = (endpoint.model if endpoint is not None else self.model) or ""
-        m = model.lower()
-        # DeepSeek-family convention: answer may ride in reasoning_content.
-        return any(tok in m for tok in ("deepseek", "deep_seek", "deepseek-r1"))
-
-    def _media_endpoint_order(self) -> list[ProviderEndpoint]:
-        """Vision first, then the rest. Text-only primaries 400 on image_url."""
-        vision = self._endpoint_named("vision")
-        ordered: list[ProviderEndpoint] = []
-        if vision is not None:
-            ordered.append(vision)
-        for ep in self._endpoints:
-            if ep not in ordered:
-                ordered.append(ep)
-        # Endpoints already known to reject attachments go last rather than
-        # being dropped: if they're all we have left, a doomed try still beats
-        # refusing to send anything.
-        return sorted(ordered, key=lambda ep: ep.name in self._media_incapable)
-
-    def _attempt_endpoint(
-        self,
-        attempt: int,
-        *,
-        fast_fallback: bool = False,
-        has_media: bool = False,
-        prefer_fallback: bool = False,
-    ) -> ProviderEndpoint:
-        primary = self._endpoint_named("primary") or self._endpoints[0]
-        fallback = self._endpoint_named("fallback")
-        vision = self._endpoint_named("vision")
-
-        if has_media and vision is not None:
-            # A fallback that has already proven text-only is not a media
-            # option; sending it an image_url just buys another 404.
-            if fallback is not None and fallback.name in self._media_incapable:
-                fallback = None
-            if prefer_fallback and fallback is not None:
-                natural = (
-                    fallback
-                    if (attempt == 1 if fast_fallback else attempt <= 2)
-                    else (vision or primary)
-                )
-            elif fast_fallback:
-                natural = vision if attempt == 1 else (fallback or vision)
-            else:
-                # Attempts 1-2: vision model; 3+: text fallback if configured.
-                natural = vision if attempt <= 2 else (fallback or vision)
-            if self._is_endpoint_cooling(natural.name):
-                candidates = (
-                    (fallback, vision, primary)
-                    if prefer_fallback
-                    else (vision, fallback, primary)
-                )
-                for ep in candidates:
-                    if ep is not None and not self._is_endpoint_cooling(ep.name):
-                        return ep
-            return natural
-
-        if fallback is None:
-            return primary
-        if prefer_fallback:
-            natural = (
-                fallback
-                if (attempt == 1 if fast_fallback else attempt <= 2)
-                else primary
-            )
-        elif fast_fallback:
-            natural = primary if attempt == 1 else fallback
-        else:
-            # Attempt 1 and 2: primary (main)
-            # Attempt 3 and beyond: fallback (second provider)
-            natural = primary if attempt <= 2 else fallback
-        # If the chosen endpoint is rate-limit cooling and a healthy alternative
-        # exists, skip straight to it. This turns a 429 on a shared upstream into
-        # an immediate fallback instead of a doomed same-endpoint retry.
-        # Skip the vision endpoint on text turns — it is reserved for media.
-        if self._is_endpoint_cooling(natural.name):
-            for ep in self._endpoints:
-                if ep.name == "vision":
-                    continue
-                if not self._is_endpoint_cooling(ep.name):
-                    return ep
-        return natural
-
-    def _is_endpoint_cooling(self, name: str) -> bool:
-        expiry = self._endpoint_cooldown.get(name)
-        if expiry is None:
-            return False
-        if time.monotonic() >= expiry:
-            self._endpoint_cooldown.pop(name, None)
-            return False
-        return True
-
-    def _cool_endpoint(self, name: str, reason: str = "rate-limited") -> None:
-        self._endpoint_cooldown[name] = time.monotonic() + self._cooldown_seconds
-        logger.warning(
-            "Provider endpoint %s %s; cooling for %.0fs (using alternative if available)",
-            name,
-            reason,
-            self._cooldown_seconds,
-        )
-
-    def deepseek_reasoning_level(
-        self,
-        endpoint: ProviderEndpoint,
-        model: str | None = None,
-        disable_reasoning: bool | None = None,
-    ) -> str | int:
-        numeric_effort = urlsplit(endpoint.base_url).hostname == "openrouter.ai"
-        body = self.extra_body if endpoint.name == "primary" else {}
-        reasoning = body.get("reasoning") or {}
-        thinking = body.get("thinking") or {}
-        level = reasoning.get("effort", body.get("reasoning_effort", "high"))
-        disabled = (
-            endpoint.disable_reasoning
-            or reasoning.get("enabled") is False
-            or thinking.get("type") == "disabled"
-            or level == "none"
-        )
-        if (
-            self.reasoning_control is not None
-            and endpoint.name == "primary"
-            and (model or endpoint.model) == self.model
-        ):
-            requested = self.reasoning_control()
-            if requested not in ("", "off", *DEEPSEEK_REASONING_EFFORTS) and not (
-                numeric_effort and type(requested) is int and 1 <= requested <= 100
-            ):
-                raise ValueError("DeepSeek reasoning control must be low, high, max, off, blank, or an OpenRouter integer 1–100")
-            if requested:
-                level = "high" if requested == "off" else requested
-                disabled = requested == "off"
-        if disable_reasoning is not None:
-            disabled = disable_reasoning
-        if disabled:
-            level = "off"
-        else:
-            aliases = {"none": "high"}
-            if urlsplit(endpoint.base_url).hostname == "api.deepseek.com":
-                aliases.update({"minimal": "low", "medium": "high", "xhigh": "high", "ultra": "max"})
-            level = aliases.get(level, level)
-            if level not in DEEPSEEK_REASONING_EFFORTS and not (
-                numeric_effort and type(level) is int and 1 <= level <= 100
-            ):
-                raise ValueError("DeepSeek reasoning supports low, high, max, or an OpenRouter integer 1–100")
-        return level
 
     def _request_payload(
         self,
         endpoint: ProviderEndpoint,
         chat_messages: list[dict],
         tools: list[dict] | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        disable_reasoning: bool | None = None,
     ) -> dict:
-        # Model override is honored ONLY on the primary endpoint. Fallback
-        # endpoints keep their configured model because the fallback is
-        # selected precisely because the primary model is unhealthy. If a
-        # caller passed a model override but we're routing to a fallback,
-        # log a debug line so it's visible why their model was swapped.
-        if model and endpoint.name != "primary" and model != endpoint.model:
-            logger.debug(
-                "Model override %r ignored on fallback endpoint %r (using %r)",
-                model,
-                endpoint.name,
-                endpoint.model,
-            )
-        effective_temperature = self.temperature if temperature is None else temperature
-        # An endpoint that already rejected our temperature gets its demanded
-        # value up front instead of another guaranteed 400.
-        forced_temperature = self._endpoint_temperatures.get(endpoint.name)
-        if forced_temperature is not None:
-            effective_temperature = forced_temperature
-        data = copy.deepcopy(self.extra_body) if endpoint.name == "primary" else {}
-        for key in ("tools", "tool_choice", "stream_options"):
-            data.pop(key, None)
-        data.update({
-            "model": (model or endpoint.model)
-            if endpoint.name == "primary"
-            else endpoint.model,
-            "messages": chat_messages,
-            "temperature": effective_temperature,
+        if endpoint != self._endpoints[0]:
+            raise ValueError("Endpoint conflicts with configured provider profile")
+        data = copy.deepcopy(self.extra_body)
+        configured = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
-            "stream": True,
-        })
-        if endpoint.name not in self._stream_usage_unsupported:
-            data["stream_options"] = {"include_usage": True}
-        # Always include max_tokens from config or override
-        effective_max = max_tokens if max_tokens is not None else self.max_tokens
-        # Proactively clamp to a previously-learned per-endpoint output cap so
-        # we don't waste a round-trip re-hitting the same 400. Per-endpoint so a
-        # small-cap model never lowers the cap for other endpoints.
-        learned_cap = self._endpoint_output_caps.get(endpoint.name)
-        if learned_cap and effective_max > learned_cap:
-            effective_max = learned_cap
-        data["max_tokens"] = effective_max
-        # Per-call disable_reasoning overrides the endpoint default; a caller
-        # that passes disable_reasoning=False can keep reasoning on a shared
-        # provider whose endpoint.disable_reasoning is True.
-        use_disable_reasoning = (
-            disable_reasoning
-            if disable_reasoning is not None
-            else endpoint.disable_reasoning
-        )
-        is_openrouter = urlsplit(endpoint.base_url).hostname == "openrouter.ai"
-        deepseek_transport = deepseek_reasoning_transport(endpoint.base_url, data["model"])
-        if deepseek_transport:
-            level = self.deepseek_reasoning_level(endpoint, data["model"], disable_reasoning)
-            data.pop("reasoning_effort", None)
-            data.pop("thinking", None)
-            reasoning = data.pop("reasoning", {})
-            if deepseek_transport == "openrouter":
-                reasoning.pop("max_tokens", None)
-                reasoning.update({"enabled": level != "off", "effort": "none" if level == "off" else level})
-                data["reasoning"] = reasoning
-            else:
-                data["thinking"] = {"type": "disabled" if level == "off" else "enabled"}
-                data["reasoning_effort"] = "none" if level == "off" else level
-        elif use_disable_reasoning:
-            if is_openrouter:
-                data.pop("reasoning_effort", None)
-                data.pop("thinking", None)
-                data["reasoning"] = {"enabled": False}
-            else:
-                data["reasoning_effort"] = "none"
-                data["reasoning"] = {"effort": "none"}
-                data["thinking"] = {"type": "disabled", "budget_tokens": 0}
-        elif not is_openrouter and "kimi-k2.7" in str(data.get("model") or "").lower():
-            # OpenCode Go's kimi-k2.7-code rejects reasoning_effort=none
-            # ("invalid thinking: only type=enabled is allowed") and, if we
-            # omit the thinking field, streams reasoning until max_tokens
-            # with an empty content delta. Pin thinking on so the visible
-            # reply actually arrives.
-            data["thinking"] = {"type": "enabled"}
-        if tools:
-            data["tools"] = tools
-            data["tool_choice"] = "auto"
+        }
+        for key, value in configured.items():
+            if value is not None:
+                if key in {"max_tokens", "top_k"} and type(value) is not int:
+                    raise ValueError(f"{key} must be an integer")
+                if key == "max_tokens" and value < 1:
+                    raise ValueError("max_tokens must be a positive integer")
+                if key in {"temperature", "top_p"} and type(value) not in {int, float}:
+                    raise ValueError(f"{key} must be a number")
+                if key in data and (type(data[key]) is not type(value) or data[key] != value):
+                    raise ValueError(f"OPENAI_EXTRA_BODY conflicts with configured {key}")
+                data[key] = value
+        json.dumps(data, allow_nan=False)
+        for key, value in (("messages", chat_messages), ("tools", tools)):
+            if value is not None:
+                if key in data and data[key] != value:
+                    raise ValueError(f"OPENAI_EXTRA_BODY conflicts with runtime {key}")
+                data[key] = copy.deepcopy(value)
         return data
 
     async def _get_session(self):
         if self._session is None or self._session.closed:
-            # BUG FIX: do NOT use SSRF-safe resolver for the provider session.
-            # The default provider URL is localhost:11434 (local Ollama), and
-            # the safe resolver blocks all private/loopback addresses.
-            # The provider is operator-configured via env vars, not user input.
+            # Do NOT use the untrusted-fetch SSRF resolver for this session.
+            # Operator-configured OpenAI-compatible endpoints may be private
+            # proxies; they are trusted configuration, not user input.
             # SSRF protection belongs on the shared session used by tools like
             # fetch_url, which DO accept untrusted URLs.
             connector = aiohttp.TCPConnector(
@@ -2055,6 +1882,7 @@ class OllamaProvider:
         if self._session and not self._session.closed:
             await self._session.close()
 
+    @track_provider_activity
     async def initialize(self):
         session = await self._get_session()
         initialized = False
@@ -2064,9 +1892,10 @@ class OllamaProvider:
             attempt_exception = sys.exception()
             try:
                 async with session.get(
-                    f"{endpoint.base_url}/models",
+                    normalize_base_url(endpoint.base_url, "models"),
                     timeout=aiohttp.ClientTimeout(total=10),
                     headers=self._headers(endpoint),
+                    allow_redirects=False,
                 ) as resp:
                     incident.response(resp)
                     if resp.status == 200:
@@ -2075,12 +1904,12 @@ class OllamaProvider:
                             f"Provider endpoint initialized: {endpoint.name} ({endpoint.model})"
                         )
                     else:
-                        incident.response_text = await resp.text()
+                        incident.capture_text(await resp.text())
                         incident.current["response_body_complete"] = True
                         logger.warning(
                             f"Provider endpoint {endpoint.name} /models returned {resp.status}"
                         )
-            except Exception as e:
+            except (aiohttp.ClientError, OSError, UnicodeDecodeError) as e:
                 incident.failure("Provider initialization failed", e)
                 incident.capture("Provider initialization failed", e)
                 logger.error(
@@ -2095,6 +1924,7 @@ class OllamaProvider:
         self.available = initialized
         return initialized
 
+    @track_provider_activity
     async def generate_response(
         self,
         messages: list[dict],
@@ -2104,8 +1934,7 @@ class OllamaProvider:
         on_tool_call_name=None,
         on_token=None,
         custom_tool_calls: bool = False,
-        prefer_fallback: bool = False,
-        **kwargs,
+        tools: list[dict] | None = None,
     ) -> str:
         """Generate response. images is legacy b64 list, media is list of {b64, mime_type}.
 
@@ -2118,8 +1947,8 @@ class OllamaProvider:
         If ``on_tool_call_name`` is provided, it's forwarded to the streaming
         layer so the caller gets a callback the moment a tool call name arrives
         mid-stream — useful for updating a live progress message during long
-        generations (e.g. create_site where the model spends 20+ seconds
-        generating HTML in the tool arguments).
+        generations (e.g. send_file where the model spends 20+ seconds
+        generating file contents in the tool arguments).
         """
         message = await self.generate_chat_completion(
             messages,
@@ -2129,8 +1958,7 @@ class OllamaProvider:
             on_tool_call_name=on_tool_call_name,
             on_token=on_token,
             custom_tool_calls=custom_tool_calls,
-            prefer_fallback=prefer_fallback,
-            **kwargs,
+            tools=tools,
         )
 
         tool_calls = message.get("tool_calls") or []
@@ -2161,22 +1989,17 @@ class OllamaProvider:
             metrics=getattr(message, "metrics", None),
         )
 
+    @track_provider_activity
     async def generate_chat_completion(
         self,
         messages: list[dict],
         images: list[str] | None = None,
         media: list[dict] | None = None,
         tools: list[dict] | None = None,
-        model: str | None = None,
         timeout: int = 3600,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-        disable_reasoning: bool | None = None,
-        fast_fallback: bool = False,
         on_tool_call_name=None,
         on_token=None,
         custom_tool_calls: bool = False,
-        prefer_fallback: bool = False,
     ) -> dict:
         """Generate an OpenAI-compatible assistant message, optionally with tools.
 
@@ -2255,14 +2078,7 @@ class OllamaProvider:
                             }
                         )
                     elif mime.startswith("video/"):
-                        # OpenCode Go / DeepSeek reject video_url ("unknown
-                        # variant"). Thumbnails and ffmpeg JPEG frames still
-                        # attach as image_url.
-                        logger.info(
-                            "Skipping video_url part (%s); sending image frames/thumbnails only",
-                            mime,
-                        )
-                        continue
+                        parts.append({"type": "video_url", "video_url": {"url": uri}})
                     else:
                         continue
                     attached += 1
@@ -2283,68 +2099,22 @@ class OllamaProvider:
 
         session = await self._get_session()
         last_error = None
-        last_usage_error = None
         incident = _ProviderDiagnostics()
-        has_media = any(
-            part.get("type") in {"image_url", "input_audio", "video_url"}
-            for message in chat_messages
-            for part in (message.get("content") if isinstance(message.get("content"), list) else [])
-        )
-        # Endpoints that rejected this call's media (text-only models 400 on
-        # image_url; OpenRouter 404s on input audio). Steer retries away so a
-        # GIF never dies on DeepSeek then Ling.
-        media_broken: set[str] = set()
-        # Endpoints that returned a deterministic non-2xx (bad model slug,
-        # unsupported params). Retrying them with the same payload just repeats
-        # the error, so they're excluded from the rest of this call.
-        dead: set[str] = set()
-        max_attempts = (
-            min(self.retry_attempts, 2)
-            if fast_fallback and len(self._endpoints) > 1
-            else self.retry_attempts
-        )
+        endpoint = self._endpoints[0]
+        payload = self._request_payload(endpoint, chat_messages, tools=tools)
+        max_attempts = self.retry_attempts
         attempt = 0
         empty_response_recoveries = 0
-        recovery_endpoint: ProviderEndpoint | None = None
         while attempt < max_attempts:
             attempt += 1
-            if recovery_endpoint is not None:
-                # Rotate empty-content recovery within the fixed attempt budget.
-                endpoint = recovery_endpoint
-                recovery_endpoint = None
-            else:
-                endpoint = self._attempt_endpoint(
-                    attempt,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
-                )
-            if endpoint.name in media_broken or endpoint.name in dead:
-                order = self._media_endpoint_order() if has_media else self._endpoints
-                usable = [
-                    e
-                    for e in order
-                    if e.name not in media_broken and e.name not in dead
-                ]
-                if usable:
-                    endpoint = usable[0]
-            data = self._request_payload(
-                endpoint,
-                chat_messages,
-                tools=tools,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                disable_reasoning=disable_reasoning,
-            )
-            if empty_response_recoveries:
-                # A blank streamed 200 can be caused by a flaky SSE gateway
-                # even when the provider is healthy. Use a normal JSON response
-                # for recovery so the stream assembler is no longer part of the
-                # failure path. Keep the caller's reasoning preference intact:
-                # some models reject an explicit reasoning-disabled parameter.
-                data["stream"] = False
-                data.pop("stream_options", None)
+            data = copy.deepcopy(payload)
+            turn = current_foreground_turn()
+            if turn is not None:
+                try:
+                    timeout = turn.reserve_attempt(timeout)
+                except TurnBudgetExceeded as e:
+                    incident.capture("Provider turn budget exhausted after upstream failures", e)
+                    raise
             observation = OutputObservation()
             request_start = time.perf_counter()
             media_parts = sum(
@@ -2356,7 +2126,7 @@ class OllamaProvider:
                 if isinstance(part, dict) and part.get("type") != "text"
             )
             logger.info(
-                "Provider timing start endpoint=%s model=%s attempt=%s/%s messages=%s media_parts=%s timeout=%s max_tokens=%s reasoning_disabled=%s tools=%s",
+                "Provider timing start endpoint=%s model=%s attempt=%s/%s messages=%s media_parts=%s timeout=%s max_tokens=%s tools=%s",
                 endpoint.name,
                 data.get("model"),
                 attempt,
@@ -2365,125 +2135,32 @@ class OllamaProvider:
                 media_parts,
                 timeout,
                 data.get("max_tokens"),
-                data.get("reasoning_effort") == "none"
-                or data.get("reasoning", {}).get("enabled") is False
-                or (
-                    isinstance(data.get("thinking"), dict)
-                    and data["thinking"].get("type") == "disabled"
-                ),
                 len(data.get("tools") or []),
             )
             incident.begin(endpoint, "chat/completions", attempt, max_attempts, data, timeout)
-            incident.current["routing"] = {
-                "fast_fallback": fast_fallback, "prefer_fallback": prefer_fallback,
-                "has_media": has_media, "custom_tool_calls": custom_tool_calls,
-                "empty_response_recoveries": empty_response_recoveries,
-            }
             attempt_exception = sys.exception()
             try:
                 async with session.post(
-                    f"{endpoint.base_url}/chat/completions",
+                    normalize_base_url(endpoint.base_url, "chat/completions"),
                     json=data,
                     timeout=aiohttp.ClientTimeout(total=timeout, connect=10),
                     headers=self._headers(endpoint),
+                    allow_redirects=False,
                 ) as resp:
                     headers_ms = (time.perf_counter() - request_start) * 1000
                     incident.response(resp)
-                    if resp.status in (500, 502, 503, 504):
-                        error_text = await resp.text()
-                        incident.response_text = error_text
-                        incident.current["response_body_complete"] = True
-                        logger.warning(
-                            "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
-                            endpoint.name,
-                            resp.status,
-                            headers_ms,
-                            len(error_text),
-                        )
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} transient HTTP {resp.status}",
-                            max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
-                        raise RuntimeError(
-                            f"Provider transient HTTP {resp.status} failure after retries"
-                        )
-                    if resp.status == 429:
-                        error_text = await resp.text()
-                        incident.response_text = error_text
-                        incident.current["response_body_complete"] = True
-                        logger.warning(
-                            "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
-                            endpoint.name,
-                            resp.status,
-                            headers_ms,
-                            len(error_text),
-                        )
-                        self._cool_endpoint(endpoint.name)
-                        if _is_usage_exhausted_error(resp.status, error_text):
-                            last_usage_error = ProviderUsageExhaustedError(
-                                f"Provider {endpoint.name} usage exhausted: HTTP {resp.status}"
-                            )
-                            if len(self._endpoints) == 1:
-                                raise last_usage_error
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} usage exhausted",
-                                max_attempts=max_attempts,
-                                fast_fallback=fast_fallback,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise last_usage_error
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} 429 rate limited",
-                            max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
-                        raise RuntimeError(
-                            f"Provider rate limited after retries: HTTP {resp.status}"
-                        )
                     if resp.status != 200:
                         error_text = await resp.text()
-                        incident.response_text = error_text
+                        incident.capture_text(error_text)
                         incident.current["response_body_complete"] = True
-                        if (
-                            resp.status in (400, 422)
-                            and "stream_options" in data
-                            and re.search(
-                                r"\b(?:stream_options|include_usage)\b",
-                                error_text,
-                                re.IGNORECASE,
+                        detail = redact_sensitive_text(incident.response_text)
+                        detail = "\n".join(detail[index:index + 4096] for index in range(0, len(detail), 4096))
+                        if _is_usage_exhausted_error(resp.status, error_text):
+                            raise ProviderUsageExhaustedError(
+                                f"Provider usage exhausted: HTTP {resp.status}: {detail}"
                             )
-                            and any(
-                                term in error_text.lower()
-                                for term in (
-                                    "not supported", "does not support", "unsupported",
-                                    "not allowed", "unknown parameter", "unknown field",
-                                    "unrecognized", "unexpected", "extra inputs",
-                                )
-                            )
-                        ):
-                            self._stream_usage_unsupported.add(endpoint.name)
-                            if attempt < max_attempts:
-                                recovery_endpoint = endpoint
-                                continue
-                        if attempt >= max_attempts:
-                            raise ProviderRequestError(
-                                f"Provider API error: {resp.status}"
-                            )
+                        if resp.status in (429, 500, 502, 503, 504):
+                            raise RuntimeError(f"Provider API error: {resp.status}: {detail}")
                         logger.warning(
                             "Provider timing status endpoint=%s status=%s headers_ms=%.1f body_chars=%s",
                             endpoint.name,
@@ -2491,277 +2168,7 @@ class OllamaProvider:
                             headers_ms,
                             len(error_text),
                         )
-                        if (
-                            resp.status in (400, 422)
-                            and tools
-                            and re.search(r"\b(?:tools?|functions?)\b", error_text, re.IGNORECASE)
-                            and any(term in error_text.lower() for term in (
-                                "not supported", "does not support", "unsupported",
-                                "not allowed", "unknown parameter", "unknown field",
-                            ))
-                        ):
-                            tools = None
-                            recovery_endpoint = endpoint
-                            logger.warning(
-                                "Provider %s rejected native tools; correcting payload within attempt budget",
-                                endpoint.name,
-                            )
-                            continue
-                        # Text-only models 400 on image_url/video_url; some
-                        # fallbacks 404 on input audio. Mark broken and retry a
-                        # media-capable endpoint (typically vision / primary).
-                        if has_media and _is_media_unsupported_error(
-                            resp.status, error_text
-                        ):
-                            media_broken.add(endpoint.name)
-                            # Model capability, not a transient fault — remember
-                            # it so later turns skip this endpoint for media.
-                            self._media_incapable.add(endpoint.name)
-                            order = self._media_endpoint_order()
-                            usable = [e for e in order if e.name not in media_broken]
-                            if not usable:
-                                # Every endpoint refused the attachments. Drop
-                                # them and answer the text instead of failing
-                                # the whole turn.
-                                if _strip_media_parts(chat_messages):
-                                    logger.warning(
-                                        "No endpoint accepts this media; retrying text-only: HTTP %s",
-                                        resp.status,
-                                    )
-                                    has_media = False
-                                    media_broken.clear()
-                                    continue
-                                raise RuntimeError(
-                                    f"Provider {endpoint.name} media-unsupported and no alternatives: HTTP {resp.status}"
-                                )
-                            logger.warning(
-                                "Provider endpoint %s cannot handle media; retrying with %s",
-                                endpoint.name,
-                                usable[0].name,
-                            )
-                            continue
-                        # Provider-side function degradation (e.g. "DEGRADED function
-                        # cannot be invoked"). This is NOT transient — don't waste
-                        # retries on the same endpoint; cool it and fall back now.
-                        if resp.status == 400 and "degraded" in error_text.lower():
-                            self._cool_endpoint(endpoint.name)
-                            logger.warning(
-                                "Provider endpoint %s marked degraded; skipping to fallback",
-                                endpoint.name,
-                            )
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} degraded",
-                                max_attempts=max_attempts,
-                                transient=False,
-                                fast_fallback=fast_fallback,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise RuntimeError(
-                                f"Provider {endpoint.name} degraded and no fallback available: HTTP {resp.status}"
-                            )
-                        # Region / geo blocks (DeepSeek V4 Flash China opt-in)
-                        # are not transient. Don't burn a 2s retry on the same
-                        # endpoint — cool it and fail over immediately.
-                        if resp.status == 403 or "regionerror" in error_text.lower():
-                            self._cool_endpoint(endpoint.name)
-                            logger.warning(
-                                "Provider endpoint %s returned 403/region block; skipping to fallback",
-                                endpoint.name,
-                            )
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} 403",
-                                max_attempts=max_attempts,
-                                transient=False,
-                                fast_fallback=True,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise RuntimeError(
-                                f"Provider {endpoint.name} 403 and no fallback available: HTTP {resp.status}"
-                            )
-                        # Content-policy prompt blocks (Gemini "sensitive words
-                        # that violate Google's use policy"). Not transient and
-                        # not payload-shaped: the same text will be refused every
-                        # time, so cool the endpoint and hand the turn to the
-                        # fallback model rather than burning retries or surfacing
-                        # a raw Google error into the channel.
-                        if _is_content_policy_block(resp.status, error_text):
-                            self._cool_endpoint(
-                                endpoint.name, "blocked the prompt on content policy"
-                            )
-                            logger.warning(
-                                "Provider endpoint %s blocked the prompt on content policy; "
-                                "failing over: HTTP %s",
-                                endpoint.name,
-                                resp.status,
-                            )
-                            if await self._retry_after_attempt(
-                                attempt,
-                                endpoint,
-                                f"Provider {endpoint.name} content-policy block",
-                                max_attempts=max_attempts,
-                                transient=False,
-                                fast_fallback=True,
-                                has_media=has_media,
-                                prefer_fallback=prefer_fallback,
-                            ):
-                                continue
-                            raise RuntimeError(
-                                f"Provider {endpoint.name} blocked this prompt on content "
-                                f"policy and no fallback endpoint was available"
-                            )
-                        # Auto-clamp max_tokens on context overflow (OpenRouter returns 400)
-                        if (
-                            resp.status == 400
-                            and "maximum context length" in error_text.lower()
-                            and max_tokens is None
-                        ):
-                            import re as _re
-
-                            ctx_match = _re.search(
-                                r"maximum context length is (\d+) tokens", error_text
-                            )
-                            req_match = _re.search(
-                                r"you requested about (\d+) tokens", error_text
-                            )
-                            if ctx_match and req_match:
-                                ctx_limit = int(ctx_match.group(1))
-                                requested = int(req_match.group(1))
-                                estimated_input = requested - int(
-                                    data.get("max_tokens", self.max_tokens)
-                                )
-                                safe_output = max(
-                                    4096, ctx_limit - estimated_input - 512
-                                )
-                                if safe_output < int(
-                                    data.get("max_tokens", self.max_tokens)
-                                ):
-                                    logger.warning(
-                                        "Clamping max_tokens from %s to %s due to context limit %s",
-                                        data.get("max_tokens"),
-                                        safe_output,
-                                        ctx_limit,
-                                    )
-                                    # The loop rebuilds payloads every attempt. Mutating only
-                                    # data["max_tokens"] here is a fake fix; keep the clamp in
-                                    # loop state or we retry the same busted request like idiots.
-                                    max_tokens = safe_output
-                                    data["max_tokens"] = safe_output
-                                    if await self._retry_after_attempt(
-                                        attempt,
-                                        endpoint,
-                                        f"Context overflow, clamped max_tokens to {safe_output}",
-                                        max_attempts=max_attempts,
-                                        transient=False,
-                                        fast_fallback=fast_fallback,
-                                        has_media=has_media,
-                                        prefer_fallback=prefer_fallback,
-                                    ):
-                                        continue
-                        # max_tokens is *output* length, not context. Models like
-                        # minimax-m3 can have 1M context but only e.g. 131072 max output.
-                        if resp.status == 400 and (
-                            "maximum output tokens" in error_text.lower()
-                            or "exceeds model's maximum output" in error_text.lower()
-                        ):
-                            import re as _re
-
-                            out_match = _re.search(
-                                r"maximum output tokens\s*\(?\s*(\d+)\s*\)?",
-                                error_text,
-                                _re.IGNORECASE,
-                            )
-                            if not out_match:
-                                out_match = _re.search(
-                                    r"maximum output tokens \((\d+)\)",
-                                    error_text,
-                                    _re.IGNORECASE,
-                                )
-                            if out_match:
-                                out_cap = int(out_match.group(1))
-                                # Leave headroom under the hard cap.
-                                safe_output = max(1024, min(out_cap - 64, out_cap))
-                                current = int(data.get("max_tokens", self.max_tokens))
-                                if safe_output < current:
-                                    logger.warning(
-                                        "Clamping max_tokens from %s to %s (model max output %s)",
-                                        current,
-                                        safe_output,
-                                        out_cap,
-                                    )
-                                    max_tokens = safe_output
-                                    # Remember per-endpoint so future calls to
-                                    # this endpoint clamp proactively without a
-                                    # wasted 400 round-trip. Do NOT mutate the
-                                    # shared self.max_tokens: that permanently
-                                    # crippled every other endpoint/concurrent
-                                    # request after one small-cap model was hit.
-                                    self._endpoint_output_caps[endpoint.name] = (
-                                        safe_output
-                                    )
-                                    data["max_tokens"] = safe_output
-                                    if await self._retry_after_attempt(
-                                        attempt,
-                                        endpoint,
-                                        f"Output cap, clamped max_tokens to {safe_output}",
-                                        max_attempts=max_attempts,
-                                        transient=False,
-                                        fast_fallback=True,
-                                        has_media=has_media,
-                                        prefer_fallback=prefer_fallback,
-                                    ):
-                                        continue
-                        # Some models accept exactly one temperature and 400 on
-                        # anything else. Learn it and resend to the SAME endpoint
-                        # rather than burning retries / falling back needlessly.
-                        required_temp = _required_temperature(resp.status, error_text)
-                        if (
-                            required_temp is not None
-                            and self._endpoint_temperatures.get(endpoint.name)
-                            != required_temp
-                        ):
-                            logger.warning(
-                                "Provider endpoint %s requires temperature=%s; resending",
-                                endpoint.name,
-                                required_temp,
-                            )
-                            # Recorded per-endpoint only. Assigning the local
-                            # `temperature` override instead would carry this
-                            # endpoint's constraint onto every other endpoint
-                            # this call later touches.
-                            self._endpoint_temperatures[endpoint.name] = required_temp
-                            continue
-                        # Anything else non-2xx used to die right here with no
-                        # failover, so a 404 "model unavailable for free" on the
-                        # primary killed the whole turn while a healthy fallback
-                        # sat unused (logged 2026-08-07). The body is
-                        # deterministic, so hand the call to a *different*
-                        # endpoint — repeating it here would just 404 again.
-                        # No _cool_endpoint(): a 400 from our own payload would
-                        # otherwise park all traffic on the fallback for a full
-                        # minute. Failing over for this call is enough.
-                        dead.add(endpoint.name)
-                        alternatives = [
-                            e for e in self._endpoints if e.name not in dead
-                        ]
-                        if alternatives:
-                            logger.warning(
-                                "Provider endpoint %s returned %s; failing over to %s",
-                                endpoint.name,
-                                resp.status,
-                                alternatives[0].name,
-                            )
-                            continue
-                        raise ProviderRequestError(
-                            f"Provider API error: {resp.status}"
-                        )
+                        raise ProviderRequestError(f"Provider API error: {resp.status}: {detail}")
 
                     content_type = resp.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                     safe_content_type = (
@@ -2776,6 +2183,7 @@ class OllamaProvider:
                         response_format = "json"
                     else:
                         response_format = "sse" if data.get("stream") else "json"
+                    usage_drain_complete = None
                     if response_format == "sse":
                         merged = await _read_sse_response(
                             resp,
@@ -2785,6 +2193,7 @@ class OllamaProvider:
                             observation=observation,
                             incident=incident,
                         )
+                        usage_drain_complete = merged.get("__usage_drain_complete__")
                         result = {
                             k: v for k, v in merged.items() if not k.startswith("__")
                         }
@@ -2792,7 +2201,11 @@ class OllamaProvider:
                         try:
                             result = await resp.json(content_type=None)
                         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                            incident.response_text = e.doc if isinstance(e, json.JSONDecodeError) else e.object.decode("utf-8", errors="replace")
+                            incident.capture_text(
+                                e.doc
+                                if isinstance(e, json.JSONDecodeError)
+                                else e.object.decode("utf-8", errors="replace")
+                            )
                             incident.failure("Provider JSON decoding failed", e)
                             raise ProviderResponseError(
                                 f"Provider JSON decoding failed: error_type={type(e).__name__}"
@@ -2811,9 +2224,6 @@ class OllamaProvider:
                             endpoint,
                             f"Provider {endpoint.name} returned non-dict JSON body",
                             max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
                         ):
                             continue
                         raise ProviderResponseError(
@@ -2840,71 +2250,70 @@ class OllamaProvider:
                             else (p if isinstance(p, str) else "")
                             for p in content
                         )
-                    # Reasoning-to-content promotion.
-                    #
-                    # Some reasoning models (notably DeepSeek) have a quirk
-                    # where the *answer* genuinely rides in `reasoning_content`
-                    # with `content` left null. Commit 010b0db promoted
-                    # reasoning -> content unconditionally to fix that, but it
-                    # was too blunt: for an interrupted/cut-off reasoning model
-                    # (grok, ollama-native, minimax-m3) a null-content + only
-                    # reasoning reply is usually chain-of-thought with NO
-                    # answer produced — promoting it sends the scratchpad to
-                    # the channel as the user-visible reply (logged leak: the
-                    # bot posted "The user is making a sexual joke about
-                    # 'Bobby Fisher'… I should decline" to Discord).
-                    #
-                    # Rule: NEVER promote when there are tool_calls (reasoning
-                    # accompanying a tool call is unambiguously internal), and
-                    # NEVER promote on providers whose answers always arrive
-                    # in `content`. Only promote for the known DeepSeek-family
-                    # case where an empty-content answer legitimately lives in
-                    # reasoning_content. Everything else drops through to the
-                    # empty-response retry/fallback below instead of leaking.
-                    if (
-                        not content
+                    finish_reason = choices[0].get("finish_reason")
+                    incomplete_classification = None
+                    partial_content = ""
+                    if finish_reason == "length":
+                        incomplete_classification = "output_token_limit"
+                        if content and not _is_policy_block_text(content):
+                            partial_content = content
+                        if partial_content:
+                            opener = _CUSTOM_TOOL_OPEN_RE.search(partial_content)
+                            if opener is not None:
+                                partial_content = partial_content[:opener.start()]
+                    elif (
+                        not content.strip()
                         and not message.get("tool_calls")
-                        and self._reasoning_content_is_answer(endpoint, message)
+                        and reasoning_content(message)
                     ):
-                        content = (
-                            message.get("reasoning_content")
-                            or message.get("reasoning")
-                            or ""
+                        incomplete_classification = "reasoning_only"
+                    if incomplete_classification is not None:
+                        metrics = build_call_metrics(
+                            result, data, observation,
+                            provider=urlsplit(endpoint.base_url).hostname or "unknown",
+                            endpoint=endpoint.name, model=data["model"],
+                            request_start=request_start, stream=response_format == "sse",
+                            attempt=attempt,
                         )
-                        if content:
-                            message["content"] = content
-                    # A blocked prompt comes back as a normal 200 whose content
-                    # IS Google's notice. Never let that reach the channel: drop
-                    # it, cool the endpoint and hand the turn to the fallback
-                    # model on the very next attempt (no second try against the
-                    # model that just refused — the same payload always loses).
+                        reported_input, _, reported_reasoning = reported_usage(result)
+                        reported_output = _explicit_output_tokens(result)
+                        raw_usage = result.get("usage")
+                        raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
+                        usage_metadata = result.get("usageMetadata")
+                        usage_metadata = usage_metadata if isinstance(usage_metadata, dict) else {}
+                        reported_total = reported_count(raw_usage, "total_tokens")
+                        if reported_total is None:
+                            reported_total = reported_count(usage_metadata, "totalTokenCount")
+                        if reported_total is None:
+                            reported_total = reported_count(result, "total_tokens")
+                        available_usage = {
+                            key: value
+                            for key, value in (
+                                ("input_tokens", reported_input),
+                                ("output_tokens", reported_output),
+                                ("reasoning_tokens", reported_reasoning),
+                                ("total_tokens", reported_total),
+                            )
+                            if value is not None
+                        }
+                        incomplete = ProviderIncompleteResponseError(
+                            partial_content=partial_content,
+                            finish_reason=finish_reason,
+                            usage=available_usage,
+                            metrics=metrics,
+                            classification=incomplete_classification,
+                        )
+                        incident.current["incomplete_response"] = {
+                            "classification": incomplete.classification,
+                            "finish_reason": incomplete.finish_reason,
+                            "reported_usage": incomplete.usage,
+                            "metrics": asdict(metrics),
+                        }
+                        if response_format == "sse" and finish_reason == "length":
+                            incident.current["usage_drain_complete"] = usage_drain_complete
+                        raise incomplete
                     if content and _is_policy_block_text(content):
-                        incident.failure("HTTP 200 content-policy prompt block")
-                        self._cool_endpoint(
-                            endpoint.name, "blocked the prompt on content policy"
-                        )
-                        logger.warning(
-                            "Provider %s returned a content-policy prompt block as its "
-                            "reply; discarding it and failing over",
-                            endpoint.name,
-                        )
-                        content = ""
-                        message["content"] = ""
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} content-policy block",
-                            max_attempts=max_attempts,
-                            transient=False,
-                            fast_fallback=True,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
-                        raise RuntimeError(
-                            "Prompt was blocked by the provider's content policy and "
-                            "no fallback endpoint was available"
-                        )
+                        raise ProviderRequestError("Prompt was blocked by the provider's content policy")
                     if not content and not message.get("tool_calls"):
                         incident.failure("HTTP 200 with empty content and no tool calls")
                         # Some providers return choices with a message but blank content (e.g. refusals, reasoning-only, or bugs).
@@ -2914,52 +2323,15 @@ class OllamaProvider:
                             bool(message.get("tool_calls")),
                             len(message),
                         )
-                        if (
-                            attempt < max_attempts
-                            and attempt >= max_attempts - self.empty_response_retries
-                            and empty_response_recoveries < self.empty_response_retries
-                        ):
+                        if empty_response_recoveries < self.empty_response_retries:
                             empty_response_recoveries += 1
-                            order = (
-                                self._media_endpoint_order()
-                                if has_media
-                                else [e for e in self._endpoints if e.name != "vision"]
-                            )
-                            usable = [
-                                e
-                                for e in order
-                                if e.name not in media_broken and e.name not in dead
-                            ]
-                            alternatives = [
-                                e for e in usable if e.name != endpoint.name
-                            ]
-                            if alternatives:
-                                healthy = [
-                                    e
-                                    for e in alternatives
-                                    if not self._is_endpoint_cooling(e.name)
-                                ]
-                                recovery_endpoint = (healthy or alternatives)[0]
-                            else:
-                                recovery_endpoint = endpoint
-                            logger.warning(
-                                "Provider %s returned an empty response; recovery %s/%s "
-                                "using %s within the attempt budget (non-streaming)",
-                                endpoint.name,
-                                empty_response_recoveries,
-                                self.empty_response_retries,
-                                recovery_endpoint.name,
-                            )
-                        if await self._retry_after_attempt(
-                            attempt,
-                            endpoint,
-                            f"Provider {endpoint.name} returned empty response",
-                            max_attempts=max_attempts,
-                            fast_fallback=fast_fallback,
-                            has_media=has_media,
-                            prefer_fallback=prefer_fallback,
-                        ):
-                            continue
+                            if await self._retry_after_attempt(
+                                attempt,
+                                endpoint,
+                                f"Provider {endpoint.name} returned empty response",
+                                max_attempts=max_attempts,
+                            ):
+                                continue
                         raise ProviderEmptyResponseError("Empty response from provider")
 
                     metrics = build_call_metrics(
@@ -2975,8 +2347,6 @@ class OllamaProvider:
                         "total_tokens": metrics.input_tokens + metrics.output_tokens,
                     }
                     self._last_usage = dict(usage)
-                    # Healthy response: this endpoint is no longer rate-limited.
-                    self._endpoint_cooldown.pop(endpoint.name, None)
                     logger.info(
                         "Provider timing done endpoint=%s status=%s headers_ms=%.1f total_ms=%.1f content_chars=%s tool_calls=%s tokens=%s",
                         endpoint.name,
@@ -3002,9 +2372,6 @@ class OllamaProvider:
                     endpoint,
                     f"Provider {endpoint.name} timeout",
                     max_attempts=max_attempts,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
                 ):
                     continue
                 failure = RuntimeError(f"Provider request timed out after {timeout}s")
@@ -3016,13 +2383,15 @@ class OllamaProvider:
                 incident.capture("Provider usage exhausted", e)
                 raise
             except ProviderRequestError as e:
-                # Deterministic and already failed over everywhere it could.
                 incident.failure("Provider request rejected", e)
                 incident.capture("Provider request rejected", e)
                 raise
             except RuntimeError as e:
                 incident.failure("Provider response failure", e)
                 last_error = e
+                if isinstance(e, (ProviderIncompleteResponseError, ProviderEmptyResponseError)):
+                    incident.capture("Provider response incomplete", e)
+                    raise
                 if isinstance(e, ProviderResponseError):
                     logger.warning(
                         "Provider response failure endpoint=%s status=%s format=%s content_type=%s reason=%s",
@@ -3033,14 +2402,11 @@ class OllamaProvider:
                     endpoint,
                     f"Provider {endpoint.name} error: {type(e).__name__}",
                     max_attempts=max_attempts,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
                 ):
                     continue
                 incident.capture("Provider response failure", e)
                 raise
-            except Exception as e:
+            except (aiohttp.ClientError, OSError, UnicodeDecodeError) as e:
                 incident.failure("Provider transport or response failure", e)
                 last_error = e
                 if await self._retry_after_attempt(
@@ -3048,9 +2414,6 @@ class OllamaProvider:
                     endpoint,
                     f"Provider {endpoint.name} error: {type(e).__name__}",
                     max_attempts=max_attempts,
-                    fast_fallback=fast_fallback,
-                    has_media=has_media,
-                    prefer_fallback=prefer_fallback,
                 ):
                     continue
                 failure = RuntimeError(f"Provider call failed: {type(last_error).__name__}")
@@ -3061,9 +2424,6 @@ class OllamaProvider:
                 active_exception = sys.exception()
                 if active_exception is not attempt_exception and isinstance(active_exception, asyncio.CancelledError) and incident.current:
                     incident.capture("Provider failures before request cancellation")
-        if last_usage_error:
-            incident.capture("Provider usage exhausted", last_usage_error)
-            raise last_usage_error
         failure = RuntimeError("Provider call failed after retries")
         incident.capture("Provider call failed after retries", failure)
         raise failure
@@ -3075,15 +2435,11 @@ class OllamaProvider:
         reason: str,
         *,
         max_attempts: int | None = None,
-        fast_fallback: bool = False,
-        has_media: bool = False,
-        prefer_fallback: bool = False,
-        transient: bool = True,
     ) -> bool:
         max_attempts = max_attempts or self.retry_attempts
         if attempt >= max_attempts:
             return False
-        wait = 10 * attempt if transient else 0
+        wait = 10 * attempt
         logger.warning(
             "%s (attempt %s/%s), retrying in %ss...",
             reason, attempt, max_attempts, wait,

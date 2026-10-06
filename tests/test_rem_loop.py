@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from rag_memory import RemEventLog
-from rem import RemStore, _provider_message, run_rem_once
+from rem import RemStore, run_rem_once
 
 
 class FakeMemory:
@@ -33,14 +33,10 @@ class FakeProvider:
         self.generation = {}
 
     async def generate_chat_completion(
-        self, messages, tools=None, model=None, timeout=60, max_tokens=None,
-        temperature=None, disable_reasoning=None,
+        self, messages, tools=None, timeout=60, **kwargs,
     ):
         self.calls += 1
-        self.generation = {
-            "temperature": temperature,
-            "disable_reasoning": disable_reasoning,
-        }
+        self.generation = kwargs
         return self.messages.pop(0)
 
 
@@ -53,7 +49,7 @@ def test_rem_loop_bypasses_tool_calls_and_records_run(tmp_path, disable_reasonin
         provider = FakeProvider([
             {"role": "assistant", "content": "DONE\n- reviewed visible slice\n- no memory edits"},
         ])
-        rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), model="rem", max_turns=3)
+        rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), max_turns=3)
         # 2026-07-21: REM no longer bypasses — it parses a trailing JSON
         # actions block and applies ltm/shared writes itself. A response
         # with no JSON block is a no-op (no edits), but tool_counts is now
@@ -66,6 +62,7 @@ def test_rem_loop_bypasses_tool_calls_and_records_run(tmp_path, disable_reasonin
         }
         assert rem_run["audit"].startswith("DONE")
         assert provider.calls == 1
+        assert provider.generation == {}
         assert len(await RemStore(str(tmp_path)).load_runs()) == 1
     asyncio.run(run())
 
@@ -85,7 +82,7 @@ def test_rem_loop_applies_actions_from_audit(tmp_path):
                 ),
             },
         ])
-        rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), model="rem", max_turns=1)
+        rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), max_turns=1)
         assert mem.items == ["user likes cats"]
         assert rem_run["tool_counts"] == {"ltm_added": 1, "ltm_removed": 0, "shared_added": 0}
         assert "ltm+1" in rem_run["audit"]
@@ -96,7 +93,7 @@ def test_rem_loop_empty_slice_and_single_pass_advances(tmp_path):
     async def run():
         log = RemEventLog(str(tmp_path), max_events=10)
         mem = FakeMemory()
-        empty = await run_rem_once(memory_manager=mem, rem_log=log, provider=FakeProvider([]), data_dir=str(tmp_path), model="rem", max_turns=1)
+        empty = await run_rem_once(memory_manager=mem, rem_log=log, provider=FakeProvider([]), data_dir=str(tmp_path), max_turns=1)
         assert empty["events"] == 0
         state = await RemStore(str(tmp_path)).load_state()
         assert state["last_rem_run_ts"]
@@ -105,8 +102,9 @@ def test_rem_loop_empty_slice_and_single_pass_advances(tmp_path):
         provider = FakeProvider([
             {"role": "assistant", "content": "DONE\n- reviewed new slice"},
         ])
-        rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), model="rem", max_turns=1)
+        rem_run = await run_rem_once(memory_manager=mem, rem_log=log, provider=provider, data_dir=str(tmp_path), max_turns=1)
         assert rem_run["turns_used"] == 0
         assert rem_run["audit"].startswith("DONE")
         assert provider.calls == 1
+        assert provider.generation == {}
     asyncio.run(run())

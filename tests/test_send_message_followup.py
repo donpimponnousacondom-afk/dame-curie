@@ -156,12 +156,12 @@ def test_ordinary_short_reply_is_not_treated_as_a_promise():
 
 
 def test_ack_plus_real_tool_does_not_consume_the_promise_budget():
-    # This batch already loops via FOLLOWUP_TOOL_NAMES (create_site), so it
+    # This batch already loops via FOLLOWUP_TOOL_NAMES (shell), so it
     # must not be classified as ack-only — otherwise the one-shot promise
     # budget would be spent on a turn that was already going to loop.
     results = [
         "Tool send_message: __MESSAGE_SENT__\non it...",
-        "Tool create_site: live at https://example.com",
+        "Tool shell: harness output",
     ]
     assert _tool_results_need_followup(results) is True
     assert _only_promise_results(results) is False
@@ -174,4 +174,13 @@ def test_no_response_stays_terminal():
 
 
 def test_error_still_forces_followup():
-    assert _tool_results_need_followup(["Tool shell: Error - boom"]) is True
+    for error in (
+        "Tool shell: Error - boom",
+        "Tool hd_image: Error - unknown tool 'hd_image'",
+        "Tool react: Error - permission actor is not authorized for this tool",
+        "Tool no_response: Error - unavailable",
+    ):
+        assert _tool_results_need_followup([error]) is True
+        assert _tool_results_need_followup(
+            ["Tool send_message: __MESSAGE_SENT__\ndone", error]
+        ) is True

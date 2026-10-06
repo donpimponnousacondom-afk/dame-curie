@@ -23,6 +23,7 @@ class State:
         self.path = config.state / "ownership.json"
         self.target = config.target()
         self.source = str(config.source)
+        self.marker_namespace = config.marker_namespace
         self.source_identity: tuple[int, ...] = ()
         self.roots: list[list[int]] = []
         self.sites: dict[str, Site] = {}
@@ -49,7 +50,10 @@ class State:
             if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or value.st_mode & 0o077:
                 raise PublisherError("ownership state refused")
             data = json.load(stream)
-        if data["version"] != 1 or data["target"] != self.target or data["source"] != self.source:
+        if (
+            data["version"] != 1 or data["target"] != self.target or data["source"] != self.source
+            or data.get("marker_namespace", "dame-curie") != self.marker_namespace
+        ):
             raise PublisherError("ownership configuration changed")
         self.source_identity = tuple(data["source_identity"])
         self.roots = data["roots"]
@@ -66,6 +70,7 @@ class State:
     def save(self) -> None:
         data = {
             "version": 1, "target": self.target, "source": self.source,
+            "marker_namespace": self.marker_namespace,
             "source_identity": self.source_identity, "roots": self.roots,
             "sites": {name: {"token": site.token, "identity": site.identity, "deleting": site.deleting}
                       for name, site in self.sites.items()},

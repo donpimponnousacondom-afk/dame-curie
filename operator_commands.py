@@ -37,7 +37,7 @@ def is_operator_command(message, prefix: str, own_id=None) -> bool:
 def ignore_operator_message(bot, message) -> bool:
     own_id = getattr(getattr(bot, "user", None), "id", None)
     return is_private_error_report(message, own_id) or is_operator_command(
-        message, getattr(bot, "command_prefix", ","), own_id
+        message, getattr(bot, "command_prefix", "!"), own_id
     )
 
 

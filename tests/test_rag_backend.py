@@ -654,7 +654,7 @@ def test_explicit_maintenance_database_never_reads_or_migrates_siblings(
     insert(original)
     original._db.close()
     target = tmp_path / "selected.db"
-    (tmp_path / "maxwell_rag.db").rename(target)
+    (tmp_path / "dame-curie-rag.db").rename(target)
     (tmp_path / "long_term_memory.txt").write_text("do not import this fact")
     (tmp_path / "prompts.json").write_text("malformed sidecar")
 
@@ -668,7 +668,7 @@ def test_explicit_maintenance_database_never_reads_or_migrates_siblings(
     manager = rag.RAGMemoryManager(str(tmp_path / "unused"), db_path=target)
     assert manager.embedding_status()["total"] == 1
     assert not (tmp_path / "unused").exists()
-    assert not (tmp_path / "maxwell_rag.db").exists()
+    assert not (tmp_path / "dame-curie-rag.db").exists()
     manager._db.close()
 
 
@@ -738,11 +738,22 @@ def doctor_config(enabled=True):
         ({"embeddings": [[float("nan")] * 8]}, 200, "warn"),
         ({"embeddings": [[0.0] * 8]}, 200, "warn"),
         ({"secret": "private error text"}, 503, "warn"),
+        ({"embeddings": [vector()]}, 302, "warn"),
+        ({"embeddings": [vector()]}, 307, "warn"),
         (ValueError("private error text"), 200, "warn"),
     ],
 )
+@pytest.mark.parametrize("api_key,authorization", [
+    ("", None), ("", "header-key"), ("synthetic-chat-key", None),
+    ("synthetic-chat-key", "header-key"), ("synthetic-chat-key", "Bearer synthetic-chat-key"),
+])
+@pytest.mark.parametrize("base,endpoint", [
+    ("https://chat.invalid/v1?region=private#section", "https://chat.invalid/v1/models?region=private#section"),
+    ("HTTPS://Chat.INVALID/v1/?#", "HTTPS://Chat.INVALID/v1/models?#"),
+    ("https://chat.invalid/v1//?region=private#", "https://chat.invalid/v1//models?region=private#"),
+])
 def test_doctor_checks_real_vectors_and_configured_backend(
-    monkeypatch, payload, status, expected
+    monkeypatch, payload, status, expected, api_key, authorization, base, endpoint
 ):
     transport = install_transport(monkeypatch, Reply(payload, status))
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config()))
@@ -753,39 +764,38 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     assert url == "http://configured.invalid/v1/embeddings"
     assert kwargs["json"]["model"] == "configured-model"
     assert kwargs["headers"]["Authorization"] == "Bearer synthetic-key"
+    assert kwargs["json"] == {"model": "configured-model", "input": "maxwell doctor probe"}
+    assert kwargs["allow_redirects"] is False
+    assert len(transport.calls) == 1
+    transport = install_transport(monkeypatch, Reply({}, status))
+    transport.get = transport.post
+    cfg = SimpleNamespace(
+        OPENAI_BASE_URL=base,
+        OPENAI_API_KEY=api_key,
+        OPENAI_COMPAT_API_KEY="must-not-borrow",
+        OPENAI_EXTRA_HEADERS={"X-Tenant": "configured"},
+    )
+    if authorization is not None:
+        cfg.OPENAI_EXTRA_HEADERS["authorization"] = authorization
+    original_headers = dict(cfg.OPENAI_EXTRA_HEADERS)
+    if api_key and authorization is not None:
+        with pytest.raises(ValueError, match="OPENAI_API_KEY conflicts with OPENAI_EXTRA_HEADERS Authorization"):
+            asyncio.run(doctor._probe_chat(cfg))
+        assert transport.calls == []
+    else:
+        state, detail = asyncio.run(doctor._probe_chat(cfg))
+        assert state == ("ok" if 200 <= status < 300 else "bad")
+        assert transport.calls[0][0] == endpoint
+        expected_headers = dict(original_headers)
+        if api_key:
+            expected_headers["Authorization"] = f"Bearer {api_key}"
+        assert transport.calls[0][1]["headers"] == expected_headers
+        assert transport.calls[0][1]["allow_redirects"] is False
+        assert len(transport.calls) == 1
+    assert cfg.OPENAI_EXTRA_HEADERS == original_headers
 
 
 def test_doctor_disabled_rag_does_not_probe():
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config(enabled=False)))
     assert state == "warn"
     assert "no request" in detail
-
-
-@pytest.mark.parametrize(
-    "stdout,stderr,returncode,reachable",
-    [
-        ("\n", "permission denied while trying to connect", 0, False),
-        ("", "", 0, False),
-        ("26.1.5", "permission denied", 0, False),
-        ("26.1.5\n", "", 0, True),
-        ("26.1.5", "", 1, False),
-    ],
-)
-def test_doctor_does_not_trust_formatted_docker_exit_zero(
-    monkeypatch, capsys, stdout, stderr, returncode, reachable
-):
-    import shutil
-    import subprocess
-
-    monkeypatch.setattr(shutil, "which", lambda binary: "/usr/bin/docker")
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            stdout=stdout,
-            stderr=stderr,
-            returncode=returncode,
-        ),
-    )
-    doctor.check_docker(SimpleNamespace(ENABLE_SHELL=True))
-    assert ("daemon reachable" in capsys.readouterr().out) is reachable

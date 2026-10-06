@@ -17,14 +17,12 @@ def mention_bot():
             "process_images": False,
         },
         _blacklist=set(),
-        _partner_ids=set(),
         _stop_until={},
         _cooldowns={},
         _active_requests={},
         _active_request_user={},
         command_prefix=",",
         _load_control=Mock(),
-        clear_message_taint=Mock(),
         _is_admin=lambda _uid: False,
         _update_recent_users=Mock(),
         _get_channel_lock=lambda _cid: asyncio.Lock(),
@@ -38,13 +36,12 @@ def mention_bot():
     )
     for name in (
         "_directly_addressed",
-        "_is_partner_message",
-        "_reset_partner_reply_budget_for_human",
         "_should_live_reply",
         "_maybe_live_reply",
         "_content_without_self_mention",
         "_solo_channel_for",
         "_solo_blocks",
+        "_channel_allowed",
     ):
         setattr(bot, name, getattr(MaxwellBot, name).__get__(bot))
     return bot

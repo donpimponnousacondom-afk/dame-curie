@@ -32,6 +32,7 @@ def bot(tmp_path):
         _control=control,
         config=SimpleNamespace(DATA_DIR=str(tmp_path)),
         _is_admin=lambda _uid: True,
+        command_prefix="!",
     )
     b._solo_channel_for = MaxwellBot._solo_channel_for.__get__(b)
     b._solo_blocks = MaxwellBot._solo_blocks.__get__(b)

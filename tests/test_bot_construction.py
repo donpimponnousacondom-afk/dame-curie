@@ -60,13 +60,14 @@ async def construct():
     assert instance.plugin_manager.state_file == data / 'plugins.json'
     assert json.loads((data / 'plugins.json').read_text())['plugins']
     assert 'checkers' in instance.plugin_manager.loaded_plugins
-    assert instance.memory.db_path == data / 'maxwell_rag.db'
+    assert instance.memory.db_path == data / 'dame-curie-rag.db'
     assert instance.memory.embedding_status()['total'] == 0
     assert instance.bg_jobs.data_path == str(data / 'background_jobs.json')
     assert instance._watermarks.path == str(data / 'watermarks.json')
     assert instance.rem_store.data_dir == data
     assert instance.autonomy_engine.store.data_dir == data
     assert instance.user is None
+    assert instance.command_prefix == os.environ['COMMAND_PREFIX']
     assert instance.ai_provider._session is None
     assert not instance.ai_provider.available
     assert not instance.memory._embed_tasks
@@ -84,8 +85,9 @@ asyncio.run(construct())
 
 
 @pytest.mark.parametrize("external_prompts", [False, True])
+@pytest.mark.parametrize("command_prefix", ["!", "?"])
 def test_actual_bot_constructor_keeps_state_outside_read_only_source(
-    tmp_path, external_prompts
+    tmp_path, external_prompts, command_prefix
 ):
     app = tmp_path / "app"
     app.mkdir()
@@ -104,28 +106,25 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
     (state / "prompts/personality.txt").write_text("Synthetic constructor personality")
     env = {
         "PATH": os.defpath,
-        "PYTHONPATH": os.pathsep.join([str(app), *filter(None, sys.path)]),
+        "PYTHONPATH": str(app),
         "HOME": str(state / "home"),
         "TMPDIR": str(state / "tmp"),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHON_DOTENV_DISABLED": "1",
-        "MAXWELL_ENV_FILE": "/dev/null",
-        "MAXWELL_CONTAINER_MODE": "true",
+        "DAME_CURIE_ENV_FILE": "/dev/null",
+        "DAME_CURIE_CONTAINER_MODE": "true",
         "DATA_DIR": str(state / "data"),
-        "MAXWELL_SITE_DIR": str(state / "sites"),
-        "MAXWELL_PROMPTS_DIR": str(state / "prompts") if external_prompts else "",
+        "DAME_CURIE_SITE_DIR": str(state / "sites"),
+        "DAME_CURIE_PROMPTS_DIR": str(state / "prompts") if external_prompts else "",
         "DISCORD_TOKEN": "synthetic-constructor-token-never-used",
-        "MAXWELL_ADMIN_PASSWORD": "synthetic-constructor-password-never-used",
-        "OLLAMA_BASE_URL": "http://127.0.0.1:9/v1",
-        "OLLAMA_MODEL": "synthetic-no-network-model",
-        "BOT_PERSONA_TYPE": "maxwell",
+        "COMMAND_PREFIX": command_prefix,
+        "DAME_CURIE_ADMIN_PASSWORD": "synthetic-constructor-password-never-used",
+        "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
+        "OPENAI_MODEL": "synthetic-no-network-model",
         **dict.fromkeys(
             (
                 "ENABLE_RAG",
                 "ENABLE_AUTONOMY",
-                "ENABLE_TELEGRAM",
-                "ENABLE_EMAIL_TOOLS",
-                "ENABLE_X",
                 "ENABLE_VC",
                 "ENABLE_TTS",
                 "ENABLE_IMAGE_GEN",
@@ -133,7 +132,6 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
             "false",
         ),
         "ENABLE_SHELL": "true",
-        "ENABLE_CREATE_SITE": "true",
     }
     result = subprocess.run(
         [sys.executable, "-B", "-c", textwrap.dedent(CONSTRUCTION_PROBE)],

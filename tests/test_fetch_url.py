@@ -1,7 +1,13 @@
-"""fetch_url: SSRF-safe redirects, private URL refusal, usable page text."""
+"""fetch_url: HTTP(S) URL validation, redirect walking, usable page text.
+
+Current contract: `_is_safe_url` accepts any HTTP(S) URL with a hostname,
+including private/local hosts, and refuses other schemes or a missing host.
+This is not an SSRF isolation boundary.
+"""
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from bot_tools import FetchUrlTool, _fetch_public_url, _is_safe_url
 
@@ -44,20 +50,24 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_is_safe_url_blocks_private_and_allows_public():
+def test_is_safe_url_accepts_http_s_and_rejects_other_schemes():
     assert _is_safe_url("https://example.com/page") is True
-    assert _is_safe_url("http://127.0.0.1/") is False
-    assert _is_safe_url("http://localhost/admin") is False
-    assert _is_safe_url("http://10.0.0.5/x") is False
-    assert _is_safe_url("http://169.254.169.254/latest") is False
+    assert _is_safe_url("http://127.0.0.1/") is True
+    assert _is_safe_url("http://localhost/admin") is True
+    assert _is_safe_url("http://10.0.0.5/x") is True
+    assert _is_safe_url("http://169.254.169.254/latest") is True
     assert _is_safe_url("file:///etc/passwd") is False
+    assert _is_safe_url("http:///no-host") is False
 
 
-def test_fetch_url_refuses_private_without_network():
+def test_fetch_url_rejects_invalid_scheme_before_network(monkeypatch):
+    session = AsyncMock(side_effect=AssertionError("session must not be acquired"))
+    monkeypatch.setattr("bot_tools._get_shared_session", session)
     tool = FetchUrlTool(SimpleNamespace())
     msg = SimpleNamespace(id=1, channel=SimpleNamespace(id=2))
-    result = _run(tool.execute(msg, url="http://127.0.0.1/secret"))
-    assert result == "Error: Cannot fetch from private/internal URLs"
+    result = _run(tool.execute(msg, url="file:///etc/passwd"))
+    assert result == "Error: URL must use HTTP(S) and include a hostname"
+    session.assert_not_awaited()
 
 
 def test_fetch_public_url_follows_redirects(monkeypatch):
@@ -88,11 +98,11 @@ def test_fetch_public_url_follows_redirects(monkeypatch):
     assert "User-Agent" in session.calls[0][1].get("headers", {})
 
 
-def test_fetch_public_url_refuses_redirect_to_private(monkeypatch):
+def test_fetch_public_url_refuses_invalid_redirect_hop(monkeypatch):
     session = FakeSession(
         {
             "https://ex.com/jump": FakeResp(
-                302, headers={"Location": "http://127.0.0.1/meta"}
+                302, headers={"Location": "file:///etc/passwd"}
             ),
         }
     )
@@ -103,9 +113,10 @@ def test_fetch_public_url_refuses_redirect_to_private(monkeypatch):
     monkeypatch.setattr("bot_tools._get_shared_session", _session)
     try:
         _run(_fetch_public_url("https://ex.com/jump", max_bytes=1024))
-        raise AssertionError("expected private-redirect refusal")
+        raise AssertionError("expected invalid-redirect refusal")
     except ValueError as e:
-        assert "private/internal" in str(e)
+        assert "HTTP(S)" in str(e)
+    assert [call[0] for call in session.calls] == ["https://ex.com/jump"]
 
 
 def test_fetch_url_returns_page_text_after_redirect(monkeypatch):
@@ -126,38 +137,9 @@ def test_fetch_url_returns_page_text_after_redirect(monkeypatch):
         return session
 
     monkeypatch.setattr("bot_tools._get_shared_session", _session)
-    bot = SimpleNamespace(mark_message_tainted=lambda *_a, **_k: None)
+    bot = SimpleNamespace()
     tool = FetchUrlTool(bot)
     msg = SimpleNamespace(id=1, channel=SimpleNamespace(id=2), guild=None)
     result = _run(tool.execute(msg, url="https://ex.com/a"))
     assert "readable article" in result
     assert not result.startswith("Error")
-
-
-def test_fetch_url_taints_on_untrusted_page(monkeypatch):
-    tainted = {}
-    session = FakeSession(
-        {
-            "https://ex.com/doc": FakeResp(
-                200,
-                headers={"Content-Type": "text/plain"},
-                body=b"untrusted",
-            ),
-        }
-    )
-
-    async def _session():
-        return session
-
-    monkeypatch.setattr("bot_tools._get_shared_session", _session)
-    bot = SimpleNamespace(
-        mark_message_tainted=lambda *_a, **_k: tainted.setdefault("ok", True)
-    )
-    result = _run(
-        FetchUrlTool(bot).execute(
-            SimpleNamespace(id=1, channel=SimpleNamespace(id=2)),
-            url="https://ex.com/doc",
-        )
-    )
-    assert result == "untrusted"
-    assert tainted.get("ok") is True

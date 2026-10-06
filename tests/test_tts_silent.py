@@ -2,15 +2,16 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from bot import (
     MaxwellBot,
+    PromptBudgetExceeded,
     ToolCircuitBreaker,
     _auto_format_discord,
-    _telegram_html,
-    _telegram_latest_message_label,
-    _telegram_tool_followup_instruction,
     _tool_results_need_followup,
 )
+from turn_budget import TOOL_GROUPS_CONTEXT
 
 
 class FakeTool:
@@ -23,6 +24,8 @@ class FakeTool:
 
     async def execute(self, message, **params):
         self.calls.append(params)
+        if isinstance(self.result, Exception):
+            raise self.result
         return self.result
 
 
@@ -53,8 +56,7 @@ def _native_call(name, args, call_id="call_1"):
 def _native_bot(tools, **control):
     """A stub bot good enough to drive _dispatch_tool_calls (native path).
 
-    Wires everything the rewritten _execute_tool_by_name touches: reasoning
-    recording, the destructive-confirm gate, platform compat, the breaker.
+    Wires reasoning recording, platform compatibility, and the breaker.
     """
     control_defaults = {
         "tools_enabled": True,
@@ -79,13 +81,10 @@ def _native_bot(tools, **control):
         _control=control_defaults,
         tools=dict(tools),
         traces=[],
-        _tainted_messages=set(),
         memory=FakeMemory(),
     )
     bot._message_tool_platform = lambda _message: "discord"
     bot._compatible_tool_names = lambda _platform: set(tools)
-    bot.is_message_tainted = lambda _message: False
-    bot._consume_destructive_confirm = lambda _author_id: False
     bot._render_custom_emojis = lambda text, _guild: text
     # 2026-07-22: _dispatch_tool_calls now resolves progress per-server via
     # _progress_enabled; tests don't exercise the progress UI so always off.
@@ -188,28 +187,6 @@ def test_send_message_with_followup_tool_triggers_followup():
     assert not _tool_results_need_followup(["Tool no_response: __NO_RESPONSE__"])
 
 
-def test_email_tools_need_followup():
-    # All four email tools must be in FOLLOWUP_TOOL_NAMES — their results
-    # are data the model needs to read and react to. A batch like
-    # email_send + send_message, or any email_read_inbox call, must
-    # trigger a follow-up turn so the model can summarize / act on the
-    # result instead of going silent.
-    for name in (
-        "email_send",
-        "email_read_inbox",
-        "email_get_message",
-        "email_search",
-    ):
-        assert _tool_results_need_followup([f"Tool {name}: returned some data"])
-    # Mixed-batch case from the actual bug: send_message + email_send.
-    assert _tool_results_need_followup(
-        [
-            "Tool send_message: __MESSAGE_SENT__ sent",
-            "Tool email_send: __EMAIL_SENT__ To: leonw@leonw.dev",
-        ]
-    )
-
-
 def test_reaction_on_maxwell_message_does_not_invoke_handler():
     calls = []
     maxwell_user = SimpleNamespace(id=42, display_name="Maxwell", bot=True)
@@ -254,9 +231,13 @@ def test_reaction_on_maxwell_message_does_not_invoke_handler():
 
 def test_dispatch_native_runs_nonterminal_tool():
     react = FakeTool("Reacted with <:catjam:123>")
-    bot = _native_bot({"react": react})
+    broken = FakeTool(RuntimeError("synthetic dispatch failure"))
+    bot = _native_bot({"react": react, "web_search": broken})
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=123))
-    raw = [_native_call("react", {"emoji": "catjam", "reasoning": "reacting"})]
+    raw = [
+        _native_call("react", {"emoji": "catjam", "reasoning": "reacting"}, "success"),
+        _native_call("web_search", {"query": "test"}, "failure"),
+    ]
 
     async def run():
         return await MaxwellBot._dispatch_tool_calls(
@@ -264,37 +245,132 @@ def test_dispatch_native_runs_nonterminal_tool():
         )
 
     _, tool_results = asyncio.run(run())
-    assert tool_results == ["Tool react: Reacted with <:catjam:123>"]
+    failure = "Tool web_search: Error - synthetic dispatch failure"
+    assert tool_results == ["Tool react: Reacted with <:catjam:123>", failure]
     assert react.calls == [{"emoji": "catjam"}]
+    assert broken.calls == [{"query": "test"}]
+    paired = bot._last_native_followup_messages[2]
+    assert paired["tool_call_id"] == "failure"
+    assert paired["content"] == failure
+
+    calls_before = list(react.calls), list(broken.calls)
+    malformed = [
+        _native_call("react", {"emoji": "must not execute"}, "blocked"),
+        {"id": "bad", "type": "function", "function": {"name": "web_search", "arguments": "{} tail"}},
+    ]
+    with pytest.raises(ValueError, match="Malformed native tool-call batch"):
+        asyncio.run(MaxwellBot._dispatch_tool_calls(bot, message, "", native_tool_calls=malformed))
+    assert (react.calls, broken.calls) == calls_before
 
 
 def test_dispatch_native_records_tool_history_in_memory():
-    react = FakeTool("Reacted with <:catjam:123>")
-    bot = _native_bot({"react": react}, store_memory=True)
-    message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=123))
-    raw = [_native_call("react", {"emoji": "catjam"})]
-
-    async def run():
-        return await MaxwellBot._dispatch_tool_calls(
-            bot, message, "", native_tool_calls=raw
-        )
-
-    _, tool_results = asyncio.run(run())
-    assert tool_results == ["Tool react: Reacted with <:catjam:123>"]
-    # native path stores the full "Tool name: result" line as tool_result
-    assert memory_added(bot) == [
-        (
-            "123",
+    shell = FakeTool("built-in shell ran")
+    prefixed_bash = FakeTool("plugin bash ran")
+    prefixed_shell = FakeTool("plugin shell ran")
+    shell_plugin = FakeTool("plugin collision must not run")
+    plugin_tools = {
+        "tool_bash": prefixed_bash,
+        "tool_shell": prefixed_shell,
+        "shell": shell_plugin,
+    }
+    bot = _native_bot({"shell": shell}, store_memory=True)
+    bot.plugin_manager = SimpleNamespace(
+        get_available_tools=lambda **kwargs: plugin_tools,
+        get_tool=lambda name: plugin_tools.get(name),
+    )
+    bot._native_tools_enabled = lambda: True
+    bot._is_admin = lambda user_id: user_id == 1
+    message = SimpleNamespace(
+        guild=None, channel=SimpleNamespace(id=123), author=SimpleNamespace(id=1)
+    )
+    image_data_uri = "data:image/png;base64," + "A" * 5_000
+    audio_base64 = "B" * 5_000
+    result_data_uri = "data:audio/wav;base64," + "C" * 9_000
+    result_image_payload = "D" * 9_000
+    prefixed_bash.result = (
+        f"plugin output before {result_data_uri} middle "
+        f"__IMAGE_B64__{result_image_payload}__END_IMAGE_B64__ after"
+    )
+    raw = [
+        _native_call(
+            "tool_bash",
             {
-                "author": "Tool",
-                "content": 'Called react with {"emoji": "catjam"} -> Tool react: Reacted with <:catjam:123>',
-                "is_tool": True,
-                "tool_name": "react",
-                "tool_params": {"emoji": "catjam"},
-                "tool_result": "Tool react: Reacted with <:catjam:123>",
+                "command": "plugin",
+                "image_url": image_data_uri,
+                "media": [{"mime_type": "audio/wav", "data": audio_base64}],
             },
-        )
+            "bash",
+        ),
+        _native_call("tool_shell", {"command": "plugin"}, "plugin-shell"),
+        _native_call("shell", {"command": "builtin"}, "builtin-shell"),
     ]
+    token = TOOL_GROUPS_CONTEXT.set(set())
+    try:
+        catalog = MaxwellBot._build_openai_tools(bot, message=message)
+        catalog_names = {item["function"]["name"] for item in catalog}
+        assert "shell" in catalog_names
+        assert "tool_bash" not in catalog_names
+        assert "tool_shell" not in catalog_names
+
+        async def run():
+            return await MaxwellBot._dispatch_tool_calls(
+                bot, message, "", native_tool_calls=raw
+            )
+
+        _, tool_results = asyncio.run(run())
+        assert tool_results[0].startswith(
+            f"Tool tool_bash: plugin output before {result_data_uri} middle"
+        )
+        assert result_image_payload not in tool_results[0]
+        assert tool_results[1:] == [
+            "Tool tool_shell: plugin shell ran",
+            "Tool shell: built-in shell ran",
+        ]
+        assert prefixed_bash.calls == [
+            {
+                "command": "plugin",
+                "image_url": image_data_uri,
+                "media": [{"mime_type": "audio/wav", "data": audio_base64}],
+            }
+        ]
+        assert prefixed_shell.calls == [{"command": "plugin"}]
+        assert shell.calls == [{"command": "builtin"}]
+        assert shell_plugin.calls == []
+        replay_names = [
+            call["function"]["name"]
+            for call in bot._last_native_followup_messages[0]["tool_calls"]
+        ]
+        assert replay_names == ["tool_bash", "tool_shell", "shell"]
+        stored = memory_added(bot)
+        stored_by_name = {entry[1]["tool_name"]: entry[1] for entry in stored}
+        assert stored_by_name.keys() == set(replay_names)
+        stored_media = stored_by_name["tool_bash"]["tool_params"]
+        assert stored_media["image_url"] == (
+            f"[embedded image/png omitted; full value "
+            f"{len(image_data_uri.encode('utf-8'))} UTF-8 bytes]"
+        )
+        assert stored_media["media"][0]["data"] == (
+            f"[embedded media omitted; full value "
+            f"{len(audio_base64.encode('utf-8'))} UTF-8 bytes]"
+        )
+        result_audio_marker = (
+            f"[embedded audio/wav omitted; full value "
+            f"{len(result_data_uri.encode('utf-8'))} UTF-8 bytes]"
+        )
+        result_image_marker = (
+            f"[embedded image omitted; encoded payload "
+            f"{len(result_image_payload.encode('utf-8'))} UTF-8 bytes]"
+        )
+        assert stored_by_name["tool_bash"]["tool_result"] == (
+            f"Tool tool_bash: plugin output before {result_audio_marker} middle "
+            f"{result_image_marker} after"
+        )
+        assert image_data_uri not in repr(stored)
+        assert audio_base64 not in repr(stored)
+        assert result_data_uri not in repr(stored)
+        assert result_image_payload not in repr(stored)
+    finally:
+        TOOL_GROUPS_CONTEXT.reset(token)
 
 
 def test_dispatch_native_strips_disabled_tool():
@@ -315,15 +391,16 @@ def test_dispatch_native_strips_disabled_tool():
 
 def test_dispatch_native_rejects_platform_incompatible_tool():
     react = FakeTool("Reacted")
-    bot = _native_bot({"react": react})
-    # react is Discord-only; pretend this turn is telegram so it's incompatible.
-    bot._message_tool_platform = lambda _message: "telegram"
-    bot._compatible_tool_names = lambda _platform: (
-        set()
-    )  # nothing compatible on tg here
+    bot = _native_bot({"react": react}, native_tool_calls=True)
+    bot._native_tools_enabled = MaxwellBot._native_tools_enabled.__get__(bot)
+    bot._message_tool_platform = lambda _message: "synthetic"
+    bot._compatible_tool_names = lambda _platform: set()
     message = SimpleNamespace(
-        guild=None, channel=SimpleNamespace(id=123), tool_platform="telegram"
+        guild=None, channel=SimpleNamespace(id=123), tool_platform="synthetic"
     )
+    assert MaxwellBot._build_openai_tools(
+        bot, platform="synthetic", message=message
+    ) == []
     raw = [_native_call("react", {"emoji": "catjam"})]
 
     async def run():
@@ -388,23 +465,6 @@ def test_dispatch_no_native_calls_just_sanitizes_text():
     assert "hello" in cleaned and "world" in cleaned
 
 
-def test_tool_prompt_filters_discord_only_tools_for_telegram():
-    bot = SimpleNamespace(
-        _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
-        _control={
-            "tools_enabled": True,
-            "disabled_tools": [],
-            "native_tool_calls": False,
-        },
-        tools={"send_file": FakeTool("sent"), "react": FakeTool("Reacted")},
-    )
-
-    prompt = MaxwellBot._tool_system_prompt(bot, "telegram")
-
-    assert "send_file:" in prompt
-    assert "react:" not in prompt
-
-
 def test_tool_prompt_keeps_discord_tools_for_discord():
     bot = SimpleNamespace(
         _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
@@ -416,6 +476,7 @@ def test_tool_prompt_keeps_discord_tools_for_discord():
         tools={"send_file": FakeTool("sent"), "react": FakeTool("Reacted")},
     )
 
+    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
     prompt = MaxwellBot._tool_system_prompt(bot, "discord")
 
     assert "send_file:" in prompt
@@ -435,6 +496,7 @@ def test_tool_prompt_describes_reasoning_inside_tool_calls():
         tools={"send_message": FakeTool("sent")},
     )
 
+    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
     prompt = MaxwellBot._tool_system_prompt(bot, "discord")
 
     assert "reasoning_log" not in prompt.lower()
@@ -592,40 +654,6 @@ def test_shell_tool_results_trigger_followup():
     )
 
 
-def test_telegram_html_renders_code_blocks():
-    rendered = _telegram_html("before\n```ansi\n$ whoami\nmaxwell\n```\nafter <ok>")
-
-    assert "before" in rendered
-    assert '<pre><code class="language-ansi">$ whoami\nmaxwell</code></pre>' in rendered
-    assert "after &lt;ok&gt;" in rendered
-
-
-def test_telegram_audio_turn_uses_stable_latest_message_label():
-    assert (
-        _telegram_latest_message_label("", has_media=True) == "[audio message attached]"
-    )
-    assert (
-        _telegram_latest_message_label("make an image", has_media=True)
-        == "make an image"
-    )
-
-
-def test_telegram_tool_followup_keeps_audio_turn_context_available():
-    instruction = _telegram_tool_followup_instruction(has_original_media=True)
-
-    assert "Original media isn't reattached here" in instruction
-    assert "send_message" in instruction
-    # native-only: no XML tag forms in the followup instruction
-    assert "<tool:send_message>" not in instruction
-
-
-def test_telegram_tool_followup_without_media_does_not_claim_audio_context():
-    instruction = _telegram_tool_followup_instruction(has_original_media=False)
-
-    assert "No original media is attached" in instruction
-    assert "Original media isn't reattached here" not in instruction
-
-
 def test_no_response_tool_results_do_not_trigger_followup():
     assert not _tool_results_need_followup(["Tool no_response: __NO_RESPONSE__"])
 
@@ -650,6 +678,7 @@ def test_tool_prompt_keeps_reasoning_plain_text_rule():
         tools={"send_message": FakeTool("sent")},
     )
 
+    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
     prompt = MaxwellBot._tool_system_prompt(bot, "discord")
 
     assert "plain text" in prompt.lower()
@@ -672,6 +701,7 @@ def test_tool_prompt_native_mode_no_xml_instructions():
         tools={"send_message": FakeTool("sent"), "react": FakeTool("Reacted")},
     )
 
+    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
     prompt = MaxwellBot._tool_system_prompt(bot, "discord")
 
     assert "native function/tool calling" in prompt.lower()
@@ -684,18 +714,78 @@ def test_tool_prompt_native_mode_no_xml_instructions():
 def test_prompt_budget_trims_large_background_blocks():
     bot = SimpleNamespace(
         _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
-        _control={"prompt_context_budget": 10000},
+        _control={"prompt_context_budget": 96000},
     )
+    core = {"role": "system", "content": "core"}
+    contract = {"role": "system", "content": "## Tool contract\n" + "c" * 300}
+    catalog = {"role": "system", "content": "## Available tools\n" + "t" * 300}
+    server = {"role": "system", "content": "Server-specific instructions:\n" + "s" * 300}
+    filler = {"role": "system", "content": "Unprotected system filler " + "u" * 20000}
+    history = "<previous_conversation>\n" + "".join(
+        f"history {index} " + "h" * 140 + "\n" for index in range(350)
+    ) + "</previous_conversation>"
+    paired_call = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "paired-result",
+                "type": "function",
+                "function": {"name": "send_message", "arguments": "{}"},
+            }
+        ],
+    }
+    paired_result = {
+        "role": "tool",
+        "tool_call_id": "paired-result",
+        "content": "r" * 24000,
+    }
     messages = [
-        {"role": "system", "content": "core"},
-        {"role": "system", "content": "x" * 50000},
-        {"role": "user", "content": "latest"},
+        core,
+        {"role": "system", "content": "RAG summary mentions ## Available tools\nCustom tool protocol: " + "x" * 50000},
+        contract,
+        catalog,
+        filler,
+        server,
+        {"role": "user", "content": history},
+        {"role": "user", "content": "[RESPOND TO THIS]\nlatest"},
+        paired_call,
+        paired_result,
     ]
+    schemas = [{"type": "function", "function": {"name": "all_tools", "description": "z" * 14000}}]
 
-    trimmed = MaxwellBot._apply_prompt_budget(bot, messages)
+    trimmed = MaxwellBot._apply_prompt_budget(bot, messages, schemas)
+    transcript = next(
+        item["content"] for item in trimmed
+        if str(item.get("content") or "").startswith("<previous_conversation>\n")
+    )
 
-    assert sum(MaxwellBot._message_content_chars(m) for m in trimmed) <= 10000
-    assert "prompt budget trimmed" in trimmed[1]["content"]
+    assert sum(MaxwellBot._message_content_chars(m) for m in trimmed) + len(
+        json.dumps(schemas, ensure_ascii=False, separators=(",", ":"))
+    ) <= 72000
+    assert "history 0" not in transcript
+    assert "history 349" in transcript
+    assert "</previous_conversation>" in transcript
+    assert paired_call in trimmed
+    assert paired_result in trimmed
+    assert paired_call["tool_calls"][0]["id"] == paired_result["tool_call_id"]
+    assert any(item.get("content") == "[RESPOND TO THIS]\nlatest" for item in trimmed)
+    assert catalog in trimmed
+    assert contract in trimmed
+    assert server in trimmed
+    assert "prompt budget trimmed" in next(
+        item["content"] for item in trimmed
+        if str(item.get("content") or "").startswith("Unprotected system filler")
+    )
+    assert contract["content"] == "## Tool contract\n" + "c" * 300
+    assert server["content"] == "Server-specific instructions:\n" + "s" * 300
+
+    too_large = [
+        core,
+        {"role": "system", "content": "## Available tools\n" + "t" * 80000},
+        {"role": "user", "content": "[RESPOND TO THIS]\nlatest"},
+    ]
+    with pytest.raises(PromptBudgetExceeded):
+        MaxwellBot._apply_prompt_budget(bot, too_large)
 
 
 def test_shared_fact_relevance_filters_broad_vague_context():

@@ -183,7 +183,7 @@ class AddressSignal:
     """
 
     direct: bool = False           # DM, @ him, or a Discord reply to him
-    soft: bool = False             # @everyone / @here / a role he holds
+    soft: bool = False             # @everyone / @here
     reply_to_other: bool = False   # a Discord reply aimed at someone else
     mentions_other: bool = False   # @ someone else, not him
     names_him: bool = False        # his name appears in the text
@@ -298,7 +298,7 @@ def describe_signal(signal: AddressSignal, state: WatchState, pressure: float,
         if signal.names_him:
             bits.append("your name appears in the text, but nobody pinged you")
         if signal.soft:
-            bits.append("broadcast to the room (@everyone/@here/a role), not a ping to you")
+            bits.append("broadcast to the room (@everyone/@here), not a ping to you")
         if signal.reply_to_other:
             bits.append("a reply to someone else, not a ping to you")
         if signal.mentions_other:

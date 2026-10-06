@@ -393,3 +393,143 @@ def test_watermark_rejects_nonpositive(tmp_path, bad):
     wm = Watermarks(str(tmp_path / "wm.json"))
     wm.note("c1", bad)
     assert wm.get("c1") is None
+
+
+# --------------------------------------------------------------------------
+# cancelling one input, not a channel
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("receipt", [False, True])
+def test_cancel_message_cancels_one_input_and_leaves_other_rooms_alone(receipt):
+    """An expiring caller cancels its own turn, not whoever else is talking."""
+
+    async def scenario():
+        seen = []
+        release = asyncio.Event()
+
+        async def handler(message, content):
+            try:
+                seen.append(message.id)
+                await release.wait()
+            except asyncio.CancelledError:
+                seen.append(("cancelled", message.id))
+                raise
+
+        q = ReplyQueue()
+        q.bind(handler)
+        q.submit("c1", _msg(11), "smoke", directed=True)
+        q.submit("c2", _msg(22), "real traffic", directed=True)
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if len(seen) >= 2:
+                break
+        target = q._channels["c1"].running
+        if receipt:
+            accepted, task = q.cancel_message_with_task("c1", "11")
+            assert accepted and task is target
+        else:
+            assert q.cancel_message("c1", "11") is True
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if ("cancelled", 11) in seen:
+                break
+        assert ("cancelled", 11) in seen
+        assert ("cancelled", 22) not in seen
+        assert q.active("c2") is True
+        release.set()
+        await q.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("receipt", [False, True])
+def test_cancel_message_removes_a_queued_input_before_it_runs(receipt):
+    """An input that expires while waiting must never execute later, unobserved."""
+
+    async def scenario():
+        ran = []
+        gate = asyncio.Event()
+
+        async def handler(message, content):
+            if message.id == 1:
+                await gate.wait()
+            ran.append(message.id)
+
+        q = ReplyQueue()
+        q.bind(handler)
+        q.submit("c1", _msg(1), "blocker", directed=True)
+        await asyncio.sleep(0)
+        assert q.submit("c1", _msg(2), "smoke", directed=True) == "queued"
+        if receipt:
+            assert q.cancel_message_with_task("c1", "2") == (True, None)
+        else:
+            assert q.cancel_message("c1", "2") is True
+        assert q.depth("c1") == 0
+        gate.set()
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if ran:
+                break
+        await asyncio.sleep(0)
+        assert ran == [1]
+        await q.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancel_message_ignores_unknown_ids_and_other_channels():
+    async def scenario():
+        async def handler(message, content):
+            await asyncio.sleep(0)
+
+        q = ReplyQueue()
+        q.bind(handler)
+        q.submit("c1", _msg(5), "hi", directed=True)
+        await asyncio.sleep(0)
+        assert q.cancel_message("c1", "99") is False
+        assert q.cancel_message("c9", "5") is False
+        assert q.cancel_message("c1", "") is False
+        assert q.cancel_message_with_task("c1", "99") == (False, None)
+        assert q.cancel_message_with_task("c9", "5") == (False, None)
+        assert q.cancel_message_with_task("c1", "") == (False, None)
+        await q.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel_before_start", [False, True])
+def test_running_message_id_names_the_input_being_answered(cancel_before_start):
+    """The id is set with the running task, and cleared when the turn ends."""
+
+    async def scenario():
+        gate = asyncio.Event()
+        started = asyncio.Event()
+
+        async def handler(message, content):
+            started.set()
+            await gate.wait()
+
+        q = ReplyQueue()
+        q.bind(handler)
+        q.submit("c1", _msg(7), "hi", directed=True)
+        for _ in range(50):
+            await asyncio.sleep(0)
+            state = q._channels.get("c1")
+            if state is not None and state.running_message_id:
+                break
+        assert q._channels["c1"].running_message_id == "7"
+        if cancel_before_start:
+            assert not started.is_set()
+            accepted, task = q.cancel_message_with_task("c1", "7")
+            assert accepted and task is q._channels["c1"].running
+            assert task is not None
+        else:
+            gate.set()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if "c1" not in q._channels:
+                break
+        assert "c1" not in q._channels
+
+    asyncio.run(scenario())

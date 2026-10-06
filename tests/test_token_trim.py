@@ -1,8 +1,6 @@
 """Same-function token cuts: live tool packs, short turns, emoji grid, embeds.
 
-The full tool catalog ships on every turn. lean/gated catalogs hid tools
-(like hd_image) behind more_tools and made photo requests look like a
-different generator.
+The core catalog stays visible; specialized groups expand through more_tools.
 """
 
 import asyncio
@@ -11,7 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from bot import MaxwellBot, ToolCircuitBreaker
+from bot_tools import MoreToolsTool
 from rag_memory import RAGMemoryManager
+from tool_schemas import CORE_TOOL_NAMES
+from turn_budget import ForegroundTurn, reset_foreground_turn, set_foreground_turn
 
 
 class FakeTool:
@@ -36,7 +37,6 @@ def _live_bot(extra_tools=None):
             "create_site",
             "list_sites",
             "shell",
-            "email_send",
             "inbox_list",
             "inbox_act",
             "send_meme",
@@ -44,7 +44,6 @@ def _live_bot(extra_tools=None):
             "lookup_user",
             "tts",
             "image_generator",
-            "hd_image",
             "join_vc",
             "more_tools",
         )
@@ -54,6 +53,8 @@ def _live_bot(extra_tools=None):
     bot = SimpleNamespace(
         tools=tools,
         user=SimpleNamespace(id=1),
+        _is_admin=lambda user_id: user_id == 1,
+        _shell_whitelist=set(),
         _control={
             "tools_enabled": True,
             "disabled_tools": [],
@@ -99,20 +100,36 @@ def _tool_names(bot, message, content, platform="discord"):
 
 def test_every_turn_offers_every_registered_tool():
     bot = _live_bot()
-    for content in (
-        "wyd",
-        "Can you run a debugger on YOUR machine?",
-        "look",
-        "can you tts that",
-        "whatts up",
-        "so anyway " * 40,
-    ):
-        names = _tool_names(bot, _msg(content, mentions=[bot.user]), content)
-        assert names == set(bot.tools) - {"more_tools"}, content
-        assert "more_tools" not in names
-        assert "shell" in names
-        assert "hd_image" in names
-        assert "image_generator" in names
+    turn = ForegroundTurn(1, time.monotonic() + 60)
+    token = set_foreground_turn(turn)
+    try:
+        for content in (
+            "wyd",
+            "Can you run a debugger on YOUR machine?",
+            "look",
+            "can you tts that",
+            "whatts up",
+            "so anyway " * 40,
+        ):
+            message = _msg(content, mentions=[bot.user])
+            message.author = bot.user
+            names = _tool_names(bot, message, content)
+            assert names == set(bot.tools).intersection(CORE_TOOL_NAMES), content
+            assert "more_tools" in names
+            assert "inbox_list" not in names
+            assert "send_meme" not in names
+            assert "shell" in names
+            assert "image_generator" in names
+
+        assert asyncio.run(
+            MoreToolsTool(bot).execute(message, group="messaging")
+        ) == "Expanded the messaging tool group for the next model call."
+        expanded = _tool_names(bot, message, "inbox")
+        assert {"inbox_list", "inbox_act", "typing"}.issubset(expanded)
+        assert turn.attempt_limit == 1
+        assert turn.attempts == 0
+    finally:
+        reset_foreground_turn(token)
 
 
 def test_lean_chat_turn_is_gone():
@@ -124,23 +141,38 @@ def test_lean_chat_turn_is_gone():
 
 def test_tool_prompt_lists_full_catalog_on_chat_turn():
     bot = _live_bot()
-    chat = MaxwellBot._tool_system_prompt(
-        bot, "discord", message=_msg("wyd"), content="wyd"
-    )
-    full = MaxwellBot._tool_system_prompt(bot, "discord")
-    assert "youtube" in chat
-    assert "shell" in chat
-    assert "hd_image" in chat
-    assert chat == full
+    message = _msg("wyd")
+    message.author = bot.user
+    turn = ForegroundTurn(1, time.monotonic() + 60)
+    token = set_foreground_turn(turn)
+    try:
+        prompt = MaxwellBot._tool_system_prompt(
+            bot, "discord", message=message, content="wyd"
+        )
+        assert "youtube" in prompt
+        assert "shell" in prompt
+        assert "image_generator" in prompt
+        assert "more_tools" in prompt
+        assert "inbox_list" not in prompt
+
+        asyncio.run(MoreToolsTool(bot).execute(message, group="messaging"))
+        expanded = MaxwellBot._tool_system_prompt(
+            bot, "discord", message=message, content="inbox"
+        )
+        assert "inbox_list" in expanded
+        assert "inbox_act" in expanded
+    finally:
+        reset_foreground_turn(token)
 
 
 def test_disabled_tools_still_hidden():
     bot = _live_bot()
-    bot._control["disabled_tools"] = ["shell", "youtube"]
+    bot._control["disabled_tools"] = ["shell", "youtube", "image_generator"]
     content = "run a shell command"
     names = _tool_names(bot, _msg(content), content)
     assert "shell" not in names
     assert "youtube" not in names
+    assert "image_generator" not in names
     assert "send_message" in names
     prompt = MaxwellBot._tool_system_prompt(
         bot, "discord", message=_msg(content), content=content
@@ -148,6 +180,7 @@ def test_disabled_tools_still_hidden():
     catalog = prompt.split("## Tool contract")[0]
     assert "shell" not in catalog
     assert "youtube" not in catalog
+    assert "image_generator" not in catalog
 
 
 def test_short_live_turn_for_watch_followup_not_hard_ping():

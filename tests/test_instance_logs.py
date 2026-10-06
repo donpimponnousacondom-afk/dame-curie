@@ -102,10 +102,10 @@ def test_every_other_line_is_unchanged_and_immediate(line):
 
 
 def test_colored_compose_prefix_and_gin_fields_keep_original_latest_line():
-    first = health_line(service="maxwell-curie-ollama-1")
-    first = first.replace("maxwell-curie-ollama-1", "\x1b[36mmaxwell-curie-ollama-1\x1b[0m")
-    latest = health_line(30, service="maxwell-curie-ollama-1")
-    latest = latest.replace("maxwell-curie-ollama-1", "\x1b[1;36mmaxwell-curie-ollama-1\x1b[0m")
+    first = health_line(service="dame-curie-ollama-1")
+    first = first.replace("dame-curie-ollama-1", "\x1b[36mdame-curie-ollama-1\x1b[0m")
+    latest = health_line(30, service="dame-curie-ollama-1")
+    latest = latest.replace("dame-curie-ollama-1", "\x1b[1;36mdame-curie-ollama-1\x1b[0m")
     latest = latest.replace("200", "\x1b[97;42m200\x1b[0m")
     assert render([(0, first), (30, latest)]) == (
         first + latest.rstrip("\n") + " [1 additional repeats in 30s; latest occurrence shown]\n"
@@ -167,7 +167,7 @@ def test_interrupt_flushes_pending_summary_before_propagating():
 
 def test_actual_logs_action_delegates_without_lifecycle_mutations(monkeypatch):
     app = instance.Instance.__new__(instance.Instance)
-    app.project = "maxwell-fixture"
+    app.project = "dame-curie"
     app.env = {"DOCKER_HOST": "unix:///synthetic/docker.sock"}
     app.inventory = Mock(return_value=[])
     app.docker = Mock(side_effect=AssertionError("no lifecycle mutation"))
@@ -180,20 +180,56 @@ def test_actual_logs_action_delegates_without_lifecycle_mutations(monkeypatch):
     assert command == ["docker", "compose", "--project-name", app.project,
                        "--project-directory", str(instance.CHECKOUT), "--env-file", "/dev/null",
                        "-f", str(instance.CHECKOUT / "compose.yaml"),
+                       "-f", str(instance.CHECKOUT / "docker" / "compose.staging.yaml"),
                        "logs", "--follow", "--tail", "100"]
     assert env is app.env
 
 
-def test_standalone_help_does_not_require_log_filter(tmp_path):
-    script = tmp_path / "instance.py"
-    script.write_bytes(Path(instance.__file__).read_bytes())
+@pytest.mark.parametrize("flags", [("-B", "-E", "-s"), ("-I", "-B")])
+@pytest.mark.parametrize("action", ["help", "logs"])
+def test_standalone_help_does_not_require_log_filter(tmp_path, flags, action):
+    trusted = tmp_path / "trusted"
+    untrusted = tmp_path / "untrusted"
+    trusted.mkdir()
+    untrusted.mkdir()
+    (untrusted / "log_filter.py").write_text("raise AssertionError('untrusted follower imported')\n")
+    script = trusted / "instance.py"
+    source = Path(instance.__file__).read_text()
+    arguments = ["--help"]
+    if action == "logs":
+        (trusted / "log_filter.py").write_text("from unittest.mock import Mock\nfollow_logs = Mock()\n")
+        source = source.replace('if __name__ == "__main__":\n', '''if __name__ == "__main__":
+    from unittest.mock import Mock
+    app = Instance.__new__(Instance)
+    app.project = "dame-curie"
+    app.env = {"DOCKER_HOST": "unix:///synthetic/docker.sock"}
+    app.inventory = Mock(return_value=[])
+    app.docker = Mock(side_effect=AssertionError("no lifecycle mutation"))
+    service_account = Mock()
+    Instance = Mock(return_value=app)
+''')
+        source += '''
+if __name__ == "__main__":
+    service_account.assert_called_once_with("dame-curie", for_logs=True)
+    app.inventory.assert_called_once_with()
+    app.docker.assert_not_called()
+    follower = sys.modules["log_filter"].follow_logs
+    follower.assert_called_once()
+    command, environment = follower.call_args.args
+    assert command[-4:] == ["logs", "--follow", "--tail", "100"]
+    assert environment is app.env
+    assert follower.call_args.kwargs == {"output_format": "screen", "no_keys": False}
+'''
+        arguments = ["dame-curie", "logs", "--format", "screen"]
+    script.write_text(source)
     result = subprocess.run(
-        [sys.executable, "-B", "-E", "-s", str(script), "--help"],
-        cwd=tmp_path, env={"HOME": str(tmp_path), "PATH": "/usr/local/bin:/usr/bin:/bin"},
+        [sys.executable, *flags, str(script), *arguments], cwd=untrusted,
+        env={"HOME": str(tmp_path), "PATH": "/usr/local/bin:/usr/bin:/bin", "PYTHONPATH": str(untrusted)},
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert "logs" in result.stdout
+    if action == "help":
+        assert "logs" in result.stdout
     assert result.stderr == ""
 
 

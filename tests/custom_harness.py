@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(0, "/root/maxwell")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot_tools
 from bot import MaxwellBot
@@ -113,10 +113,6 @@ async def run_custom_tool_harness():
     res = await bot.tools["web_search"].execute(fake_msg, query="Python asyncio")
     print(f"[PASS] web_search tool returned {len(str(res))} chars")
     assert len(str(res)) > 10
-
-    # 6. list_sites tool
-    res = await bot.tools["list_sites"].execute(fake_msg)
-    print(f"[PASS] list_sites tool returned: {str(res)[:60]}...")
 
     # 7. update_base_personality tool
     old_p = bot._get_personality()

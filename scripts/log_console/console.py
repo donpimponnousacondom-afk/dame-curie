@@ -5,18 +5,19 @@ from dataclasses import replace
 from time import monotonic
 from typing import TextIO
 
+from .append_events import AppendParser
 from .controls import ConsoleState
-from .events import EventParser
 from .health import HealthDisplay
 from .history import EventHistory, NOT_RETAINED
 from .input import KeyBuffer, LineBuffer, MAX_PENDING_BYTES
 from .render import render_frame
+from .scopes import VIEWER_SCOPE
 from .terminal import Capabilities, Terminal
 
 
 class Console:
     def __init__(self) -> None:
-        self.parser = EventParser()
+        self.parser = AppendParser()
         self.history = EventHistory()
         self.state = ConsoleState()
         self.health = HealthDisplay()
@@ -24,14 +25,19 @@ class Console:
         self.keys = KeyBuffer()
 
     def ingest(self, line: str | None, now: float) -> None:
+        """Fail closed on framing loss: one dropped record can hide a redaction boundary."""
         if line is None:
-            event = replace(self.parser.parse(f"Console input record exceeded {MAX_PENDING_BYTES} bytes. {NOT_RETAINED}"),
-                            kind="console.omitted", parse_error="InputRecordTooLarge")
+            event = replace(
+                self.parser.record(None),
+                message=(
+                    f"Evidence omitted after input >{MAX_PENDING_BYTES} bytes; restart viewer. {NOT_RETAINED}"
+                ),
+            )
             self.history.omitted_events += 1
         else:
-            event = self.parser.parse(line)
+            event = self.parser.record(line)
         entry = self.history.append(event)
-        if line is not None:
+        if line is not None and entry.first.scope != VIEWER_SCOPE:
             self.health.feed(line, entry.sequence, now)
         self.health.prune(set(self.history.entries))
 

@@ -6,11 +6,27 @@ fake Discord objects instead of a connection.
 
 import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
+import discord
 import pytest
 
+from control_defaults import SERVER_PROMPT_MAX_BYTES
+from bot import MaxwellBot
 from error_reporting import PUBLIC_ERROR_TEXT
+from job_routing import JobProvider, parse_background_request
+from tool_schemas import TOOL_PARAMETERS
+from turn_budget import (
+    TOOL_GROUPS_CONTEXT,
+    ForegroundTurn,
+    current_foreground_turn,
+    current_tool_groups,
+    reset_foreground_turn,
+    set_foreground_turn,
+)
 from jobs import (
+    JOB_TURN,
     BackgroundJobManager,
     SpawnBackgroundTool,
     resolve_job_budgets,
@@ -19,7 +35,7 @@ from jobs import (
 
 
 class FakeConfig:
-    OLLAMA_MAX_TOKENS = 16384
+    OPENAI_MAX_TOKENS = 16384
 
 
 class FakeAuthor:
@@ -32,15 +48,24 @@ class FakeThread:
         self.id = "thread-1"
         self.sent = []
         self.jump_url = "http://thread.local/t1"
+        self.native_result_owner = None
+        self.foreign_overwrites = 0
 
     async def send(self, text):
         self.sent.append(text)
+        if self.native_result_owner is not None and text.startswith("step "):
+            self.foreign_overwrites += 1
+            self.native_result_owner._last_native_followup_messages = [
+                {"role": "assistant", "content": "FOREIGN_ROUND"},
+                {"role": "user", "content": "FOREIGN_TOOL_RESULT"},
+            ]
         return None
 
 
 class FakeChannel:
-    def __init__(self, cid="222"):
+    def __init__(self, cid="222", parent_id=""):
         self.id = cid
+        self.parent_id = parent_id
         self.sent = []
         self.thread = FakeThread()
 
@@ -56,6 +81,7 @@ class FakeGuild:
 
 class FakeMessage:
     def __init__(self, channel=None, content=",bg a portfolio site"):
+        self.id = "900"
         self.channel = channel or FakeChannel()
         self.content = content
         self.author = FakeAuthor()
@@ -70,6 +96,96 @@ class StubBot:
         self.bg_jobs = manager
         self._control = {}
         self.config = FakeConfig()
+        self.memory = SimpleNamespace(get_server_prompt=lambda server_id: None)
+        self._get_personality = lambda: "Synthetic personality"
+
+
+class FakeParentChannel(FakeChannel):
+    """The channel that owns a thread; a job started in the thread lands here."""
+
+    def __init__(self, cid="666"):
+        super().__init__(cid)
+        self.created_threads = []
+
+    async def create_thread(self, **kwargs):
+        self.created_threads.append(kwargs)
+        self.thread = FakeThread()
+        return self.thread
+
+
+class FakeThreadChannel:
+    """A live Discord thread: sendable, and it names its parent channel."""
+
+    def __init__(self, parent):
+        self.id = "555"
+        self.parent = parent
+        self.parent_id = str(getattr(parent, "id", "") or "")
+        self.sent = []
+
+    async def send(self, text):
+        self.sent.append(text)
+        return None
+
+
+class GateMessage:
+    """The message surface the allowlist gates read."""
+
+    def __init__(self, channel):
+        self.id = "900"
+        self.channel = channel
+        self.content = "hello there"
+        self.author = SimpleNamespace(id=111, bot=False, display_name="root")
+        self.guild = SimpleNamespace(id=333)
+
+
+class AllowlistBot:
+    """Only the bot surface the allowed_channels gates actually touch."""
+
+    _blacklist = set()
+    _stop_until = {}
+    command_prefix = "!"
+    user = SimpleNamespace(id=42)
+
+    _channel_allowed = MaxwellBot._channel_allowed
+    _solo_blocks = MaxwellBot._solo_blocks
+    _solo_channel_for = MaxwellBot._solo_channel_for
+    _message_update_allowed = MaxwellBot._message_update_allowed
+
+    def __init__(self, allowed=(), blocked=()):
+        self._control = {
+            "bot_enabled": True,
+            "allowed_channels": list(allowed),
+            "blocked_channels": list(blocked),
+        }
+        self.dispatched = []
+
+    def _is_admin(self, user_id):
+        return False
+
+    def _load_control(self):
+        return None
+
+    def _dispatch_reply(self, message, content, *, directed):
+        self.dispatched.append((str(getattr(message, "id", "")), bool(directed)))
+        return "started"
+
+
+class FakeRefusingMessage(FakeMessage):
+    """A thread origin, where Discord refuses a thread of a thread."""
+
+    async def create_thread(self, name=None, auto_archive_duration=None):
+        raise RuntimeError("no nested threads")
+
+
+class FakeDMMessage(FakeMessage):
+    """A DM: discord.py refuses to create a thread without guild info."""
+
+    def __init__(self, channel=None):
+        super().__init__(channel=channel)
+        self.guild = None
+
+    async def create_thread(self, name=None, auto_archive_duration=None):
+        raise ValueError("This message does not have guild info attached")
 
 
 # budgets
@@ -77,9 +193,15 @@ class StubBot:
 
 def test_budgets_default_to_extended_headroom():
     budgets = resolve_job_budgets({}, FakeConfig())
-    assert budgets["max_tokens"] == 32768  # max(16384*2, 32768)
+    assert "max_tokens" not in budgets
     assert budgets["timeout_seconds"] == 7200
     assert budgets["max_iters"] == 100
+    turn = ForegroundTurn.from_controls({"turn_output_token_budget": 1})
+    assert turn.attempt_limit == 12
+    assert 590 < turn.remaining_seconds <= 600
+    assert turn.reserve_attempt(45) == 45
+    assert turn.attempts == 1
+    assert not hasattr(turn, "output_remaining")
 
 
 def test_budgets_clamp_to_hard_caps():
@@ -87,13 +209,13 @@ def test_budgets_clamp_to_hard_caps():
         {"bg_max_tokens": 999999, "bg_timeout_seconds": 99999, "bg_max_iters": 9999},
         FakeConfig(),
     )
-    assert budgets == {"max_tokens": 131072, "timeout_seconds": 14400, "max_iters": 200}
+    assert budgets == {"timeout_seconds": 14400, "max_iters": 200}
 
 
 def test_budgets_zero_means_default(monkeypatch):
-    monkeypatch.delenv("BG_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("BG_MAX_TOKENS", "131072")
     budgets = resolve_job_budgets({"bg_max_tokens": 0}, FakeConfig())
-    assert budgets["max_tokens"] == 32768
+    assert "max_tokens" not in budgets
 
 
 def test_budgets_env_override(monkeypatch):
@@ -109,6 +231,15 @@ def test_manager_caps_per_user_then_global(tmp_path):
     manager = BackgroundJobManager(
         data_path=str(tmp_path / "jobs.json"), max_jobs=2, max_per_user=1
     )
+    assert parse_background_request("build a page") == ("build a page", JobProvider.MAIN, None)
+    assert parse_background_request("-- build a page") == ("build a page", JobProvider.MAIN, None)
+    for selector in ("--provider main -- goal", "--provider aux -- goal", "--model other -- goal"):
+        with pytest.raises(ValueError, match="active provider configuration"):
+            parse_background_request(selector)
+    for selectors in ({"provider": "aux"}, {"model": "other"}):
+        with pytest.raises(ValueError, match="active provider configuration"):
+            manager.create(guild_id="g", channel_id="c", user_id="u1", goal="one", **selectors)
+    assert not {"provider", "model"} & TOOL_PARAMETERS["spawn_background"]["properties"].keys()
     manager.create(guild_id="g", channel_id="c", user_id="u1", goal="one")
     with pytest.raises(RuntimeError, match="ALREADY_RUNNING"):
         manager.create(guild_id="g", channel_id="c", user_id="u1", goal="two")
@@ -153,7 +284,8 @@ def test_manager_restart_cancels_inflight(tmp_path):
 # spawn tool
 
 
-def test_spawn_tool_acks_and_tracks_job(tmp_path):
+@pytest.mark.parametrize("selectors", [{}, {"provider": "main"}, {"provider": "aux"}, {"model": "other"}])
+def test_spawn_tool_acks_and_tracks_job(tmp_path, selectors):
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         tool = SpawnBackgroundTool(StubBot(manager))
@@ -168,40 +300,53 @@ def test_spawn_tool_acks_and_tracks_job(tmp_path):
         real = jobs_mod.run_background_job
         jobs_mod.run_background_job = fake_runner
         try:
-            result = await tool.execute(message, goal="a portfolio site")
+            result = await tool.execute(message, goal="a portfolio site", **selectors)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
         finally:
             jobs_mod.run_background_job = real
-        assert "Background job `" in result
-        assert manager.active_count() == 1
-        assert launched["jid"] is not None
+        if selectors:
+            assert "provider/model selection is not available to tools" in result
+            assert manager.active_count() == 0
+            assert launched == {}
+        else:
+            assert "Background job `" in result
+            assert manager.active_count() == 1
+            assert launched["jid"] is not None
         return result
 
     result = asyncio.run(scenario())
-    assert "send_message" in result  # ack instruction for the live turn
+    if not selectors:
+        assert "send_message" in result
 
 
 def test_spawn_tool_refuses_recursion(tmp_path):
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         tool = SpawnBackgroundTool(StubBot(manager))
-        message = FakeMessage()
-        message._bg_job = True
-        return await tool.execute(message, goal="nested")
+        token = JOB_TURN.set(True)
+        try:
+            return await tool.execute(FakeMessage(), goal="nested")
+        finally:
+            JOB_TURN.reset(token)
 
     assert "ALREADY INSIDE" in asyncio.run(scenario())
 
 
 def test_spawn_tool_second_spawn_tells_model_to_ack(tmp_path):
+    """The live turn's own second attempt is a limit, not "you are inside a job"."""
+
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         tool = SpawnBackgroundTool(StubBot(manager))
-        await tool.execute(FakeMessage(), goal="first")
-        return await tool.execute(FakeMessage(), goal="second")
+        message = FakeMessage()
+        first = await tool.execute(message, goal="first")
+        assert "Background job `" in first
+        return await tool.execute(message, goal="second")
 
     result = asyncio.run(scenario())
     assert "ALREADY RUNNING" in result
+    assert "ALREADY INSIDE" not in result
     assert "send_message" in result
 
 
@@ -209,22 +354,37 @@ def test_spawn_tool_second_spawn_tells_model_to_ack(tmp_path):
 
 
 class RunnerStubBot(StubBot):
+    """Runner seams plus the allowlist gate the real bot always has."""
+
+    _channel_allowed = MaxwellBot._channel_allowed
+
     def __init__(self, manager):
         super().__init__(manager)
         self.slot_priority = None
         self.generated_with = {}
+        self.generated_messages = []
+        self.generated_prompts = []
+        self.generated_turns = []
+        self.catalog_groups = []
+        self.discover = False
+        self.dispatch_delay = 0.0
+        self.dispatch_events = []
 
     def _message_tool_platform(self, message):
         return "discord"
 
     def _tool_system_prompt(self, platform, message=None, content=None):
-        return ""
+        return "catalog: " + (", ".join(sorted(current_tool_groups() or [])) or "core")
 
     def _build_openai_tools(self, platform, message=None, content=None):
-        return []
+        groups = current_tool_groups()
+        assert groups is not None
+        self.catalog_groups.append(set(groups))
+        names = ["more_tools", "extra_tool"] if "identity" in groups else ["more_tools"]
+        return [{"type": "function", "function": {"name": name}} for name in names] if self.discover else []
 
     def _select_tool_protocol(self, openai_tools):
-        return False, []
+        return False, openai_tools
 
     async def _acquire_ai_slot(self, timeout, *, priority="background", key=""):
         self.slot_priority = priority
@@ -234,56 +394,168 @@ class RunnerStubBot(StubBot):
 
     async def _generate_response(self, messages, **kwargs):
         self.generated_with = dict(kwargs)
-        return "built it: http://example.local/site"
+        self.generated_messages = messages
+        self.generated_prompts.append(messages[0]["content"])
+        self.generated_turns.append(current_foreground_turn())
+        return "discover" if self.discover and len(self.generated_prompts) == 1 else "built it: http://example.local/site"
 
     def _native_calls_from(self, response):
-        return []
+        return [{"id": "discover_1", "type": "function", "function": {
+            "name": "more_tools", "arguments": '{"group":"identity"}',
+        }}] if response == "discover" else []
 
     def _recover_text_tool_calls(self, response):
         return [], response
 
     async def _dispatch_tool_calls(self, message, response, **kwargs):
+        self.dispatch_events.append("started")
+        try:
+            await asyncio.sleep(self.dispatch_delay)
+        finally:
+            await asyncio.sleep(0)
+            self.dispatch_events.append("settled")
+        self.dispatch_events.append("completed")
+        self._last_native_followup_messages = []
+        if response == "discover":
+            current_tool_groups().add("identity")
+            call = kwargs["native_tool_calls"][0]
+            self._last_native_followup_messages = [
+                {"role": "assistant", "content": "", "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": "Expanded identity tools."},
+            ]
+            return "", ["Expanded identity tools."]
         return str(response), []
 
 
-def test_runner_delivers_final_reply_with_mention(tmp_path):
+@pytest.mark.parametrize("discover", [False, True])
+@pytest.mark.parametrize("descendant", [False, True])
+@pytest.mark.parametrize("dispatch_delay", [0.0, 0.2])
+def test_runner_delivers_final_reply_with_mention(
+    tmp_path, discover, descendant, dispatch_delay,
+):
+    oversized_prompt = "x" * (SERVER_PROMPT_MAX_BYTES + 1)
+
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = RunnerStubBot(manager)
+        bot.discover = discover
+        bot.dispatch_delay = dispatch_delay
+        bot.command_prefix = "?"
+        bot.memory.get_server_prompt = lambda server_id: oversized_prompt
         message = FakeMessage()
+        message.channel.thread.native_result_owner = bot
         job = manager.create(
             guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
         )
         manager.attach_runtime(job.id, message=message, channel=message.channel)
-        await run_background_job(bot, job.id)
+        turn = ForegroundTurn(12, asyncio.get_running_loop().time() + 600) if descendant else None
+        turn_token = set_foreground_turn(turn) if descendant else None
+        parent_groups = {"games"}
+        groups_token = TOOL_GROUPS_CONTEXT.set(parent_groups)
+        try:
+            await run_background_job(bot, job.id)
+            assert current_tool_groups() is parent_groups and parent_groups == {"games"}
+            assert current_foreground_turn() is turn
+            assert all(observed is turn for observed in bot.generated_turns)
+        finally:
+            TOOL_GROUPS_CONTEXT.reset(groups_token)
+            if turn_token is not None:
+                reset_foreground_turn(turn_token)
         return manager.get(job.id), message.channel, bot
 
     job, channel, bot = asyncio.run(scenario())
     assert job.status == "done"
     assert bot.slot_priority == "background"  # user turns outrank it
-    assert bot.generated_with.get("disable_reasoning") is False  # full thinking
-    assert bot.generated_with.get("max_tokens", 0) >= 32768  # extended output
+    assert not {"disable_reasoning", "max_tokens", "temperature", "model", "prefer_fallback"} & bot.generated_with.keys()
+    assert bot.dispatch_events == ["started", "settled", "completed"] * (2 if discover else 1)
+    if not descendant:
+        assert 600 < bot.generated_with["timeout"] <= 7200
+    system_prompt = bot.generated_messages[0]["content"]
+    assert "Stored server prompt omitted" in system_prompt
+    assert "?longprompt" in system_prompt
+    assert oversized_prompt not in system_prompt
+    assert bot.memory.get_server_prompt("333") == oversized_prompt
+    assert bot.catalog_groups == ([set(), {"identity"}] if discover else [set()])
+    assert channel.thread.foreign_overwrites == int(discover)
+    assert "catalog: core" in bot.generated_prompts[0]
+    if discover:
+        assert "catalog: identity" in bot.generated_prompts[1]
+        assert len(bot.generated_messages) == 4
+        assert bot.generated_messages[2]["tool_calls"][0]["id"] == "discover_1"
+        assert bot.generated_messages[3]["tool_call_id"] == "discover_1"
+        assert "FOREIGN_" not in json.dumps(bot.generated_messages)
+        assert [tool["function"]["name"] for tool in bot.generated_with["tools"]] == ["more_tools", "extra_tool"]
     assert any("<@111>" in text and job.id in text for text in channel.sent)
     assert any("http://example.local/site" in text for text in channel.sent)
 
 
-def test_runner_marks_error_and_notifies(tmp_path):
+@pytest.mark.parametrize(
+    ("failure", "discover"),
+    [
+        ("generation", False), ("catalog", False),
+        ("deadline", False), ("deadline", True), ("expired", True),
+    ],
+)
+def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discover):
     class BrokenBot(RunnerStubBot):
         async def _generate_response(self, messages, **kwargs):
-            raise RuntimeError("provider down")
+            if failure in {"generation", "catalog"}:
+                raise RuntimeError("provider down")
+            return await super()._generate_response(messages, **kwargs)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = BrokenBot(manager)
+        bot.discover = discover
+        bot.dispatch_delay = 0.2
+        provider = SimpleNamespace(
+            generate_response=bot._generate_response, close=AsyncMock(),
+        )
+        bot._create_background_provider = Mock(return_value=provider)
+        if failure == "catalog":
+            monkeypatch.setattr(bot, "_build_openai_tools", Mock(side_effect=RuntimeError("catalog unavailable")))
         message = FakeMessage()
-        job = manager.create(guild_id="g", channel_id="222", user_id="111", goal="x")
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="x",
+        )
         manager.attach_runtime(job.id, message=message, channel=message.channel)
-        await run_background_job(bot, job.id)
-        return manager.get(job.id), message.channel
+        parent_groups = {"games"}
+        token = TOOL_GROUPS_CONTEXT.set(parent_groups)
+        turn = ForegroundTurn(
+            12, asyncio.get_running_loop().time() + (0.05 if failure == "deadline" else -1),
+        )
+        turn_token = set_foreground_turn(turn) if failure in {"deadline", "expired"} else None
+        try:
+            task = asyncio.create_task(run_background_job(bot, job.id))
+            manager.track_task(job.id, task)
+            await task
+            assert current_tool_groups() is parent_groups and parent_groups == {"games"}
+            assert not JOB_TURN.get()
+            assert not manager._tasks and not manager.runtime(job.id)
+            if turn_token is not None:
+                assert current_foreground_turn() is turn
+                assert all(observed is turn for observed in bot.generated_turns)
+                assert turn.attempts == 0
+        finally:
+            TOOL_GROUPS_CONTEXT.reset(token)
+            if turn_token is not None:
+                reset_foreground_turn(turn_token)
+        provider.close.assert_not_awaited()
+        bot._create_background_provider.assert_not_called()
+        return manager.get(job.id), message.channel, bot
 
-    job, channel = asyncio.run(scenario())
+    job, channel, bot = asyncio.run(scenario())
     assert job.status == "error"
+    assert job.finished_at > 0
     assert channel.sent == [PUBLIC_ERROR_TEXT]
+    if failure in {"deadline", "expired"}:
+        assert job.progress == "Foreground turn deadline expired"
+        assert job.result == ""
+        assert bot.dispatch_events == (["started", "settled"] if failure == "deadline" else [])
+        assert len(bot.generated_turns) == int(failure == "deadline")
+        assert channel.thread.sent[-1] == PUBLIC_ERROR_TEXT
+    if failure == "expired":
+        assert bot.slot_priority is None and bot.catalog_groups == []
 
 
 def test_manager_list_text_guild_filtering(tmp_path):
@@ -319,3 +591,293 @@ def test_runner_splits_long_delivery_messages(tmp_path):
     for msg in channel.sent:
         assert len(msg) <= 1900
 
+
+# progress thread targeting and honest thread failure
+
+
+@pytest.mark.parametrize("configured_ids", [[], ["666"], [666]])
+def test_runner_puts_progress_thread_in_parent_channel_for_thread_origin(tmp_path, monkeypatch, configured_ids):
+    """A job started inside a thread cannot nest: progress goes to its parent."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        bot._control["allowed_channels"] = configured_ids
+        parent = FakeParentChannel()
+        channel = FakeThreadChannel(parent)
+        message = FakeRefusingMessage(channel=channel)
+        job = manager.create(
+            guild_id="g", channel_id="555", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), parent, channel
+
+    job, parent, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert [entry["name"] for entry in parent.created_threads] == ["build: a portfolio site"]
+    assert job.thread_id == "thread-1"
+    assert job.thread_error == ""
+    assert parent.thread.sent[0].startswith(f"Job `{job.id}` running")
+    assert not any("no progress thread" in text for text in channel.sent)
+
+
+def test_runner_reports_missing_progress_thread_instead_of_silent_success(tmp_path):
+    """The work still finishes; the missing thread is stated, not implied."""
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        message = FakeRefusingMessage()
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_id == ""
+    assert job.thread_error == "RuntimeError"
+    notices = [text for text in channel.sent if "no progress thread" in text]
+    assert len(notices) == 1
+    assert "The job continues; its result lands here." in notices[0]
+    assert PUBLIC_ERROR_TEXT not in channel.sent
+    assert any("<@111>" in text and job.id in text for text in channel.sent)
+
+
+def test_runner_keeps_thread_failure_quiet_when_error_replies_are_off(tmp_path):
+    """The record is still honest even when the notice is configured away."""
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        bot._control = {"error_replies": False}
+        message = FakeRefusingMessage()
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_error == "RuntimeError"
+    assert not any("no progress thread" in text for text in channel.sent)
+
+
+def test_runner_dm_job_reports_no_thread_without_claiming_one(tmp_path):
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        message = FakeDMMessage()
+        job = manager.create(
+            guild_id="DM", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_id == ""
+    assert job.thread_error == ""
+    assert not any("progress thread" in text for text in channel.sent)
+
+
+def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
+    async def scenario():
+        manager = BackgroundJobManager(
+            data_path=str(tmp_path / "jobs.json"), max_jobs=2, max_per_user=1
+        )
+        channel = FakeChannel("222")
+        bot = SimpleNamespace(
+            command_prefix="!",
+            _control={},
+            _is_admin=lambda _uid: False,
+            bg_jobs=manager,
+        )
+        message = SimpleNamespace(
+            content="",
+            channel=channel,
+            author=SimpleNamespace(id=111),
+            guild=SimpleNamespace(id="333"),
+        )
+        linked = manager.create(
+            guild_id="333", channel_id="222", user_id="111", goal="linked job"
+        )
+        manager.mark(linked.id, thread_id="thread-1")
+        threadless = manager.create(
+            guild_id="333", channel_id="222", user_id=222, goal="threadless job"
+        )
+        manager.mark(threadless.id, thread_error="Forbidden")
+        message.content = f"!job {linked.id}"
+        await MaxwellBot._handle_command(bot, message)
+        message.content = f"!job {threadless.id}"
+        await MaxwellBot._handle_command(bot, message)
+        return channel
+
+    channel = asyncio.run(scenario())
+    assert "https://discord.com/channels/333/thread-1" in channel.sent[0]
+    assert "no progress thread: Forbidden" in channel.sent[1]
+
+
+# allowed_channels: a thread inherits an allowed parent, never a blocked one
+
+
+def test_channel_allowed_inherits_an_allowed_parent_but_not_a_blocked_one(monkeypatch):
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    bot = AllowlistBot(allowed=["100"], blocked=["200"])
+    allowed_ids = {"100"}
+    assert bot._channel_allowed(FakeChannel("100"), allowed_ids) is True
+    assert bot._channel_allowed(FakeChannel("999"), allowed_ids) is False
+    assert (
+        bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="100")), allowed_ids)
+        is True
+    )
+    assert (
+        bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="999")), allowed_ids)
+        is False
+    )
+    # The regression: a thread of a blocked parent was denied before the
+    # inheritance existed, so it must stay denied.
+    assert (
+        bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="200")), allowed_ids)
+        is False
+    )
+    # An explicit thread allowance is the operator's own choice and survives a
+    # blocked parent; only the inherited allowance is withheld.
+    assert (
+        bot._channel_allowed(
+            FakeThreadChannel(SimpleNamespace(id="200")), {"100", "555"}
+        )
+        is True
+    )
+    # A plain channel is never judged by its category id.
+    assert bot._channel_allowed(FakeChannel("100", parent_id="200"), allowed_ids) is True
+
+
+def test_edit_gate_applies_the_same_parent_rule(monkeypatch):
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    bot = AllowlistBot(allowed=["100"], blocked=["200"])
+    assert MaxwellBot._message_update_allowed(bot, GateMessage(FakeChannel("100"))) is True
+    assert MaxwellBot._message_update_allowed(bot, GateMessage(FakeChannel("999"))) is False
+    assert (
+        MaxwellBot._message_update_allowed(
+            bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="100")))
+        )
+        is True
+    )
+    assert (
+        MaxwellBot._message_update_allowed(
+            bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
+        )
+        is False
+    )
+    # Same explicit-choice rule through the edit gate.
+    explicit = AllowlistBot(allowed=["100", "555"], blocked=["200"])
+    assert (
+        MaxwellBot._message_update_allowed(
+            explicit, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
+        )
+        is True
+    )
+
+
+def test_on_message_gate_denies_a_thread_of_a_blocked_parent(monkeypatch):
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    bot = AllowlistBot(allowed=["100"], blocked=["200"])
+    message = GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
+    asyncio.run(MaxwellBot._on_message_impl(bot, message))
+    assert bot.dispatched == []
+
+
+# a job inside an explicitly allowed thread must not touch its refused parent
+
+
+class ThreadScopedJobBot(RunnerStubBot):
+    """A bot whose allowlist names one thread inside a refused parent."""
+
+    def __init__(self, manager, allowed, blocked):
+        super().__init__(manager)
+        self._control = {
+            "allowed_channels": list(allowed),
+            "blocked_channels": list(blocked),
+            "error_replies": True,
+        }
+
+
+@pytest.mark.parametrize("allowed", [[], ["555"], ["555", "666"], ["555", 666]])
+@pytest.mark.parametrize("blocked", [["666"], [666]])
+def test_runner_never_creates_a_progress_thread_in_a_blocked_parent(tmp_path, monkeypatch, allowed, blocked):
+    """The allowed thread is usable; the refused parent gets nothing at all."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = ThreadScopedJobBot(manager, allowed=allowed, blocked=blocked)
+        parent = FakeParentChannel("666")
+        channel = FakeThreadChannel(parent)
+        message = FakeRefusingMessage(channel=channel)
+        job = manager.create(
+            guild_id="g", channel_id="555", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), parent, channel
+
+    job, parent, channel = asyncio.run(scenario())
+    # The refused parent is untouched: no thread, and not one single message.
+    assert parent.created_threads == []
+    assert parent.sent == []
+    # The job itself still runs to completion where the requester is.
+    assert job.status == "done"
+    assert job.thread_id == ""
+    assert job.thread_error == "the origin thread's parent channel is not allowed for this bot"
+    assert any("no progress thread" in text for text in channel.sent)
+    assert any("<@111>" in text and job.id in text for text in channel.sent)
+
+
+def test_runner_still_places_progress_in_a_refused_parent_for_a_plain_channel(tmp_path, monkeypatch):
+    """A plain-channel !bg keeps its existing placement, refused parent or not."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = ThreadScopedJobBot(manager, allowed=["555"], blocked=["222"])
+        message = FakeMessage()
+        job = manager.create(
+            guild_id="g", channel_id="222", user_id="111", goal="a portfolio site"
+        )
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel
+
+    job, channel = asyncio.run(scenario())
+    assert job.status == "done"
+    assert job.thread_id == "thread-1"
+    assert job.thread_error == ""
+    assert channel.thread.sent[0].startswith(f"Job `{job.id}` running")
+
+
+def test_placement_gate_refuses_a_blocked_parent_and_keeps_an_allowed_one(monkeypatch):
+    """The gate scope the job runner uses, on a bot shaped like the real one."""
+    monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
+    gate_bot = AllowlistBot(allowed=["100", "555", "777"], blocked=["200", "666"])
+    allowed = set(gate_bot._control["allowed_channels"])
+    assert gate_bot._channel_allowed(FakeChannel("100"), allowed) is True
+    # A parent that is not the allowlist's: refused as a job target.
+    assert gate_bot._channel_allowed(FakeChannel("999"), allowed) is False
+    # A parent explicitly blocked: refused as a job target.
+    assert gate_bot._channel_allowed(FakeChannel("666"), allowed) is False
+    # An allowed, unblocked parent still hosts the progress thread.
+    assert gate_bot._channel_allowed(FakeChannel("777"), allowed) is True
+    # An explicitly allowed thread under a blocked parent keeps its own
+    # allowance; the job simply never creates anything in that parent.
+    assert (
+        gate_bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="666")), allowed)
+        is True
+    )

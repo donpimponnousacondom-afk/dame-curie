@@ -77,9 +77,9 @@ def _run(code, env=None):
     child_env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith(("REM_", "ENABLE_", "OLLAMA_", "MAXWELL_", "DISCORD_"))
+        if not k.startswith(("REM_", "ENABLE_", "OPENAI_", "DAME_CURIE_", "DISCORD_"))
     }
-    child_env["MAXWELL_ENV_FILE"] = os.devnull
+    child_env["DAME_CURIE_ENV_FILE"] = os.devnull
     child_env.update(env or {})
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -114,8 +114,8 @@ def test_enable_rem_alias_turns_rem_on():
 
 MINIMUM_ENV = {
     "DISCORD_TOKEN": "test-token",
-    "OLLAMA_BASE_URL": "http://localhost:11434",
-    "OLLAMA_MODEL": "test-model",
+    "OPENAI_BASE_URL": "http://localhost:11434",
+    "OPENAI_MODEL": "test-model",
 }
 
 
@@ -133,7 +133,7 @@ def test_minimum_install_only_needs_token_and_model():
     "missing,expected",
     [
         ("DISCORD_TOKEN", "DISCORD_TOKEN"),
-        ("OLLAMA_MODEL", "OLLAMA_MODEL"),
+        ("OPENAI_MODEL", "OPENAI_MODEL"),
     ],
 )
 def test_validate_names_the_missing_requirement(missing, expected):
@@ -150,20 +150,29 @@ def test_validate_names_the_missing_requirement(missing, expected):
 
 
 @pytest.mark.parametrize(
-    "given,expected",
+    "given,path,expected",
     [
-        # A bare host gets the conventional API path — the #1 setup mistake.
-        ("http://localhost:11434", "http://localhost:11434/v1"),
-        ("https://api.openai.com", "https://api.openai.com/v1"),
-        ("http://localhost:11434/", "http://localhost:11434/v1"),
-        # Anything with a path is the operator's business, left alone.
-        ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"),
-        ("https://example.com/v2", "https://example.com/v2"),
-        ("", ""),
+        ("http://localhost:11434", "", "http://localhost:11434"),
+        ("https://api.openai.com", "", "https://api.openai.com"),
+        ("http://localhost:11434/", "", "http://localhost:11434/"),
+        ("https://openrouter.ai/api/v1", "", "https://openrouter.ai/api/v1"),
+        ("https://example.com/v2", "", "https://example.com/v2"),
+        ("https://example.com/v2?opaque=a%2Fb#fragment", "", "https://example.com/v2?opaque=a%2Fb#fragment"),
+        ("http://localhost:11434", "models", "http://localhost:11434/models"),
+        ("http://localhost:11434/", "chat/completions", "http://localhost:11434/chat/completions"),
+        ("https://example.com/v2?opaque=a%2Fb#fragment", "models", "https://example.com/v2/models?opaque=a%2Fb#fragment"),
+        ("HTTPS://Example.COM/v2/?opaque=a%2Fb#fragment", "chat/completions", "HTTPS://Example.COM/v2/chat/completions?opaque=a%2Fb#fragment"),
+        ("https://example.com/v2#fragment?literal", "models", "https://example.com/v2/models#fragment?literal"),
+        ("https://example.com/v2?#", "models", "https://example.com/v2/models?#"),
+        ("", "", None),
     ],
 )
-def test_base_url_normalization(given, expected):
-    assert normalize_base_url(given) == expected
+def test_base_url_normalization(given, path, expected):
+    if expected is None:
+        with pytest.raises(ValueError, match="base_url"):
+            normalize_base_url(given, path)
+    else:
+        assert normalize_base_url(given, path) == expected
 
 
 @pytest.mark.parametrize(
@@ -173,7 +182,9 @@ def test_base_url_normalization(given, expected):
         ("https://api.openai.com/v1", "https://api.openai.com/v1/embeddings"),
         ("https://api.openai.com/v1/embeddings", "https://api.openai.com/v1/embeddings"),
         ("http://box:11434/api/embed", "http://box:11434/api/embed"),
-        ("", "http://localhost:11434/api/embed"),
+        ("", ""),
+        ("https://embed.invalid/v1?region=private#section", "https://embed.invalid/v1/embeddings?region=private#section"),
+        ("https://embed.invalid/api/embed?region=private", "https://embed.invalid/api/embed?region=private"),
     ],
 )
 def test_embed_endpoint_derivation(given, expected):

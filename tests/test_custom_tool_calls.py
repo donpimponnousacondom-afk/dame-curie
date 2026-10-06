@@ -1,4 +1,5 @@
 """Tests for the custom streaming tool-call buffer (bare-JSON protocol)."""
+import json
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import providers  # noqa: E402
+from tool_schemas import message_chars, trim_tool_tail  # noqa: E402
 
 
 def test_find_balanced_json_end_basic():
@@ -75,6 +77,39 @@ def test_buffer_multiple_tool_calls():
     assert len(buf.completed) == 2
     assert buf.completed[0]["function"]["name"] == "a"
     assert buf.completed[1]["function"]["name"] == "b"
+
+    tail = []
+    for round_id in range(4):
+        batch = []
+        results = []
+        for call_id in range(3):
+            identifier = f"call_{round_id}_{call_id}"
+            batch.append({
+                "id": identifier,
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "arguments": json.dumps({"reasoning": "r" * 2000, "command": "c" * 9000}),
+                },
+            })
+            results.append(
+                {"role": "tool", "tool_call_id": identifier, "content": "z" * 32_000}
+            )
+        tail.extend([{"role": "assistant", "content": None, "tool_calls": batch}, *results])
+    trimmed = trim_tool_tail(tail)
+    assert len(trimmed) <= 12
+    assert sum(message_chars(msg) for msg in trimmed) <= 36_000
+    latest = [msg for msg in trimmed if msg.get("tool_call_id", "").startswith("call_3_")]
+    assert len(latest) == 3
+    assert all("truncated from tool result" in msg["content"] for msg in latest)
+    assert sum(message_chars(msg) for msg in trimmed[-4:]) <= 24_000
+    assert any(msg.get("tool_call_id", "").startswith("call_2_") for msg in trimmed)
+    snapshot = json.dumps(trimmed, sort_keys=True)
+    assert trim_tool_tail(trimmed) == trimmed
+    assert json.dumps(trimmed, sort_keys=True) == snapshot
+    older = next(msg for msg in trimmed if msg.get("tool_call_id") == "call_2_0")
+    prefix, _, suffix = older["content"].partition("\n… [")
+    assert int(suffix.split(" chars", 1)[0]) == 32_000 - len(prefix)
 
 
 def test_buffer_malformed_json_is_kept_as_text():

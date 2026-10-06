@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.publisher.common import CREDENTIAL_MARKERS, ScanIncomplete
+from scripts.publisher.common import ScanIncomplete
 from scripts.publisher.scan import CHUNK_SIZE, Scanner
 from scripts.publisher.staging import Staging
 
@@ -47,16 +47,31 @@ class PublisherScanTests(unittest.TestCase):
 
     def test_exclusions_do_not_open_private_or_special_entries(self):
         self.put("site/index.html")
-        for name in (".env", ".curie-publisher-owner", ".publisher-link"):
-            self.put("site/" + name, CREDENTIAL_MARKERS[0])
-        for name in ("_data", "_build", ".git", ".curie-publisher-claim-synthetic"):
-            self.put(f"site/{name}/blocked", CREDENTIAL_MARKERS[0])
+        files = (".env", ".dame-curie-publisher-owner", ".publisher-link")
+        directories = ("_data", "_build", ".git", ".dame-curie-publisher-claim-synthetic")
+        for name in files:
+            self.put("site/" + name, b"excluded file")
+        for name in directories:
+            self.put(f"site/{name}/blocked", b"excluded subtree")
         private = self.root / "outside"
-        private.write_bytes(CREDENTIAL_MARKERS[0])
+        private.write_bytes(b"symlink target")
         (self.source / "site/link").symlink_to(private)
         (self.source / "site/linkdir").symlink_to(self.root, target_is_directory=True)
         os.mkfifo(self.source / "site/pipe")
-        self.assertEqual(set(self.scanner.scan().files), {Path("site/index.html")})
+        legacy_files = {Path("site/.curie-publisher-owner"), Path("site/.curie-publisher-claim-synthetic/legacy-child")}
+        for path in legacy_files:
+            self.put(str(path), b"legacy internal name")
+        for namespace in ("dame-curie", "curie"):
+            self.scanner.marker_namespace = namespace
+            expected = {Path("site/index.html")}
+            excluded = {*files, *directories, "blocked", "outside", "link", "linkdir", "pipe"}
+            if namespace == "dame-curie":
+                expected.update(legacy_files)
+            else:
+                excluded.update({".curie-publisher-owner", ".curie-publisher-claim-synthetic", "legacy-child"})
+            with self.subTest(namespace=namespace), patch("scripts.publisher.scan.os.open", wraps=os.open) as opened:
+                self.assertEqual(set(self.scanner.scan().files), expected)
+                self.assertTrue(excluded.isdisjoint(Path(call.args[0]).name for call in opened.call_args_list))
 
     def test_public_data_config_and_other_ordinary_site_names_are_mirrored(self):
         names = {"data", "config", "credentials", "secrets", "node_modules", "venv", "registry.json", "public.db", "public.key"}
@@ -107,9 +122,11 @@ class PublisherScanTests(unittest.TestCase):
 
     def test_explicit_private_subtree_never_recurses(self):
         self.put("site/index.html")
-        private = self.put("site/operator-only/unknown.bin", CREDENTIAL_MARKERS[0]).parent
+        private = self.put("site/operator-only/unknown.bin", b"private subtree").parent
         self.scanner.private_paths = (private,)
-        self.assertEqual(set(self.scanner.scan().files), {Path("site/index.html")})
+        with patch("scripts.publisher.scan.os.open", wraps=os.open) as opened:
+            self.assertEqual(set(self.scanner.scan().files), {Path("site/index.html")})
+        self.assertTrue({"operator-only", "unknown.bin"}.isdisjoint(Path(call.args[0]).name for call in opened.call_args_list))
 
     def test_hardlink_is_rejected_before_content_read(self):
         private = self.root / "synthetic-private"
@@ -120,11 +137,12 @@ class PublisherScanTests(unittest.TestCase):
             with self.assertRaises(ScanIncomplete):
                 self.scanner.scan()
 
-    def test_fixed_marker_across_chunk_boundary_refuses_scan(self):
-        marker = CREDENTIAL_MARKERS[0]
-        self.put("site/download.bin", b"x" * (CHUNK_SIZE - 5) + marker)
-        with self.assertRaisesRegex(ScanIncomplete, "tripwire"):
-            self.scanner.scan()
+    def test_fixed_marker_across_chunk_boundary_keeps_exact_bytes(self):
+        marker = b"-----BEGIN PRIVATE KEY-----"
+        content = b"x" * (CHUNK_SIZE - 5) + marker
+        self.put("site/download.bin", content)
+        self.staging.materialize(self.scanner.scan())
+        self.assertEqual((self.staging.tree / "site/download.bin").read_bytes(), content)
 
     def test_redacted_labels_and_environment_references_are_publishable(self):
         self.put("site/backend.py", b'api_key=os.getenv("OPENAI_API_KEY")\nDISCORD_TOKEN=os.environ["DISCORD_TOKEN"]\n')
@@ -132,14 +150,20 @@ class PublisherScanTests(unittest.TestCase):
         self.put("_images/image.txt", b'Authorization: [REDACTED]\napi_key=[REDACTED]\n"private_key": "[REDACTED]"\n')
         self.assertEqual(len(self.scanner.scan().files), 3)
 
-    def test_credential_literals_are_refused_but_redaction_can_cross_chunks(self):
-        path = self.put("site/file.txt", b"x" * (CHUNK_SIZE - 20) + b"Authorization: Bearer [REDACTED]")
-        self.scanner.scan()
-        for content in (b"DISCORD_TOKEN=synthetic-real-token", b'api_key="sk-synthetic-literal"', b"Authorization: Bearer synthetic-literal"):
+    def test_credential_shaped_content_keeps_exact_bytes(self):
+        path = self.put("site/file.txt")
+        for content in (
+            b"x" * (CHUNK_SIZE - 20) + b"Authorization: Bearer [REDACTED]",
+            b"DISCORD_TOKEN=synthetic-real-token",
+            b'api_key="sk-synthetic-literal"',
+            b"Authorization: Bearer synthetic-literal",
+            b"Authorization: Bearer $OPENROUTER_API_KEY",
+            b"Authorization: Bearer ${OPENROUTER_API_KEY}",
+        ):
             with self.subTest(content=content):
                 path.write_bytes(content)
-                with self.assertRaisesRegex(ScanIncomplete, "tripwire"):
-                    self.scanner.scan()
+                self.staging.materialize(self.scanner.scan())
+                self.assertEqual((self.staging.tree / "site/file.txt").read_bytes(), content)
 
     def test_symlink_swap_between_stat_and_open_is_refused(self):
         path = self.put("site/file.txt")

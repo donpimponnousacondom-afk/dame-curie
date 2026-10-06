@@ -10,11 +10,13 @@ import bot_tools
 import error_reporting
 from bot_tools import ToolFailure
 from error_reporting import PUBLIC_ERROR_TEXT, IncidentLoggingHandler, configure_incident_store, register_secrets
-from operator_commands import PRIVATE_ERROR_REPORT_MARKER
 
 
 @pytest.fixture
 def incidents(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAME_CURIE_CONTAINER_MODE", "true")
+    is_file = bot_tools.os.path.isfile
+    monkeypatch.setattr(bot_tools.os.path, "isfile", lambda path: path == "/.dockerenv" or is_file(path))
     monkeypatch.setattr(error_reporting, "_store", None)
     monkeypatch.setattr(error_reporting, "_secrets", ())
     monkeypatch.setattr(bot_tools, "_get_shared_session", AsyncMock(side_effect=AssertionError("unmocked HTTP")))
@@ -66,6 +68,7 @@ def message_in(channel=None):
 def tool_bot():
     return SimpleNamespace(
         user=SimpleNamespace(id=99), _control={"footer_enabled": True},
+        _is_admin=lambda actor_id: actor_id == 42,
         _current_progress_by_channel={},
     )
 
@@ -118,7 +121,7 @@ def test_image_failures_capture_full_response_body(incidents, monkeypatch, statu
     if decode_failure:
         monkeypatch.setattr(bot_tools, "_decode_image_response", Mock(side_effect=ValueError("bad image bytes")))
     blob, ext, result = asyncio.run(bot_tools._image_generation_request(
-        "https://images.invalid/generate", "synthetic-image-key", {"model": "synthetic"}, timeout_s=1, native=True,
+        "https://images.invalid/generate", "synthetic-image-key", {"model": "synthetic", "prompt": "synthetic prompt"}, timeout_s=1,
     ))
     assert (blob, ext) == (b"", "png")
     assert isinstance(result, ToolFailure)
@@ -138,26 +141,30 @@ def test_image_credentials_redacted_in_result_and_private_record(incidents, monk
     secret = "synthetic-image-key"
     image_session(monkeypatch, Response(503, "raw key " + secret + " BODY-END"))
     _, _, result = asyncio.run(bot_tools._image_generation_request(
-        "https://images.invalid/generate", secret, {"model": "synthetic"}, timeout_s=1, native=True,
+        "https://images.invalid/generate", secret, {"model": "synthetic", "prompt": "synthetic prompt"}, timeout_s=1,
     ))
-    assert result.startswith("Error: image API returned status 503")
+    assert result.startswith("Error: Image API returned status 503")
     assert secret not in result
     assert "raw key [REDACTED] BODY-END" in result
     assert secret not in incidents.get(0).format_report()
     assert "raw key [REDACTED] BODY-END" in incidents.get(0).details
 
 
-def test_pollinations_error_logging_does_not_duplicate_capture(incidents, monkeypatch):
+def test_native_image_error_logging_does_not_duplicate_capture(incidents, monkeypatch):
     body = "private HTTP body\n" * 1000 + "BODY-END"
     image_session(monkeypatch, Response(502, body))
-    tool = bot_tools.ImageGeneratorTool(SimpleNamespace(config=SimpleNamespace(POLLINATIONS_MODEL="synthetic")))
+    tool = bot_tools.ImageGeneratorTool(SimpleNamespace(config=SimpleNamespace(
+        IMAGE_GEN_PROTOCOL="images", IMAGE_GEN_BASE_URL="https://images.invalid/v1",
+        IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
+        IMAGE_GEN_MODEL="synthetic-image-a", IMAGE_GEN_QUALITY="low", IMAGE_GEN_TIMEOUT=300,
+    )))
     handler = IncidentLoggingHandler()
     bot_tools.logger.addHandler(handler)
     try:
-        result = asyncio.run(tool._pollinations_generate(message_in(), "synthetic image"))
+        result = asyncio.run(tool.execute(message_in(), "synthetic image"))
     finally:
         bot_tools.logger.removeHandler(handler)
-    assert result == "Error generating image: Pollinations returned 502."
+    assert result.startswith("Error:")
     assert isinstance(result, ToolFailure)
     assert body in incidents.get(0).details
     assert incidents.get(1) is None
@@ -223,7 +230,6 @@ def test_successful_shell_diagnostic_quotes_are_not_failures(incidents):
 
 def test_shell_private_spool_retains_output_beyond_model_cap(incidents, monkeypatch):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
     tool._max_output = lambda: 32
     stdout_body = b"stdout " * 3000 + b"STDOUT-END"
     stderr_body = b"stderr " * 3000 + b"STDERR-END"
@@ -253,7 +259,6 @@ def test_shell_private_spool_retains_output_beyond_model_cap(incidents, monkeypa
 
 def test_successful_shell_does_not_capture_callers_handled_exception(incidents, monkeypatch):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
 
     async def run():
         stdout = asyncio.StreamReader()
@@ -346,69 +351,33 @@ def test_guide_ordinary_dm_no_thread_is_not_an_incident(incidents):
     assert incidents.get(0) is None
 
 
-class SyntheticCaptcha(RuntimeError):
-    service = "synthetic"
-    sitekey = "synthetic-site-key"
-    session_id = "synthetic-session"
-    rqdata = "private challenge data " * 100 + "CHALLENGE-END"
-    rqtoken = "synthetic-rqtoken"
-    should_serve_invisible = False
-    errors = ["synthetic challenge"]
-
-
-def captcha_call(monkeypatch, *, denied_dm=False):
-    monkeypatch.setattr(bot_tools.discord, "CaptchaRequired", SyntheticCaptcha, raising=False)
+def invite_call():
     message = message_in()
     dm = Channel(55)
-    message.author.create_dm = AsyncMock(side_effect=RuntimeError("DM delivery blocked")) if denied_dm else AsyncMock(return_value=dm)
+    message.author.create_dm = AsyncMock(return_value=dm)
     guild = SimpleNamespace(id=77, name="Synthetic Guild", features=[], verification_level=None, member_count=2)
-    invite = SimpleNamespace(guild=guild, approximate_member_count=2, accept=AsyncMock(side_effect=SyntheticCaptcha("challenge")))
+    invite = SimpleNamespace(guild=guild, approximate_member_count=2)
     bot = tool_bot()
-    bot.config = SimpleNamespace(CAPTCHA_HUMAN_SOLVE=True)
     bot._is_admin = Mock(return_value=True)
     bot.fetch_invite = AsyncMock(return_value=invite)
     bot.get_guild = Mock(side_effect=[None, guild])
-    bot._retry_invite_with_captcha = AsyncMock(return_value={"guild": {"id": 77}})
-    bot._auto_onboard = AsyncMock(return_value={"ok": False})
-
-    async def solve(exception, notify):
-        await notify("https://solve.invalid/synthetic-private-challenge")
-        return "synthetic-solved-token"
-
-    bot._solve_captcha_with_notify = solve
     return bot_tools.JoinServerTool(bot), message, dm
 
 
-@pytest.mark.parametrize("denied_dm", [False, True])
-def test_captcha_notification_is_private_and_solver_still_runs(incidents, monkeypatch, denied_dm):
-    tool, message, dm = captcha_call(monkeypatch, denied_dm=denied_dm)
-    result = asyncio.run(tool.execute(message, invite="synthetic-code"))
-    assert "JOINED Synthetic Guild" in result
-    assert message.channel.sent == []
-    message.author.create_dm.assert_awaited_once()
-    tool.bot._retry_invite_with_captcha.assert_awaited_once()
-    if denied_dm:
-        assert dm.sent == []
+@pytest.mark.parametrize("url,allowed", [("http://127.0.0.1/private", True), ("file:///private", False), ("https://", False)])
+def test_fetch_url_policy_is_not_an_incident(incidents, monkeypatch, url, allowed):
+    response = Response(content_type="text/plain")
+    chunks = AsyncMock()
+    chunks.__aiter__.return_value = [b"synthetic response"]
+    response.content = SimpleNamespace(iter_chunked=Mock(return_value=chunks))
+    session = image_session(monkeypatch, response)
+    if allowed:
+        assert asyncio.run(bot_tools._fetch_public_url(url, max_bytes=100)) == (url, "text/plain", b"synthetic response")
+        session.get.assert_called_once()
     else:
-        assert "https://solve.invalid/synthetic-private-challenge" in dm.sent[0].content
-        assert PRIVATE_ERROR_REPORT_MARKER in dm.sent[0].content
-        assert dm.options[0]["allowed_mentions"].everyone is False
-    assert "CHALLENGE-END" in incidents.get(0).format_report()
-
-
-def test_captcha_rechecks_admin_before_private_notification(incidents, monkeypatch):
-    tool, message, dm = captcha_call(monkeypatch)
-    tool.bot._is_admin = Mock(side_effect=[True, False])
-    asyncio.run(tool.execute(message, invite="synthetic-code"))
-    message.author.create_dm.assert_not_called()
-    assert dm.sent == message.channel.sent == []
-
-
-def test_private_url_refusal_is_not_an_incident(incidents, monkeypatch):
-    session = image_session(monkeypatch, Response())
-    with pytest.raises(ValueError, match="private/internal"):
-        asyncio.run(bot_tools._fetch_public_url("http://127.0.0.1/private", max_bytes=100))
-    session.get.assert_not_called()
+        with pytest.raises(ValueError, match=r"HTTP\(S\)"):
+            asyncio.run(bot_tools._fetch_public_url(url, max_bytes=100))
+        session.get.assert_not_called()
     assert incidents.get(0) is None
 
 
@@ -420,49 +389,6 @@ def test_http_fetch_failure_keeps_full_body_and_original_error(incidents, monkey
     assert body in incidents.get(0).details
     assert "ValueError: HTTP 502" in incidents.get(0).traceback
     assert incidents.get(1) is None
-
-
-def server_tool(tmp_path):
-    bot = tool_bot()
-    bot.config = SimpleNamespace(DATA_DIR=tmp_path, MAXWELL_SITE_DIR=tmp_path / "sites")
-    tool = bot_tools.SiteServerTool(bot)
-    tool._resolve = Mock(return_value=("synthetic", {"server": True}, tmp_path, None))
-    tool._mark_server = AsyncMock()
-    return tool
-
-
-def test_site_execution_marker_is_preserved_and_deduplicated(incidents, monkeypatch, tmp_path):
-    tool = server_tool(tmp_path)
-    failure = bot_tools.site_server.SiteServerExecutionError(
-        "could not start backend", operation="start", details="full backend log\n" * 1000 + "BACKEND-END",
-    )
-    monkeypatch.setattr(bot_tools.site_server, "start", AsyncMock(side_effect=failure))
-    result = asyncio.run(tool.execute(message_in(), name="synthetic", action="start"))
-    assert result == "Error: could not start backend"
-    assert isinstance(result, ToolFailure)
-    assert result.incident_id == failure.incident_id
-    assert "BACKEND-END" in incidents.get(0).details
-    assert incidents.get(1) is None
-    tool._mark_server.assert_awaited_once_with("synthetic", {"server": True}, False)
-
-
-def test_site_validation_is_not_an_execution_incident(incidents, monkeypatch, tmp_path):
-    tool = server_tool(tmp_path)
-    monkeypatch.setattr(bot_tools.site_server, "start", AsyncMock(side_effect=bot_tools.site_server.SiteServerError("no app.py")))
-    result = asyncio.run(tool.execute(message_in(), name="synthetic", action="start"))
-    assert result == "Error: no app.py"
-    assert not isinstance(result, ToolFailure)
-    assert incidents.get(0) is None
-
-
-def test_existing_backend_log_access_is_unchanged(incidents, monkeypatch, tmp_path):
-    tool = server_tool(tmp_path)
-    diagnostic = "Error: intentional log read\nTraceback (most recent call last):\nLOG-END"
-    monkeypatch.setattr(bot_tools.site_server, "logs", AsyncMock(return_value=diagnostic))
-    result = asyncio.run(tool.execute(message_in(), name="synthetic", action="logs"))
-    assert result == "synthetic backend logs:\n" + diagnostic
-    assert not isinstance(result, ToolFailure)
-    assert incidents.get(0) is None
 
 
 def test_partial_send_failure_retains_original_sent_result(incidents):
@@ -479,8 +405,7 @@ def test_partial_send_failure_retains_original_sent_result(incidents):
 
 def test_shell_timeout_keeps_full_spooled_diagnostics(incidents, monkeypatch):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
-    tool._kill_container_exec = AsyncMock()
+    tool._terminate_shell_process = AsyncMock()
     tool._max_output = lambda: 32
     body = b"timeout stdout " * 3000 + b"TIMEOUT-END"
     message = message_in()
@@ -571,7 +496,6 @@ async def completed_shell(monkeypatch, tool, stdout_body, stderr_body, code=0):
 @pytest.mark.parametrize("fault", ["allocation", "write", "close"])
 def test_capture_io_failure_does_not_change_successful_shell_output(root_incidents, monkeypatch, spool_state, fault):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
     tool._max_output = lambda: 100_000
     stdout = b"original stdout\n" * 1000 + b"STDOUT-END"
     stderr = b"original stderr\n" * 1000 + b"STDERR-END"
@@ -591,7 +515,6 @@ def test_capture_io_failure_does_not_change_successful_shell_output(root_inciden
 @pytest.mark.parametrize("fault", ["allocation", "write", "seek", "read", "flush", "close", "short_write"])
 def test_capture_io_failure_keeps_nonzero_shell_feedback(root_incidents, monkeypatch, spool_state, fault):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
     spool_state.fault = fault
     actual = asyncio.run(completed_shell(monkeypatch, tool, b"stdout tail", b"stderr tail", 7))
     assert actual == "stdout tail\n[stderr] stderr tail\n[exit code: 7]"
@@ -654,7 +577,6 @@ class RunningProcess:
 @pytest.mark.parametrize("fault", [None, "seek", "read", "flush"])
 def test_shell_settles_process_and_sibling_before_capture(root_incidents, monkeypatch, spool_state, mode, fault):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
     tool._timeout_seconds = lambda: 0.01 if mode == "timeout" else 10
     spool_state.fault = fault
 
@@ -670,6 +592,8 @@ def test_shell_settles_process_and_sibling_before_capture(root_incidents, monkey
         async def kill_group(*args):
             group_started.set()
             await group_release.wait()
+            process.kill()
+            await process.wait()
 
         read_states = []
 
@@ -679,7 +603,7 @@ def test_shell_settles_process_and_sibling_before_capture(root_incidents, monkey
             assert settled
 
         spool_state.before_read = check_settled
-        tool._kill_container_exec = AsyncMock(side_effect=kill_group)
+        tool._terminate_shell_process = AsyncMock(side_effect=kill_group)
         monkeypatch.setattr(bot_tools.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
         call = asyncio.create_task(tool.execute(message_in(), command="printf synthetic"))
         await asyncio.wait_for(asyncio.gather(stdout.started.wait(), stderr.started.wait()), timeout=1)
@@ -697,7 +621,7 @@ def test_shell_settles_process_and_sibling_before_capture(root_incidents, monkey
             assert "synthetic pipe transport failure" in result if mode == "pipe" else "Command timed out" in result
         check_settled()
         assert all(read_states)
-        tool._kill_container_exec.assert_awaited_once()
+        tool._terminate_shell_process.assert_awaited_once()
         assert asyncio.all_tasks() == {asyncio.current_task()}
 
     asyncio.run(run())
@@ -712,7 +636,6 @@ def test_shell_settles_process_and_sibling_before_capture(root_incidents, monkey
 @pytest.mark.parametrize("mode", ["pipe", "timeout"])
 def test_execution_failure_survives_cancellation_during_cleanup(root_incidents, monkeypatch, spool_state, mode):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
     tool._timeout_seconds = lambda: 0.01 if mode == "timeout" else 10
     tool._max_output = lambda: 4
 
@@ -727,12 +650,14 @@ def test_execution_failure_survives_cancellation_during_cleanup(root_incidents, 
         async def kill_group(*args):
             group_started.set()
             await group_release.wait()
+            process.kill()
+            await process.wait()
 
         def observe_read():
             read_states.append(process.reaped and stdout.settled.is_set() and stderr.settled.is_set())
 
         spool_state.before_read = observe_read
-        tool._kill_container_exec = AsyncMock(side_effect=kill_group)
+        tool._terminate_shell_process = AsyncMock(side_effect=kill_group)
         monkeypatch.setattr(bot_tools.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
         call = asyncio.create_task(tool.execute(message_in(), command="printf synthetic"))
         await asyncio.wait_for(asyncio.gather(stdout.started.wait(), stderr.started.wait()), timeout=1)
@@ -744,7 +669,7 @@ def test_execution_failure_survives_cancellation_during_cleanup(root_incidents, 
         assert process.killed.is_set() and process.reaped and process.returncode == -9
         assert stdout.settled.is_set() and stderr.settled.is_set()
         assert read_states and all(read_states)
-        tool._kill_container_exec.assert_awaited_once()
+        tool._terminate_shell_process.assert_awaited_once()
         assert asyncio.all_tasks() == {asyncio.current_task()}
 
     asyncio.run(run())
@@ -761,8 +686,7 @@ def test_execution_failure_survives_cancellation_during_cleanup(root_incidents, 
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_completed_exit_status_survives_cleanup_cancellation(root_incidents, monkeypatch, spool_state, exit_code):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
-    tool._kill_container_exec = AsyncMock()
+    tool._terminate_shell_process = AsyncMock()
     tool._max_output = lambda: 4
 
     async def run():
@@ -797,7 +721,7 @@ def test_completed_exit_status_survives_cleanup_cancellation(root_incidents, mon
         assert all(read_states)
         process.wait.assert_awaited_once()
         process.kill.assert_not_called()
-        tool._kill_container_exec.assert_not_called()
+        tool._terminate_shell_process.assert_not_called()
         assert asyncio.all_tasks() == {asyncio.current_task()}
 
     asyncio.run(run())
@@ -817,7 +741,6 @@ def test_completed_exit_status_survives_cleanup_cancellation(root_incidents, mon
 @pytest.mark.parametrize("fault", ["allocation", "write", "close"])
 def test_healthy_shell_result_has_no_execution_incident_on_capture_failure(root_incidents, monkeypatch, spool_state, fault):
     tool = bot_tools.ShellTool(tool_bot())
-    tool._ensure_container = AsyncMock(return_value="synthetic-container")
     tool._max_output = lambda: 100_000
     spool_state.fault = fault
 
@@ -897,8 +820,8 @@ def test_resolver_cancellation_is_not_a_tool_failure(root_incidents, kind):
 
 
 @pytest.mark.parametrize("status", [429, 503])
-def test_ordinary_invite_accept_http_failure_keeps_full_body(root_incidents, monkeypatch, status):
-    tool, message, dm = captcha_call(monkeypatch)
+def test_ordinary_invite_accept_http_failure_keeps_full_body(root_incidents, status):
+    tool, message, dm = invite_call()
     body = "ordinary invite upstream detail\n" * 1000 + "INVITE-TAIL"
     failure = bot_tools.discord.HTTPException(SimpleNamespace(status=status, reason="synthetic"), body)
 

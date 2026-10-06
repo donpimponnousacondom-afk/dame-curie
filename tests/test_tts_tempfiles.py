@@ -54,7 +54,12 @@ def tts_runtime(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "gtts", gtts)
     return SimpleNamespace(
         tool=TtsTool(
-            SimpleNamespace(config=SimpleNamespace(NVIDIA_API_KEY="", FISH_API_KEY=""))
+            SimpleNamespace(config=SimpleNamespace(
+                TTS_ENGINE="riva", NVIDIA_API_KEY="synthetic-riva", FISH_API_KEY="synthetic-fish",
+                TTS_RIVA_FUNCTION_ID="synthetic-function", TTS_RIVA_VOICE="configured-voice",
+                TTS_RIVA_LANGUAGE="en-US", TTS_FISH_MODEL="synthetic-model",
+                TTS_FISH_REFERENCE_ID="synthetic-voice", TTS_FISH_FORMAT=None,
+            ))
         ),
         scratch=scratch,
         cwd=cwd,
@@ -124,6 +129,8 @@ def tts_message():
 def test_execute_riva_keeps_audio_until_discord_send_then_cleans(
     tts_runtime, tts_media, tts_message, language, voice_name, language_code
 ):
+    tts_runtime.tool.bot.config.TTS_RIVA_VOICE = voice_name
+    tts_runtime.tool.bot.config.TTS_RIVA_LANGUAGE = language_code
     result = asyncio.run(
         tts_runtime.tool.execute(
             tts_message.message, text="synthetic audio", language=language
@@ -174,24 +181,20 @@ def test_execute_riva_succeeds_with_read_only_cwd(
     assert list(tts_runtime.cwd.iterdir()) == []
 
 
+@pytest.mark.parametrize("engine", ["riva", "", "auto", "invalid", "fish", "gtts"])
 def test_execute_gtts_fallback_uses_private_temp_path(
-    tts_runtime, tts_media, tts_message
+    tts_runtime, tts_media, tts_message, engine
 ):
     tts_runtime.riva.side_effect = RuntimeError("synthetic Riva failure")
-
-    result = asyncio.run(
-        tts_runtime.tool.execute(
-            tts_message.message, text="hola", lang="es", voice="mommy"
-        )
-    )
-
-    assert result == "__TTS_SENT__"
-    tts_runtime.riva.assert_called_once()
-    tts_runtime.gtts.assert_called_once_with(text="hola", lang="es")
-    path = Path(tts_runtime.save.call_args.args[0])
-    assert path.is_absolute()
-    assert path.parent.parent == tts_runtime.scratch
-    assert not path.parent.exists()
+    tts_runtime.tool.bot.config.TTS_ENGINE = engine
+    tts_runtime.tool.bot.config.FISH_API_KEY = ""
+    expected = "synthetic Riva failure" if engine == "riva" else "FISH_API_KEY" if engine == "fish" else "TTS_ENGINE"
+    with pytest.raises((RuntimeError, ValueError), match=expected):
+        asyncio.run(tts_runtime.tool.execute(tts_message.message, text="hola"))
+    assert tts_runtime.riva.call_count == (1 if engine == "riva" else 0)
+    tts_runtime.gtts.assert_not_called()
+    tts_message.send.assert_not_awaited()
+    assert list(tts_runtime.scratch.iterdir()) == []
 
 
 def test_execute_fish_uses_real_helper_and_preserves_voice(
@@ -201,6 +204,8 @@ def test_execute_fish_uses_real_helper_and_preserves_voice(
     monkeypatch.setenv("TTS_FISH_MODEL", "synthetic-model")
     monkeypatch.setenv("TTS_FISH_FORMAT", "mp3")
     monkeypatch.setenv("TTS_FISH_REFERENCE_ID_MOMMY", "synthetic-mommy")
+    tts_runtime.tool.bot.config.TTS_ENGINE = "fish"
+    tts_runtime.tool.bot.config.TTS_FISH_FORMAT = "mp3"
     response = SimpleNamespace(status=200, read=AsyncMock(return_value=b"fish" * 64))
     request = AsyncMock()
     request.__aenter__.return_value = response
@@ -211,19 +216,22 @@ def test_execute_fish_uses_real_helper_and_preserves_voice(
 
     result = asyncio.run(
         tts_runtime.tool.execute(
-            tts_message.message, text="[excited] synthetic", voice="mommy"
+            tts_message.message, text="[excited] synthetic", voice="synthetic-voice"
         )
     )
 
     assert result == "__TTS_SENT__"
     tts_runtime.riva.assert_not_called()
     tts_runtime.gtts.assert_not_called()
+    assert session.post.call_args.args[0] == "https://api.ppq.ai/v1/audio/speech"
+    assert session.post.call_args.kwargs["allow_redirects"] is False
     assert session.post.call_args.kwargs["json"] == {
-        "text": "[excited] synthetic",
-        "format": "mp3",
-        "reference_id": "synthetic-mommy",
+        "model": "synthetic-model",
+        "input": "[excited] synthetic",
+        "voice": "synthetic-voice",
+        "response_format": "mp3",
     }
-    assert session.post.call_args.kwargs["headers"]["model"] == "synthetic-model"
+    assert session.post.call_args.kwargs["headers"]["Authorization"] == "Bearer synthetic-fish"
     assert list(tts_runtime.scratch.iterdir()) == []
 
 
@@ -237,13 +245,12 @@ def test_execute_failed_provider_cleans_partial_audio(
         raise RuntimeError("synthetic gTTS failure")
 
     tts_runtime.save.side_effect = failed_save
-    result = asyncio.run(
-        tts_runtime.tool.execute(tts_message.message, text="synthetic")
-    )
-
-    assert (
-        result == "Error: all TTS providers failed (last error: synthetic gTTS failure)"
-    )
+    tts_runtime.tool.bot.config.TTS_ENGINE = "gtts"
+    with pytest.raises(ValueError, match="gtts is unsupported.*unconfigured"):
+        asyncio.run(tts_runtime.tool.execute(tts_message.message, text="synthetic"))
+    tts_runtime.riva.assert_not_called()
+    tts_runtime.gtts.assert_not_called()
+    tts_runtime.save.assert_not_called()
     tts_message.send.assert_not_awaited()
     assert tts_media.sources == []
     assert list(tts_runtime.scratch.iterdir()) == []
@@ -285,7 +292,7 @@ def test_execute_cancellation_cleans_temp_directory(
             await asyncio.Event().wait()
 
         if stage == "provider":
-            monkeypatch.setenv("FISH_API_KEY", "synthetic-fish")
+            tts_runtime.tool.bot.config.TTS_ENGINE = "fish"
             response = SimpleNamespace(status=200, read=pause)
             request = AsyncMock()
             request.__aenter__.return_value = response
@@ -321,8 +328,9 @@ def test_execute_concurrent_calls_have_independent_directories(
         release_first = asyncio.Event()
         release_second = asyncio.Event()
 
-        async def send_voice_file(path):
-            paths.append(Path(path))
+        async def send_message(channel_id, *, params):
+            path = Path(params.files[0].fp.name)
+            paths.append(path)
             if len(paths) == 2:
                 both_sending.set()
             await (release_first if len(paths) == 1 else release_second).wait()
@@ -332,8 +340,10 @@ def test_execute_concurrent_calls_have_independent_directories(
             asyncio.create_task(
                 tts_runtime.tool.execute(
                     SimpleNamespace(
-                        channel=SimpleNamespace(id=channel),
-                        send_voice_file=send_voice_file,
+                        channel=SimpleNamespace(
+                            id=channel,
+                            _state=SimpleNamespace(http=SimpleNamespace(send_message=send_message)),
+                        ),
                     ),
                     text="synthetic",
                 )

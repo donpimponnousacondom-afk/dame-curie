@@ -122,7 +122,17 @@ def wait_for_follower(process: subprocess.Popen[str], request: StopRequest) -> i
     raise KeyboardInterrupt
 
 
-def follow_logs(command: list[str], env: dict[str, str], *, output_format: str = "auto") -> None:
+def follow_logs(command: list[str], env: dict[str, str], *, output_format: str = "auto", no_keys: bool = False) -> None:
+    if no_keys and output_format != "screen":
+        raise ValueError("--no-keys is only available for logs --format screen")
+    if output_format == "screen":
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        try:
+            from scripts.log_console.append import follow_screen
+        finally:
+            sys.path.pop(0)
+        follow_screen(command, env, no_keys=no_keys)
+        return
     request = StopRequest()
     stream, interactive = select_stream(output_format, lambda: request.stopped)
     input_options = {"stdin": subprocess.DEVNULL} if interactive else {}

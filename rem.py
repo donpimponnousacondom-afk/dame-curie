@@ -39,7 +39,7 @@ def rem_system_prompt(turns_remaining: int, prompt_body: str | None = None) -> s
         "preferences, unresolved tasks, or identity facts.\n\n"
         f"## Task\n{body}\n\n"
         "## Output\nSingle pass. Brief reason, then exactly one JSON object "
-        "(one line). `audit` is what the dashboard shows — keep it short."
+        "(one line). `audit` is the operator-facing summary — keep it short."
     )
 
 
@@ -305,27 +305,17 @@ async def _provider_message(
     provider,
     messages: list[dict],
     tools: list[dict],
-    model: str,
     timeout: int,
-    max_tokens: int | None = None,
-    disable_reasoning: bool = True,
 ) -> dict:
     if hasattr(provider, "generate_chat_completion"):
         return await provider.generate_chat_completion(
             messages,
             tools=tools,
-            model=model,
             timeout=timeout,
-            max_tokens=max_tokens,
-            temperature=0.2,
-            disable_reasoning=disable_reasoning,
         )
     content = await provider.generate_response(
         messages,
         timeout=timeout,
-        max_tokens=max_tokens,
-        temperature=0.2,
-        disable_reasoning=disable_reasoning,
     )
     return {"role": "assistant", "content": content}
 
@@ -336,14 +326,11 @@ async def run_rem_once(
     rem_log,
     provider,
     data_dir: str,
-    model: str,
     max_turns: int = 3,
     run_history: int = 50,
     prompt_body: str | None = None,
     timeout: int = 60,
-    max_tokens: int | None = None,
     apply_actions: bool = True,
-    disable_reasoning: bool = True,
 ) -> dict:
     store = RemStore(data_dir, run_history=run_history)
     state = await store.load_state()
@@ -388,7 +375,7 @@ async def run_rem_once(
     try:
         await store.patch_state({"running": True, "running_since": started})
         response = await _provider_message(
-            provider, messages, [], model, timeout, max_tokens, disable_reasoning
+            provider, messages, [], timeout
         )
         raw_audit = _message_content(response).strip() or "DONE"
         audit = raw_audit[:4000]

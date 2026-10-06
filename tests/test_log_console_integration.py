@@ -16,7 +16,7 @@ from scripts.log_console import jsonl
 
 def test_jsonl_cli_follows_logs_without_lock_or_container_mutation(monkeypatch):
     app = instance.Instance.__new__(instance.Instance)
-    app.project = "maxwell-fixture"
+    app.project = "dame-curie-fixture"
     app.env = {"DOCKER_HOST": "unix:///synthetic/docker.sock"}
     app.inventory = Mock(return_value=[])
     app.docker = Mock(side_effect=AssertionError("no lifecycle operation"))
@@ -24,7 +24,7 @@ def test_jsonl_cli_follows_logs_without_lock_or_container_mutation(monkeypatch):
     follower = Mock()
     monkeypatch.setattr(instance, "service_account", Mock(return_value=account))
     monkeypatch.setattr(instance, "Instance", Mock(return_value=app))
-    monkeypatch.setattr(instance.sys, "argv", ["instance.py", "fixture", "logs", "--format", "jsonl"])
+    monkeypatch.setattr(instance.sys, "argv", ["instance.py", "dame-curie-fixture", "logs", "--format", "jsonl"])
     monkeypatch.setattr(instance.sys, "dont_write_bytecode", sys.dont_write_bytecode)
     monkeypatch.setattr(instance.os, "open", Mock(side_effect=AssertionError("logs do not acquire operation lock")))
     monkeypatch.setattr(log_filter, "follow_logs", follower)
@@ -34,14 +34,14 @@ def test_jsonl_cli_follows_logs_without_lock_or_container_mutation(monkeypatch):
     command, env = follower.call_args.args
     assert command[-4:] == ["logs", "--follow", "--tail", "100"]
     assert env is app.env
-    assert follower.call_args.kwargs == {"output_format": "jsonl"}
+    assert follower.call_args.kwargs == {"output_format": "jsonl", "no_keys": False}
 
 
 @pytest.mark.parametrize("action", ["up", "start", "stop", "restart", "down", "backup", "restore"])
 def test_format_option_is_rejected_before_any_identity_access(monkeypatch, capsys, action):
     account = Mock(side_effect=AssertionError("no identity lookup"))
     monkeypatch.setattr(instance, "service_account", account)
-    monkeypatch.setattr(instance.sys, "argv", ["instance.py", "fixture", action, "--format", "jsonl"])
+    monkeypatch.setattr(instance.sys, "argv", ["instance.py", "dame-curie-fixture", action, "--format", "jsonl"])
     with pytest.raises(SystemExit) as error:
         instance.main()
     assert error.value.code == 2
@@ -102,22 +102,22 @@ def test_script_mode_jsonl_needs_only_stdlib_and_inert_redactor(tmp_path):
 @pytest.mark.parametrize("no_color", [None, "", "private-value-must-not-be-forwarded"])
 @pytest.mark.parametrize("for_logs", [False, True], ids=["recovery", "logs"])
 def test_root_reexec_preserves_only_logs_terminal_settings_and_no_bytecode(monkeypatch, no_color, for_logs):
-    account = SimpleNamespace(pw_uid=1003, pw_name="maxwell-fixture", pw_dir="/synthetic/home")
+    account = SimpleNamespace(pw_uid=1003, pw_name="dame-curie-fixture", pw_dir="/synthetic/home")
     environment = {"TERM": "screen-256color", "PYTHONPATH": "/synthetic/forbidden-imports", "API_KEY": "synthetic-secret"}
     if no_color is not None:
         environment["NO_COLOR"] = no_color
     monkeypatch.setattr(instance.os, "environ", environment)
     monkeypatch.setattr(instance.os, "geteuid", Mock(return_value=0))
     monkeypatch.setattr(instance.pwd, "getpwnam", Mock(return_value=account))
-    arguments = ["instance.py", "--format", "auto", "fixture", "logs"] if for_logs else ["instance.py", "fixture", "backup", "/synthetic/archive.tar"]
+    arguments = ["instance.py", "--format", "auto", "dame-curie-fixture", "logs"] if for_logs else ["instance.py", "dame-curie-fixture", "backup", "/synthetic/archive.tar"]
     monkeypatch.setattr(instance.sys, "argv", arguments)
     execute = Mock(side_effect=SystemExit(0))
     monkeypatch.setattr(instance.os, "execv", execute)
     with pytest.raises(SystemExit):
-        instance.service_account("fixture", for_logs=for_logs)
+        instance.service_account("dame-curie-fixture", for_logs=for_logs)
     path, argv = execute.call_args.args
     assert path == "/usr/sbin/runuser"
-    expected = ["runuser", "-u", "maxwell-fixture", "--", "/usr/bin/env", "-i",
+    expected = ["runuser", "-u", "dame-curie-fixture", "--", "/usr/bin/env", "-i",
                 "HOME=/synthetic/home", "PATH=/usr/local/bin:/usr/bin:/bin", "XDG_RUNTIME_DIR=/run/user/1003"]
     if for_logs:
         expected.append("TERM=screen-256color")
@@ -130,8 +130,8 @@ def test_root_reexec_preserves_only_logs_terminal_settings_and_no_bytecode(monke
 
 
 @pytest.mark.parametrize("arguments,format", [
-    (["fixture", "logs"], "auto"), (["--format", "console", "fixture", "logs"], "console"),
-    (["fixture", "logs", "--format", "plain"], "plain"),
+    (["dame-curie-fixture", "logs"], "auto"), (["--format", "console", "dame-curie-fixture", "logs"], "console"),
+    (["dame-curie-fixture", "logs", "--format", "plain"], "plain"),
 ])
 def test_logs_main_passes_parsed_terminal_intent_even_with_options_before_action(monkeypatch, arguments, format):
     account, app = object(), object()
@@ -142,8 +142,8 @@ def test_logs_main_passes_parsed_terminal_intent_even_with_options_before_action
     monkeypatch.setattr(instance, "Instance", Mock(return_value=app))
     monkeypatch.setattr(instance, "lifecycle", lifecycle)
     instance.main()
-    account_lookup.assert_called_once_with("fixture", for_logs=True)
-    lifecycle.assert_called_once_with(app, "logs", log_format=format)
+    account_lookup.assert_called_once_with("dame-curie-fixture", for_logs=True)
+    lifecycle.assert_called_once_with(app, "logs", log_format=format, no_keys=False)
     assert sys.dont_write_bytecode
 
 

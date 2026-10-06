@@ -1,9 +1,9 @@
 """Tests for UpdateBasePersonalityTool and UpdateServerPromptTool.
 
 These tools let Maxwell rewrite its own base personality paragraph and
-per-server prompts at runtime. Anyone can call them. Tests cover:
+per-server prompts at runtime. Only admins can call them. Tests cover:
 
-- non-admin call: writes
+- non-admin call: refused without mutation
 - valid text: writes to bot_control.json atomically
 - empty/too-short/too-long text: rejected with clear error
 - server prompt set + clear + DM target
@@ -92,13 +92,15 @@ def non_admin_msg():
 # ---------------------------------------------------------------------------
 
 
-def test_update_base_personality_allows_non_admin(bot, non_admin_msg):
+def test_update_base_personality_rejects_non_admin(bot, non_admin_msg, tmp_data_dir):
+    before = (tmp_data_dir / "bot_control.json").read_bytes()
     async def run():
         tool = UpdateBasePersonalityTool(bot)
         return await tool.execute(non_admin_msg, text="anything goes here really ok")
     result = asyncio.run(run())
-    assert "updated" in result.lower()
-    assert bot._control["base_personality"] == "anything goes here really ok"
+    assert "restricted to admins" in result.lower()
+    assert bot._control["base_personality"] == "original personality text"
+    assert (tmp_data_dir / "bot_control.json").read_bytes() == before
 
 
 def test_update_base_personality_requires_text(bot, admin_msg):
@@ -160,13 +162,15 @@ def test_update_base_personality_keeps_other_keys(bot, admin_msg, tmp_data_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_update_server_prompt_allows_non_admin(bot, non_admin_msg):
+@pytest.mark.parametrize("text", ["anything goes here ok", "__CLEAR__", ""])
+def test_update_server_prompt_rejects_non_admin(bot, non_admin_msg, text):
+    bot.memory.set_server_prompt("12345", "original server prompt")
     async def run():
         tool = UpdateServerPromptTool(bot)
-        return await tool.execute(non_admin_msg, server_id="12345", text="anything goes here ok")
+        return await tool.execute(non_admin_msg, server_id="12345", text=text)
     result = asyncio.run(run())
-    assert "updated" in result.lower()
-    assert bot.memory.get_server_prompt("12345") == "anything goes here ok"
+    assert "restricted to admins" in result.lower()
+    assert bot.memory.get_server_prompt("12345") == "original server prompt"
 
 
 def test_update_server_prompt_requires_server_id(bot, admin_msg):

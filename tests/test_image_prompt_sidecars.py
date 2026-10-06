@@ -7,14 +7,14 @@ from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from urllib.parse import parse_qs, quote, unquote, urlsplit
+from urllib.parse import quote
 
 import discord
 import pytest
 
 import bot_tools
 import error_reporting
-from bot_tools import HDImageGeneratorTool, ImageGeneratorTool
+from bot_tools import ImageGeneratorTool
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -23,17 +23,12 @@ CDN = "https://cdn.example.invalid/image.png"
 KEY = "synthetic/key+credential"
 PROMPT = " \n\t" + '火 dragon 🐉 — café e\u0301 "glass" \\ moon\n' * 100 + "FULL PROMPT TAIL \t\n"
 REVISION = "Provider revision is not the submitted prompt."
-PROFILES = ["normal-native", "hd-native", "hd-chat", "pollinations"]
+PROFILES = ["generation", "edit"]
 
 
 def response_for(profile, image_bytes, ext="png"):
     encoded = base64.b64encode(image_bytes).decode()
-    payload = (
-        {"choices": [{"message": {"content": REVISION, "images": [
-            {"type": "image_url", "image_url": {"url": f"data:image/{ext};base64,{encoded}"}},
-        ]}}]}
-        if profile == "hd-chat" else {"data": [{"b64_json": encoded, "revised_prompt": REVISION}]}
-    )
+    payload = {"data": [{"b64_json": encoded, "revised_prompt": REVISION}]}
     response = MagicMock(status=200, headers={"Content-Type": f"image/{ext}"})
     response.__aenter__ = AsyncMock(return_value=response)
     response.__aexit__ = AsyncMock(return_value=None)
@@ -51,21 +46,18 @@ def image_case(request, monkeypatch, tmp_path, caplog):
     profile = request.param
     root = tmp_path / "site"
     config = SimpleNamespace(
-        MAXWELL_SITE_DIR=str(root), MAXWELL_PUBLIC_BASE_URL=LOCAL,
-        MAXWELL_SITE_PUBLIC_BASE_URL="https://redroom.zombiedawn.net/dame",
-        IMAGE_GEN_PROTOCOL="pollinations" if profile == "pollinations" else "images",
-        IMAGE_GEN_BASE_URL="https://normal.example.invalid/v1", IMAGE_GEN_API_KEY=KEY,
-        IMAGE_GEN_MODEL="normal-model", IMAGE_GEN_QUALITY="low", IMAGE_GEN_TIMEOUT=90,
-        GEMINI_IMAGE_PROTOCOL="chat_completions" if profile == "hd-chat" else "images",
-        GEMINI_IMAGE_BASE_URL="https://hd.example.invalid/v1", GEMINI_IMAGE_API_KEY=KEY,
-        GEMINI_IMAGE_MODEL="hd-model", GEMINI_IMAGE_QUALITY="high", GEMINI_IMAGE_TIMEOUT=90,
-        POLLINATIONS_MODEL="flux",
+        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_PUBLIC_BASE_URL=LOCAL,
+        DAME_CURIE_SITE_PUBLIC_BASE_URL="https://redroom.zombiedawn.net/dame",
+        IMAGE_GEN_PROTOCOL="images",
+        IMAGE_GEN_BASE_URL="https://images.example.invalid/v1", IMAGE_GEN_API_KEY=KEY,
+        IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
+        IMAGE_GEN_MODEL="synthetic-image-a", IMAGE_GEN_QUALITY="low", IMAGE_GEN_TIMEOUT=90,
     )
     bot = SimpleNamespace(
         config=config, memory=SimpleNamespace(add_to_channel_memory=AsyncMock()),
         _current_progress_by_channel={},
     )
-    tool = HDImageGeneratorTool(bot) if profile.startswith("hd-") else ImageGeneratorTool(bot)
+    tool = ImageGeneratorTool(bot)
     message = SimpleNamespace(
         attachments=[], channel=SimpleNamespace(id=42, send=AsyncMock(
             return_value=SimpleNamespace(attachments=[SimpleNamespace(url=CDN)]),
@@ -87,16 +79,12 @@ def image_case(request, monkeypatch, tmp_path, caplog):
 
 
 def generate(case, prompt=PROMPT, auto_send=False):
-    return asyncio.run(case.tool.execute(case.message, prompt=prompt, auto_send=auto_send))
+    image = "data:image/png;base64," + base64.b64encode(PNG).decode() if case.profile == "edit" else None
+    return asyncio.run(case.tool.execute(case.message, prompt=prompt, image=image, auto_send=auto_send))
 
 
 def sent_prompt(case):
-    if case.profile == "pollinations":
-        return unquote(urlsplit(case.session.get.call_args.args[0]).path.removeprefix("/prompt/"))
-    payload = case.session.post.call_args.kwargs["json"]
-    if case.profile == "hd-chat":
-        return payload["messages"][0]["content"][0]["text"]
-    return payload["prompt"]
+    return case.session.post.call_args.kwargs["json"]["prompt"]
 
 
 def saved_pair(case, prompt=PROMPT):
@@ -104,7 +92,7 @@ def saved_pair(case, prompt=PROMPT):
     assert len(images) == 1
     image = images[0]
     sidecar = image.with_suffix(".txt")
-    expected = prompt[:1500] if case.profile == "pollinations" else prompt
+    expected = prompt
     assert image.read_bytes() == PNG
     assert sidecar.read_bytes() == expected.encode("utf-8")
     assert set(image.parent.iterdir()) == {image, sidecar}
@@ -116,7 +104,7 @@ def test_real_requests_save_exact_submitted_text_without_changing_delivery(image
     case = image_case
     result = generate(case, auto_send=auto_send)
     image, sidecar = saved_pair(case)
-    expected = PROMPT[:1500] if case.profile == "pollinations" else PROMPT
+    expected = PROMPT
     assert sent_prompt(case) == expected
     assert REVISION not in sidecar.read_text(encoding="utf-8")
     assert case.session.get.call_count + case.session.post.call_count == 1
@@ -125,46 +113,40 @@ def test_real_requests_save_exact_submitted_text_without_changing_delivery(image
     assert sidecar.name not in result and "https://redroom.zombiedawn.net" not in result
     assert PROMPT[:100] in result
     memory = case.bot.memory.add_to_channel_memory.await_args.args[1]
-    label = "Generated HD image" if case.profile.startswith("hd-") else "Generated image"
+    label = "Edited image" if case.profile == "edit" else "Generated image"
     assert memory["content"] == f"{label}: {PROMPT[:200]}"
     if auto_send:
         case.message.channel.send.assert_awaited_once()
         upload = case.message.channel.send.await_args.kwargs["file"]
         assert upload.fp.getvalue() == PNG
-        expected_name = "hd_generated_image.png" if case.profile.startswith("hd-") else "generated_image.png"
+        expected_name = "generated_image.png"
         assert upload.filename == expected_name
         assert result.startswith("__IMAGE_SENT__ ") and f"Image URL: {CDN}" in result
     else:
         case.message.channel.send.assert_not_awaited()
-        assert "generated, NOT sent:" in result and "__IMAGE_SENT__" not in result
-    if case.profile == "pollinations":
-        query = parse_qs(urlsplit(case.session.get.call_args.args[0]).query)
-        assert query == {"width": ["1024"], "height": ["1024"], "nologo": ["true"], "model": ["flux"], "seed": query["seed"]}
-    elif case.profile == "hd-chat":
-        assert case.session.post.call_args.kwargs["json"] == {
-            "model": "hd-model", "messages": [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}],
-        }
-    else:
-        assert case.session.post.call_args.kwargs["json"] == {
-            "model": "hd-model" if case.profile == "hd-native" else "normal-model",
-            "prompt": PROMPT, "quality": "high" if case.profile == "hd-native" else "low",
-            "output_format": "png", "response_format": "b64_json", "n": 1,
-        }
+        assert ("edited, NOT sent:" if case.profile == "edit" else "generated, NOT sent:") in result
+        assert "__IMAGE_SENT__" not in result
+    payload = case.session.post.call_args.kwargs["json"]
+    assert payload == {
+        "model": "synthetic-image-a", "prompt": PROMPT, "quality": "low",
+        **({"images": [{"image_url": "data:image/png;base64," + base64.b64encode(PNG).decode()}]}
+           if case.profile == "edit" else {}),
+    }
+    assert case.session.post.call_args.args[0].endswith(
+        "/images/edits" if case.profile == "edit" else "/images/generations"
+    )
 
 
-@pytest.mark.parametrize("image_case", ["hd-native", "hd-chat"], indirect=True)
-def test_hd_edit_sidecar_contains_only_submitted_text(image_case):
+@pytest.mark.parametrize("image_case", ["edit"], indirect=True)
+def test_edit_sidecar_contains_only_submitted_text(image_case):
     case = image_case
     reference = "data:image/png;base64," + base64.b64encode(PNG).decode()
     result = asyncio.run(case.tool.execute(case.message, prompt=PROMPT, image=reference))
     image, sidecar = saved_pair(case)
     assert sent_prompt(case) == PROMPT
     payload = case.session.post.call_args.kwargs["json"]
-    if case.profile == "hd-native":
-        assert payload["images"] == [{"image_url": reference}]
-        assert case.session.post.call_args.args[0].endswith("/images/edits")
-    else:
-        assert len(payload["messages"][0]["content"]) == 2
+    assert payload["images"] == [{"image_url": reference}]
+    assert case.session.post.call_args.args[0].endswith("/images/edits")
     assert "data:image" not in sidecar.read_text(encoding="utf-8")
     assert str(image) in result and sidecar.name not in result
     assert case.session.get.call_count + case.session.post.call_count == 1
@@ -177,11 +159,11 @@ def test_sidecar_preserves_original_non_png_bytes_and_filename_extension(image_c
     case.session.post.return_value = response
     case.session.get.return_value = response
     result = generate(case)
-    ext = "png" if case.profile == "pollinations" else "jpg"
+    ext = "jpg"
     images = list(case.root.glob(f"_images/*.{ext}"))
     assert len(images) == 1
     assert images[0].read_bytes() == raw
-    expected = PROMPT[:1500] if case.profile == "pollinations" else PROMPT
+    expected = PROMPT
     assert images[0].with_suffix(".txt").read_bytes() == expected.encode("utf-8")
     assert f"Permanent URL: {LOCAL}/bot/_images/{images[0].name} " in result
     assert case.session.get.call_count + case.session.post.call_count == 1
@@ -192,7 +174,7 @@ def test_sidecar_redacts_known_credentials_without_changing_submitted_prompt(ima
     error_reporting.register_secrets([KEY])
     prompt = f" \n{KEY}\n{quote(KEY, safe='')}\nAuthorization: Bearer fake-auth\nCookie: fake-cookie\n" + PROMPT
     result = generate(case, prompt)
-    submitted = prompt[:1500] if case.profile == "pollinations" else prompt
+    submitted = prompt
     assert sent_prompt(case) == submitted
     expected = submitted.replace(KEY, "[REDACTED]").replace(quote(KEY, safe=""), "[REDACTED]")
     expected = expected.replace("Authorization: Bearer fake-auth", "Authorization: [REDACTED]")
@@ -209,7 +191,7 @@ def test_sidecar_redacts_known_credentials_without_changing_submitted_prompt(ima
 
 def test_sidecar_atomically_replaces_a_same_directory_temporary(image_case, monkeypatch):
     case = image_case
-    expected = (PROMPT[:1500] if case.profile == "pollinations" else PROMPT).encode("utf-8")
+    expected = PROMPT.encode("utf-8")
     replace = bot_tools.os.replace
     observed = []
 
@@ -274,7 +256,7 @@ def test_metadata_failure_preserves_exact_success_reply_delivery_and_one_request
     assert result == expected_result
     assert image.read_bytes() == PNG and set(image.parent.iterdir()) == {image}
     assert case.session.get.call_count + case.session.post.call_count == 1
-    assert sent_prompt(case) == (PROMPT[:1500] if case.profile == "pollinations" else PROMPT)
+    assert sent_prompt(case) == PROMPT
     assert case.message.channel.send.await_count == int(auto_send)
     if auto_send:
         assert case.message.channel.send.await_args.kwargs["file"].fp.getvalue() == PNG
@@ -328,7 +310,7 @@ def test_failed_request_creates_neither_image_nor_prompt(image_case, failure):
         case.session.post.return_value = response
         case.session.get.return_value = response
     result = generate(case, auto_send=True)
-    prefix = "Error generating image:" if case.profile == "pollinations" and failure == "http" else "Error:"
+    prefix = "Error:"
     assert result.startswith(prefix)
     assert list(case.root.glob("_images/*")) == []
     case.message.channel.send.assert_not_awaited()
@@ -384,7 +366,7 @@ def synchronized_response(profile, image_bytes, barrier):
 def test_overlapping_requests_pair_their_own_submitted_prompts_and_bytes(image_case, monkeypatch):
     case = image_case
     prompts = ["FIRST\n" + PROMPT, "SECOND\n" + PROMPT]
-    submitted = [text[:1500] if case.profile == "pollinations" else text for text in prompts]
+    submitted = prompts
     images = {submitted[0]: PNG + b"first", submitted[1]: PNG + b"second"}
     numbers = count(100000)
     monkeypatch.setattr(bot_tools.random, "randint", lambda low, high: next(numbers))
@@ -394,9 +376,7 @@ def test_overlapping_requests_pair_their_own_submitted_prompts_and_bytes(image_c
 
         def request_response(url, **kwargs):
             payload = kwargs.get("json")
-            text = unquote(urlsplit(url).path.removeprefix("/prompt/")) if payload is None else (
-                payload["messages"][0]["content"][0]["text"] if case.profile == "hd-chat" else payload["prompt"]
-            )
+            text = payload["prompt"]
             return synchronized_response(case.profile, images[text], barrier)
 
         case.session.post.side_effect = request_response

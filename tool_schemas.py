@@ -7,6 +7,8 @@ come from the live tool instances at request time so they stay in sync with
 
 from __future__ import annotations
 
+import json
+import math
 import re
 from typing import Any
 
@@ -46,41 +48,71 @@ def _num(desc: str = "") -> dict[str, Any]:
 
 
 # parameter schemas only — descriptions are attached from tool.get_description()
+CORE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "send_message", "react", "search_messages", "lookup_user", "web_search",
+        "fetch_url", "shell", "image_generator", "see_image", "see_video",
+        "youtube", "send_file", "wait", "no_response", "more_tools",
+    }
+)
+TOOL_DISCOVERY_GROUPS: dict[str, frozenset[str]] = {
+    "messaging": frozenset(
+        {
+            "edit_message", "delete_message", "create_poll", "create_invite",
+            "forward_message", "typing", "pin_message", "inbox_list", "inbox_act",
+        }
+    ),
+    "media": frozenset(
+        {"change_avatar", "send_meme", "send_media", "tts"}
+    ),
+    "identity": frozenset(
+        {"set_nickname", "set_member_nickname", "change_avatar", "change_presence"}
+    ),
+    "servers": frozenset(
+        {
+            "join_server", "server_setup", "leave_server", "list_servers",
+            "list_admin_servers", "create_category", "create_channel", "edit_channel",
+            "delete_channel", "set_channel_permissions", "edit_server", "manage_emoji",
+        }
+    ),
+    "moderation": frozenset(
+        {
+            "kick_member", "ban_member", "unban_member", "list_bans", "timeout_member",
+            "manage_role", "purge_messages", "set_member_nickname", "voice_mod",
+            "lock_channel", "audit_log", "pin_message",
+        }
+    ),
+    "voice": frozenset(
+        {"join_vc", "vc_status", "vc_where", "leave_vc", "voice_mod", "tts"}
+    ),
+    "workflow": frozenset(
+        {
+            "set_activity", "sleep", "clear_sleep", "update_base_personality",
+            "update_server_prompt", "guide", "spawn_background", "usage", "manage_plugin",
+        }
+    ),
+    "games": frozenset(
+        {"chess_start", "chess_move", "chess_state", "chess_resign"}
+    ),
+    "plugins": frozenset({"manage_plugin"}),
+}
+
 TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "image_generator": _obj(
         {
-            "prompt": _str("Image generation prompt"),
-            "auto_send": {
-                "type": "boolean",
-                "default": False,
-                "description": (
-                    "Default false: generate and save only; present with send_file(path=..., caption=...) "
-                    "or a normal image-preview link. True: upload once immediately; __IMAGE_SENT__ "
-                    "means already sent, do not resend its URL or add commentary."
-                ),
-            },
-        },
-        ["prompt"],
-    ),
-    "hd_image": _obj(
-        {
             "prompt": _str(
-                "What to generate, or — when an input image is supplied — the "
-                "change to make to it (e.g. 'make the jacket red')"
+                "What to generate, or — with input images — the change to make"
             ),
             "image": _str(
-                "Optional image to edit or use as reference: an http(s) URL "
-                "(Discord CDN, a permanent URL from a previous image, any public "
-                "link) or a local path Dame Curie wrote. For several, pass a JSON "
-                "list or a comma-separated string (max 4). Omit to generate from "
-                "scratch; images attached to the user's message are used "
-                "automatically."
+                "Optional image URL, data URI, or local path Dame Curie wrote; for several, pass a "
+                "JSON list or comma-separated refs (max 4). Omit to use message attachments. "
+                "Pass an empty string or empty JSON list to generate from scratch without attachments."
             ),
             "auto_send": {
                 "type": "boolean",
                 "default": False,
                 "description": (
-                    "Default false: generate and save only; present with send_file(path=..., caption=...) "
+                    "Default false: generate/edit and save only; present with send_file(path=..., caption=...) "
                     "or a normal image-preview link. True: upload once immediately; __IMAGE_SENT__ "
                     "means already sent, do not resend its URL or add commentary."
                 ),
@@ -370,160 +402,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         {"url": _str("Direct image URL (jpg/png/gif/webp)")},
         ["url"],
     ),
-    "create_site": _obj(
-        {
-            "name": _str("Short slug: lowercase, numbers, hyphens"),
-            "title": _str(
-                "Site title for listing/metadata — not a required on-page heading"
-            ),
-            "body": _str(
-                "FULL HTML document (DOCTYPE through closing tags) for index.html. "
-                "Served as-is: no restyle or layout template. Invent a new look each "
-                "time unless the user specified one. Prefer this over stuffing HTML "
-                "into chat. In visible HTML text use real line breaks or <br>, never "
-                "literal \\n; keep \\n only inside intentional JavaScript/CSS strings. "
-                "Ship the finished thing: every section written, every control wired "
-                "to code that runs, every list populated with real content. No "
-                "placeholders, no lorem ipsum, no TODO, no 'coming soon', no empty "
-                "href='#' navigation, no stub function returning a fake value. A page "
-                "whose body is just a 'Loading…' shell is a failure, not a start — if "
-                "it takes 900 lines to actually work, write 900 lines."
-            ),
-            "files": _str(
-                'Optional extra files as JSON: {"style.css": "...", "app.js": "...", '
-                '"about/index.html": "..."}. Anything a static host serves — split a '
-                "big page up, add subpages, ship a data.json. Paths are relative to "
-                "the site root."
-            ),
-            "backend": _bool(
-#                "ALWAYS true — every site MUST have a live Python backend via "
-#                "site_server (FastAPI+uvicorn on $PORT at /bot/<slug>/api/...; ws at "
-#                "/ws if realtime). Frontend never computes alone — it fetches/renders "
-#                "from the backend. Client-only sites are forbidden."
-                 "Proper PHP/Perl or cgi-bin on the remote, remember that "
-                 "remote is a Dreamhost shared server you cannot access certan things there. "
-                 "Frontend never computes alone - it fetches/renders from the backend in the remote "
-                 "in the route indicated for the remote: https://redroom.zombiedawn.net/dame/<site> "
-                 "any API need to be PHP/Perl or cgi-bin because the dreamhost, you cannot use those "
-                 "in local so you must debug things against the remote, it's instant sync automatically "
-                 "so you can create things on this local machine and you will have almost instant acces "
-                 "to the site in remote for you to debug properly against the frontend and test the "
-                 "back end\n"
-            ),
-            "permanent": _bool(
-                "Skip the auto-expiry clock so the site stays up until deleted"
-            ),
-            "encoding": _str("text (default) or base64 for exact bytes"),
-            "images": _str("Optional JSON list of local image paths to include"),
-        },
-        ["name", "title", "body"],
-    ),
-    "edit_site": _obj(
-        {
-            "name": _str("Slug of the site to edit (see list_sites)"),
-            "action": _str(
-                "list | read | write | replace | delete | rename | backend | extend"
-            ),
-            "path": _str("File inside the site, default index.html"),
-            "content": _str("New file contents for write"),
-            "files": _str(
-                'Optional extra files to write at once: {"style.css": "...", "app.js": "..."}'
-            ),
-            "find": _str("For replace: exact existing text to swap out"),
-            "replace": _str("For replace: what to put there (empty string deletes it)"),
-            "all": _bool(
-                "For replace: true = every occurrence, false = first only (default)"
-            ),
-            "title": _str("For rename: the new title"),
-            "encoding": _str("text (default) or base64 for write"),
-            "backend": _str("For backend: true | false | status | clear"),
-            "permanent": _bool("For extend: stop this site expiring"),
-            "start_line": _int(
-                "For read of a large file: 1-based line to start the window. "
-                "Omit to see the top (or the whole file if it is small)."
-            ),
-        },
-        ["name", "action"],
-    ),
-    "site_server": _obj(
-        {
-            "name": _str("Slug of the site this backend belongs to"),
-            "action": _str(
-                "list | read | write | replace | deploy | start | stop | restart | "
-                "status | logs | env | rm | delete"
-            ),
-            "files": _str(
-                'Server source as JSON: {"app.php": "...", "helpers.pl": "..."}. '
-                "write merges these into the existing source (other files stay). "
-                "deploy replaces the whole snapshot - missing files disappear. "
-#                "app.php is the entry and must listen on 0.0.0.0:$PORT. flask, "
-#                "waitress, fastapi, uvicorn, websockets, sqlalchemy, bcrypt, "
-#                "pyjwt, requests, httpx, jinja2, pillow and the stdlib are "
-#                "installed. Use fastapi+uvicorn instead of flask+waitress when "
-#                "the app needs WebSockets. Only /data is writable and only /data "
-#                "survives a restart — put the database at /data/app.db. Routes "
-#                "are served under /bot/<name>/api/."
-                "Routes are server under remote: https://redroom.zombiedawn.net/dame/ "
-                "You local routes must be /dame/<name>/api/ if you need an API backend in PHP/Perl or cgi-bin "
-                "in the remote dreamhost shared server where everything get synced automatically from this local copy\n"
-            ),
-            "path": _str(
-                "For read/replace/rm/write-one-file: which server file (default app.py)"
-            ),
-            "content": _str(
-                "For write of a single file: the new contents (or use files=)"
-            ),
-            "find": _str("For replace: exact existing text to swap out"),
-            "replace": _str("For replace: what to put there"),
-            "all": _bool(
-                "For replace: true = every occurrence, false = first only (default)"
-            ),
-            "env": _str(
-                'Secrets and config as JSON: {"API_KEY": "sk-..."}. Held outside '
-                "the site directory, never served and never echoed back; read "
-                "them with os.environ. Setting env restarts the server."
-            ),
-            "packages": _str(
-                'Extra pip packages as a JSON list, e.g. ["redis==5.0.1"]. Only '
-                "needed for something outside the installed set. Builds a per-site "
-                "image, so the first deploy takes longer."
-            ),
-            "lines": _int("For logs: how many lines (default 40, max 200)"),
-            "start_line": _int(
-                "For read of a large file: 1-based line to start the window. "
-                "Omit to see the top (or the whole file if it is small)."
-            ),
-        },
-        ["name", "action"],
-    ),
-    "delete_site": _obj(
-        {"name": _str("Slug of the site to delete")},
-        ["name"],
-    ),
-    "list_sites": _obj(
-        {
-            "all_users": _bool(
-                "Optional boolean. If true, list all published sites across all users."
-            ),
-        },
-    ),
-    "site_test": _obj(
-        {
-            "name": _str("Slug of the site to test (see list_sites)"),
-            "path": _str(
-                "Optional subpage (about/) or this site's full public URL. "
-                "Default is the homepage."
-            ),
-            "url": _str("Alias of path: this site's full public URL"),
-            "wait": _num(
-                "Seconds to let JavaScript run after load (default 2, max 15)"
-            ),
-            "screenshot": _bool(
-                "Attach a screenshot of the loaded page (default true)"
-            ),
-        },
-        ["name"],
-    ),
     "guide": _obj(
         {
             "goal": _str(
@@ -534,13 +412,14 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "spawn_background": _obj(
         {
             "goal": _str(
-                "What the background job should build/do (e.g. 'portfolio site with guestbook backend'). Required."
+                "What the background job should build/do. Required."
             ),
             "context": _str(
                 "Extra spec for the job: requirements, style, constraints. Optional."
             ),
         },
         ["goal"],
+        additional=False,
     ),
     "web_search": _obj(
         {
@@ -575,11 +454,13 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "no_response": _obj({}),
     "more_tools": _obj(
         {
-            "need": _str(
-                "What you are trying to do, in a few words — 'ban a raider', "
-                "'read my email', 'run a script'. Used to point you at the right tool."
+            "group": _str(
+                "Optional tools to add for the next response turn.",
+                enum=sorted(TOOL_DISCOVERY_GROUPS),
             )
-        }
+        },
+        ["group"],
+        additional=False,
     ),
     "send_file": _obj(
         {
@@ -596,8 +477,8 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "shell": _obj(
         {
             "command": _str(
-                "Bash command to run in the sandbox. Newlines are only allowed "
-                "inside a heredoc. To write a file: cat << 'EOF' > path/file.py "
+                "Bash command to run directly inside the bot container. Multiline "
+                "scripts are allowed. To write a file: cat << 'EOF' > path/file.py "
                 "then the body then a line containing only EOF. Put `> file` on "
                 "the opener line, not after EOF."
             ),
@@ -659,10 +540,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "tts": _obj(
         {
             "text": _str("Text to speak"),
-            "language": _str("Language name or code (e.g. english, spanish)"),
-            "voice": _str(
-                "TTS voice name (tiktok, mommy, or espanol/spanish). Omit for the default voice."
-            ),
         },
         ["text"],
     ),
@@ -673,7 +550,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
                 "accept, decline, dismiss, or read (read demotes a notice "
                 "without clearing it)"
             ),
-            "item_id": _str("Inbox item id, e.g. friend_123 or email_412"),
+            "item_id": _str("Inbox item id, e.g. friend_123"),
             "user_id": _str("Requester Discord id if item_id is omitted"),
         },
         ["action"],
@@ -710,80 +587,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
             "server_id": _str("Optional guild id; defaults to the current server"),
         },
         ["text"],
-    ),
-    # maxwell@z3ki.dev email — local MTA. Bot talks to local Postfix
-    # (127.0.0.1:25, SMTP+STARTTLS+SASL) and local Dovecot (127.0.0.1:993,
-    # IMAPS+SASL). No third-party relay. See bot_tools.py and
-    # email_integration/README.md.
-    "email_send": _obj(
-        {
-            "to": _str(
-                "Recipient(s). Comma-separated for multiple. e.g. 'a@x.com, b@y.com'"
-            ),
-            "subject": _str("Email subject line"),
-            "body": _str("Plain text or HTML body (set is_html=true for HTML)"),
-            "is_html": _bool("If true, body is sent as HTML. Default false."),
-            "reply_to": _str("Optional Reply-To address"),
-            "cc": _str("Optional comma-separated CC list"),
-            "bcc": _str("Optional comma-separated BCC list"),
-        },
-        ["to", "subject", "body"],
-    ),
-    "email_read_inbox": _obj(
-        {
-            "max_results": _int("Max messages to return (default 10, max 50)"),
-            "days_back": _int("Bound the window in days (default 7, max 90)"),
-            "unread_only": _bool("If true, only show unread mail (default false)"),
-        }
-    ),
-    "email_get_message": _obj(
-        {
-            "message_id": _str(
-                "IMAP uid, from email_read_inbox, email_search, or an inbox "
-                "email notice (412 and email_412 both work)"
-            ),
-            "max_chars": _int("Max body characters to return (default 8000)"),
-        },
-        ["message_id"],
-    ),
-    "email_search": _obj(
-        {
-            "query": _str("Free-text query, e.g. 'github', 'invoice', 'unsubscribe'"),
-            "max_results": _int("Max matches to return (default 10, max 50)"),
-        },
-        ["query"],
-    ),
-    # X (Twitter). One read tool and one write tool — the action enum keeps
-    # the catalog from growing six near-identical entries.
-    "x_read": _obj(
-        {
-            "action": _str(
-                "home (your feed), user (someone's posts), search, mentions "
-                "(people talking to you), or tweet (one post by id/URL)",
-                enum=["home", "user", "search", "mentions", "tweet"],
-            ),
-            "handle": _str("Account for action=user, with or without the @"),
-            "query": _str(
-                "Search text for action=search. X operators work: from:nasa, "
-                "-filter:replies, min_faves:100, lang:en"
-            ),
-            "tweet_id": _str("Post id or full x.com URL, for action=tweet"),
-            "limit": _int("How many posts (default 15, max 50)"),
-        },
-        ["action"],
-    ),
-    "x_post": _obj(
-        {
-            "action": _str(
-                "post (new), reply, quote, delete, like, or repost",
-                enum=["post", "reply", "quote", "delete", "like", "repost"],
-            ),
-            "text": _str("The post itself, for post/reply/quote"),
-            "reply_to": _str("Post id or URL being replied to"),
-            "quote": _str("Post id or URL being quoted"),
-            "tweet_id": _str("Post id or URL for delete/like/repost"),
-        },
-        ["action"],
     ),
     # ---- Chess (Dame Curie plays real chess himself against a chosen opponent) --
     "chess_start": _obj(
@@ -842,7 +645,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
 RESULT_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "image_generator",
-        "hd_image",
         "lookup_user",
         "manage_plugin",
         "search_messages",
@@ -859,12 +661,6 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         # text at all.
         "change_avatar",
         "list_servers",
-        "create_site",
-        "edit_site",
-        "delete_site",
-        "site_server",
-        "site_test",
-        "list_sites",
         "guide",
         "web_search",
         "fetch_url",
@@ -895,16 +691,6 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "send_file",
         "send_meme",
         "send_media",
-        # email_send is here too so a batch like email_send + send_message
-        # still gets a second turn to confirm, retry, or react.
-        "email_send",
-        "email_read_inbox",
-        "email_get_message",
-        "email_search",
-        "x_read",
-        # x_post gets a turn back so he can say what he posted (and see the
-        # link) instead of describing a post he has not confirmed landed.
-        "x_post",
         "inbox_list",
         "inbox_act",
         "join_vc",
@@ -918,7 +704,7 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "set_activity",
         "update_base_personality",
         "update_server_prompt",
-        # more_tools hands the full catalog back and must get a turn to use it.
+        # more_tools expands the selected group for the following model turn.
         "more_tools",
         # chess + usage return data the model needs a follow-up turn to react to.
         "chess_start",
@@ -929,32 +715,6 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         # spawn_background hands the job id back so the live turn can ack it
         # by name, then ends (the detached job delivers the real answer later).
         "spawn_background",
-    }
-)
-
-# ── unused leftover (full catalog ships every turn; do not gate on this) ──
-# Kept so older tests and comments that name this set still import cleanly.
-CHAT_CORE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "send_message",
-        "no_response",
-        "react",
-        "typing",
-        "wait",
-        "web_search",
-        "fetch_url",
-        "see_image",
-        "see_video",
-        "send_media",
-        "send_meme",
-        "image_generator",
-        "hd_image",
-        "more_tools",
-        "chess_start",
-        "chess_move",
-        "chess_state",
-        "chess_resign",
-        "usage",
     }
 )
 
@@ -999,7 +759,7 @@ def result_contract(name: str) -> str:
     if returns_result(name):
         return (
             " [returns saved image by default; auto_send=true + __IMAGE_SENT__ means already delivered, no repeat]"
-            if name in {"image_generator", "hd_image"} else _CONTRACT_RESULT
+            if name == "image_generator" else _CONTRACT_RESULT
         )
     if name in TURN_ENDING_TOOL_NAMES:
         return _CONTRACT_ENDING
@@ -1085,7 +845,6 @@ def build_openai_tools(
                 "additionalProperties": True,
             }
         params = dict(declared)
-        # Inject reasoning onto a COPY so we never mutate TOOL_PARAMETERS.
         raw_props = params.get("properties")
         props = dict(raw_props) if isinstance(raw_props, dict) else {}
         props.setdefault("reasoning", REASONING_PARAM)
@@ -1189,28 +948,184 @@ def _decode_tool_arguments(raw_args: Any) -> dict[str, Any]:
     return {"content": text}
 
 
-def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
-    """Normalize provider tool_calls into {id, name, arguments: dict, raw}."""
+_NATIVE_MAX_CALLS = 8
+_NATIVE_MAX_ID_BYTES = 128
+_NATIVE_MAX_NAME_BYTES = 128
+_NATIVE_MAX_ARGUMENT_BYTES = 16_000
+_NATIVE_MAX_BATCH_ARGUMENT_BYTES = 32_000
+_NATIVE_MAX_BATCH_ENVELOPE_BYTES = 40_000
+_NATIVE_MAX_ARGUMENT_DEPTH = 32
+
+
+def _native_argument_depth_is_bounded(text: str) -> bool:
+    """Reject malformed or over-nested JSON before decoding."""
+    depth = 0
+    quoted = escaped = False
+    for character in text:
+        if quoted and escaped:
+            escaped = False
+        elif quoted and character == "\\":
+            escaped = True
+        elif character == '"':
+            quoted = not quoted
+        elif not quoted and character in "{[":
+            depth += 1
+            if depth > _NATIVE_MAX_ARGUMENT_DEPTH:
+                return False
+        elif not quoted and character in "}]":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and not quoted
+
+
+def _native_argument_values_are_json_safe(value: dict) -> bool:
+    """Reject non-string keys and non-finite numbers in argument objects."""
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            if any(not isinstance(key, str) for key in current):
+                return False
+            pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            pending.extend(current)
+        elif isinstance(current, float) and not math.isfinite(current):
+            return False
+    return True
+
+
+def _parse_native_argument_json(
+    text: str, decoder: json.JSONDecoder
+) -> object:
+    """Parse one complete nesting-bounded JSON argument value."""
+    if text[:1] in {"{", "[", '"'} and not _native_argument_depth_is_bounded(
+        text
+    ):
+        raise ValueError("Malformed or oversized native tool-call batch")
+    try:
+        parsed, end = decoder.raw_decode(text)
+    except json.JSONDecodeError:
+        raise ValueError("Malformed native tool-call batch") from None
+    if text[end:].strip():
+        raise ValueError("Malformed native tool-call batch")
+    return parsed
+
+
+def _decode_native_tool_arguments(
+    raw_args: object, *, allow_oversized: bool = False
+) -> tuple[dict[str, object], int, bool]:
+    """Strictly decode one JSON-object argument payload within its mode's bound."""
+    if raw_args is None:
+        return {}, 0, False
+    if isinstance(raw_args, dict):
+        if not _native_argument_values_are_json_safe(raw_args):
+            raise ValueError("Malformed native tool-call batch")
+        encoded = json.dumps(
+            raw_args, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+        argument_bytes = len(encoded.encode("utf-8"))
+        current = raw_args
+    elif isinstance(raw_args, str):
+        argument_bytes = len(raw_args.encode("utf-8"))
+        current = raw_args.strip().lstrip("\ufeff")
+    else:
+        raise ValueError("Malformed native tool-call batch")
+    oversized = argument_bytes > _NATIVE_MAX_ARGUMENT_BYTES
+    if (oversized and not allow_oversized) or (
+        isinstance(raw_args, dict)
+        and not _native_argument_depth_is_bounded(encoded)
+    ):
+        raise ValueError("Malformed or oversized native tool-call batch")
+    if isinstance(current, str) and not current:
+        return {}, argument_bytes, oversized
+
+    decoder = json.JSONDecoder()
+    for _ in range(3):
+        if isinstance(current, str):
+            current = _parse_native_argument_json(current, decoder)
+            continue
+        if not isinstance(current, dict):
+            raise ValueError("Malformed native tool-call batch")
+        wrapper = next(
+            (
+                key
+                for key in ("arguments", "parameters")
+                if len(current) == 1 and key in current and isinstance(current[key], (dict, str))
+            ),
+            None,
+        )
+        if wrapper is not None:
+            current = current[wrapper]
+            continue
+        if not _native_argument_values_are_json_safe(current):
+            raise ValueError("Malformed native tool-call batch")
+        return dict(current), argument_bytes, oversized
+    raise ValueError("Malformed or oversized native tool-call batch")
+
+
+def normalize_native_tool_calls(
+    raw_calls: list | None, *, allow_oversized_arguments: bool = False
+) -> list[dict[str, Any]]:
+    """Validate and normalize a complete provider tool-call batch."""
+    if raw_calls is None:
+        return []
+    if not isinstance(raw_calls, list) or len(raw_calls) > _NATIVE_MAX_CALLS:
+        raise ValueError("Malformed or oversized native tool-call batch")
     normalized: list[dict[str, Any]] = []
-    for i, call in enumerate(raw_calls or []):
-        if not isinstance(call, dict):
-            continue
-        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
-        name = str(fn.get("name") or call.get("name") or "").strip()
+    seen_ids: set[str] = set()
+    batch_argument_bytes = 0
+    batch_envelope_bytes = 0
+    for i, call in enumerate(raw_calls):
+        if not isinstance(call, dict) or call.get("type") not in (None, "function"):
+            raise ValueError("Malformed native tool-call batch")
+        fn_value = call.get("function")
+        if fn_value is not None and not isinstance(fn_value, dict):
+            raise ValueError("Malformed native tool-call batch")
+        fn = fn_value if isinstance(fn_value, dict) else {}
+        raw_name = fn.get("name") or call.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValueError("Malformed native tool-call batch")
+        if len(raw_name.encode("utf-8")) > _NATIVE_MAX_NAME_BYTES:
+            raise ValueError("Oversized native tool-call batch")
+        original_name = raw_name.strip()
+        name = original_name[5:] if original_name.lower().startswith("tool_") else original_name
         if not name:
-            continue
-        # Some providers use tool_ name prefixes
-        if name.lower().startswith("tool_"):
-            name = name[5:]
+            raise ValueError("Malformed native tool-call batch")
         raw_args = fn.get("arguments", call.get("arguments", {}))
-        args = _decode_tool_arguments(raw_args)
-        call_id = str(call.get("id") or f"call_{i}_{name}")
+        args, argument_bytes, oversized_arguments = _decode_native_tool_arguments(
+            raw_args, allow_oversized=allow_oversized_arguments
+        )
+        batch_argument_bytes += argument_bytes
+        if batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
+            raise ValueError("Oversized native tool-call batch")
+        raw_id = call.get("id")
+        if raw_id in (None, ""):
+            call_id = f"call_{i}"
+        elif isinstance(raw_id, str):
+            call_id = raw_id
+        else:
+            raise ValueError("Malformed native tool-call batch")
+        if (
+            not call_id.strip()
+            or len(call_id.encode("utf-8")) > _NATIVE_MAX_ID_BYTES
+            or call_id in seen_ids
+        ):
+            raise ValueError("Malformed or oversized native tool-call batch")
+        seen_ids.add(call_id)
+        batch_envelope_bytes += len(
+            json.dumps(call, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES:
+            raise ValueError("Oversized native tool-call batch")
         normalized.append(
             {
                 "id": call_id,
                 "name": name,
-                "arguments": args,
-                "raw": call,
+                "raw_name": original_name,
+                "arguments": args if not oversized_arguments else {},
+                "oversized_arguments": oversized_arguments,
+                "raw": call if not oversized_arguments else None,
             }
         )
     return normalized
@@ -1239,6 +1154,8 @@ def normalize_native_tool_calls(raw_calls: list | None) -> list[dict[str, Any]]:
 # whatever prose surrounded the markup survives as the leftover text.
 
 _RECOVERY_MAX_CALLS = 8
+_RECOVERY_MAX_INPUT_CHARS = 16_000
+_RECOVERY_MAX_ARGUMENT_CHARS = 4_000
 
 _FENCE_RE = re.compile(r"```.*?(?:```|$)|~~~.*?(?:~~~|$)", re.DOTALL)
 
@@ -1689,7 +1606,7 @@ def recover_text_tool_calls(
     import json
 
     raw = str(text or "")
-    if not raw.strip():
+    if len(raw) > _RECOVERY_MAX_INPUT_CHARS or not raw.strip():
         return [], raw
     allowed = {str(n).lower() for n in (known_names or ())} or None
     # Recovery runs on every reply the provider did not attach tool_calls to —
@@ -1803,8 +1720,8 @@ def recover_text_tool_calls(
         if any(not (span[1] <= k[0] or span[0] >= k[1]) for k in kept):
             continue
         kept.append(span)
-        if len(kept) >= _RECOVERY_MAX_CALLS:
-            break
+    if len(kept) > _RECOVERY_MAX_CALLS:
+        return [], raw
     kept.sort(key=lambda item: item[0])
 
     if not kept:
@@ -1823,42 +1740,47 @@ def recover_text_tool_calls(
 
     calls: list[dict[str, Any]] = []
     for i, (_start, _end, name, args) in enumerate(kept):
+        arguments = json.dumps(_coerce_args(name, args))
+        if len(arguments) > _RECOVERY_MAX_ARGUMENT_CHARS:
+            return [], raw
         calls.append(
             {
                 "id": f"recovered_{i}_{name}",
                 "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps(_coerce_args(name, args)),
-                },
+                "function": {"name": name, "arguments": arguments},
             }
         )
     return calls, leftover
 
 
 # ── tool-loop transcript bounds ──────────────────────────────────────────
-# Every agent loop in this repo (Discord, Telegram) replays the
+# Every agent loop in this repo replays the
 # whole assistant/tool transcript on every round, so an unbounded tail is how a
 # turn walks off the end of the context window mid-loop. Per-result truncation
 # is not enough on its own: 24 rounds of a 32k-capped result is still ~768k
 # chars riding on top of an already-full prompt.
 TOOL_TAIL_MAX_MESSAGES = 12
 TOOL_TAIL_MAX_CHARS = 36_000
+TOOL_TAIL_NEWEST_GROUP_CHARS = 24_000
 TOOL_RESULT_COMPACT_CHARS = 4_000
+_HISTORY_MARKER_RE = re.compile(
+    r"\n… \[(\d+) chars truncated from (?:earlier tool result|tool result|tool history)\]$"
+)
 
 
 def message_chars(message: dict) -> int:
     """Prompt size of one chat message, tool_calls included.
 
     An assistant turn replayed in a tool loop carries its arguments (a
-    create_site body, a shell script, a long send_message) and those are real
+    file body, a shell script, a long send_message) and those are real
     prompt tokens — counting only ``content`` leaves a budget blind to the
     heaviest messages in the conversation.
     """
-    extra = 0
+    extra = len(str(message.get("tool_call_id") or ""))
     for call in message.get("tool_calls") or []:
         if not isinstance(call, dict):
             continue
+        extra += len(str(call.get("id") or ""))
         fn = call.get("function")
         if isinstance(fn, dict):
             extra += len(str(fn.get("name") or "")) + len(
@@ -1880,19 +1802,83 @@ def message_chars(message: dict) -> int:
 
 
 def tool_tail_groups(tail: list[dict]) -> list[list[dict]]:
-    """Split a tool-loop tail into (assistant, tool, tool, ...) rounds.
+    """Group complete native batches and assistant/synthetic-user result pairs.
 
-    A ``role: "tool"`` message is only valid while the assistant message that
-    emitted its ``tool_call_id`` is still present, so grouping is what makes
-    trimming safe.
+    Reject orphan or mismatched native results rather than replaying a broken
+    assistant/tool sequence or silently trimming half of a batch.
     """
     groups: list[list[dict]] = []
     for msg in tail:
-        if msg.get("role") == "tool" and groups:
+        role = msg.get("role")
+        if role == "tool":
+            if not groups or not groups[-1][0].get("tool_calls"):
+                raise ValueError("Orphan tool result in tool history")
+            groups[-1].append(msg)
+        elif (
+            role == "user"
+            and groups
+            and groups[-1][0].get("role") == "assistant"
+            and len(groups[-1]) == 1
+            and str(msg.get("content") or "").startswith("=== TOOL RESULTS ===\n")
+        ):
             groups[-1].append(msg)
         else:
             groups.append([msg])
+    for group in groups:
+        calls = group[0].get("tool_calls") or []
+        if not calls:
+            continue
+        ids = [str(call.get("id") or "") for call in calls]
+        results = [str(msg.get("tool_call_id") or "") for msg in group[1:]]
+        if not all(ids) or len(set(ids)) != len(ids) or sorted(ids) != sorted(results):
+            raise ValueError("Incomplete or mismatched native tool-call batch")
     return groups
+
+
+def _truncate_history_text(content: str, limit: int, label: str) -> str:
+    """Shorten a replay string without inventing new omission counts on retries."""
+    if len(content) <= limit:
+        return content
+    match = _HISTORY_MARKER_RE.search(content)
+    body = content[: match.start()] if match else content
+    omitted = int(match.group(1)) if match else 0
+    retained = min(len(body), limit)
+    while retained:
+        missing = omitted + len(body) - retained
+        marker = f"\n… [{missing} chars truncated from {label}]"
+        if retained + len(marker) <= limit:
+            return body[:retained] + marker
+        retained -= max(1, retained + len(marker) - limit)
+    marker = f"\n… [{omitted + len(body)} chars truncated from {label}]"
+    return marker if len(marker) <= limit else "…"[:limit]
+
+
+def _fit_tool_group(group: list[dict], limit: int) -> None:
+    """Share one strict char allowance across every result in a batch."""
+    for msg in group:
+        calls = msg.get("tool_calls") or []
+        if calls:
+            msg["tool_calls"] = elide_tool_calls_for_history(
+                calls, max_args_chars=max(160, 4_000 // len(calls))
+            )
+    fixed = sum(message_chars(msg) for msg in group)
+    contents = [msg for msg in group if isinstance(msg.get("content"), str)]
+    fixed -= sum(len(msg["content"]) for msg in contents)
+    if fixed > limit:
+        raise ValueError("Tool-call IDs, names, or arguments exceed history budget")
+    available = limit - fixed
+    if sum(len(msg["content"]) for msg in contents) <= available:
+        return
+    low, high = 0, max(len(msg["content"]) for msg in contents)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if sum(min(len(msg["content"]), mid) for msg in contents) <= available:
+            low = mid
+        else:
+            high = mid - 1
+    for msg in contents:
+        label = "tool result" if msg.get("role") == "tool" else "tool history"
+        msg["content"] = _truncate_history_text(msg["content"], low, label)
 
 
 def trim_tool_tail(
@@ -1901,110 +1887,98 @@ def trim_tool_tail(
     max_messages: int = TOOL_TAIL_MAX_MESSAGES,
     max_chars: int = TOOL_TAIL_MAX_CHARS,
 ) -> list[dict]:
-    """Bound a tool-loop tail by size AND count, oldest round first.
+    """Compact before evicting; retain only complete groups under both caps.
 
-    Never slices mid-round: a plain ``tail[-24:]`` can cut an assistant message
-    away from the ``role: "tool"`` replies carrying its tool_call_ids, which
-    OpenAI-compatible providers reject with a 400 ("tool_call_id not found").
-    Whole rounds are dropped instead, and the newest round always survives so
-    the model still sees what it just ran.
+    The newest whole batch receives at most 24k of the total 36k chars.
+    Batches with more messages than the count cap or immutable overhead beyond
+    the char cap must be rejected by the caller before executing their tools.
     """
     groups = tool_tail_groups(tail)
-    used = sum(message_chars(m) for m in tail)
-    count = len(tail)
-    while len(groups) > 1 and (count > max_messages or used > max_chars):
-        dropped = groups.pop(0)
-        count -= len(dropped)
-        used -= sum(message_chars(m) for m in dropped)
+    while len(groups) > 1 and sum(map(len, groups)) > max_messages:
+        groups.pop(0)
+    if not groups:
+        return []
+    if len(groups[-1]) > max_messages:
+        raise ValueError("Newest tool-call batch exceeds history message cap")
     _compact_old_tool_results(groups)
+    group_limit = min(TOOL_TAIL_NEWEST_GROUP_CHARS, max_chars)
+    _fit_tool_group(groups[-1], group_limit)
+    for group in groups[:-1]:
+        _fit_tool_group(group, group_limit)
+    used = sum(message_chars(msg) for group in groups for msg in group)
+    while len(groups) > 1 and used > max_chars:
+        room = max_chars - sum(
+            message_chars(msg) for group in groups[:-1] for msg in group
+        )
+        if room >= min(16_000, group_limit):
+            _fit_tool_group(groups[-1], room)
+            used = sum(message_chars(msg) for group in groups for msg in group)
+            if used <= max_chars:
+                break
+        dropped = groups.pop(0)
+        used -= sum(message_chars(msg) for msg in dropped)
     return [msg for group in groups for msg in group]
 
 
 def _compact_old_tool_results(groups: list[list[dict]]) -> None:
-    """Shrink older tool results so a huge dump cannot evict the other file.
-
-    The newest round stays intact (the model just produced it). Earlier
-    rounds already got a follow-up turn; keeping a 40k HTML dump of them
-    only inflates the tail until trim_tool_tail drops the sibling read.
-    """
-    if len(groups) < 2:
-        return
-    marker_prefix = "\n… ["
+    """Compact all older replay text before considering whole-group eviction."""
     for group in groups[:-1]:
         for msg in group:
-            if msg.get("role") != "tool":
-                continue
             content = msg.get("content")
-            if not isinstance(content, str) or len(content) <= TOOL_RESULT_COMPACT_CHARS:
-                continue
-            omitted = len(content) - TOOL_RESULT_COMPACT_CHARS
-            msg["content"] = (
-                content[:TOOL_RESULT_COMPACT_CHARS]
-                + f"{marker_prefix}{omitted} chars truncated from earlier tool result]"
-            )
-
-
-# Site tools carry the page itself in arguments. Replacing that with
-# ``[large content omitted, N chars]`` made the follow-up model write the
-# placeholder onto the live site. Keep the real HTML for these.
-KEEP_FULL_TOOL_ARGS: frozenset[str] = frozenset(
-    {
-        "create_site",
-        "edit_site",
-        "site_server",
-        "site_test",
-    }
-)
+            if isinstance(content, str):
+                label = (
+                    "earlier tool result" if msg.get("role") == "tool" else "tool history"
+                )
+                msg["content"] = _truncate_history_text(
+                    content, TOOL_RESULT_COMPACT_CHARS, label
+                )
 
 
 def elide_tool_calls_for_history(
     tool_calls: list[dict],
     *,
-    heavy_keys: tuple[str, ...] = ("body", "content", "code", "html", "data"),
     max_chars: int = 2000,
+    max_args_chars: int = 4000,
 ) -> list[dict]:
-    """Copy tool_calls with huge argument strings elided for context budget.
-
-    Site-building tools are left intact: the next turn needs the real HTML
-    to keep editing, and an omitted-placeholder looks like page content.
-    """
+    """Copy calls with bounded public arguments; never edit executable calls."""
     import copy
     import json
 
     out = copy.deepcopy(tool_calls or [])
     for call in out:
         fn = call.get("function")
-        name = ""
-        if isinstance(fn, dict):
-            name = str(fn.get("name") or "")
-        elif isinstance(call.get("name"), str):
-            name = call["name"]
-        if name in KEEP_FULL_TOOL_ARGS:
-            continue
         if not isinstance(fn, dict):
             continue
         raw_args = fn.get("arguments")
         if isinstance(raw_args, str):
             try:
-                args = json.loads(raw_args) if raw_args.strip() else {}
+                args = json.loads(raw_args.strip() or "{}")
             except json.JSONDecodeError:
-                if len(raw_args) > max_chars:
-                    fn["arguments"] = json.dumps(
-                        {"_elided": f"[large arguments omitted, {len(raw_args)} chars]"}
-                    )
+                fn["arguments"] = json.dumps({"_elided": f"[malformed arguments omitted, {len(raw_args)} chars]"})
                 continue
         elif isinstance(raw_args, dict):
             args = raw_args
         else:
             continue
         if not isinstance(args, dict):
+            fn["arguments"] = json.dumps({"_elided": f"[non-object arguments omitted, {len(str(raw_args))} chars]"})
             continue
+        original_chars = len(raw_args) if isinstance(raw_args, str) else len(json.dumps(raw_args, ensure_ascii=False))
         changed = False
-        for key in heavy_keys:
-            val = args.get(key)
-            if isinstance(val, str) and len(val) > max_chars:
-                args[key] = f"[large {key} omitted, {len(val)} chars]"
+        for key, value in args.items():
+            limit = 300 if key == "reasoning" else max_chars
+            if isinstance(value, str) and len(value) > limit:
+                if key == "reasoning":
+                    marker = f"… [{len(value)} chars total; reasoning shortened]"
+                    args[key] = value[: limit - len(marker)] + marker
+                else:
+                    args[key] = f"[large {key} omitted, {len(value)} chars]"
                 changed = True
-        if changed:
-            fn["arguments"] = json.dumps(args, ensure_ascii=False)
+        encoded = json.dumps(args, ensure_ascii=False)
+        if len(encoded) > max_args_chars:
+            fn["arguments"] = json.dumps(
+                {"_elided": f"[large arguments omitted, {original_chars} chars]"}
+            )
+        elif changed or isinstance(raw_args, dict) or not raw_args.strip() or len(raw_args) > max_args_chars:
+            fn["arguments"] = encoded
     return out

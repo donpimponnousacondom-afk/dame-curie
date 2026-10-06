@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from bot_tools import HDImageGeneratorTool, ImageGeneratorTool, SendFileTool, SendMediaTool
+from bot_tools import ImageGeneratorTool, SendFileTool, SendMediaTool
 from tool_schemas import TOOL_PARAMETERS, result_contract
 
 
@@ -16,24 +16,25 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 CDN = "https://cdn.discordapp.com/attachments/10/20/image.png"
 
 
-@pytest.fixture(params=["pollinations", "normal-native", "hd-native", "hd-chat"])
+@pytest.fixture(params=[False, True], ids=["generation", "edit"])
 def image_delivery(request, monkeypatch, tmp_path):
-    profile = request.param
+    editing = request.param
     config = SimpleNamespace(
-        MAXWELL_SITE_DIR=str(tmp_path / "site"),
-        MAXWELL_PUBLIC_BASE_URL="https://images.example.invalid",
-        IMAGE_GEN_PROTOCOL="pollinations" if profile == "pollinations" else "images",
-        IMAGE_GEN_BASE_URL="https://normal.example.invalid/v1",
-        POLLINATIONS_MODEL="flux",
-        GEMINI_IMAGE_PROTOCOL="images" if profile == "hd-native" else "chat_completions",
-        GEMINI_IMAGE_BASE_URL="https://hd.example.invalid/v1",
+        DAME_CURIE_SITE_DIR=str(tmp_path / "site"),
+        DAME_CURIE_PUBLIC_BASE_URL="https://images.example.invalid",
+        IMAGE_GEN_PROTOCOL="images",
+        IMAGE_GEN_BASE_URL="https://images.example.invalid/v1",
+        IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
+        IMAGE_GEN_MODEL="synthetic-image-a",
+        IMAGE_GEN_QUALITY="low",
+        IMAGE_GEN_TIMEOUT=300,
     )
     bot = SimpleNamespace(
         config=config,
         memory=SimpleNamespace(add_to_channel_memory=AsyncMock()),
         _current_progress_by_channel={},
     )
-    tool = HDImageGeneratorTool(bot) if profile.startswith("hd-") else ImageGeneratorTool(bot)
+    tool = ImageGeneratorTool(bot)
     posted = SimpleNamespace(attachments=[SimpleNamespace(url=CDN)])
     message = SimpleNamespace(
         attachments=[], reply=AsyncMock(return_value=posted),
@@ -43,12 +44,7 @@ def image_delivery(request, monkeypatch, tmp_path):
     response.__aenter__ = AsyncMock(return_value=response)
     response.__aexit__ = AsyncMock(return_value=None)
     encoded = base64.b64encode(PNG).decode()
-    payload = (
-        {"choices": [{"message": {"images": [
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}},
-        ]}}]}
-        if profile == "hd-chat" else {"data": [{"b64_json": encoded}]}
-    )
+    payload = {"data": [{"b64_json": encoded}]}
     response.text = AsyncMock(return_value=json.dumps(payload))
     session = MagicMock()
     session.get.return_value = response
@@ -59,20 +55,21 @@ def image_delivery(request, monkeypatch, tmp_path):
     monkeypatch.setattr(tool, "_signal_streaming", signal)
     return SimpleNamespace(
         tool=tool, message=message, session=session, response=response,
-        signal=signal, site=tmp_path / "site", profile=profile,
+        signal=signal, site=tmp_path / "site", editing=editing,
+        reference="data:image/png;base64," + encoded if editing else None,
     )
 
 
 @pytest.mark.parametrize("arguments", [{}, {"auto_send": False}])
 def test_default_image_generation_persists_without_delivery(image_delivery, arguments):
     case = image_delivery
-    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", **arguments))
+    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", image=case.reference, **arguments))
     paths = list(case.site.glob("_images/*.png"))
     assert len(paths) == 1
     assert paths[0].read_bytes() == PNG
     assert paths[0].with_suffix(".txt").read_bytes() == b"a red fox"
     assert set(case.site.glob("_images/*")) == {paths[0], paths[0].with_suffix(".txt")}
-    assert "generated, NOT sent" in result
+    assert ("edited, NOT sent" if case.editing else "generated, NOT sent") in result
     assert f"Local path: {paths[0]}" in result
     assert f"Permanent URL: https://images.example.invalid/bot/_images/{paths[0].name}" in result
     assert f'send_file(path="{paths[0]}", caption="...")' in result
@@ -88,7 +85,7 @@ def test_default_image_generation_persists_without_delivery(image_delivery, argu
 
 def test_auto_send_uploads_exactly_once_with_terminal_marker(image_delivery):
     case = image_delivery
-    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", auto_send=True))
+    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", image=case.reference, auto_send=True))
     assert result.startswith("__IMAGE_SENT__ ")
     assert "sent to chat:" in result
     assert "do not resend the image or its URL" in result
@@ -110,8 +107,8 @@ def test_default_persistence_failure_is_not_delivery_or_regeneration(image_deliv
     case = image_delivery
     blocked = tmp_path / "not-a-directory"
     blocked.write_bytes(b"synthetic blocker")
-    case.tool.bot.config.MAXWELL_SITE_DIR = str(blocked)
-    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox"))
+    case.tool.bot.config.DAME_CURIE_SITE_DIR = str(blocked)
+    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", image=case.reference))
     assert result.startswith("Error:")
     assert "saving the local/public copy failed" in result
     assert "NOT sent" in result
@@ -124,11 +121,26 @@ def test_default_persistence_failure_is_not_delivery_or_regeneration(image_deliv
     assert case.session.get.call_count + case.session.post.call_count == 1
 
 
+def test_auto_send_can_deliver_once_even_if_local_persistence_fails(image_delivery, tmp_path):
+    case = image_delivery
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_bytes(b"synthetic blocker")
+    case.tool.bot.config.DAME_CURIE_SITE_DIR = str(blocked)
+    result = asyncio.run(case.tool.execute(
+        case.message, prompt="a red fox", image=case.reference, auto_send=True,
+    ))
+    assert result.startswith("__IMAGE_SENT__ ")
+    assert f"Image URL: {CDN}" in result
+    case.message.channel.send.assert_awaited_once()
+    assert case.message.channel.send.await_args.kwargs["file"].fp.getvalue() == PNG
+    case.session.post.assert_called_once()
+
+
 @pytest.mark.parametrize("auto_send", [False, True])
 def test_generation_error_has_no_success_marker_or_retry(image_delivery, auto_send):
     case = image_delivery
     case.response.status = 503
-    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", auto_send=auto_send))
+    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", image=case.reference, auto_send=auto_send))
     assert result.startswith("Error")
     assert "__IMAGE_SENT__" not in result
     assert list(case.site.glob("_images/*")) == []
@@ -141,7 +153,7 @@ def test_upload_failure_has_no_success_marker_and_keeps_generated_file(image_del
     case.message.channel.send.side_effect = discord.Forbidden(
         SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions",
     )
-    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", auto_send=True))
+    result = asyncio.run(case.tool.execute(case.message, prompt="a red fox", image=case.reference, auto_send=True))
     assert result.startswith("Error:")
     assert "__IMAGE_SENT__" not in result
     paths = list(case.site.glob("_images/*.png"))
@@ -155,7 +167,7 @@ def test_upload_failure_has_no_success_marker_and_keeps_generated_file(image_del
 
 def test_generated_path_can_be_presented_once_with_caption(image_delivery):
     case = image_delivery
-    asyncio.run(case.tool.execute(case.message, prompt="a red fox"))
+    asyncio.run(case.tool.execute(case.message, prompt="a red fox", image=case.reference))
     path = next(case.site.glob("_images/*.png"))
     assert path.with_suffix(".txt").read_bytes() == b"a red fox"
     result = asyncio.run(SendFileTool(case.tool.bot).execute(
@@ -171,7 +183,7 @@ def test_generated_path_can_be_presented_once_with_caption(image_delivery):
 
 @pytest.fixture(params=["inline", "path", "media"])
 def caption_delivery(request, monkeypatch, tmp_path):
-    config = SimpleNamespace(MAXWELL_SITE_DIR=str(tmp_path))
+    config = SimpleNamespace(DAME_CURIE_SITE_DIR=str(tmp_path))
     bot = SimpleNamespace(config=config)
     posted = SimpleNamespace(attachments=[SimpleNamespace(url=CDN)])
     message = SimpleNamespace(
@@ -264,21 +276,18 @@ def test_send_file_missing_reply_parent_keeps_caption_in_fallback_post():
     assert message.channel.send.await_args.kwargs["file"].fp.getvalue() == b"note"
 
 
-@pytest.mark.parametrize("name,tool_class", [
-    ("image_generator", ImageGeneratorTool), ("hd_image", HDImageGeneratorTool),
-])
-def test_image_schema_and_prompt_describe_conditional_delivery(name, tool_class):
-    parameters = TOOL_PARAMETERS[name]
+def test_image_schema_and_prompt_describe_conditional_delivery():
+    parameters = TOOL_PARAMETERS["image_generator"]
     auto_send = parameters["properties"]["auto_send"]
     assert auto_send["type"] == "boolean"
     assert auto_send["default"] is False
     assert "auto_send" not in parameters.get("required", [])
-    assert inspect.signature(tool_class.execute).parameters["auto_send"].default is False
-    description = tool_class(None).get_description()
-    assert "default false" in description
+    assert inspect.signature(ImageGeneratorTool.execute).parameters["auto_send"].default is False
+    description = ImageGeneratorTool(None).get_description()
+    assert "By default" in description
     assert "send_file(path=..., caption=...)" in description
     assert "__IMAGE_SENT__" in description
-    assert "auto_send=true" in result_contract(name)
+    assert "auto_send=true" in result_contract("image_generator")
 
 
 @pytest.mark.parametrize("name", ["send_file", "send_media"])

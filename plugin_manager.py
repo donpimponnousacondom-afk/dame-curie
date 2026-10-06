@@ -856,7 +856,7 @@ class PluginManager:
                     "tools": list(data["tools"].keys()),
                     "enabled_globally": globally_enabled,
                     "enabled_for_you": user_enabled,
-                    # The ,plugin command path reads user_active; the tool path
+                    # The !plugin command path reads user_active; the tool path
                     # reads enabled_for_you. Both names, one value, so neither
                     # caller has to guess (the command used to KeyError here).
                     "user_active": user_enabled,

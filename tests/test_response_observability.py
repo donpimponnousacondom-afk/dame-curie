@@ -10,6 +10,8 @@ from provider_telemetry import CallMetrics
 from response_observability import (
     DEFAULT_FOOTER_FORMAT,
     FOOTER_MARKER,
+    PROVENANCE_UNKNOWN,
+    TURN_INPUT,
     DeliveryMeasurements,
     RunningBuild,
     capture_running_build,
@@ -87,6 +89,117 @@ def fake_bot(**kwargs):
     )
 
 
+class RecordingObserver:
+    """Stands in for the optional Dirac smoke observer."""
+
+    def __init__(self):
+        self.token = object()
+        self.started = []
+        self.delivered_calls = []
+        self.finished = []
+
+    def start(self, input_id, channel_id, task):
+        self.started.append((input_id, channel_id, task))
+        return self.token
+
+    def delivered(self, input_id, channel_id, message_id, notice=False):
+        self.delivered_calls.append((input_id, channel_id, message_id))
+
+    def finish(self, input_id, channel_id, returned, token):
+        self.finished.append((input_id, channel_id, returned, token))
+
+
+def test_record_delivery_reports_only_the_active_turn_input(metrics):
+    observer = RecordingObserver()
+    bot = fake_bot(_turn_observer=observer)
+    token = TURN_INPUT.set("4242")
+    try:
+        record_delivery(bot, Channel(100), SimpleNamespace(id=11), metrics)
+    finally:
+        TURN_INPUT.reset(token)
+    assert observer.delivered_calls == [("4242", "100", "11")]
+
+
+def test_delivery_without_turn_input_or_observer_is_unchanged(metrics):
+    record_delivery(fake_bot(), Channel(100), SimpleNamespace(id=11), metrics)
+    observer = RecordingObserver()
+    assert TURN_INPUT.get() == ""
+    record_delivery(fake_bot(_turn_observer=observer), Channel(100), SimpleNamespace(id=11), metrics)
+    assert observer.delivered_calls == []
+
+
+def test_broken_observer_cannot_cost_a_delivery(metrics):
+    class BrokenObserver(RecordingObserver):
+        def delivered(self, input_id, channel_id, message_id, notice=False):
+            raise RuntimeError("observer down")
+
+    bot = fake_bot(_turn_observer=BrokenObserver())
+    registry = bot._delivery_measurements = DeliveryMeasurements()
+    token = TURN_INPUT.set("4242")
+    try:
+        record_delivery(bot, Channel(100), SimpleNamespace(id=11), metrics)
+    finally:
+        TURN_INPUT.reset(token)
+    assert registry.lookup("100", "11") is not None
+
+
+def test_run_queued_reply_brackets_the_turn_with_the_observer():
+    from bot import MaxwellBot
+
+    async def scenario():
+        observer = RecordingObserver()
+        seen = []
+
+        async def handle(message, content):
+            seen.append((str(message.id), content))
+            return "answer"
+
+        bot = SimpleNamespace(_turn_observer=observer, _handle_message=handle)
+        message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
+        result = await MaxwellBot._run_queued_reply(bot, message, "hi")
+        return observer, seen, result
+
+    observer, seen, result = asyncio.run(scenario())
+    assert result == "answer"
+    assert seen == [("77", "hi")]
+    assert [(i, c) for i, c, _ in observer.started] == [("77", "100")]
+    assert observer.started[0][2] is not None  # the turn's own task
+    assert observer.finished == [("77", "100", True, observer.token)]
+
+
+def test_run_queued_reply_closes_the_input_when_the_turn_raises():
+    from bot import MaxwellBot
+
+    async def scenario():
+        observer = RecordingObserver()
+
+        async def handle(message, content):
+            raise RuntimeError("turn failed")
+
+        bot = SimpleNamespace(_turn_observer=observer, _handle_message=handle)
+        message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
+        with pytest.raises(RuntimeError):
+            await MaxwellBot._run_queued_reply(bot, message, "hi")
+        return observer
+
+    observer = asyncio.run(scenario())
+    assert observer.finished == [("77", "100", False, observer.token)]
+
+
+def test_run_queued_reply_forwards_unchanged_without_an_observer():
+    from bot import MaxwellBot
+
+    async def scenario():
+        async def handle(message, content):
+            return "answer"
+
+        bot = SimpleNamespace(_handle_message=handle)
+        message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
+        return await MaxwellBot._run_queued_reply(bot, message, "hi")
+
+    assert asyncio.run(scenario()) == "answer"
+
+
 def test_footer_tokens_and_estimates(metrics):
     measured = replace(
         metrics, input_source="cl100k_base", output_source="mixed", ttft_estimated=True
@@ -151,9 +264,9 @@ def test_split_reserves_footer_once_preserves_body_and_fences(metrics):
 
 @pytest.mark.parametrize(
     "platform,enabled,measured",
-    [("discord", False, True), ("telegram", True, True), ("discord", True, False)],
+    [("discord", False, True), ("discord", True, False)],
 )
-def test_disabled_telegram_and_no_call_have_identical_body(
+def test_disabled_footer_and_no_call_have_identical_body(
     metrics, platform, enabled, measured
 ):
     bot = fake_bot(_control={"footer_enabled": enabled})
@@ -260,7 +373,7 @@ def test_partial_send_failure_returns_clean_success_and_only_sent_ids(metrics):
     asyncio.run(scenario())
 
 
-def test_targeted_send_registers_destination_and_telegram_stays_plain(metrics):
+def test_targeted_send_registers_destination(metrics):
     from bot_tools import SendMessageTool
 
     async def scenario():
@@ -275,12 +388,6 @@ def test_targeted_send_registers_destination_and_telegram_stays_plain(metrics):
         )
         assert bot._delivery_measurements.lookup("100") is None
         assert bot._delivery_measurements.lookup("200") is not None
-        message.tool_platform = "telegram"
-        await SendMessageTool(bot).execute(
-            message, content="telegram", _response_metrics=metrics
-        )
-        assert message.channel.sent[0].content == "telegram"
-        assert bot._delivery_measurements.lookup("100") is None
 
     asyncio.run(scenario())
 
@@ -350,14 +457,14 @@ def test_progress_registers_only_actual_success(metrics, edit_fails, send_fails)
             record_delivery(bot, message.channel, sent, metrics)
             done.set()
 
-        assert await progress.transition_to_final("answer", on_delivered=delivered)
-        assert bot._delivery_measurements.lookup("100") is None
+        settled = await progress.transition_to_final("answer", on_delivered=delivered)
+        assert settled is not (edit_fails and send_fails)
         if send_fails:
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            assert bot._delivery_measurements.lookup("100") is None
+            assert not done.is_set()
             assert callbacks == []
         else:
-            await asyncio.wait_for(done.wait(), timeout=1)
+            assert done.is_set()
             expected = 1000 if edit_fails else 33
             assert callbacks == [expected]
             assert bot._delivery_measurements.lookup("100")[0] == str(expected)
@@ -383,10 +490,9 @@ def test_footer_commands_auth_validation_and_static_replies(
     async def scenario():
         bot = fake_bot(
             _is_admin=lambda uid: uid == 7,
-            config=SimpleNamespace(DATA_DIR=str(tmp_path), MAXWELL_PROMPTS_DIR=""),
+            config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR=""),
             command_prefix="!",
             _ai_concurrency=2,
-            _apply_x_control=lambda control: None,
             _sync_audio_input_flags=lambda: None,
             _conversation_watch_enabled=lambda: True,
         )
@@ -447,7 +553,7 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
         assert "must be in this channel" in message.channel.sent[-1].content
         message.content = "!version"
         await MaxwellBot._handle_command(bot, message)
-        assert "Checkout at boot:" in message.channel.sent[-1].content
+        assert "Provenance: checkout at boot" in message.channel.sent[-1].content
         assert all(
             sent.content.startswith("```\n") and sent.content.endswith("\n```")
             and FOOTER_MARKER not in sent.content
@@ -470,9 +576,9 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
 
 @pytest.fixture
 def runtime_provider():
-    from providers import OllamaProvider
+    from providers import OpenAICompatibleProvider
 
-    provider = OllamaProvider(
+    provider = OpenAICompatibleProvider(
         base_url="https://private-user:private-pass@loaded.example/secret-path?token=secret-query#secret-fragment",
         model="loaded-model",
         max_tokens=100,
@@ -544,16 +650,11 @@ def test_debug_loaded_runtime_before_completion_without_config_reads(runtime_pro
 @pytest.mark.parametrize("measured_endpoint", ["primary", "fallback", "vision"])
 def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metrics, measured_endpoint):
     from bot import MaxwellBot
-    from providers import ProviderEndpoint
 
     async def scenario():
-        runtime_provider._endpoints.append(ProviderEndpoint(
-            "fallback", "https://fallback-user:fallback-pass@fallback.example/private?key=fallback-secret",
-            "loaded-fallback", "fallback-key",
-        ))
         bot = fake_bot(
             _is_admin=lambda uid: True, command_prefix="!", ai_provider=runtime_provider,
-            config=SimpleNamespace(OLLAMA_MODEL="stale-config-model", OLLAMA_BASE_URL="https://stale.example"),
+            config=SimpleNamespace(OPENAI_MODEL="stale-config-model", OPENAI_BASE_URL="https://stale.example"),
         )
         message = Message(content="!debug")
         measured = replace(metrics, model="old-request-override", provider="old.example", endpoint=measured_endpoint)
@@ -563,14 +664,14 @@ def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metr
         runtime, measurement = text.split("\n\n", 1)
         assert "Primary model: loaded-model" in runtime
         assert "Primary provider: loaded.example" in runtime
-        assert "Fallback model: loaded-fallback" in runtime
-        assert "Fallback provider: fallback.example" in runtime
-        assert "Per-request fallback/overrides may differ" in runtime
+        assert len(runtime_provider._endpoints) == 1
+        assert "Fallback model:" not in runtime
+        assert "Fallback provider:" not in runtime
         assert "Measured bot message: 999" in measurement
         assert "Model: old-request-override" in measurement
         assert f"Provider: old.example ({measured_endpoint})" in measurement
         assert "TTFT: 125ms | TPS: 25.0 tok/s" in measurement
-        for absent in ("old-request-override", "old.example", "stale-config-model", "stale.example", "fallback-user", "fallback-pass", "fallback-secret", "fallback-key"):
+        for absent in ("old-request-override", "old.example", "stale-config-model", "stale.example"):
             assert absent not in runtime
         assert FOOTER_MARKER not in text
         assert bot._delivery_measurements.lookup("100")[1] is measured
@@ -615,6 +716,7 @@ def test_version_is_frozen_after_source_head_changes(
 ):
     import response_observability as observability
 
+    monkeypatch.delenv("DAME_CURIE_STARTUP_GIT_SOCKET", raising=False)
     (tmp_path / ".git").mkdir()
     calls = []
     outputs = iter(
@@ -639,7 +741,8 @@ def test_version_is_frozen_after_source_head_changes(
         lambda *args, **kwargs: pytest.fail("version queried git after startup"),
     )
     assert snapshot.format() == first
-    assert "dirty at startup: yes" in first
+    assert "dirty: yes" in first
+    assert "Provenance: checkout at boot" in first
     assert len(calls) == 3
     assert snapshot.commit == "a" * 40
     assert snapshot.date == utc_date
@@ -699,12 +802,12 @@ def test_footer_does_not_ping_but_body_mentions_remain(metrics):
 def test_background_producing_call_survives_string_recovery_without_error_borrow(
     metrics, fail_followup
 ):
-    from jobs import run_background_job
+    from jobs import BackgroundJob, run_background_job
     from providers import ProviderResult
 
     async def scenario():
         message = Message()
-        job = SimpleNamespace(
+        job = BackgroundJob(
             id="job", guild_id="9", channel_id="100", user_id="7", goal="test", context=""
         )
         manager = SimpleNamespace(
@@ -726,6 +829,8 @@ def test_background_producing_call_survives_string_recovery_without_error_borrow
         bot = fake_bot(
             bg_jobs=manager,
             config=SimpleNamespace(),
+            memory=SimpleNamespace(get_server_prompt=lambda server_id: None),
+            _get_personality=lambda: "Synthetic personality",
             _message_tool_platform=lambda message: "discord",
             _tool_system_prompt=lambda *args, **kwargs: "",
             _build_openai_tools=lambda *args, **kwargs: [],
@@ -881,8 +986,13 @@ def test_self_memory_and_reply_quote_strip_footer_before_persistence(metrics):
     assert FOOTER_MARKER in MaxwellBot._message_memory_content(bot, message)
 
 
-def test_version_without_git_is_honest_unknown(tmp_path):
+def test_version_without_git_is_honest_unknown(monkeypatch, tmp_path):
+    import response_observability as observability
+
+    monkeypatch.delenv("DAME_CURIE_STARTUP_GIT_SOCKET", raising=False)
+    monkeypatch.setattr(observability.shutil, "which", lambda name: None)
     snapshot = capture_running_build(tmp_path)
     assert snapshot.commit == snapshot.branch == "unknown"
     assert snapshot.dirty is None
+    assert snapshot.provenance == PROVENANCE_UNKNOWN
     assert snapshot.python.startswith("3.14")

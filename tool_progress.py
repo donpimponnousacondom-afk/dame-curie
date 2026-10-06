@@ -15,13 +15,6 @@ web_search, and the only feedback was the post-hoc reply. Users thought
 the bot was stuck. The typing indicator isn't enough for tool calls that
 take longer than ~10s or for tools that have meaningful internal phases.
 
-Discord vs Telegram
--------------------
-Discord supports message.edit() natively. The Telegram adapter in this
-codebase does NOT (thin shim around sendMessage). On Telegram we
-degrade to: post a single "working…" message at start, delete at end,
-no live edits.
-
 Rate limits
 -----------
 Discord's per-channel edit limit is 5 edits / 5s. We coalesce edits
@@ -46,10 +39,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# asyncio keeps only a weak reference to a running task. A detached
-# create_task() whose handle nobody holds can be collected mid-flight, which
-# here means a progress message that never gets edited to its final content or
-# never gets deleted. Hold a strong ref until the task completes.
+# Cosmetic progress tasks remain detached and need a strong reference until
+# they finish. Final reply delivery is awaited by its originating turn.
+from response_observability import notice_send  # noqa: E402
 from utils import _spawn_background as _fire_and_forget  # noqa: E402
 
 
@@ -88,7 +80,7 @@ _HARD_FALLBACK_CHARS = 4000
 _VISIBLE_STRIP_CHARS = set("{}[\\]\"`:")
 
 # Code-snippet preview budget. The model often spends its time
-# generating a large artifact (full HTML document for create_site, a
+# generating a large artifact (full file contents for send_file, a
 # multi-line shell command, etc.) that the user can't see at all while
 # the tool runs. We surface a SHORT head of the artifact on the
 # progress line so the user can watch the code scroll by in real time.
@@ -179,7 +171,6 @@ class ToolProgress:
 
     def __init__(self, message: Any):
         self._msg = message
-        self._platform = str(getattr(message, "tool_platform", "discord") or "discord")
         self._posted: Any = None
         self._post_task: asyncio.Task | None = None
         self._last_edit: float = 0.0
@@ -216,21 +207,10 @@ class ToolProgress:
     async def start(self) -> None:
         if self._stopped or self._posted is not None or self._post_task is not None:
             return
-        if self._platform != "discord":
-            try:
-                self._posted = True
-                await self._post_reply("working on it…")
-            except Exception as e:  # noqa: BLE001
-                logger.debug("Telegram progress post failed: %s", e)
-                self._posted = None
-            return
         await self._do_deferred_post()
 
     async def start_defer(self) -> None:
         if self._stopped or self._posted is not None or self._post_task is not None:
-            return
-        if self._platform != "discord":
-            await self.start()
             return
         try:
             self._post_task = asyncio.create_task(self._do_deferred_post())
@@ -256,7 +236,10 @@ class ToolProgress:
             if self._stopped or self._tool_streaming or self._posted is not None:
                 return
             content = self._render()
-            posted = await self._post_reply(content)
+            # Transient progress, never an answer: the turn's output is what it
+            # posts outside these, or this message turned into the reply later.
+            with notice_send():
+                posted = await self._post_reply(content)
             if self._stopped:
                 if posted is not None:
                     with contextlib.suppress(Exception):
@@ -274,7 +257,7 @@ class ToolProgress:
         """Post the progress message to the channel (NOT as a reply).
 
         Falls back to reply() if the message object doesn't expose a
-        channel send (Telegram adapter, mocked tests).
+        channel send (mocked tests).
         """
         msg = self._msg
         channel = getattr(msg, "channel", None)
@@ -334,8 +317,6 @@ class ToolProgress:
         """
         if self._stopped or self._tool_streaming:
             return
-        if self._platform != "discord":
-            return
 
         prev_tool = self._current_tool
         self._current_tool = tool_name
@@ -388,8 +369,6 @@ class ToolProgress:
         """
         if self._stopped or self._tool_streaming:
             return
-        if self._platform != "discord":
-            return
 
         if tool_name:
             self._current_tool = tool_name
@@ -428,7 +407,8 @@ class ToolProgress:
             if not first_flush and now - self._last_edit < _TOKEN_TICK_INTERVAL:
                 return
             try:
-                await self._posted.edit(content=content)
+                with notice_send():
+                    await self._posted.edit(content=content)
                 self._last_edit = time.monotonic()
                 self._last_content = content
                 self._edits_made += 1
@@ -593,9 +573,6 @@ class ToolProgress:
             self._deferred_task = None
         if not self._posted:
             return
-        if self._platform != "discord":
-            self._posted = None
-            return
         posted = self._posted
         self._posted = None
         try:
@@ -617,18 +594,12 @@ class ToolProgress:
         the existing progress message in place instead of deleting
         + reposting. Avoids the delete-then-fresh-post flicker.
 
-        2026-07-21: was ``await self._posted.edit()`` which made the
-        caller wait on a Discord round-trip before posting the reply.
-        Now fire-and-forget so the reply is not blocked on Discord
-        latency. Returns synchronously based on whether we have a
-        posted message to edit; the actual edit happens in the
-        background. If the bot is also racing a stop() (e.g. the
-        tool's finally block already scheduled a delete), we still
-        return True here and the background task will either land
-        the edit or fall through to delete — either way the user
-        sees one message.
+        The caller skips its first reply chunk when this returns True, so
+        the edit or fallback send must settle before the turn can finish.
+        An uncertain cancelled edit is never deleted: Discord may have
+        applied it before cancellation reached this task.
         """
-        if self._stopped or self._platform != "discord" or not self._posted:
+        if self._stopped or not self._posted:
             return False
         if not content:
             return False
@@ -639,26 +610,10 @@ class ToolProgress:
         if self._deferred_task and not self._deferred_task.done():
             self._deferred_task.cancel()
             self._deferred_task = None
-        try:
-            _fire_and_forget(self._background_transition(posted, content, on_delivered=on_delivered))
-        except RuntimeError:
-            with contextlib.suppress(Exception):
-                await posted.edit(content=content)
-                if on_delivered is not None:
-                    on_delivered(posted)
-        return True
+        return await self._deliver_final(posted, content, on_delivered=on_delivered)
 
-    async def _background_transition(self, posted: Any, content: str, *, on_delivered=None) -> None:
-        """Edit the message in place to the final reply. Fire-and-forget.
-
-        The caller treats a True return from ``transition_to_final`` as "the
-        reply has been delivered" and skips sending the first chunk itself.
-        So if this edit fails — the progress message was deleted by a racing
-        stop(), a moderator removed it, the edit 404s — the user's answer is
-        gone with only a debug line to show for it. Fall back to posting the
-        content as a fresh message so a failed edit costs a cosmetic flicker
-        instead of the whole reply.
-        """
+    async def _deliver_final(self, posted: Any, content: str, *, on_delivered=None) -> bool:
+        """Report whether an edit or fallback send actually settled."""
         try:
             await posted.edit(content=content)
         except Exception as e:  # noqa: BLE001
@@ -670,18 +625,29 @@ class ToolProgress:
         else:
             if on_delivered is not None:
                 on_delivered(posted)
-            return
+            return True
         channel = getattr(self._msg, "channel", None)
         if channel is None:
             logger.error("Transition fallback impossible: no channel; reply dropped")
-            return
+            _fire_and_forget(self._bg_delete(posted))
+            return False
         try:
             sent = await channel.send(content)
+        except asyncio.CancelledError:
+            _fire_and_forget(self._bg_delete(posted))
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("Transition fallback send failed; reply dropped: %s", e)
-        else:
-            if on_delivered is not None:
-                on_delivered(sent)
+            _fire_and_forget(self._bg_delete(posted))
+            return False
+        if sent is None:
+            logger.error("Transition fallback send returned no message; reply unconfirmed")
+            _fire_and_forget(self._bg_delete(posted))
+            return False
+        if on_delivered is not None:
+            on_delivered(sent)
+        _fire_and_forget(self._bg_delete(posted))
+        return True
 
 
 def make_progress(message: Any) -> ToolProgress:

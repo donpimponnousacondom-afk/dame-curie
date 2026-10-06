@@ -1,242 +1,260 @@
 import asyncio
+import base64
 import json
+import runpy
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bot_tools import HDImageGeneratorTool
+import config as config_module
+from bot import MaxwellBot
+from bot_tools import ImageGeneratorTool
+from config import _json_env
+from tool_schemas import TOOL_PARAMETERS, build_openai_tools
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+MODELS = {"synthetic-image-a": "Illustrations", "synthetic-image-b": "Reference edits"}
 
 
 @pytest.fixture
-def hd_image(monkeypatch):
+def image_tool(monkeypatch):
     config = SimpleNamespace(
-        OLLAMA_BASE_URL="https://openrouter.ai/api/v1",
-        OLLAMA_API_KEY="synthetic-chat-key",
-        OLLAMA_MODEL="synthetic-chat-model",
-        OLLAMA_EXTRA_BODY={"provider": {"only": ["synthetic-chat-provider"]}},
-        GEMINI_IMAGE_BASE_URL="",
-        GEMINI_IMAGE_API_KEY="",
+        OPENAI_BASE_URL="https://chat.example.invalid/v1",
+        OPENAI_API_KEY="synthetic-chat-key",
+        IMAGE_GEN_PROTOCOL="images",
+        IMAGE_GEN_BASE_URL="https://images.example.invalid/v1",
+        IMAGE_GEN_API_KEY="synthetic-image-key",
+        IMAGE_GEN_MODELS=MODELS.copy(),
+        IMAGE_GEN_MODEL="synthetic-image-a",
+        IMAGE_GEN_QUALITY="low",
+        IMAGE_GEN_TIMEOUT=300,
     )
-    tool = HDImageGeneratorTool(
-        SimpleNamespace(
-            config=config,
-            memory=SimpleNamespace(add_to_channel_memory=AsyncMock()),
-            _current_progress_by_channel={},
-        )
-    )
+    tool = ImageGeneratorTool(SimpleNamespace(
+        config=config,
+        memory=SimpleNamespace(add_to_channel_memory=AsyncMock()),
+        _current_progress_by_channel={},
+    ))
     message = SimpleNamespace(
         attachments=[],
-        channel=SimpleNamespace(
-            id=42,
-            send=AsyncMock(return_value=SimpleNamespace(attachments=[])),
-        ),
+        channel=SimpleNamespace(id=42, send=AsyncMock(return_value=SimpleNamespace(attachments=[]))),
     )
     response = MagicMock(status=200)
     response.__aenter__ = AsyncMock(return_value=response)
     response.__aexit__ = AsyncMock(return_value=None)
-    response.text = AsyncMock(
-        return_value=json.dumps(
-            {"choices": [{"message": {"content": "data:image/png;base64,aW1hZ2U="}}]}
-        )
-    )
+    response.text = AsyncMock(return_value=json.dumps({
+        "data": [{"b64_json": base64.b64encode(PNG).decode()}],
+    }))
     session = MagicMock()
     session.post.return_value = response
     get_session = AsyncMock(return_value=session)
     monkeypatch.setattr("bot_tools._get_shared_session", get_session)
-    monkeypatch.setattr("bot_tools._persist_public_image", MagicMock(return_value=("", "")))
+    monkeypatch.setattr("bot_tools._persist_public_image", MagicMock(return_value=("/synthetic/image.png", "")))
     return tool, message, session, get_session
 
 
 @pytest.mark.parametrize("base", [None, "", "   ", "/"])
-@pytest.mark.parametrize("image", [None, "https://example.invalid/input.png"])
-def test_chat_openrouter_settings_cannot_enable_hd_image(hd_image, monkeypatch, base, image):
-    tool, message, session, get_session = hd_image
+@pytest.mark.parametrize("image", [None, "data:image/png;base64,aW1hZ2U="])
+def test_chat_settings_cannot_enable_unconfigured_images(image_tool, base, image):
+    tool, message, session, get_session = image_tool
     if base is None:
-        del tool.bot.config.GEMINI_IMAGE_BASE_URL
+        del tool.bot.config.IMAGE_GEN_BASE_URL
     else:
-        tool.bot.config.GEMINI_IMAGE_BASE_URL = base
-    message.attachments = [
-        SimpleNamespace(
-            url="https://example.invalid/attachment.png",
-            content_type="image/png",
-            filename="attachment.png",
-        )
-    ]
-    load_image = AsyncMock(return_value=(b"image", ""))
-    monkeypatch.setattr(tool, "_load_one", load_image)
-
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox", image=image))
-
-    assert result == (
-        "Error: HD image generation is not configured "
-        "(set GEMINI_IMAGE_BASE_URL explicitly; chat settings are not used)"
-    )
-    load_image.assert_not_awaited()
+        tool.bot.config.IMAGE_GEN_BASE_URL = base
+    result = asyncio.run(tool.execute(message, prompt="a red fox", image=image))
+    assert result.startswith("Error:")
+    assert "IMAGE_GEN_BASE_URL" in result
     get_session.assert_not_awaited()
-    session.get.assert_not_called()
     session.post.assert_not_called()
     message.channel.send.assert_not_awaited()
 
 
-@pytest.mark.parametrize("suffix", ["", "/", "/chat/completions"])
-@pytest.mark.parametrize("model", ["", "dedicated-image-model"])
-def test_hd_image_uses_explicit_endpoint_and_key(hd_image, suffix, model):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "https://images.example.invalid/v1" + suffix
-    tool.bot.config.GEMINI_IMAGE_API_KEY = "synthetic-image-key"
-    tool.bot.config.GEMINI_IMAGE_MODEL = model
-
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox"))
-
-    assert result.startswith("__IMAGE_SENT__ HD image generated successfully")
-    session.post.assert_called_once()
-    args, kwargs = session.post.call_args
-    assert args == ("https://images.example.invalid/v1/chat/completions",)
-    assert kwargs["headers"] == {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer synthetic-image-key",
-    }
-    assert kwargs["json"] == {
-        "model": model or "gemini-3.1-flash-image",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "a red fox"}]}],
-    }
-    message.channel.send.assert_awaited_once()
-
-
-@pytest.mark.parametrize("key_present", [True, False])
-def test_explicit_keyless_image_endpoint_never_borrows_chat_key(hd_image, key_present):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "http://127.0.0.1:1234/v1"
-    if not key_present:
-        del tool.bot.config.GEMINI_IMAGE_API_KEY
-
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox"))
-
-    assert result.startswith("__IMAGE_SENT__ HD image generated successfully")
-    session.post.assert_called_once()
-    args, kwargs = session.post.call_args
-    assert args == ("http://127.0.0.1:1234/v1/chat/completions",)
-    assert kwargs["headers"] == {"Content-Type": "application/json"}
-    message.channel.send.assert_awaited_once()
-
-
-IMAGE_URI = "data:image/png;base64,aW1hZ2U="
-IMAGE_PART = {"type": "image_url", "image_url": {"url": IMAGE_URI}}
-
-
-@pytest.mark.parametrize(
-    "response_message",
-    [
-        {"content": None, "images": [IMAGE_PART]},
-        {"content": "", "images": [IMAGE_PART]},
-        {"content": "Here is the image.", "images": [IMAGE_PART]},
-        {"content": [{"type": "text", "text": "Here it is."}], "images": [IMAGE_PART]},
-        {"content": [IMAGE_PART]},
-        {"content": [{"type": "text", "text": "Here it is."}, IMAGE_PART]},
-        {"content": IMAGE_URI, "images": [IMAGE_PART]},
-        {"content": [{"type": "text", "text": f"![image]({IMAGE_URI})"}]},
-    ],
-)
-def test_supported_image_responses_generate_and_upload_once(hd_image, response_message):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "https://images.example.invalid/v1"
-    session.post.return_value.text.return_value = json.dumps(
-        {"choices": [{"message": response_message, "finish_reason": "stop"}]}
-    )
-
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox"))
-
-    session.post.assert_called_once()
-    assert result.startswith("__IMAGE_SENT__ HD image generated successfully")
-    message.channel.send.assert_awaited_once()
-    assert message.channel.send.await_args.kwargs["file"].fp.getvalue() == b"image"
-    tool.bot.memory.add_to_channel_memory.assert_awaited_once()
-
-
-@pytest.mark.parametrize(
-    "response_body",
-    [
-        {},
-        {"choices": []},
-        {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]},
-        {"choices": [{"message": {"content": None}, "finish_reason": "stop"}]},
-        {"choices": [{"message": {"content": ""}, "finish_reason": "content_filter"}]},
-        {"choices": [{"message": {"content": None, "refusal": "Request refused."}}]},
-        {"choices": [{"message": {"content": "I cannot generate this image."}}]},
-        {"choices": [{"message": {"content": "data:image/png;base64,a"}}]},
-    ],
-)
-@pytest.mark.parametrize("editing", [False, True])
-def test_unusable_response_does_not_repeat_billable_generation(
-    hd_image, monkeypatch, response_body, editing
-):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "https://images.example.invalid/v1"
-    session.post.return_value.text.return_value = json.dumps(response_body)
-    monkeypatch.setattr(tool, "_shrink", lambda raw: (raw, "image/png"))
-
-    result = asyncio.run(
-        tool.execute(message, auto_send=True, prompt="a red fox", image=IMAGE_URI if editing else None)
-    )
-
-    session.post.assert_called_once()
+@pytest.mark.parametrize("model", [None, "", "synthetic-image-a"])
+def test_native_model_default_and_exact_override(image_tool, model):
+    tool, message, session, _ = image_tool
+    arguments = {} if model is None else {"model": model}
+    result = asyncio.run(tool.execute(message, prompt="a red fox", **arguments))
+    assert "generated, NOT sent" in result
+    assert session.post.call_args.args == ("https://images.example.invalid/v1/images/generations",)
+    assert session.post.call_args.kwargs["json"]["model"] == (model or "synthetic-image-a")
+    assert session.post.call_args.kwargs["json"]["prompt"] == "a red fox"
+    assert session.post.call_args.kwargs["headers"]["Authorization"] == "Bearer synthetic-image-key"
     message.channel.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("model", ["synthetic-image-A", "synthetic-image-a ", "unknown-image", "synthetic-image-b"])
+def test_unlisted_model_rejected_before_http(image_tool, model):
+    tool, message, session, get_session = image_tool
+    result = asyncio.run(tool.execute(message, prompt="a red fox", model=model))
     assert result.startswith("Error:")
-    assert "may have been billed" not in result
-    assert "not retried" in result
-    assert "do not automatically repeat" in result
-    assert "reword" not in result.lower()
-    assert "real people" not in result
-    assert "image_generator" not in result
+    assert "model" in result.lower()
+    get_session.assert_not_awaited()
+    session.post.assert_not_called()
 
 
-@pytest.mark.parametrize("status", [400, 429, 500, 502, 503])
-@pytest.mark.parametrize("body", [
-    "upstream unavailable",
-    '{"error":{"message":"Safety rejection; request ID synthetic-hd-id.","type":"image_generation_user_error","code":"moderation_blocked"}}',
+@pytest.mark.parametrize("models,default", [
+    ({}, ""),
+    ({"synthetic-image-a": "Illustrations"}, ""),
+    ({"synthetic-image-a": "Illustrations"}, "unlisted-image"),
 ])
-def test_http_error_does_not_repeat_billable_generation(hd_image, status, body):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "https://images.example.invalid/v1"
-    session.post.return_value.status = status
-    session.post.return_value.text.return_value = body
-
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox"))
-
-    session.post.assert_called_once()
-    message.channel.send.assert_not_awaited()
-    assert f"API returned status {status}" in result
-    assert body in result
-    assert "may have been billed" not in result
-    assert "not retried" in result
+def test_missing_or_invalid_image_configuration_errors_before_http(image_tool, models, default):
+    tool, message, session, get_session = image_tool
+    tool.bot.config.IMAGE_GEN_MODELS = models
+    tool.bot.config.IMAGE_GEN_MODEL = default
+    result = asyncio.run(tool.execute(message, prompt="a red fox"))
+    assert result.startswith("Error:")
+    get_session.assert_not_awaited()
+    session.post.assert_not_called()
 
 
-@pytest.mark.parametrize("error", [asyncio.TimeoutError, ConnectionError])
-@pytest.mark.parametrize("stage", ["__aenter__", "text"])
-def test_transport_failure_does_not_repeat_billable_generation(hd_image, error, stage):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "https://images.example.invalid/v1"
-    getattr(session.post.return_value, stage).side_effect = error("response lost")
+@pytest.fixture
+def isolated_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAME_CURIE_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.setenv("DISCORD_TOKEN", "synthetic-token")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://chat.example.invalid/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "synthetic-chat-model")
+    monkeypatch.setenv("OPENAI_EXTRA_BODY", "{}")
+    monkeypatch.setenv("OPENAI_EXTRA_HEADERS", "{}")
+    monkeypatch.setenv("ENABLE_SHELL", "false")
+    for name in ("IMAGE_GEN_BASE_URL", "IMAGE_GEN_API_KEY", "IMAGE_GEN_MODELS", "IMAGE_GEN_MODEL", "IMAGE_GEN_EXTRA_BODY", "IMAGE_GEN_QUALITY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("IMAGE_GEN_PROTOCOL", "images")
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", "auto")
+    return config_module.__file__
 
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox"))
 
-    session.post.assert_called_once()
-    message.channel.send.assert_not_awaited()
-    assert result.startswith("Error")
-    assert "may have been billed" not in result
-    assert "not retried" in result
+@pytest.mark.parametrize("raw", ["{not json", "[]", "null", '"synthetic-image-a"'])
+@pytest.mark.parametrize("setting", ["IMAGE_GEN_MODELS", "IMAGE_GEN_EXTRA_BODY"])
+def test_config_image_model_map_requires_strict_json_object(isolated_config, image_tool, monkeypatch, raw, setting):
+    monkeypatch.setenv("IMAGE_GEN_MODELS", json.dumps(MODELS))
+    monkeypatch.setenv(setting, raw)
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://images.example.invalid/v1")
+    monkeypatch.setenv("IMAGE_GEN_MODEL", "synthetic-image-a")
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", "true")
+    with pytest.raises(ValueError, match=f"{setting}.*JSON object"):
+        _json_env(setting, strict=True)
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.ENABLE_IMAGE_GEN is False
+    assert setting in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert raw not in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert any(
+        name == "ENABLE_IMAGE_GEN" and not enabled and loaded.IMAGE_GEN_CONFIG_ERROR in reason
+        for name, _, enabled, reason in loaded.feature_report()
+    )
+    tool, message, session, get_session = image_tool
+    tool.bot.config = loaded
+    result = asyncio.run(tool.execute(message, prompt="a red fox"))
+    assert loaded.IMAGE_GEN_CONFIG_ERROR in result
+    get_session.assert_not_awaited()
+    session.post.assert_not_called()
 
 
-def test_non_json_response_does_not_repeat_billable_generation(hd_image):
-    tool, message, session, _ = hd_image
-    tool.bot.config.GEMINI_IMAGE_BASE_URL = "https://images.example.invalid/v1"
-    session.post.return_value.text.return_value = "<html>upstream response lost</html>"
+@pytest.mark.parametrize("switch,enabled", [("auto", True), ("true", True), ("false", False)])
+@pytest.mark.parametrize("quality", [None, "", "high"])
+def test_config_accepts_valid_operator_model_map(isolated_config, image_tool, monkeypatch, switch, enabled, quality):
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://images.example.invalid/v1")
+    monkeypatch.setenv("IMAGE_GEN_MODELS", json.dumps(MODELS))
+    monkeypatch.setenv("IMAGE_GEN_MODEL", "synthetic-image-b")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "")
+    if quality is not None:
+        monkeypatch.setenv("IMAGE_GEN_QUALITY", quality)
+    monkeypatch.setenv("IMAGE_GEN_EXTRA_BODY", '{"response_format":"b64_json","seed":0}')
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", switch)
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.IMAGE_GEN_MODELS == MODELS
+    assert loaded.IMAGE_GEN_CONFIG_ERROR == ""
+    assert loaded.ENABLE_IMAGE_GEN is enabled
+    assert loaded.IMAGE_GEN_API_KEY == ""
+    assert loaded.IMAGE_GEN_QUALITY == quality
+    assert loaded.IMAGE_GEN_EXTRA_BODY == {"response_format": "b64_json", "seed": 0}
+    assert next(row[2] for row in loaded.feature_report() if row[0] == "ENABLE_IMAGE_GEN") is enabled
+    tool, message, session, get_session = image_tool
+    tool.bot.config = loaded
+    result = asyncio.run(tool.execute(message, prompt="a red fox"))
+    if not enabled:
+        assert "ENABLE_IMAGE_GEN=false" in result
+        get_session.assert_not_awaited()
+        session.post.assert_not_called()
+    else:
+        expected = {"model": "synthetic-image-b", "prompt": "a red fox", "response_format": "b64_json", "seed": 0}
+        if quality is not None:
+            expected["quality"] = quality
+        assert session.post.call_args.kwargs["json"] == expected
+        assert loaded.IMAGE_GEN_EXTRA_BODY == {"response_format": "b64_json", "seed": 0}
 
-    result = asyncio.run(tool.execute(message, auto_send=True, prompt="a red fox"))
 
-    session.post.assert_called_once()
-    message.channel.send.assert_not_awaited()
-    assert "non-JSON response" in result
-    assert "may have been billed" not in result
-    assert "not retried" in result
+@pytest.mark.parametrize("models,default,protocol,diagnostic", [
+    ({"synthetic-image-a": ""}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": "   "}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({" synthetic-image-a": "Illustrations"}, " synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": 123}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": "private-description", "synthetic-image-b": ""}, "synthetic-image-a", "images", "IMAGE_GEN_MODELS"),
+    ({"synthetic-image-a": "Illustrations"}, "", "images", "IMAGE_GEN_MODEL"),
+    ({"synthetic-image-a": "Illustrations"}, "unknown-image", "images", "IMAGE_GEN_MODEL"),
+    ({"synthetic-image-a": "Illustrations"}, "synthetic-image-a", "pollinations", "IMAGE_GEN_PROTOCOL"),
+])
+def test_config_rejects_invalid_image_map_or_default(isolated_config, monkeypatch, models, default, protocol, diagnostic):
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://images.example.invalid/v1")
+    monkeypatch.setenv("IMAGE_GEN_MODELS", json.dumps(models))
+    monkeypatch.setenv("IMAGE_GEN_MODEL", default)
+    monkeypatch.setenv("IMAGE_GEN_PROTOCOL", protocol)
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", "true")
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.ENABLE_IMAGE_GEN is False
+    assert diagnostic in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert "Illustrations" not in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert "private-description" not in loaded.IMAGE_GEN_CONFIG_ERROR
+    assert any(
+        name == "ENABLE_IMAGE_GEN" and not enabled and diagnostic in reason
+        for name, _, enabled, reason in loaded.feature_report()
+    )
+
+
+@pytest.mark.parametrize("switch", ["auto", "false"])
+def test_unconfigured_image_profile_can_boot_but_cannot_generate(isolated_config, image_tool, monkeypatch, switch):
+    monkeypatch.setenv("ENABLE_IMAGE_GEN", switch)
+    loaded = runpy.run_path(isolated_config)["Config"]
+    loaded.validate()
+    assert loaded.ENABLE_IMAGE_GEN is False
+    assert "IMAGE_GEN_BASE_URL" in loaded.IMAGE_GEN_CONFIG_ERROR
+    tool, message, session, get_session = image_tool
+    tool.bot.config = loaded
+    result = asyncio.run(tool.execute(message, prompt="a red fox"))
+    assert result.startswith("Error:")
+    assert loaded.IMAGE_GEN_CONFIG_ERROR in result
+    get_session.assert_not_awaited()
+    session.post.assert_not_called()
+
+
+def test_dynamic_schema_exposes_every_configured_model_without_mutating_shared_schema(image_tool):
+    tool, _, _, _ = image_tool
+    tool.bot.config.IMAGE_GEN_MODELS = {
+        f"synthetic-image-{index}": f"Operator description {index} " + "details " * 30
+        for index in range(8)
+    }
+    tool.bot.config.IMAGE_GEN_MODEL = "synthetic-image-0"
+    original = deepcopy(TOOL_PARAMETERS["image_generator"]["properties"])
+    first = build_openai_tools({"image_generator": tool}, max_description_chars=64)[0]["function"]
+    second = build_openai_tools({"image_generator": tool}, max_description_chars=64)[0]["function"]
+    assert not {"model", "quality"} & first["parameters"]["properties"].keys()
+    assert second["parameters"]["properties"] == first["parameters"]["properties"]
+    assert not {"voice", "language"} & TOOL_PARAMETERS["tts"]["properties"].keys()
+    image_description = first["parameters"]["properties"]["image"]["description"]
+    assert "empty string" in image_description and "empty JSON list" in image_description
+    assert TOOL_PARAMETERS["image_generator"]["properties"] == original
+
+    bot = SimpleNamespace(
+        tools={"image_generator": tool},
+        _control={"tools_enabled": True, "native_tool_calls": False, "disabled_tools": []},
+    )
+    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
+    guidance = MaxwellBot._tool_system_prompt(bot)
+    assert "image_generator" in guidance
+    for model in tool.bot.config.IMAGE_GEN_MODELS:
+        if model != tool.bot.config.IMAGE_GEN_MODEL:
+            assert model not in guidance

@@ -9,7 +9,7 @@ from .events import LogEvent
 from .history import EventHistory, HistoryEntry
 from .paging import fit, page_text
 from .safety import terminal_text
-from .scopes import SCOPE_KEYS
+from .scopes import SCOPE_KEYS, VIEWER_SCOPE
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ def summary(event: LogEvent) -> str:
         text = SUMMARY_RENDERERS[event.kind](event)
     else:
         text = event.message.split("\n", 1)[0]
-        if event.parse_error:
+        if event.parse_error and event.scope != VIEWER_SCOPE:
             text = f"[unparsed: {event.parse_error}] " + text
     return terminal_text(text)
 
@@ -108,9 +108,10 @@ def live_lines(history: EventHistory, state: ConsoleState, width: int, height: i
     used = 0
     for entry in history.recent():
         event = entry.first
-        if entry.sequence in hidden or not state.visible(event):
+        if not state.visible(event) or (event.scope != VIEWER_SCOPE and entry.sequence in hidden):
             continue
-        block = [heading(entry, width, note=notes.get(entry.sequence, ""))]
+        note = "" if event.scope == VIEWER_SCOPE else notes.get(entry.sequence, "")
+        block = [heading(entry, width, note=note)]
         depth = state.tool_depth if event.scope == "tool" else state.provider_depth if event.scope == "provider" else 2
         if not state.folded and not event.live_collapsed and depth:
             details = entry_evidence(entry) if depth == 2 else terminal_text(f"logger={event.logger} kind={event.kind} records={len(entry.records)}")
@@ -166,9 +167,9 @@ def inspector_text(history: EventHistory, state: ConsoleState, color: bool) -> s
 def render_frame(history: EventHistory, state: ConsoleState, width: int, height: int, *, color: bool,
                  hidden: frozenset[int] = frozenset(), notes: tuple[tuple[int, str], ...] = ()) -> list[PaintLine]:
     body_height = max(1, height - 3)
-    title = f"Curie logs | {state.view} | {LEVELS[state.verbosity]} | {'folded' if state.folded else 'expanded'} | T={state.tool_depth} P={state.provider_depth}"
+    title = f"Curie logs | {state.view} | {LEVELS[state.verbosity]} | {'folded' if state.folded else 'expanded'} | T={state.tool_depth} P={state.provider_depth} | time=local"
     scope_line = "Scopes " + " ".join(f"{key}{'+' if scope in state.enabled_scopes else '-'}" for key, scope in SCOPE_KEYS.items())
-    scope_line += f" | o Ollama{'+' if state.show_ollama else '-'} | Time: local; P=src P?=TZ? D=Docker O=observed"
+    scope_line += f" | o Ollama{'+' if state.show_ollama else '-'} | P=src P?=TZ? D=Docker O=observed"
     if state.view == "live":
         body = live_lines(history, state, width, body_height, hidden, dict(notes))
     elif state.view in {"recent", "errors"}:

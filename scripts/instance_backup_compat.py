@@ -10,9 +10,9 @@ from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
-from scripts.instance import SLUG, validate_archive
+from scripts.instance import INSTANCE, validate_archive
 
-FORMAT = "maxwell-interpreter-link-v1"
+FORMAT = "dame-curie-interpreter-link-v1"
 INTERPRETER = "/usr/bin/python3"
 
 RECONSTRUCT_PROGRAM = '''payload = json.load(sys.stdin, object_pairs_hook=unique_object)
@@ -101,7 +101,7 @@ def link_record(member: tarfile.TarInfo) -> dict:
 
 def validate_record(record: dict, expected_instance: str, approved_link: str) -> None:
     approved_name(approved_link)
-    if not isinstance(expected_instance, str) or not SLUG.fullmatch(expected_instance):
+    if not isinstance(expected_instance, str) or not INSTANCE.fullmatch(expected_instance) or len(expected_instance) > 30:
         raise ValueError("invalid expected instance")
     if not isinstance(record, dict) or record.keys() != {"format", "instance", "archive_sha256", "link"}:
         raise ValueError("invalid compatibility record fields")
@@ -149,7 +149,7 @@ def validate_pair(derived_archive: Path, sidecar: Path, expected_instance: str, 
             raise ValueError("compatibility archive digest mismatch")
         source.seek(0)
         with tarfile.open(fileobj=source, mode="r:*") as archive:
-            if archive.pax_headers.get("maxwell.compat.link_sha256") != metadata_digest(record):
+            if archive.pax_headers.get("dame-curie.compat.link_sha256") != metadata_digest(record):
                 raise ValueError("compatibility link metadata digest mismatch")
             validate_archive(archive, expected_instance)
             link = tarfile.TarInfo(approved_link)
@@ -162,7 +162,7 @@ def validate_pair(derived_archive: Path, sidecar: Path, expected_instance: str, 
 
 
 def write_filtered_archive(source: tarfile.TarFile, omitted: tarfile.TarInfo, record: dict, output) -> None:
-    headers = {**source.pax_headers, "maxwell.compat.link_sha256": metadata_digest(record)}
+    headers = {**source.pax_headers, "dame-curie.compat.link_sha256": metadata_digest(record)}
     with tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT, pax_headers=headers) as target:
         for member in source.getmembers():
             if member is omitted:
@@ -208,7 +208,7 @@ def reconstruction_request(record: dict, expected_instance: str, *, approved_lin
     validate_record(record, expected_instance, approved_link)
     program = "\n".join((
         "import json, os, re, sys\nfrom contextlib import ExitStack\nfrom pathlib import Path",
-        f"FORMAT = {FORMAT!r}\nINTERPRETER = {INTERPRETER!r}\nSLUG = re.compile({SLUG.pattern!r})",
+        f"FORMAT = {FORMAT!r}\nINTERPRETER = {INTERPRETER!r}\nINSTANCE = re.compile({INSTANCE.pattern!r})",
         inspect.getsource(approved_name), inspect.getsource(validate_record), inspect.getsource(unique_object),
         RECONSTRUCT_PROGRAM,
     ))

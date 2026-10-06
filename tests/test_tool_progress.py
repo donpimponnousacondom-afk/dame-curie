@@ -6,8 +6,7 @@ Covers the four behaviors the user actually cares about:
   3. Rate limit coalesces rapid updates — the channel doesn't see every tick
   4. notify_streaming() + stop() cleanly deletes the message so the
      channel is left with only the tool's own streamed output
-  5. Telegram platform doesn't try to edit (no adapter for it)
-  6. stop() is idempotent and safe from finally blocks
+  5. stop() is idempotent and safe from finally blocks
 
 We test against a fake Message/Channel so we don't need Discord.
 """
@@ -16,6 +15,9 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 # Make sure the repo root is on the path so the test can import
 # `tool_progress` without an installed package.
@@ -235,25 +237,6 @@ def test_notify_streaming_marks_for_deletion():
     assert len(msg.channel.edited) == edits_before
     asyncio.run(prog.stop())
     assert posted_msg in msg.channel.deleted
-
-
-def test_telegram_does_not_try_to_edit():
-    """Telegram adapter in this codebase has no editMessage; we just post
-    one ack message and stop() drops the reference (we don't try to delete
-    by message_id since the adapter doesn't expose a clean fetch)."""
-    msg = FakeMessage(platform="telegram")
-    prog = tool_progress.ToolProgress(msg)
-    asyncio.run(prog.start())
-    # First post went out
-    assert len(msg.channel.sent) == 1
-    # update() should be a no-op (we don't have editMessage on Telegram)
-    edits_before = len(msg.channel.edited)
-    prog._last_edit = 0
-    asyncio.run(prog.update("shell", "any reasoning"))
-    assert len(msg.channel.edited) == edits_before
-    # stop() should NOT try to fetch+delete (no id exposed)
-    asyncio.run(prog.stop())
-    assert msg.channel.deleted == []
 
 
 def test_start_is_idempotent():
@@ -751,147 +734,44 @@ def test_concurrent_progresses_isolated_per_channel():
 
 
 def test_streaming_tick_inserts_space_between_glued_deltas():
-    """Real-API regression: hit kimi-k2.6:cloud and verify the
-    progress UI captures streaming deltas and space-joins them.
-
-    The previous bug: SSE deltas that arrived with no whitespace
-    boundary between them were concatenated into one run ("hello
-    worldThe user wants me to look at the disk.") so _format_thinking
-    saw a single sentence and the progress line never rolled. The fix
-    inserts a space between deltas when neither side has a boundary.
-
-    This test runs against the live provider configured in .env so
-    it verifies the real streaming path end-to-end: HTTP -> SSE
-    parsing -> on_token callback -> tick() -> progress message edit.
-    Skipped if OLLAMA_BASE_URL is not set (CI / no network).
-    """
-    import os as _os
-    from pathlib import Path as _Path
-    # Load .env so OLLAMA_BASE_URL / OLLAMA_MODEL are visible in pytest
-    _env_path = _Path(__file__).resolve().parent.parent / ".env"
-    if _env_path.exists():
-        for _line in _env_path.read_text(encoding="utf-8").splitlines():
-            _line = _line.strip()
-            if not _line or _line.startswith("#") or "=" not in _line:
-                continue
-            _k, _, _v = _line.partition("=")
-            _os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
-    base_url = _os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
-    if not base_url:
-        import pytest
-        pytest.skip("OLLAMA_BASE_URL not set; real-API progress test skipped")
-    model = _os.getenv("OLLAMA_MODEL", "kimi-k2.6:cloud")
-    api_key = _os.getenv("OLLAMA_API_KEY", "")
+    """Synthetic SSE chunks exercise the real parser and progress callback."""
+    import json
+    from providers import _read_sse_response
 
     msg = FakeMessage()
     prog = tool_progress.ToolProgress(msg)
+    deltas = ["Hello world", "The cats purr."]
+    frames = [
+        ("data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": delta}}]}) + "\n\n").encode()
+        for delta in deltas
+    ]
+    frames.extend(
+        [
+            b'data: {"choices":[{"index":0,"finish_reason":"stop"}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
 
-    pending: list = []
+    chunks = AsyncMock()
+    chunks.__aiter__.return_value = [part for frame in frames for part in (frame[:len(frame) // 2], frame[len(frame) // 2:])]
 
     async def drive():
-        from providers import OllamaProvider as _Prov
-
-        prov = _Prov(
-            base_url=base_url,
-            model=model,
-            max_tokens=256,
-            temperature=0.7,
-            api_key=api_key,
-            retry_attempts=1,
-        )
-        fb = _os.getenv("OLLAMA_FALLBACK_BASE_URL", "")
-        if fb:
-            prov._endpoints.append(
-                type(prov._endpoints[0])(
-                    "fallback",
-                    fb,
-                    _os.getenv("OLLAMA_FALLBACK_MODEL", ""),
-                    _os.getenv("OLLAMA_FALLBACK_API_KEY", ""),
-                    True,
-                )
-            )
-        ok = await prov.initialize()
-        assert ok, "provider failed to initialize"
-
         await prog.start()
+        pending = []
 
-        def on_token(tok):
-            c = tok.get("content", "") or ""
-            r = tok.get("reasoning", "") or ""
-            if c or r:
-                pending.append(
-                    asyncio.create_task(
-                        prog.tick(
-                            reasoning_delta=c + r,
-                            tool_name=tok.get("tool_name"),
-                        )
-                    )
-                )
+        def on_token(token):
+            pending.append(
+                asyncio.create_task(prog.tick(reasoning_delta=token["content"]))
+            )
 
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a test bot. Answer in 3-4 short sentences about cats.",
-            },
-            {
-                "role": "user",
-                "content": "Tell me about cats in 3-4 short sentences.",
-            },
-        ]
-        result = await prov.generate_chat_completion(
-            messages, on_token=on_token, timeout=120, max_tokens=256
-        )
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        # Let any coalesced final tick render
-        await asyncio.sleep(3.5)
-
-        edits = [e.content for e in msg.channel.edited]
-        assert edits, "progress message was never edited"
-        # Buffer should be space-joined at word boundaries, not glued.
-        # The original bug glued two letter-runs together with no space
-        # between them ("hello worldThe user" — "d" then "T" with no
-        # boundary). Numbers and hyphens around them (e.g. "12-16" from
-        # the model itself) are not deltas that need spacing.
-        import re as _re2
-        buf = prog._reasoning_buffer
-        buf_compact = _re2.sub(r"[\s\-\d_]+", "", buf)
-        for glued in ["worldThe", "diskThen", "meowingPurring", "catsThey"]:
-            if glued in buf_compact:
-                raise AssertionError(
-                    f"deltas were not space-joined: {glued!r} in {buf!r}"
-                )
-        # The progress message should show the model's rolling output
-        # (the last _VISIBLE_BUDGET chars of the buffer). The buffer
-        # must have grown from at least one tick — i.e. the progress
-        # message captured the streaming text.
-        # At least one edit should reflect the captured text. The
-        # new format is just the rolling tail (no "thinking:" or
-        # "using X:" prefix), so any edit that captured the model's
-        # streaming text is a pass.
-        assert edits, f"no progress edits at all: {msg.channel.edited!r}"
-        # The buffer must show streaming content.
-        assert prog._reasoning_buffer.strip(), (
-            f"no streaming text was captured: {prog._reasoning_buffer!r}"
-        )
-        # Final response should contain the same text as the buffer.
-        # ProviderResult is a str subclass, so str(result) IS the content
-        # we care about. (The real bot reads the .choices[0].message
-        # path; for this test we just want to confirm the stream and
-        # the final agree.)
-        final = str(result)
-        import re as _re
-        buf_words = set(_re.findall(r"\w+", buf.lower()))
-        final_words = set(_re.findall(r"\w+", final.lower()))
-        assert buf_words, f"empty buffer: {buf!r}"
-        assert final_words, f"empty final: {final!r}"
-        # Most of the words should overlap — kimi streamed them too
-        overlap = len(buf_words & final_words)
-        assert overlap >= min(5, len(buf_words) // 2), (
-            f"buffer and final don't agree: buf={buf_words!r} final={final_words!r}"
-        )
+        response = SimpleNamespace(content=SimpleNamespace(iter_any=Mock(return_value=chunks)))
+        result = await _read_sse_response(response, on_token=on_token)
+        await asyncio.gather(*pending)
+        assert result["choices"][0]["message"]["content"] == "Hello worldThe cats purr."
+        assert prog._reasoning_buffer == "Hello world The cats purr."
+        assert msg.channel.edited
+        assert "Hello world" in msg.channel.edited[0].content
         await prog.stop()
-        await prov.close()
 
     asyncio.run(drive())
 
@@ -899,10 +779,8 @@ def test_streaming_tick_inserts_space_between_glued_deltas():
 def test_transition_to_final_falls_back_to_a_fresh_post_when_the_edit_fails():
     """A failed in-place edit must not eat the reply.
 
-    The caller reads True from transition_to_final as "delivered" and skips
-    sending the first chunk itself. The edit runs detached, so if it fails
-    (message deleted underneath us, edit 404s) the user's answer used to
-    vanish with only a debug log line. Post it as a new message instead.
+    The caller skips its first chunk only after the failed edit's fallback
+    send has settled inside transition_to_final.
     """
 
     async def run():
@@ -918,13 +796,23 @@ def test_transition_to_final_falls_back_to_a_fresh_post_when_the_edit_fails():
 
         ok = await prog.transition_to_final("Disk has 50GB free.")
         assert ok is True
-        # Let the detached transition task run.
-        for _ in range(5):
-            await asyncio.sleep(0)
-        return msg
+        assert [m.content for m in msg.channel.sent[1:]] == ["Disk has 50GB free."]
 
-    msg = asyncio.run(run())
-    assert [m.content for m in msg.channel.sent[1:]] == ["Disk has 50GB free."]
+        failed = FakeMessage()
+        failed_prog = tool_progress.ToolProgress(failed)
+        await failed_prog.start()
+        failed.channel.sent[0].edit = boom
+
+        failed.channel.send = AsyncMock(side_effect=RuntimeError("channel send failed"))
+        delivered = []
+        assert await failed_prog.transition_to_final(
+            "Not sent.", on_delivered=delivered.append
+        ) is False
+        await asyncio.sleep(0)
+        assert delivered == []
+        assert failed.channel.sent[0] in failed.channel.deleted
+
+    asyncio.run(run())
 
 
 def test_transition_to_final_does_not_double_post_when_the_edit_works():
@@ -934,10 +822,138 @@ def test_transition_to_final_does_not_double_post_when_the_edit_works():
         await prog.start()
         ok = await prog.transition_to_final("Disk has 50GB free.")
         assert ok is True
-        for _ in range(5):
-            await asyncio.sleep(0)
         return msg
 
     msg = asyncio.run(run())
     assert len(msg.channel.sent) == 1
     assert msg.channel.sent[0].content == "Disk has 50GB free."
+
+
+def test_final_edit_keeps_transition_pending_until_delivery() -> None:
+    async def run() -> None:
+        msg = FakeMessage()
+        prog = tool_progress.ToolProgress(msg)
+        posted = await msg.channel.send("working on it…")
+        prog._posted = posted
+        started = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+        original_edit = posted.edit
+
+        async def blocked_edit(content=None, **kwargs):
+            started.set()
+            await release.wait()
+            await original_edit(content=content, **kwargs)
+
+        posted.edit = blocked_edit
+        transition = asyncio.create_task(
+            prog.transition_to_final("Answer.", on_delivered=delivered.append)
+        )
+        await started.wait()
+        assert not transition.done()
+        assert posted.content == "working on it…"
+        assert delivered == []
+        assert msg.channel.sent == [posted]
+        await prog.stop()
+        assert not transition.done()
+        release.set()
+        assert await transition is True
+        assert delivered == [posted]
+        assert posted.content == "Answer."
+        assert msg.channel.sent == [posted]
+        assert msg.channel.deleted == []
+
+    asyncio.run(run())
+
+
+def test_final_fallback_keeps_transition_pending_until_send() -> None:
+    async def run() -> None:
+        msg = FakeMessage()
+        prog = tool_progress.ToolProgress(msg)
+        posted = await msg.channel.send("working on it…")
+        prog._posted = posted
+        started = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+        original_send = msg.channel.send
+
+        async def failed_edit(content=None, **kwargs):
+            raise RuntimeError("progress was deleted")
+
+        async def blocked_send(content=None, **kwargs):
+            started.set()
+            await release.wait()
+            return await original_send(content=content, **kwargs)
+
+        posted.edit = failed_edit
+        msg.channel.send = blocked_send
+        transition = asyncio.create_task(
+            prog.transition_to_final("Answer.", on_delivered=delivered.append)
+        )
+        await started.wait()
+        assert not transition.done()
+        assert delivered == []
+        assert msg.channel.sent == [posted]
+        release.set()
+        assert await transition is True
+        assert len(msg.channel.sent) == 2
+        assert msg.channel.sent[1].content == "Answer."
+        assert delivered == [msg.channel.sent[1]]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("blocked_step", ["edit", "fallback"])
+def test_cancelled_final_delivery_cleans_progress_without_sending(blocked_step: str) -> None:
+    async def run() -> None:
+        msg = FakeMessage()
+        prog = tool_progress.ToolProgress(msg)
+        posted = await msg.channel.send("working on it…")
+        prog._posted = posted
+        started = asyncio.Event()
+        deleted = asyncio.Event()
+        delivered = []
+        original_delete = posted.delete
+
+        async def tracked_delete():
+            await original_delete()
+            deleted.set()
+
+        original_edit = posted.edit
+
+        async def blocked_edit(content=None, **kwargs):
+            await original_edit(content=content, **kwargs)
+            started.set()
+            await asyncio.Event().wait()
+
+        async def failed_edit(content=None, **kwargs):
+            raise RuntimeError("progress was deleted")
+
+        async def blocked_send(content=None, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        posted.delete = tracked_delete
+        posted.edit = blocked_edit if blocked_step == "edit" else failed_edit
+        if blocked_step == "fallback":
+            msg.channel.send = blocked_send
+        transition = asyncio.create_task(
+            prog.transition_to_final("Answer.", on_delivered=delivered.append)
+        )
+        await started.wait()
+        assert not transition.done()
+        transition.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await transition
+        if blocked_step == "fallback":
+            await asyncio.wait_for(deleted.wait(), timeout=1)
+            assert msg.channel.deleted == [posted]
+        else:
+            assert posted.content == "Answer."
+            assert msg.channel.deleted == []
+        assert delivered == []
+        assert msg.channel.sent == [posted]
+        await prog.stop()
+        assert msg.channel.deleted == ([posted] if blocked_step == "fallback" else [])
+
+    asyncio.run(run())

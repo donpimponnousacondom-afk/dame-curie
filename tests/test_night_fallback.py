@@ -24,8 +24,8 @@ def _make_bot():
         "night_fallback_end_hour": 9,
     }
     bot.config = SimpleNamespace(
-        OLLAMA_FALLBACK_BASE_URL="https://fallback.example/v1",
-        OLLAMA_FALLBACK_MODEL="fallback-model",
+        OPENAI_FALLBACK_BASE_URL="https://fallback.example/v1",
+        OPENAI_FALLBACK_MODEL="fallback-model",
     )
     bot.ai_provider = _FakeProvider()
     bot._sleep_until = 0.0
@@ -38,9 +38,8 @@ def test_night_window_prefers_fallback(monkeypatch):
         bot_mod.time, "localtime", lambda: SimpleNamespace(tm_hour=23)
     )
 
-    assert bot._is_in_night_fallback_window() is True
     asyncio.run(bot._generate_response([{"role": "user", "content": "hi"}]))
-    assert bot.ai_provider.kwargs["prefer_fallback"] is True
+    assert bot.ai_provider.kwargs == {}
 
 
 def test_daytime_keeps_primary_provider(monkeypatch):
@@ -49,7 +48,6 @@ def test_daytime_keeps_primary_provider(monkeypatch):
         bot_mod.time, "localtime", lambda: SimpleNamespace(tm_hour=12)
     )
 
-    assert bot._is_in_night_fallback_window() is False
     asyncio.run(bot._generate_response([{"role": "user", "content": "hi"}]))
     assert "prefer_fallback" not in bot.ai_provider.kwargs
 
@@ -65,11 +63,10 @@ def test_night_window_does_not_put_bot_to_sleep(monkeypatch):
 
 def test_night_fallback_is_disabled_without_a_configured_fallback(monkeypatch):
     bot = _make_bot()
-    bot.config.OLLAMA_FALLBACK_MODEL = ""
+    bot.config.OPENAI_FALLBACK_MODEL = ""
     monkeypatch.setattr(
         bot_mod.time, "localtime", lambda: SimpleNamespace(tm_hour=23)
     )
 
-    assert bot._night_fallback_active() is False
     asyncio.run(bot._generate_response([{"role": "user", "content": "hi"}]))
     assert "prefer_fallback" not in bot.ai_provider.kwargs

@@ -17,7 +17,7 @@ from provider_telemetry import (
     request_text,
     token_count,
 )
-from providers import OllamaProvider, ProviderRequestError, ProviderResult
+from providers import OpenAICompatibleProvider, ProviderIncompleteResponseError, ProviderRequestError, ProviderResult
 from test_provider_resilience import DONE, StreamResponse
 from test_providers import (
     FakeEmptyResponse,
@@ -44,10 +44,10 @@ def sse_frame(delta=None, **fields):
     return b"data: " + json.dumps({**body, **fields}).encode() + b"\n\n"
 
 
-def provider_for(responses, **kwargs):
-    provider = OllamaProvider(
+def provider_for(responses, *, model="model", **kwargs):
+    provider = OpenAICompatibleProvider(
         "https://user:synthetic@example.test/v1?secret=synthetic",
-        "model",
+        model,
         8192,
         0.6,
         **kwargs,
@@ -341,7 +341,8 @@ def test_sse_ttft_ignores_preamble_and_end_before_postprocessing(monkeypatch):
 
 
 @pytest.mark.parametrize("stream", [True, False])
-def test_actual_response_format_and_timing_before_tokenization(monkeypatch, stream):
+@pytest.mark.parametrize("configured", [{}, {"stream": False}, {"stream": True}])
+def test_actual_response_format_and_timing_before_tokenization(monkeypatch, stream, configured):
     now = [10.0]
     monkeypatch.setattr("providers.time.perf_counter", lambda: now[0])
     import provider_telemetry
@@ -366,18 +367,12 @@ def test_actual_response_format_and_timing_before_tokenization(monkeypatch, stre
             yield DONE
 
     response = TimedResponse([], "text/event-stream" if stream else "application/json")
-    provider = provider_for([response])
-    if stream:
-        original = provider._request_payload
-
-        def forced_json(*args, **kwargs):
-            data = original(*args, **kwargs)
-            data["stream"] = False
-            data.pop("stream_options", None)
-            return data
-
-        monkeypatch.setattr(provider, "_request_payload", forced_json)
+    provider = provider_for([response], extra_body=configured)
     result = asyncio.run(provider.generate_response([]))
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6,
+        "messages": [], **configured,
+    }]
     assert result.metrics.stream is stream
     assert result.metrics.elapsed_ms == 4000
     assert result.metrics.ttft_estimated is (not stream)
@@ -445,15 +440,20 @@ def test_unicode_tools_stream_and_json_counts_match():
     assert results[0].metrics.output_bytes == results[1].metrics.output_bytes
 
 
-def test_promoted_reasoning_and_custom_json_are_counted_once():
+def test_reasoning_only_is_terminal_and_custom_json_is_counted_once():
     custom = '{"name": "lookup", "arguments": {"reasoning": "test", "text": "世界"}}'
     provider = provider_for(
-        [json_response({"content": None, "reasoning_content": "answer"})]
+        [json_response({"content": None, "reasoning_content": custom}), json_response()],
+        retry_attempts=5, empty_response_retries=3,
     )
-    provider._reasoning_content_is_answer = lambda *args: True
-    promoted = asyncio.run(provider.generate_response([]))
-    assert promoted == "answer"
-    assert promoted.metrics.output_tokens == count_tokens("answer")
+    with pytest.raises(ProviderIncompleteResponseError):
+        asyncio.run(provider.generate_response([], custom_tool_calls=True))
+    assert len(provider._session.payloads) == len(provider._session.responses) == 1
+    provider._session = FakeSession(json_response({"content": "answer", "reasoning_content": "thought"}))
+    answered = asyncio.run(provider.generate_response([]))
+    assert answered == "answer"
+    assert answered.metrics.output_tokens == count_tokens("answerthought")
+    assert answered.metrics.output_bytes == len("answerthought".encode())
     provider._session = FakeSession(
         StreamResponse([sse_frame({"content": custom}), DONE])
     )
@@ -530,61 +530,79 @@ def test_usage_rejection_is_cached_and_corrected_within_budget(
             json_response(),
         ],
         retry_attempts=attempts,
+        extra_body={"stream": True, "stream_options": {"include_usage": True}},
     )
-    if attempts == 1:
-        with pytest.raises(ProviderRequestError):
-            asyncio.run(provider.generate_response([]))
-        assert len(provider._session.payloads) == 1
-    else:
-        result = asyncio.run(provider.generate_response([]))
-        assert result.metrics.attempt == 2
-        assert len(provider._session.payloads) == 2
-        assert "stream_options" not in provider._session.payloads[1]
-    assert provider._stream_usage_unsupported == {"primary"}
+    with pytest.raises(ProviderRequestError, match="Unknown parameter: stream_options"):
+        asyncio.run(provider.generate_response([]))
+    assert len(provider._session.payloads) == len(provider._session.responses) == 1
     no_wait.assert_not_awaited()
-    provider._session = FakeSession(json_response())
-    asyncio.run(provider.generate_response([]))
-    assert "stream_options" not in provider._session.payloads[0]
+    result = asyncio.run(provider.generate_response([]))
+    assert result.metrics.attempt == 1
+    assert result.metrics.endpoint == "primary"
+    assert result.metrics.stream is False
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+    }] * 2
+    no_wait.assert_not_awaited()
 
 
 def test_corrected_endpoint_is_pinned_not_switched_by_fast_fallback(no_wait):
     provider = provider_for(
         [FakeErrorResponse(422, "include_usage is not supported"), json_response()],
-        fallback_base_url="https://fallback.test",
-        fallback_model="fallback-model",
+        extra_body={
+            "stream": True, "stream_options": {"include_usage": True},
+            "provider": {"only": ["configured"], "allow_fallbacks": False},
+        },
     )
-    result = asyncio.run(provider.generate_response([], fast_fallback=True))
-    assert result.metrics.attempt == 2
+    with pytest.raises(ProviderRequestError, match="include_usage is not supported"):
+        asyncio.run(provider.generate_response([]))
+    assert len(provider._session.payloads) == len(provider._session.responses) == 1
+    result = asyncio.run(provider.generate_response([]))
+    assert result.metrics.attempt == 1
     assert result.metrics.endpoint == "primary"
-    assert provider._session.urls[0] == provider._session.urls[1]
-    fallback = provider._endpoints[1]
-    assert provider._request_payload(fallback, [])["stream_options"] == {
-        "include_usage": True
-    }
+    assert result.metrics.provider == "example.test"
+    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions?secret=synthetic"] * 2
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+        "provider": {"only": ["configured"], "allow_fallbacks": False},
+    }] * 2
     no_wait.assert_not_awaited()
 
 
 def test_correction_does_not_extend_budget_on_final_rejection(no_wait):
     provider = provider_for(
         [
+            FakeErrorResponse(503, "temporarily unavailable"),
             FakeErrorResponse(400, "unsupported stream_options"),
-            FakeErrorResponse(400, "unsupported unrelated"),
+            json_response(),
         ],
         retry_attempts=2,
+        extra_body={"stream": True, "stream_options": {"include_usage": True}},
     )
-    with pytest.raises(ProviderRequestError):
+    with pytest.raises(ProviderRequestError, match="unsupported stream_options"):
         asyncio.run(provider.generate_response([]))
-    assert len(provider._session.payloads) == 2
-    no_wait.assert_not_awaited()
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+    }] * 2
+    assert len(provider._session.responses) == 1
+    assert [call.args[0] for call in no_wait.await_args_list] == [10]
 
 
-def test_forced_json_removes_stream_options(no_wait):
-    provider = provider_for([FakeEmptyResponse(), json_response()], retry_attempts=2)
+@pytest.mark.parametrize("configured", [{}, {"stream": False}, {"stream": True, "stream_options": {"include_usage": True}}])
+def test_forced_json_removes_stream_options(no_wait, configured):
+    provider = provider_for([FakeEmptyResponse(), json_response()], retry_attempts=2, extra_body=configured)
     result = asyncio.run(provider.generate_response([]))
     assert result.metrics.attempt == 2
-    assert provider._session.payloads[0]["stream_options"] == {"include_usage": True}
-    assert not provider._session.payloads[1]["stream"]
-    assert "stream_options" not in provider._session.payloads[1]
+    assert result.metrics.stream is False
+    assert result.metrics.ttft_estimated
+    assert result.metrics.output_tokens == count_tokens("hello")
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6,
+        "messages": [], **configured,
+    }] * 2
     assert [call.args[0] for call in no_wait.await_args_list] == [10]
 
 
@@ -666,22 +684,24 @@ def test_concurrent_response_wrapping_never_reads_last_usage():
     assert first.metrics.call_id != second.metrics.call_id
 
 
-def test_actual_selected_model_override_and_fallback():
-    provider = provider_for([json_response()])
-    primary = asyncio.run(provider.generate_response([], model="actual-override"))
-    assert primary.metrics.model == "actual-override"
+@pytest.mark.parametrize("model", ["configured-model", "unknown/new-model"])
+def test_actual_selected_model_override_and_fallback(model):
     provider = provider_for(
-        [FakeErrorResponse(503, "unavailable"), json_response()],
-        fallback_base_url="https://fallback.test",
-        fallback_model="actual-fallback",
+        [json_response(), FakeErrorResponse(503, "unavailable"), json_response()],
+        model=model,
     )
-    fallback = asyncio.run(
-        provider.generate_response([], model="ignored-on-fallback", fast_fallback=True)
-    )
-    assert fallback.metrics.model == "actual-fallback"
-    assert fallback.metrics.provider == "fallback.test"
-    assert fallback.metrics.endpoint == "fallback"
-    assert fallback.metrics.attempt == 2
+    primary = asyncio.run(provider.generate_response([]))
+    retried = asyncio.run(provider.generate_response([]))
+    assert primary.metrics.model == retried.metrics.model == model
+    assert primary.metrics.provider == retried.metrics.provider == "example.test"
+    assert primary.metrics.endpoint == retried.metrics.endpoint == "primary"
+    assert primary.metrics.attempt == 1
+    assert retried.metrics.attempt == 2
+    assert primary.metrics.call_id != retried.metrics.call_id
+    assert provider._session.urls == ["https://user:synthetic@example.test/v1/chat/completions?secret=synthetic"] * 3
+    assert provider._session.payloads == [{
+        "model": model, "max_tokens": 8192, "temperature": 0.6, "messages": [],
+    }] * 3
 
 
 def test_tokenizer_failure_precedes_provider_network_initialization(monkeypatch):
@@ -690,7 +710,7 @@ def test_tokenizer_failure_precedes_provider_network_initialization(monkeypatch)
 
     initialize = AsyncMock()
     monkeypatch.setattr("providers.local_encoding", missing_asset)
-    monkeypatch.setattr(OllamaProvider, "initialize", initialize)
+    monkeypatch.setattr(OpenAICompatibleProvider, "initialize", initialize)
     with pytest.raises(FileNotFoundError, match="local tokenizer"):
         provider_for([])
     initialize.assert_not_awaited()
@@ -1140,17 +1160,20 @@ def test_failed_attempt_time_is_not_accumulated(monkeypatch):
 def test_usage_correction_preserves_five_attempt_ceiling_and_waits(no_wait):
     provider = provider_for(
         [
-            FakeErrorResponse(400, "unsupported stream_options"),
-            *[FakeErrorResponse(503, "synthetic transient") for _ in range(3)],
+            *[FakeErrorResponse(503, "synthetic transient") for _ in range(4)],
             json_response(),
-        ]
+        ],
+        extra_body={"stream": True, "stream_options": {"include_usage": True}},
     )
     result = asyncio.run(provider.generate_response([]))
     assert result.metrics.attempt == len(provider._session.payloads) == 5
-    assert [call.args[0] for call in no_wait.await_args_list] == [20, 30, 40]
-    assert all(
-        "stream_options" not in payload for payload in provider._session.payloads[1:]
-    )
+    assert result.metrics.stream is False
+    assert result.metrics.output_source == "cl100k_base"
+    assert [call.args[0] for call in no_wait.await_args_list] == [10, 20, 30, 40]
+    assert provider._session.payloads == [{
+        "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
+        "stream": True, "stream_options": {"include_usage": True},
+    }] * 5
 
 
 @pytest.mark.parametrize(

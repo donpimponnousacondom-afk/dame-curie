@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Operate one private rootless Maxwell deployment without loading bot secrets."""
+"""Operate one private rootless dame-curie deployment without loading bot secrets."""
 
 import argparse
 import fcntl
@@ -16,14 +16,21 @@ from pathlib import Path
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
-SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE", "WEB_IMAGE", "WEB_PORT"}
+SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE"}
+OPTIONAL_SETTINGS = {"DAME_CURIE_STAGING", "DAME_CURIE_EMBED_MODE"}
+RETIRED_SETTINGS = {"WEB_IMAGE", "WEB_PORT"}
+BASE_COMPOSE = Path("compose.yaml")
+STAGING_OVERLAY = Path("docker/compose.staging.yaml")
+EXTERNAL_EMBED_OVERLAY = Path("docker/compose.embeddings-external.yaml")
+EMBED_MODES = {"local", "external"}
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?")
+INSTANCE = re.compile(rf"dame-curie(?:-{SLUG.pattern})?")
 IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/:@-]*")
 
 ARCHIVE_PROGRAM = '''import sys, tarfile
 from pathlib import Path
 roots = ("config", "data", "sites", "shell")
-with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", pax_headers={"maxwell.instance": sys.argv[1]}) as archive:
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", pax_headers={"dame-curie.instance": sys.argv[1]}) as archive:
     for root in roots:
         archive.add(Path("/instance") / root, arcname=root)
 '''
@@ -34,6 +41,8 @@ for kind in ("uid", "gid"):
     maps[kind] = [tuple(map(int, line.split())) for line in Path("/proc/self/" + kind + "_map").read_text().splitlines()]
 def owned_filter(member, destination):
     result = tarfile.data_filter(member, destination)
+    if member.isdir():
+        result.mode = member.mode & 0o755
     for kind in ("uid", "gid"):
         value = getattr(member, kind)
         if not any(start <= value < start + count for start, outside, count in maps[kind]):
@@ -46,6 +55,29 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as archive:
 '''
 
 
+def compose_files(staging: bool, embed_mode: str) -> list[Path]:
+    """Select the exact Compose files for one staging/embedding configuration."""
+    files = [CHECKOUT / BASE_COMPOSE]
+    if staging:
+        files.append(CHECKOUT / STAGING_OVERLAY)
+    if embed_mode == "external":
+        files.append(CHECKOUT / EXTERNAL_EMBED_OVERLAY)
+    return files
+
+
+def owned_config_files() -> set[str]:
+    """Config-file labels this checkout can produce, for every supported mode.
+
+    Docker records the file list it was actually given, so accepting only these
+    derived permutations keeps provenance complete without hand-copied paths.
+    """
+    return {
+        ",".join(str(path) for path in compose_files(staging, embed_mode))
+        for staging in (True, False)
+        for embed_mode in sorted(EMBED_MODES)
+    }
+
+
 def parse_settings(text: str) -> dict[str, str]:
     """Parse literal deployment settings; expansion and shell syntax are forbidden."""
     values = {}
@@ -54,21 +86,39 @@ def parse_settings(text: str) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key not in SETTINGS or key in values:
+        if not separator or key not in SETTINGS | OPTIONAL_SETTINGS | RETIRED_SETTINGS or key in values:
             raise ValueError("unknown or duplicate deploy.env setting")
         if not value or any(char.isspace() for char in value) or any(char in value for char in "'\"`$\\;"):
             raise ValueError("deploy.env values must be unquoted literals")
         values[key] = value
-    if values.keys() != SETTINGS:
+    if values.keys() - RETIRED_SETTINGS - OPTIONAL_SETTINGS != SETTINGS:
         raise ValueError("deploy.env must contain exactly the documented settings")
+    retired = values.keys() & RETIRED_SETTINGS
+    if retired and retired != RETIRED_SETTINGS:
+        raise ValueError("remove WEB_IMAGE and WEB_PORT together")
+    if retired:
+        if not IMAGE.fullmatch(values["WEB_IMAGE"]):
+            raise ValueError("invalid retired web image reference")
+        if not values["WEB_PORT"].isdigit() or not 1024 <= int(values["WEB_PORT"]) <= 65535:
+            raise ValueError("retired WEB_PORT must be between 1024 and 65535")
+        for key in RETIRED_SETTINGS:
+            del values[key]
+    if values.get("DAME_CURIE_STAGING", "true") not in {"true", "false"}:
+        raise ValueError("DAME_CURIE_STAGING must be true or false")
+    if values.get("DAME_CURIE_EMBED_MODE", "local") not in EMBED_MODES:
+        raise ValueError("DAME_CURIE_EMBED_MODE must be local or external")
     return values
 
 
-def service_account(instance: str, *, for_logs: bool = False):
-    """Select the fixed service identity, dropping host root before any I/O."""
-    if not SLUG.fullmatch(instance):
-        raise ValueError("instance must be a lowercase slug of 1-30 characters")
-    account = pwd.getpwnam(f"maxwell-{instance}")
+def service_account(instance: str, *, for_logs: bool = False, entrypoint: Path | None = None):
+    """Select the fixed service identity, dropping host root before any I/O.
+
+    A root invocation re-executes `entrypoint` as that identity; it defaults to
+    this module, so every existing caller re-enters `instance.py` unchanged.
+    """
+    if not INSTANCE.fullmatch(instance) or len(instance) > 30:
+        raise ValueError("instance must be dame-curie or dame-curie-<identity>, up to 30 characters")
+    account = pwd.getpwnam(instance)
     if account.pw_uid == 0:
         raise ValueError("service account cannot be root")
     if os.geteuid() == 0:
@@ -82,7 +132,8 @@ def service_account(instance: str, *, for_logs: bool = False):
             "runuser", "-u", account.pw_name, "--", "/usr/bin/env", "-i",
             f"HOME={account.pw_dir}", "PATH=/usr/local/bin:/usr/bin:/bin",
             f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}", *terminal_settings,
-            sys.executable, *(("-B",) if for_logs else ()), str(Path(__file__).resolve()), *sys.argv[1:],
+            sys.executable, *(("-B",) if for_logs else ()),
+            str(entrypoint or Path(__file__).resolve()), *sys.argv[1:],
         ])
     if os.geteuid() != account.pw_uid:
         raise ValueError("run as host root or the instance's own service user")
@@ -105,8 +156,8 @@ class Instance:
 
     def __init__(self, name: str, account):
         self.name = name
-        self.path = Path("/srv/maxwell") / name
-        self.project = f"maxwell-{name}"
+        self.path = Path("/srv") / name
+        self.project = name
         require_private(self.path, account.pw_uid)
         deploy = self.path / "deploy.env"
         require_private(deploy, account.pw_uid, directory=False)
@@ -117,10 +168,8 @@ class Instance:
             raise ValueError("deployment identity, directory, or engine socket mismatch")
         if socket.is_symlink() or not stat.S_ISSOCK(socket.stat().st_mode) or socket.stat().st_uid != account.pw_uid:
             raise ValueError("engine socket is not owned by the service user")
-        if not all(IMAGE.fullmatch(self.values[key]) for key in ("APP_IMAGE", "WEB_IMAGE")):
+        if not IMAGE.fullmatch(self.values["APP_IMAGE"]):
             raise ValueError("invalid image reference")
-        if not self.values["WEB_PORT"].isdigit() or not 1024 <= int(self.values["WEB_PORT"]) <= 65535:
-            raise ValueError("WEB_PORT must be between 1024 and 65535")
         self.env = {"HOME": account.pw_dir, "PATH": "/usr/local/bin:/usr/bin:/bin",
                     "XDG_RUNTIME_DIR": str(socket.parent), "DOCKER_HOST": f"unix://{socket}",
                     "COMPOSE_DISABLE_ENV_FILE": "1", **self.values}
@@ -139,16 +188,29 @@ class Instance:
             raise RuntimeError(f"Docker {args[0]} failed or wrote diagnostics; inspect the private engine directly")
         return result.stdout
 
-    def compose(self, *args: str, log_format: str = "auto") -> None:
+    @property
+    def staging_enabled(self) -> bool:
+        """Whether the staged no-start overlay participates in this deployment."""
+        return self.env.get("DAME_CURIE_STAGING", "true") == "true"
+
+    @property
+    def embed_mode(self) -> str:
+        """Selected embedding deployment: this project's own Ollama, or an external endpoint."""
+        return self.env.get("DAME_CURIE_EMBED_MODE", "local")
+
+    def compose(self, *args: str, log_format: str = "auto", no_keys: bool = False) -> None:
         command = ["docker", "compose", "--project-name", self.project,
-                   "--project-directory", str(CHECKOUT), "--env-file", "/dev/null",
-                   "-f", str(CHECKOUT / "compose.yaml"), *args]
+                   "--project-directory", str(CHECKOUT), "--env-file", "/dev/null"]
+        for path in compose_files(self.staging_enabled, self.embed_mode):
+            command.extend(["-f", str(path)])
+        command.extend(args)
         if args[0] == "logs":
             if __name__ == "__main__" and not __package__:
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
                 from log_filter import follow_logs
             else:
                 from scripts.log_filter import follow_logs
-            follow_logs(command, self.env, output_format=log_format)
+            follow_logs(command, self.env, output_format=log_format, no_keys=no_keys)
         else:
             result = subprocess.run(command, env=self.env)
             if result.returncode:
@@ -161,7 +223,7 @@ class Instance:
 
     def helper(self, program: str, *, writable: bool = False) -> list[str]:
         args = ["docker", "run", "--rm", "-i", "--network", "none", "--read-only",
-                "--label", f"maxwell.instance={self.name}", "--label", "maxwell.kind=backup",
+                "--label", f"dame-curie.instance={self.name}", "--label", "dame-curie.kind=backup",
                 "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN",
                 "--cap-add", "FOWNER", "--security-opt", "no-new-privileges:true"]
         for root in ROOTS:
@@ -173,21 +235,22 @@ class Instance:
 def select_owned(containers: list[dict], name: str, project: str) -> list[dict]:
     """Require ownership labels before any container can be stopped or removed."""
     owned = []
+    config_files = owned_config_files()
     for item in containers:
         labels = item.get("Config", {}).get("Labels") or {}
         compose = labels.get("com.docker.compose.project") == project
-        managed = labels.get("maxwell.instance") == name
+        managed = labels.get("dame-curie.instance") == name
         matching_name = item.get("Name", "").lstrip("/").startswith(project + "-")
         if not (compose or managed or matching_name):
             continue
         if compose:
-            if labels.get("maxwell.instance", name) != name:
+            if labels.get("dame-curie.instance", name) != name:
                 raise ValueError("conflicting instance ownership labels")
             if labels.get("com.docker.compose.service") not in {"bot", "api", "web", "ollama", "ollama-pull"}:
                 raise ValueError("unexpected service in instance project")
-            if labels.get("com.docker.compose.project.config_files") != str(CHECKOUT / "compose.yaml"):
+            if labels.get("com.docker.compose.project.config_files") not in config_files:
                 raise ValueError("Compose container belongs to another checkout")
-        elif not managed or labels.get("maxwell.kind") not in {"shell", "site"}:
+        elif not managed or labels.get("dame-curie.kind") not in {"shell", "site"}:
             raise ValueError("container name has missing or foreign ownership labels")
         owned.append(item)
     return owned
@@ -216,23 +279,25 @@ def quiesce(instance: Instance, running: list[dict]) -> list[dict]:
     return containers
 
 
-def lifecycle(instance: Instance, action: str, *, log_format: str = "auto") -> None:
+def lifecycle(instance: Instance, action: str, *, log_format: str = "auto", no_keys: bool = False) -> None:
     if action in {"stop", "down"}:
         containers = quiesce(instance, [])
         if action == "down":
             for item in containers:
                 labels = item["Config"].get("Labels") or {}
-                if labels.get("maxwell.kind") in {"site", "shell"}:
+                if labels.get("dame-curie.kind") in {"site", "shell"}:
                     instance.docker("rm", item["Id"])
-            instance.compose("down", "--timeout", "45")
+            instance.compose("--profile", "*", "down", "--remove-orphans", "--timeout", "45")
     else:
         instance.inventory()
+        if action in {"up", "start", "restart"} and instance.staging_enabled:
+            return
         if action == "restart":
-            instance.compose("restart", "--timeout", "45", "bot", "api")
+            instance.compose("restart", "--timeout", "45", "bot")
         elif action in {"up", "start"}:
-            instance.compose("up", "-d", "--wait", "--wait-timeout", "300")
+            instance.compose("up", "-d", "--wait", "--wait-timeout", "300", "bot")
         else:
-            instance.compose("logs", "--follow", "--tail", "100", log_format=log_format)
+            instance.compose("logs", "--follow", "--tail", "100", log_format=log_format, no_keys=no_keys)
 
 
 def archive_outside(path: Path, instance: Instance) -> Path:
@@ -271,7 +336,7 @@ def backup(instance: Instance, destination: Path) -> None:
 
 def validate_archive(archive: tarfile.TarFile, expected_instance: str) -> None:
     """Accept only same-identity data files, directories, and in-root links."""
-    if archive.pax_headers.get("maxwell.instance") != expected_instance:
+    if archive.pax_headers.get("dame-curie.instance") != expected_instance:
         raise ValueError("archive identity mismatch; cross-instance cloning is unsupported")
     members = archive.getmembers()
     names = {}
@@ -330,11 +395,14 @@ def main() -> None:
     parser.add_argument("instance")
     parser.add_argument("action", choices=("up", "start", "stop", "restart", "logs", "down", "backup", "restore"))
     parser.add_argument("archive", nargs="?", type=Path)
-    parser.add_argument("--format", dest="log_format", choices=("auto", "console", "plain", "jsonl"),
-                        help="logs only: auto/console use a capable input+output TTY, otherwise legacy plain; jsonl emits every received line")
+    parser.add_argument("--format", dest="log_format", choices=("auto", "console", "plain", "jsonl", "screen"),
+                        help="logs only: screen is opt-in append-only; auto/console retain full-screen TTY selection; plain/jsonl unchanged")
+    parser.add_argument("--no-keys", action="store_true", help="logs --format screen only: disable keyboard controls")
     args = parser.parse_args()
     if args.log_format is not None and args.action != "logs":
         parser.error("--format is only available for logs")
+    if args.no_keys and (args.action != "logs" or args.log_format != "screen"):
+        parser.error("--no-keys requires logs --format screen")
     if (args.action in {"backup", "restore"}) != (args.archive is not None):
         parser.error("backup/restore require an archive path; other commands do not")
     if args.action == "logs":
@@ -344,7 +412,7 @@ def main() -> None:
         account = service_account(args.instance)
     instance = Instance(args.instance, account)
     if args.action == "logs":
-        lifecycle(instance, args.action, log_format=args.log_format or "auto")
+        lifecycle(instance, args.action, log_format=args.log_format or "auto", no_keys=args.no_keys)
         return
     lock_path = instance.path / ".operations.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)

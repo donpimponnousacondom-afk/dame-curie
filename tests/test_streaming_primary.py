@@ -1,9 +1,8 @@
-"""Test SSE streaming against the bot's PRIMARY provider (local Ollama +
-minimax-m3:cloud). This is the model the bot is actually using, so it's the
-one the streaming code MUST work against.
+"""Test SSE streaming against the explicitly configured PRIMARY remote
+OpenAI-compatible endpoint and model.
 
-Catches: reasoning deltas, content=empty but reasoning=present (the ollama
-cloud variant does this), usage, tool calls, error frames.
+Catches: terminal reasoning-only responses, reasoning with actual answers,
+usage, tool calls, error frames.
 """
 
 import asyncio
@@ -11,20 +10,20 @@ import os
 import sys
 import time
 
-sys.path.insert(0, "/root/maxwell")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import providers  # noqa: E402
 
 
 async def main() -> int:
-    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    base_url = os.environ["OPENAI_BASE_URL"]
     if not base_url.endswith("/v1"):
         base_url = base_url.rstrip("/") + "/v1"
-    model = os.environ.get("OLLAMA_MODEL", "minimax-m3:cloud")
-    api_key = os.environ.get("OLLAMA_API_KEY", "")
+    model = os.environ["OPENAI_MODEL"]
+    api_key = os.environ.get("OPENAI_API_KEY", "")
 
     print(f"Testing stream=True against PRIMARY {base_url} model={model}")
-    p = providers.OllamaProvider(
+    p = providers.OpenAICompatibleProvider(
         base_url=base_url,
         model=model,
         max_tokens=200,
@@ -72,10 +71,8 @@ async def main() -> int:
     print(f"  reasoning: {reasoning!r}")
     print(f"  tool_calls: {tool_calls!r}")
 
-    if not content and not reasoning:
-        print(
-            "FAIL: both content and reasoning are empty — model produced nothing mergeable"
-        )
+    if not content and not tool_calls:
+        print("FAIL: no answer or native tool call — reasoning alone is not a reply")
         return 1
     if not p._last_usage or p._last_usage.get("total_tokens", 0) <= 0:
         print("WARN: usage not populated (some providers omit it on free tier)")

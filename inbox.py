@@ -30,10 +30,7 @@ ACTIONABLE_STATES = frozenset({"unread", "read"})
 # Actions that mean a human is waiting on an answer. An item carrying one of
 # these stays in the planner tail after it has been read — reading a friend
 # request does not answer it. Everything else is a *notice*: something to be
-# told once. Mail is the common case, and it used to have no way out of the
-# tail short of an explicit dismiss, so the same message was announced on
-# every turn, reworded each time ("update from .normal.man…", ".normal.man already
-# replied…", "update: .normal.man just replied…").
+# told once.
 DECISION_ACTIONS = frozenset({"accept", "decline"})
 
 
@@ -49,16 +46,11 @@ def needs_decision(item: dict) -> bool:
 KIND_PRIORITY = {
     "friend_request": 0,
     "group_dm": 1,
-    "email": 2,
-    # An @ on X is someone talking to him in public, which is more like mail
-    # than like a friend request: worth telling, not waiting on an answer.
-    "x_mention": 3,
 }
 KIND_PRIORITY_DEFAULT = 4
 
-# One noisy source must not push the others out of the tail. Mail arrives in
-# bursts; friend requests do not.
-KIND_RENDER_CAP = {"email": 6, "x_mention": 5}
+# One noisy source must not push the others out of the tail.
+KIND_RENDER_CAP = {}
 KIND_RENDER_CAP_DEFAULT = 12
 
 try:
@@ -134,16 +126,13 @@ class InboxStore:
     ) -> list[dict]:
         """Actionable items in the order the planner should see them.
 
-        Sorted by urgency, then capped per kind so a burst of mail can't
+        Sorted by urgency, then capped per kind so a burst of notices can't
         push a waiting friend request out of the tail.
 
         ``exclude_announced`` drops notices he has already said out loud —
         read, and with no decision left to make. Only the prompt tail passes
-        it. `inbox_list` deliberately does not: a read email has not gone
-        anywhere, and "show me my inbox" should show the whole inbox. Without
-        that split a notice had no way out of the prompt short of an explicit
-        dismiss, so the same email was announced on every turn, reworded each
-        time, until somebody cleared it by hand.
+        it. `inbox_list` deliberately does not: a read notice has not gone
+        anywhere, and "show me my inbox" should show the whole inbox.
         """
         # Two stable passes: newest first, then urgency. created_at is ISO, so
         # a plain reverse string sort is chronological.
@@ -174,31 +163,15 @@ class InboxStore:
 
     @staticmethod
     def render_item(item: dict, *, summary_chars: int = 160) -> str:
-        """One inbox line. Mail leads with sender+subject, not an actor id."""
+        """One inbox line."""
         iid = str(item.get("id") or "")
         kind = str(item.get("kind") or "notice")
         acts = ",".join(str(a) for a in (item.get("actions") or [])[:4])
         summary = str(item.get("summary") or "")[:summary_chars]
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         actor = str(item.get("actor_name") or "?")
         aid = str(item.get("actor_id") or "")
-        if kind == "x_mention":
-            # actor_id is the handle; the summary already reads as a sentence.
-            body = summary or f"@{aid}"
-            url = str(payload.get("url") or "")
-            if url:
-                body += f" — {url}"
-        elif kind == "email":
-            # actor_name/actor_id are the sender's display name and address.
-            who = f"{actor} <{aid}>" if aid else actor
-            subject = str(payload.get("subject") or "").strip() or "(no subject)"
-            body = f'{who} — "{subject}"'
-            snippet = " ".join(str(payload.get("snippet") or "").split())
-            if snippet:
-                body += f": {snippet[:summary_chars]}"
-        else:
-            who = f"{actor}({aid})" if aid else actor
-            body = f"{who}: {summary}"
+        who = f"{actor}({aid})" if aid else actor
+        body = f"{who}: {summary}"
         return f"- [{iid}] {kind} {body} [{acts}]"
 
     def render_planner(self, items: list[dict]) -> str:
@@ -261,10 +234,9 @@ class InboxStore:
     async def insert_if_absent(self, item: dict) -> dict | None:
         """Create an item only if its id is new. Returns None if it existed.
 
-        The mail poller re-sees the same UID on every tick for as long as the
-        message stays unread. Going through ``upsert`` would reset a dismissed
-        item back to "unread" each time, so a message he deliberately ignored
-        would nag him forever. One insert, then his decision stands.
+        Going through ``upsert`` would reset a dismissed item back to "unread"
+        each time a poller sees it, so an item he deliberately ignored would
+        nag him forever. One insert, then his decision stands.
         """
         iid = str(item.get("id") or "").strip()
         if not iid:

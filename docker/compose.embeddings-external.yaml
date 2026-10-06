@@ -1,0 +1,44 @@
+# External/shared embedding deployment.
+#
+# scripts/instance.py selects this overlay only when private deploy.env sets
+# DAME_CURIE_EMBED_MODE=external. The bot then embeds through the endpoint in
+# its own bot.env (DAME_CURIE_EMBED_BASE_URL), so this project must not start a
+# local Ollama, must not run its one-shot model pull and must not wait on a
+# local embedding healthcheck. Overlay effects, not prohibitions:
+#
+#   * `depends_on: !reset []` drops the base file's "ollama is healthy"
+#     dependency, so the wrapper's `up bot` no longer starts or waits on a local
+#     embedding service. Compose refuses a dependency on a profile-disabled
+#     service, so the target service cannot simply be hidden behind a profile.
+#   * the `local-embeddings` profile keeps both local embedding services out of
+#     the default startup set, so a bare `docker compose up` skips them too, and
+#     `!override` replaces the staged overlay's `rag-activation` profile. This
+#     is a startup default, not a lock: `--profile local-embeddings` or an
+#     explicit `up ollama` still starts them.
+#   * DAME_CURIE_EMBED_MODE=external tells the readiness gate in
+#     docker/check_embeddings.py that a shared endpoint is in use, and
+#     DAME_CURIE_EMBED_BASE_URL is cleared so the local service URL cannot be
+#     mistaken for the shared one. The endpoint must then come from the private
+#     bot.env, which wins for the URL as it does for config.py; the gate fails
+#     closed when nothing configures one.
+#
+# Requires Docker Compose >= 2.28.1: the `!reset` tag itself needs 2.24, and
+# resetting `depends_on` specifically was only fixed in 2.28.1
+# (docker/compose#11980). An older Compose rejects this file, which affects the
+# external deployment only; the canonical local deployment does not use it.
+#
+# RAG stays off with ENABLE_RAG=false in bot.env: no startup probe, no HTTP.
+services:
+  bot:
+    depends_on: !reset []
+    environment:
+      DAME_CURIE_EMBED_MODE: external
+      DAME_CURIE_EMBED_BASE_URL: !reset null
+
+  ollama:
+    profiles: !override
+      - local-embeddings
+
+  ollama-pull:
+    profiles: !override
+      - local-embeddings

@@ -191,24 +191,25 @@ def test_context_rejection_splits_only_offending_chunk_without_losing_unicode(me
         return Reply()
 
     transport.respond = respond
-    assert asyncio.run(memory._embed(text)) is not None
+    assert asyncio.run(memory._embed(text)) is None
     original_chunks = rag._split_embed_chunks(text)
-    assert "".join(accepted) == "".join(original_chunks)
-    assert accepted[-1] == original_chunks[-1]
-    assert memory._embed_endpoint_down_until == 0.0
-    assert all(call[1]["json"]["truncate"] is False for call in transport.calls)
-    assert all(call[1]["timeout"].total == rag.EMBED_HTTP_TIMEOUT_SECONDS for call in transport.calls)
-    calls = len(transport.calls)
-    assert asyncio.run(memory._embed(text)) is not None
-    assert len(transport.calls) == calls
+    assert accepted == []
+    assert len(transport.calls) == 1
+    assert transport.calls[0][1]["json"] == {
+        "model": memory.embed_model, "input": original_chunks[0],
+    }
+    assert memory._embed_endpoint_down_until > 0.0
+    assert transport.calls[0][1]["timeout"].total == rag.EMBED_HTTP_TIMEOUT_SECONDS
+    assert asyncio.run(memory._embed(text)) is None
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.parametrize("text", ["x", "x" * 6000])
 def test_repeated_context_rejections_stop_without_cache_or_global_outage(memory, transport, text):
     transport.respond = lambda chunk: Reply(CONTEXT_ERROR, 400)
     assert asyncio.run(memory._embed(text)) is None
-    assert len(transport.calls) == min(len(text), rag.EMBED_CONTEXT_SPLIT_LIMIT + 1)
-    assert memory._embed_endpoint_down_until == 0.0
+    assert len(transport.calls) == 1
+    assert memory._embed_endpoint_down_until > 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
 
 
@@ -218,7 +219,7 @@ def test_partial_success_is_not_cached_when_later_chunk_cannot_fit(memory, trans
     assert asyncio.run(memory._embed(text)) is None
     assert transport.calls[0][1]["json"]["input"] == "a" * 6000
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
-    assert memory._embed_endpoint_down_until == 0.0
+    assert memory._embed_endpoint_down_until > 0.0
 
 
 @pytest.mark.parametrize(
@@ -230,10 +231,12 @@ def test_partial_success_is_not_cached_when_later_chunk_cannot_fit(memory, trans
         json.JSONDecodeError("invalid JSON", "invalid", 0),
     ],
 )
-def test_unrecognized_400_does_not_trigger_split_retries(memory, transport, payload):
-    transport.respond = lambda chunk: Reply(payload, 400)
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308, 400])
+def test_unrecognized_400_does_not_trigger_split_retries(memory, transport, payload, status):
+    transport.respond = lambda chunk: Reply(payload, status)
     assert asyncio.run(memory._embed("Synthetic text.")) is None
     assert len(transport.calls) == 1
+    assert transport.calls[0][1]["allow_redirects"] is False
     assert memory._embed_endpoint_down_until > 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
 
@@ -247,10 +250,10 @@ def test_context_message_from_non_ollama_endpoint_is_not_retried(memory, transpo
 
 
 def test_cancellation_during_context_recovery_propagates(memory, transport):
-    replies = iter([Reply(CONTEXT_ERROR, 400), Reply(asyncio.CancelledError())])
+    replies = iter([Reply(asyncio.CancelledError())])
     transport.respond = lambda chunk: next(replies)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(memory._embed("Synthetic text."))
-    assert len(transport.calls) == 2
+    assert len(transport.calls) == 1
     assert memory._embed_endpoint_down_until == 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0

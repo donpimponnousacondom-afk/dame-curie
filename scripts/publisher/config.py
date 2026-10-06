@@ -24,6 +24,7 @@ class Config:
     rescan_seconds: float = 60.0
     settle_seconds: float = 0.3
     timeout_seconds: int = 120
+    marker_namespace: str = "dame-curie"
 
     def target(self) -> list[str | int]:
         return [self.host, self.user, self.port, self.site_root, self.image_root]
@@ -40,6 +41,8 @@ def private_file(path: Path) -> None:
 
 
 def validate(config: Config, config_path: Path) -> None:
+    if config.marker_namespace not in ("dame-curie", "curie"):
+        raise PublisherError("publisher marker namespace refused")
     roots = [config.source, config.staging, config.state]
     files = [config.key, config.known_hosts, config_path]
     for index, first in enumerate(roots):

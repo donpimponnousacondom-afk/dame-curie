@@ -38,7 +38,9 @@ class JobBot:
     def __init__(self, manager, responses, dispatches=()):
         self.bg_jobs = manager
         self._control = {"footer_enabled": True, "footer_format": "MEASURED_FOOTER"}
-        self.config = SimpleNamespace(OLLAMA_MAX_TOKENS=8192)
+        self.config = SimpleNamespace(OPENAI_MAX_TOKENS=8192)
+        self.memory = SimpleNamespace(get_server_prompt=lambda server_id: None)
+        self._get_personality = lambda: "Synthetic personality"
         self.responses = list(responses)
         self.dispatches = list(dispatches)
         self.model_messages = []
@@ -259,7 +261,10 @@ def test_job_thread_creation_failure_preserves_success_and_private_trace(tmp_pat
     message.create_thread.side_effect = RuntimeError("private creation detail " + "x" * 3000 + " CREATION TAIL")
     asyncio.run(run_background_job(bot, job.id))
     assert job.status == "done"
-    assert len(message.channel.sent) == 1
+    assert len(message.channel.sent) == 2
+    assert "no progress thread (RuntimeError)" in message.channel.sent[0]
+    assert "safe result" in message.channel.sent[1]
+    assert "private creation detail" not in "\n".join(message.channel.sent)
     assert PUBLIC_ERROR_TEXT not in message.channel.sent
     assert "CREATION TAIL" in private_store.get(0).format_report()
 

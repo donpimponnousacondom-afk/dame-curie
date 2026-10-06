@@ -260,42 +260,6 @@ def test_join_vc_and_where_and_status():
     asyncio.run(run())
 
 
-def test_commands_post_accepts_inbox_act(tmp_path, monkeypatch):
-    import json
-
-    import api.api_server as api
-
-    monkeypatch.setattr(api, "DATA_DIR", tmp_path)
-    (tmp_path / "bot_commands.json").write_text("[]", encoding="utf-8")
-
-    class Req:
-        def __init__(self, body):
-            self._body = body
-
-        async def json(self):
-            return self._body
-
-    async def run():
-        bad = await api.commands_post(Req({"type": "inbox_act", "action": "nope"}))
-        assert bad.status == 400
-        missing = await api.commands_post(Req({"type": "inbox_act", "action": "accept"}))
-        assert missing.status == 400
-        resp = await api.commands_post(
-            Req({"type": "inbox_act", "action": "accept", "item_id": "friend_1"})
-        )
-        assert resp.status == 200
-        queued = json.loads((tmp_path / "bot_commands.json").read_text())
-        assert queued[-1]["type"] == "inbox_act"
-        assert queued[-1]["item_id"] == "friend_1"
-        assert queued[-1]["status"] == "pending"
-
-        monkeypatch.setattr(api, "_has_admin_auth", lambda _req: True)
-        listed = await api.inbox_get(Req({}))
-        assert listed.status == 200
-
-    asyncio.run(run())
-
-
 def test_new_tools_are_followup_and_have_schemas():
     for name in (
         "inbox_list",
@@ -324,20 +288,6 @@ def _item(iid, kind, created, state="unread", **extra):
     }
     row.update(extra)
     return row
-
-
-def test_a_waiting_person_outranks_a_pile_of_mail(tmp_path):
-    """Mail arrives in bursts; a friend request must not be pushed out."""
-    store = InboxStore(str(tmp_path))
-    items = [
-        _item(f"email_{n}", "email", f"2026-08-24T10:{n:02d}:00Z") for n in range(20)
-    ]
-    items.append(_item("friend_9", "friend_request", "2026-08-24T09:00:00Z"))
-
-    ordered = store.planner_items(items)
-    assert ordered[0]["id"] == "friend_9"
-    # Mail is capped, so it cannot fill the tail on its own.
-    assert sum(1 for i in ordered if i["kind"] == "email") == 6
 
 
 def test_newest_first_within_a_kind(tmp_path):

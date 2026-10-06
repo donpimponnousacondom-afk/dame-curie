@@ -20,7 +20,7 @@ def test_fetch_svg_returns_original_xml_even_with_external_refs(monkeypatch, mim
     renderer = AsyncMock(side_effect=AssertionError("fetch_url must not render SVG"))
     monkeypatch.setattr("bot_tools._fetch_public_url", fetch)
     monkeypatch.setattr("bot_tools.normalize_image", renderer)
-    bot = SimpleNamespace(_control={"process_images": False}, mark_message_tainted=lambda _: None)
+    bot = SimpleNamespace(_control={"process_images": False})
     result = asyncio.run(FetchUrlTool(bot).execute(SimpleNamespace(), url="https://example.test/a.svg"))
     assert result == SVG.decode()
     assert "__IMAGE_B64__" not in result

@@ -1,0 +1,25 @@
+[Unit]
+Description=dame-curie public site mirror and image archive
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=dame-curie
+Group=dame-curie
+WorkingDirectory=/opt/dame-curie
+ExecStart=/opt/dame-curie/.venv/bin/python -B -m scripts.publisher --config /srv/dame-curie/publisher/config/publisher.toml
+Restart=on-failure
+RestartSec=30
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/opt/dame-curie /srv/dame-curie/sites
+ReadWritePaths=/srv/dame-curie/publisher/staging /srv/dame-curie/publisher/state
+InaccessiblePaths=-/srv/dame-curie/data -/srv/dame-curie/config -/srv/dame-curie/logs -/srv/dame-curie/shell
+
+[Install]
+WantedBy=multi-user.target
