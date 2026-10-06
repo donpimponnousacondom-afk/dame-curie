@@ -4216,7 +4216,15 @@ class MaxwellBot(commands.Bot):
         least-recently-served key goes first, which is what stops one loud
         room from monopolising the pool when many servers are active.
         """
+        started = time.monotonic()
         await self._ai_slots.acquire(timeout, key=str(key or ""), priority=priority)
+        waited = time.monotonic() - started
+        if waited >= 1.0:
+            # Visible queueing: a caller sat behind other inference calls.
+            logger.info(
+                "AI slot wait %.1fs priority=%s key=%s %s",
+                waited, priority, key or "", self._ai_slots.stats(),
+            )
         task = asyncio.current_task()
         if task is not None:
             self._ai_call_kind[task] = priority
