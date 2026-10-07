@@ -166,6 +166,10 @@ class FairSemaphore:
         self._default_rank = len(priorities)
         self._history = max(16, int(history))
         self._active = 0
+        # Slots held by callers below the top priority. With capacity above
+        # one, these callers may hold at most capacity - 1 slots, so one slot
+        # is always free for the top priority (a human reply).
+        self._active_lower = 0
         self._seq = 0
         self._waiters: list[dict[str, Any]] = []
         # key -> monotonic time it was last admitted. Bounded; see _mark_served.
@@ -209,6 +213,15 @@ class FairSemaphore:
             return None
         return min(self._waiters, key=self._waiter_rank)
 
+    def _admissible(self, waiter: dict[str, Any]) -> bool:
+        if self._active >= self._capacity:
+            return False
+        if self._rank.get(waiter["priority"], self._default_rank) == 0:
+            return True
+        if self._capacity == 1:
+            return True
+        return self._active_lower < self._capacity - 1
+
     def _waiter_rank(self, waiter: dict[str, Any]) -> tuple:
         rank = self._rank.get(waiter["priority"], self._default_rank)
         # A key never served sorts as 0.0 - a room's first turn jumps ahead of
@@ -217,8 +230,8 @@ class FairSemaphore:
 
     async def acquire(
         self, timeout: float, *, key: str = "", priority: str = "background"
-    ) -> None:
-        """Take a slot or raise asyncio.TimeoutError. Pair with release()."""
+    ) -> dict[str, Any]:
+        """Take a slot or raise asyncio.TimeoutError. Pass the result to release()."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + float(timeout)
         waiter = {
@@ -231,10 +244,12 @@ class FairSemaphore:
             self._waiters.append(waiter)
             try:
                 while True:
-                    if self._active < self._capacity and self._next_waiter() is waiter:
+                    if self._admissible(waiter) and self._next_waiter() is waiter:
                         self._active += 1
+                        if self._rank.get(waiter["priority"], self._default_rank) != 0:
+                            self._active_lower += 1
                         self._mark_served(waiter["key"], loop.time())
-                        return
+                        return waiter
                     remaining = deadline - loop.time()
                     if remaining <= 0:
                         raise asyncio.TimeoutError()
@@ -250,10 +265,17 @@ class FairSemaphore:
                 # changed shape - somebody behind us may now be next.
                 self._cond.notify_all()
 
-    async def release(self) -> None:
+    async def release(self, token: dict[str, Any] | None = None) -> None:
+        """Free a slot. `token` is the dict acquire() returned; it says which count to lower."""
         async with self._cond:
             if self._active > 0:
                 self._active -= 1
+            if (
+                token is not None
+                and self._rank.get(token["priority"], self._default_rank) != 0
+                and self._active_lower > 0
+            ):
+                self._active_lower -= 1
             self._cond.notify_all()
 
     async def notify(self) -> None:
@@ -268,6 +290,7 @@ class FairSemaphore:
         return {
             "capacity": self._capacity,
             "active": self._active,
+            "active_background": self._active_lower,
             "waiting": len(self._waiters),
             "waiting_by_priority": by_priority,
             "known_keys": len(self._last_served),

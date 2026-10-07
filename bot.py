@@ -4217,7 +4217,7 @@ class MaxwellBot(commands.Bot):
         room from monopolising the pool when many servers are active.
         """
         started = time.monotonic()
-        await self._ai_slots.acquire(timeout, key=str(key or ""), priority=priority)
+        token = await self._ai_slots.acquire(timeout, key=str(key or ""), priority=priority)
         waited = time.monotonic() - started
         if waited >= 1.0:
             # Visible queueing: a caller sat behind other inference calls.
@@ -4227,13 +4227,12 @@ class MaxwellBot(commands.Bot):
             )
         task = asyncio.current_task()
         if task is not None:
-            self._ai_call_kind[task] = priority
+            self._ai_call_kind[task] = token
 
     async def _release_ai_slot(self):
         task = asyncio.current_task()
-        if task is not None:
-            self._ai_call_kind.pop(task, None)
-        await self._ai_slots.release()
+        token = self._ai_call_kind.pop(task, None) if task is not None else None
+        await self._ai_slots.release(token)
 
     def _notify_ai_waiters(self):
         with contextlib.suppress(RuntimeError):
@@ -15055,6 +15054,18 @@ class MaxwellBot(commands.Bot):
     ) -> list[dict]:
         channel_id = str(message.channel.id)
 
+        # Section timers. Each mark records cpu/wall seconds since the previous
+        # mark. The log line shows which part of prompt building blocks the loop.
+        _build_wall = time.perf_counter()
+        _build_cpu = time.process_time()
+        _sections: list[tuple[str, float, float]] = []
+        _last = [_build_wall, _build_cpu]
+
+        def _mark(name: str) -> None:
+            now_wall, now_cpu = time.perf_counter(), time.process_time()
+            _sections.append((name, now_cpu - _last[1], now_wall - _last[0]))
+            _last[0], _last[1] = now_wall, now_cpu
+
         # Collect recent users from conversation for pinging support
         conv_users = {}
         try:
@@ -15069,6 +15080,7 @@ class MaxwellBot(commands.Bot):
                 if hasattr(self, "memory")
                 else []
             )
+            _mark("channel_memory")
             for m in (mem or [])[-50:]:
                 aid = str(m.get("author_id") or "")
                 an = str(m.get("author") or "")
@@ -15219,6 +15231,7 @@ class MaxwellBot(commands.Bot):
                     user_message,
                     budget=ctx_plan.budget_for("entity"),
                 )
+                _mark("entity_profile")
             except Exception as e:
                 logger.debug(f"entity profile skipped: {e}")
             block = MaxwellBot._render_entity_block(
@@ -15274,6 +15287,7 @@ class MaxwellBot(commands.Bot):
                             ),
                         ),
                     )
+                    _mark("rag_ltm")
                     rag_context = [
                         r for r in rag_results if r.get("similarity", 0) >= 0.35
                     ]
@@ -15292,6 +15306,7 @@ class MaxwellBot(commands.Bot):
                         recency_tau_days=3.0,  # tight tau - recent chat
                         top_k=8,
                     )
+                    _mark("rag_recent")
                     rag_recent = [
                         r for r in recent_results if r.get("similarity", 0) >= 0.40
                     ][:5]  # cap to 5 recent messages
@@ -15315,6 +15330,7 @@ class MaxwellBot(commands.Bot):
                             min_similarity=0.40,
                             max_age_days=7,
                         )
+                        _mark("web_results")
                         rag_web = [
                             r for r in web_rows if r.get("similarity", 0) >= 0.40
                         ]
@@ -15501,6 +15517,7 @@ class MaxwellBot(commands.Bot):
                         ),
                     ),
                 )
+                _mark("shared_context")
                 if facts:
                     lines = []
                     for fact in facts:
@@ -15565,6 +15582,7 @@ class MaxwellBot(commands.Bot):
         append_inbox = getattr(self, "_append_inbox_dynamic", None)
         if callable(append_inbox):
             await append_inbox(dynamic_parts)
+            _mark("inbox")
         # 2026-07-21: explicit memory-scope reminder. Short-term (the
         # user/assistant turns that follow the system message) is
         # scoped to THIS channel only - you do NOT share per-channel
@@ -15615,6 +15633,7 @@ class MaxwellBot(commands.Bot):
         if tool_prompt:
             messages.append({"role": "system", "content": tool_prompt})
         memory = await self.memory.get_channel_memory(channel_id)
+        _mark("history")
         if memory:
             # 2026-07-19: Discord chat does not need a 200k-char dump. Keep
             # the running thread, not every shell log from an hour ago.
@@ -15990,7 +16009,17 @@ class MaxwellBot(commands.Bot):
             messages[-1]["content"] += "\n\n" + current
         else:
             messages.append({"role": "user", "content": current})
-        return MaxwellBot._apply_prompt_budget(self, messages)
+        messages = MaxwellBot._apply_prompt_budget(self, messages)
+        _mark("budget")
+        _cpu_total = time.process_time() - _build_cpu
+        if _cpu_total >= 0.2:
+            logger.info(
+                "Prompt build cpu=%.2fs wall=%.2fs: %s",
+                _cpu_total,
+                time.perf_counter() - _build_wall,
+                " ".join(f"{n}={c:.2f}/{w:.2f}" for n, c, w in _sections if c >= 0.02),
+            )
+        return messages
 
 
 async def main():
