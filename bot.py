@@ -15055,14 +15055,15 @@ class MaxwellBot(commands.Bot):
         channel_id = str(message.channel.id)
 
         # Section timers. Each mark records cpu/wall seconds since the previous
-        # mark. The log line shows which part of prompt building blocks the loop.
+        # mark. cpu is this thread's time: the event loop runs here, so it is
+        # the time the loop was blocked. Other threads are not counted.
         _build_wall = time.perf_counter()
-        _build_cpu = time.process_time()
+        _build_cpu = time.thread_time()
         _sections: list[tuple[str, float, float]] = []
         _last = [_build_wall, _build_cpu]
 
         def _mark(name: str) -> None:
-            now_wall, now_cpu = time.perf_counter(), time.process_time()
+            now_wall, now_cpu = time.perf_counter(), time.thread_time()
             _sections.append((name, now_cpu - _last[1], now_wall - _last[0]))
             _last[0], _last[1] = now_wall, now_cpu
 
@@ -16011,7 +16012,7 @@ class MaxwellBot(commands.Bot):
             messages.append({"role": "user", "content": current})
         messages = MaxwellBot._apply_prompt_budget(self, messages)
         _mark("budget")
-        _cpu_total = time.process_time() - _build_cpu
+        _cpu_total = time.thread_time() - _build_cpu
         if _cpu_total >= 0.2:
             logger.info(
                 "Prompt build cpu=%.2fs wall=%.2fs: %s",

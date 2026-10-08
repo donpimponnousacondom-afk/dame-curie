@@ -105,6 +105,12 @@ services:
     environment:
       TZ: ":/etc/dame-curie-localtime"
       HOME: /home/dame-curie
+      # One BLAS thread. The bot is one asyncio process under a CPU quota;
+      # OpenBLAS otherwise starts one thread per host CPU and the quota
+      # throttles them. Measured 2026-10-08 at cpus=2: one memory scan took
+      # 64 ms with default threads and 7 ms with one thread.
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
       DAME_CURIE_ENV_FILE: /config/bot.env
       DAME_CURIE_CONTAINER_MODE: "true"
       DAME_CURIE_INSTANCE_ID: ${INSTANCE_ID}
