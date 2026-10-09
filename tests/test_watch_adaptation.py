@@ -51,6 +51,7 @@ def _bot(control=None, admins=()):
         "_conversation_watch_enabled",
         "_conversation_watch_active",
         "_watch_debounce_seconds",
+        "_extraction_score",
         "_should_extract_context",
         "_extract_threshold",
         "_note_extraction_ran",

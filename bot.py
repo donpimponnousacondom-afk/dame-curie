@@ -9154,8 +9154,8 @@ class MaxwellBot(commands.Bot):
         except (TypeError, ValueError):
             return watch_policy.EXTRACT_THRESHOLD
 
-    def _should_extract_context(self, message) -> bool:
-        """Is this message worth spending a context-watcher call on?
+    def _extraction_score(self, message) -> watch_policy.ExtractionScore | None:
+        """Score a message for a context-watcher call; None when it is excluded.
 
         This used to be a list of about fifteen English phrases - "remember",
         "i like", "my name is". Anything said in other words was dropped, and
@@ -9171,19 +9171,19 @@ class MaxwellBot(commands.Bot):
         if not self._control.get(
             "cross_context_enabled", True
         ) or not self._control.get("cross_context_extract_enabled", True):
-            return False
+            return None
         if getattr(message, "notice_author", None) is not None:
             # A synthetic input names the bot as the real author: its text is a
             # harness instruction, so there is no human fact in it to extract. The
             # message is still written to memory and REM.
-            return False
+            return None
         combined = message_combined_content(message)
         has_media = any(
             getattr(src, "attachments", None) or getattr(src, "embeds", None)
             for src in iter_message_payloads(message)
         )
         if not combined and not has_media:
-            return False
+            return None
         author = getattr(message, "author", None)
         author_id = str(getattr(author, "id", "") or "")
         channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "")
@@ -9204,7 +9204,12 @@ class MaxwellBot(commands.Bot):
             author_seen_before=author_id
             in (getattr(self, "_extracted_authors", None) or set()),
         )
-        score = watch_policy.extraction_score(ctx)
+        return watch_policy.extraction_score(ctx)
+
+    def _should_extract_context(self, message) -> bool:
+        score = self._extraction_score(message)
+        if score is None:
+            return False
         threshold = self._extract_threshold()
         if score.value >= threshold:
             logger.debug(
@@ -9255,7 +9260,8 @@ class MaxwellBot(commands.Bot):
         self._maybe_schedule_context_extraction(message)
 
     def _maybe_schedule_context_extraction(self, message):
-        if not self._should_extract_context(message):
+        score = self._extraction_score(message)
+        if score is None or score.value < self._extract_threshold():
             return
         channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "")
         # While a reply/tool turn is running in this room, don't fire the watcher
@@ -9272,7 +9278,9 @@ class MaxwellBot(commands.Bot):
         # term is to space out calls, and a call that returns should_store
         # false cost the same request as one that stored something.
         self._note_extraction_ran(message)
-        task = asyncio.create_task(self._extract_shared_context_fact(message))
+        task = asyncio.create_task(
+            self._extract_shared_context_fact(message, score=score.value)
+        )
         self._context_tasks.add(task)
         task.add_done_callback(self._context_tasks.discard)
         if len(self._context_tasks) > 20:
@@ -9424,7 +9432,8 @@ class MaxwellBot(commands.Bot):
             "expires_at": expires_at,
         }
 
-    async def _extract_shared_context_fact(self, message):
+    async def _extract_shared_context_fact(self, message, score: float | None = None):
+        score_text = f"{score:.2f}" if score is not None else "n/a"
         try:
             text = (message_combined_content(message) or "").strip()
             attachment_note = ""
@@ -9517,8 +9526,21 @@ class MaxwellBot(commands.Bot):
             data = self._json_object_from_text(raw)
             entry = self._normalize_context_entry(message, data)
             if not entry:
+                if not isinstance(data, dict):
+                    reason = "no_json"
+                elif not data.get("should_store"):
+                    reason = "should_store_false"
+                else:
+                    reason = "entry_rejected"
+                logger.info(
+                    "Context watcher result score=%s stored=False reason=%s",
+                    score_text, reason,
+                )
                 return
             context_id = await self.memory.add_shared_context(entry)
+            logger.info(
+                "Context watcher result score=%s stored=%s", score_text, bool(context_id)
+            )
             if context_id:
                 logger.info(
                     f"Context watcher stored fact {context_id}: {entry['content'][:120]}"
@@ -9527,6 +9549,9 @@ class MaxwellBot(commands.Bot):
             self._ingest_graph_triples(message, data)
         except Exception as e:
             logger.warning(f"Context extraction error: {e}")
+            logger.info(
+                "Context watcher result score=%s stored=False reason=error", score_text
+            )
 
     async def _mirror_fact_to_entity(self, message, entry: dict) -> None:
         """Copy a person-scoped extracted fact into global entity memory.
@@ -13801,6 +13826,19 @@ class MaxwellBot(commands.Bot):
         terminal = [
             c for c in calls if c["name"] in {"send_message", "no_response", "wait"}
         ]
+        # A batch of several concurrent calls gets one progress line that names
+        # all of them. Per-call updates would show only the last call to start.
+        batch_label = None
+        batch_reason = ""
+        if len(non_terminal) > 1:
+            batch_label = ", ".join(dict.fromkeys(c["name"] for c in non_terminal))
+            explanations = [
+                " ".join(str((c.get("arguments") or {}).get("explanation") or "").split())
+                for c in non_terminal
+            ]
+            batch_reason = "; ".join(text for text in explanations if text)
+            if len(batch_reason) > 280:
+                batch_reason = batch_reason[:277] + "…"
 
         result_by_id: dict[str, str] = {}
 
@@ -13876,7 +13914,7 @@ class MaxwellBot(commands.Bot):
             # per-tool field rather than the first non-reasoning key
             # so we surface the actual code, not a slug or URL.
             artifact_snippet = _artifact_snippet_for(name, params)
-            if progress is not None:
+            if progress is not None and batch_label is None:
                 import contextlib
 
                 with contextlib.suppress(Exception):
@@ -13958,6 +13996,11 @@ class MaxwellBot(commands.Bot):
         async def run_all():
             nonlocal tool_results
             if non_terminal:
+                if progress is not None and batch_label is not None:
+                    with contextlib.suppress(Exception):
+                        await progress.update(
+                            batch_label, batch_reason or f"{len(non_terminal)} calls at once"
+                        )
                 # 2026-07-21: use return_exceptions=True so a single
                 # failing sibling doesn't abort the whole batch.
                 # Without this, a raise from run_one(c2) cancels the
