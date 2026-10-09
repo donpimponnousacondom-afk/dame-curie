@@ -949,7 +949,7 @@ def _decode_tool_arguments(raw_args: Any) -> dict[str, Any]:
     return {"content": text}
 
 
-_NATIVE_MAX_CALLS = 8
+_NATIVE_MAX_CALLS = 10
 _NATIVE_MAX_ID_BYTES = 128
 _NATIVE_MAX_NAME_BYTES = 128
 _NATIVE_MAX_ARGUMENT_BYTES = 16_000
@@ -1154,7 +1154,7 @@ def normalize_native_tool_calls(
 # call so it EXECUTES. send_message actually sends, shell actually runs, and
 # whatever prose surrounded the markup survives as the leftover text.
 
-_RECOVERY_MAX_CALLS = 8
+_RECOVERY_MAX_CALLS = 10
 _RECOVERY_MAX_INPUT_CHARS = 16_000
 _RECOVERY_MAX_ARGUMENT_CHARS = 4_000
 
