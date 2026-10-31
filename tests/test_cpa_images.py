@@ -336,7 +336,7 @@ def test_native_private_http_reference_uses_existing_fetch_rules(native_image, m
 
 @pytest.mark.parametrize("allowed", [False, True])
 @pytest.mark.parametrize("linked", [False, True])
-def test_native_local_reference_uses_existing_allowed_image_paths(native_image, tmp_path, allowed, linked):
+def test_native_local_reference_reads_any_local_image_path(native_image, tmp_path, allowed, linked):
     case = native_image
     case.tool.bot.config.DAME_CURIE_SITE_DIR = str(tmp_path / "site")
     directory = tmp_path / "site" / "_images" if allowed else tmp_path / "outside"

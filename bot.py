@@ -12770,8 +12770,11 @@ class DameCurieBot(commands.Bot):
                 if (
                     round_had_calls
                     and str(response or "").strip()
+                    and _tool_results_need_followup(tool_results)
                     and not any(
-                        marker in result for result in tool_results for marker in _DELIVERY_MARKERS
+                        marker in result
+                        for result in tool_results
+                        for marker in (*_DELIVERY_MARKERS, "__NO_RESPONSE__")
                     )
                     and await DameCurieBot._post_progress_update(self, message, response)
                 ):
@@ -13090,15 +13093,11 @@ class DameCurieBot(commands.Bot):
             if incomplete_error is None and _should_skip_plaintext_after_send(
                 tool_results, all_tool_results, followup_turn_ran, response
             ):
-                if (
-                    followup_turn_ran
-                    and not str(response or "").strip()
-                    and not any("__MESSAGE_SENT__" in result for result in tool_results)
-                ):
+                if (followup_turn_ran or final_without_calls) and not last_model_text.strip():
                     # Root, 2026-10-31: flag it so its rate can be measured.
                     logger.warning(
-                        "Turn ended with an empty final response after an earlier "
-                        "send_message in channel %s", channel_id,
+                        "Turn ended with an empty final response after an earlier delivery "
+                        "(message, file, media or image) in channel %s", channel_id,
                     )
                 await self._ensure_reasoning_trace(
                     message, all_tool_results, response, "send_message"
@@ -13167,7 +13166,7 @@ class DameCurieBot(commands.Bot):
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
             )
-            delivered = bool(posted_updates) or any(
+            delivered = any(
                 marker in result
                 for result in all_tool_results
                 for marker in _DELIVERY_MARKERS
@@ -15091,7 +15090,7 @@ class DameCurieBot(commands.Bot):
         )
 
     async def _post_progress_update(self, message, text: str) -> bool:
-        """Post model text written next to tool calls; return True when sent."""
+        """Post model text written next to tool calls; True only when every chunk sent."""
         text = _sanitize_visible_reply(
             text, scrub_repeats=bool(self._control.get("scrub_repetitions", True))
         )
@@ -15107,8 +15106,11 @@ class DameCurieBot(commands.Bot):
             try:
                 sent = await message.channel.send(chunk)
             except discord.HTTPException as exc:
-                logger.warning("Progress update could not be sent: %s", exc)
-                return sent_any
+                logger.warning(
+                    "Progress update could not be sent (%s chunk(s) sent before the failure): %s",
+                    "some" if sent_any else "no", exc,
+                )
+                return False
             sent_any = True
             if self._control.get("store_memory", True) and getattr(self, "memory", None) is not None:
                 await self.add_message_to_memory(

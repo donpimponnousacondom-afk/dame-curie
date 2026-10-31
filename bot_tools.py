@@ -1224,7 +1224,7 @@ class ImageGeneratorTool(Tool):
         )
         return (
             "Generate an AI image or edit/use supplied images as references. "
-            "For an edit, describe the changes to make; provide an image URL or allowed local path, "
+            "For an edit, describe the changes to make; provide an image URL or a local path, "
             "or up to four references. If image is None, attachments are used; image='' generates from scratch. "
             "Model and quality use the operator-configured image profile; tool arguments cannot override it. "
             "By default, generate/edit and save a local/public image WITHOUT posting it. "
@@ -1292,8 +1292,11 @@ class ImageGeneratorTool(Tool):
             # Off-thread: images run up to MAX_INPUT_BYTES and this is on the
             # event loop, so a blocking read stalls unrelated chats.
             data = await asyncio.to_thread(Path(path).read_bytes)
-            if not image_mime(data, "application/octet-stream").startswith("image/"):
+            mime = image_mime(data, "application/octet-stream")
+            if not mime.startswith("image/"):
                 return None, f"not an image file: {ref[:80]}"
+            if mime == "image/svg+xml":
+                data, _ = await normalize_image(data, mime)
             return data, ""
         except Exception as e:
             return None, f"could not read {ref[:80]}: {e}"
@@ -5894,7 +5897,7 @@ class SeeImageTool(Tool):
             return "Error: url is required"
         own = _local_media_path(self.bot, url)
         if own is None and "://" not in str(url):
-            return f"Error: no such file: {url}"
+            return f"Error: no such file: {str(url)[:200]}"
         if own is None and not _is_safe_url(url):
             return "Error: URL must use HTTP(S) and include a hostname"
         control = getattr(self.bot, "_control", None) or {}
@@ -5910,6 +5913,8 @@ class SeeImageTool(Tool):
             if os.path.getsize(own) > max_size:
                 return f"Error: {url} is larger than {max_size} bytes"
             local = await asyncio.to_thread(Path(own).read_bytes)
+            if not image_mime(local, "application/octet-stream").startswith("image/"):
+                return f"Error: not an image file: {url[:200]}"
             item = {
                 "b64": base64.b64encode(local).decode("ascii"),
                 "mime_type": image_mime(local, ""),
