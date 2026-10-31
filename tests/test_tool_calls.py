@@ -1,6 +1,6 @@
 """Tests for the new explanation-in-tool-calls + native-only dispatch.
 
-The XML ``collect_tool_calls`` dispatcher is gone (Maxwell is native
+The XML ``collect_tool_calls`` dispatcher is gone (Curie is native
 function-calling only now). What stays is ``strip_tool_payload_leaks`` - the
 defensive sanitizer that scrubs any leaked ``<tool:...>`` tags a misbehaving
 model drops into visible text even in native mode. These tests cover that
@@ -15,10 +15,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot import MaxwellBot, strip_tool_payload_leaks
+from bot import DameCurieBot, strip_tool_payload_leaks
 from tool_registry import extract_explanation, _sanitize_explanation, record_explanation
 from tool_schemas import (
     EXPLANATION_PARAM,
+    TOOL_TAIL_MAX_CHARS,
     build_openai_tools,
     elide_tool_calls_for_history,
     message_chars,
@@ -74,14 +75,20 @@ def test_strip_tool_payload_leaks_removes_unclosed_tool_and_environment_details(
 
 
 def test_strip_tool_payload_leaks_removes_reasoning_json_and_system_reminder():
-    text = '''{
+    # Root, 2026-10-31: reasoning-shaped JSON stays visible; tool tags and
+    # injected context markers are still removed.
+    reasoning = '''{
   "thoughts": "User asked for TTS.",
   "intent": "tts",
   "decision": "Call tts"
-}
+}'''
+    text = reasoning + '''
 <tool:tts text="Hey there!" language="english" />
 <system-reminder>secret context</system-reminder>'''
-    assert strip_tool_payload_leaks(text) == ""
+    assert strip_tool_payload_leaks(text) == reasoning
+    for key in ("reasoning", "plan", "thoughts", "internal_monologue", "tool_plan"):
+        leaked = '{"' + key + '": "why I did it"}'
+        assert strip_tool_payload_leaks(leaked) == leaked
 
 
 def test_strip_tool_payload_leaks_removes_registered_tool_bodies():
@@ -309,7 +316,7 @@ def test_select_tool_protocol_native_wins_over_custom():
         _control={"native_tool_calls": True, "tools_enabled": True},
     )
     bot._native_tools_enabled = lambda: True
-    custom, provider_tools = MaxwellBot._select_tool_protocol(bot, tools)
+    custom, provider_tools = DameCurieBot._select_tool_protocol(bot, tools)
     assert custom is False
     assert provider_tools == tools
 
@@ -321,7 +328,7 @@ def test_select_tool_protocol_custom_only_when_native_off():
         _control={"native_tool_calls": False, "tools_enabled": True},
     )
     bot._native_tools_enabled = lambda: False
-    custom, provider_tools = MaxwellBot._select_tool_protocol(bot, tools)
+    custom, provider_tools = DameCurieBot._select_tool_protocol(bot, tools)
     assert custom is True
     assert provider_tools is None
 
@@ -519,14 +526,14 @@ def test_elide_compacts_message_content():
     assert elide_tool_calls_for_history(out) == out
 
     text_tail = [
-        {"role": "assistant", "content": "explanation " * 5000},
-        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "result " * 5000},
-        {"role": "assistant", "content": "new round " * 5000},
-        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "fresh " * 5000},
+        {"role": "assistant", "content": "explanation " * 12000},
+        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "result " * 12000},
+        {"role": "assistant", "content": "new round " * 12000},
+        {"role": "user", "content": "=== TOOL RESULTS ===\n" + "fresh " * 12000},
     ]
     text_trimmed = trim_tool_tail(text_tail)
     assert len(text_trimmed) == 4
-    assert sum(message_chars(msg) for msg in text_trimmed) <= 36_000
+    assert sum(message_chars(msg) for msg in text_trimmed) <= TOOL_TAIL_MAX_CHARS
     assert "truncated from tool history" in text_trimmed[0]["content"]
     with pytest.raises(ValueError, match="Orphan tool result"):
         trim_tool_tail([{"role": "tool", "tool_call_id": "orphan", "content": "x"}])

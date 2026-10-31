@@ -1,4 +1,4 @@
-"""Shared control defaults for Maxwell Bot.
+"""Shared control defaults for Dame Curie Bot.
 
 Single source of truth for DEFAULT_CONTROL, KNOWN_TOOLS, and parse_bool.
 Bot and prompt storage import from here so defaults never drift.
@@ -102,7 +102,7 @@ DEFAULT_CONTROL = {
     "reply_dms": True,
     "reply_groups": True,
     "reply_mentions": True,
-    # After a mention/reply (or after Maxwell posts in a room), keep
+    # After a mention/reply (or after Dame Curie posts in a room), keep
     # watching that whole channel so a directed follow-up does not need
     # another @ or Discord reply. Each later line can spend a full LLM
     # turn deciding whether to speak - that is token-expensive, so the
@@ -110,7 +110,7 @@ DEFAULT_CONTROL = {
     "conversation_watch_enabled": True,
     "conversation_watch_seconds": 180,
     # Watch follow-ups wait this long for more lines, then one reply.
-    # Hard @ / reply-to-Maxwell still go out immediately.
+    # Hard @ / reply-to-Dame Curie still go out immediately.
     "conversation_watch_debounce_seconds": 1,
     # How much a line nobody pinged him with has to look like it wants an
     # answer before it is worth an LLM turn (0..1, see
@@ -159,7 +159,7 @@ DEFAULT_CONTROL = {
     # Unused: the full tool catalog is attached on every turn. Kept so existing
     # control.json files still load.
     "lean_chat_tools": False,
-    # When a new support/ticket-style channel is created in a server Maxwell is
+    # When a new support/ticket-style channel is created in a server Dame Curie is
     # in, post a short opening line so he is present in the room and it enters
     # his memory / conversation-watch scope. Off and he only observes new
     # channels without posting anything.
@@ -169,7 +169,7 @@ DEFAULT_CONTROL = {
     "allowed_channels": [],
     "blocked_channels": [],
     "disabled_commands": [],
-    # {guild_id: channel_id}. When a server has an entry, Maxwell only speaks
+    # {guild_id: channel_id}. When a server has an entry, Dame Curie only speaks
     # in that one channel there - every other channel in that server is dead to
     # him, including autonomy. Set with `!solo`, cleared with `!solo off`.
     # Scoped per server on purpose: allowed_channels is global, so using it to
@@ -200,7 +200,7 @@ DEFAULT_CONTROL = {
     "vc_max_response_chars": 2000,
     "vc_reply_mode": "voice",
     "vc_response_mode": "always",
-    "vc_wake_words": ["maxwell"],
+    "vc_wake_words": ["curie"],
     "vc_interrupt_enabled": True,
     "vc_debug": True,
     "autonomy_enabled": False,
@@ -213,7 +213,7 @@ DEFAULT_CONTROL = {
     "autonomy_recent_reply_block_seconds": 0,
     # --- Conversational turn-taking (autonomy_social.py) ---------------------
     # Autonomy runs on a timer; conversation runs on turns. These decide whether
-    # Maxwell holds the floor in a room before he's allowed to speak unprompted.
+    # Dame Curie holds the floor in a room before he's allowed to speak unprompted.
     # They gate ONLY speaking - memory and goal actions are untouched.
     # Off means the planner still sees the room read but execute() stops
     # enforcing it: a debugging escape hatch, not a mode to run in.
@@ -238,7 +238,7 @@ DEFAULT_CONTROL = {
     # Goals not acted on for this many days are flagged STALE in context (candidates for
     # the complete_goal action). Not auto-deleted - the bot decides to retire them.
     "autonomy_goal_stale_days": 14,
-    # Periodic reflection nudge injected into context roughly every N seconds so Maxwell
+    # Periodic reflection nudge injected into context roughly every N seconds so Dame Curie
     # self-reviews goals/memory and sets new objectives on its own cadence.
     "autonomy_reflect_enabled": True,
     "autonomy_reflect_interval_seconds": 3600,

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import bot as bot_module
-from bot import MaxwellBot
+from bot import DameCurieBot
 from dirac_runtime import _TurnObserver
 from message_pipeline import ReplyQueue
 from provider_reload import providers_idle
@@ -23,8 +23,8 @@ def final_round(foreground_bot: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
     message = Message()
     observer = _TurnObserver()
     bot._turn_observer = observer
-    bot._handle_message = MethodType(MaxwellBot._handle_message, bot)
-    bot._preserve_input_actor = MaxwellBot._preserve_input_actor
+    bot._handle_message = MethodType(DameCurieBot._handle_message, bot)
+    bot._preserve_input_actor = DameCurieBot._preserve_input_actor
     bot._progress_enabled = lambda guild: True
     bot._control["footer_enabled"] = False
     initial, final = ToolProgress(message), ToolProgress(message)
@@ -84,7 +84,7 @@ def test_final_delivery_owns_observer_and_reload_idle_boundary(
     async def run() -> None:
         message, observer = final_round.message, final_round.observer
         turn = observer.open(str(message.id), str(message.channel.id))
-        task = asyncio.create_task(MaxwellBot._run_queued_reply(bot, message))
+        task = asyncio.create_task(DameCurieBot._run_queued_reply(bot, message))
         await asyncio.wait_for(final_round.edit_started.wait(), timeout=1)
         assert not task.done() and not turn.done.is_set()
         assert turn.model_ok and turn.output == [] and turn.delivered == []

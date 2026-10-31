@@ -1638,7 +1638,7 @@ def _is_policy_block_text(text: str) -> bool:
         The prompt could not be submitted. The prompt contains sensitive words
         that violate Google's (...use-policy). Try rephrasing the prompt. ...
 
-    Nothing upstream flags it, so Maxwell relayed it into the channel verbatim
+    Nothing upstream flags it, so Dame Curie relayed it into the channel verbatim
     (logged 2026-08-21, #villa-31 and #poketwo-spawns). These markers are the
     provider's own boilerplate; a genuine reply does not contain them. A false
     positive only costs us one turn answered by the fallback model, so this is

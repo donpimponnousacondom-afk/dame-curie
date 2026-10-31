@@ -1,4 +1,4 @@
-"""Base Tool class for Maxwell Bot"""
+"""Base Tool class for Dame Curie Bot"""
 
 from abc import ABC, abstractmethod
 from typing import Any

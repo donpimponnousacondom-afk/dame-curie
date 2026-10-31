@@ -37,7 +37,7 @@ if str(ROOT) not in sys.path:
 import bot_tools  # noqa: E402
 
 
-_BOT_USER = SimpleNamespace(id=777, display_name="Maxwell", name="maxwell")
+_BOT_USER = SimpleNamespace(id=777, display_name="Curie", name="curie")
 
 
 class FakeMessage:
@@ -79,12 +79,12 @@ class FakeBot:
     """Minimal bot-shaped object exposing the sleep-state API the
     tests need: _is_sleeping / set_sleep / clear_sleep /
     _check_sleep_gate / _format_sleep_remaining. We DON'T pull the
-    full MaxwellBot class in (it requires a Discord client + config
+    full DameCurieBot class in (it requires a Discord client + config
     pipeline) - we test the *contract* by calling the methods that
     the SleepTool / clear_sleep tool will hit at runtime.
 
     For the gate-level tests (which need a real `asyncio.Lock`-free
-    bot-shaped object) we instantiate MaxwellBot... no. The gate
+    bot-shaped object) we instantiate DameCurieBot... no. The gate
     uses real asyncio + a real time source. We mirror the gate logic
     with a smaller helper to keep the tests fast and dependency-free.
     """
@@ -97,7 +97,7 @@ class FakeBot:
         return True
 
     def _now(self):
-        # The real MaxwellBot uses asyncio.get_running_loop().time() so
+        # The real DameCurieBot uses asyncio.get_running_loop().time() so
         # the test mirror here uses time.monotonic() - same epoch,
         # no event-loop dependency.
         import time
@@ -236,7 +236,7 @@ def test_sleep_tools_allow_non_admin():
 
 
 # ---- SleepTool integration with real bot's sleep helpers ----
-# The real `MaxwellBot.set_sleep` clamps to 60 and the real
+# The real `DameCurieBot.set_sleep` clamps to 60 and the real
 # `_is_sleeping` returns the right tuple. We verify by spinning up
 # a barebones bot without Discord: a tiny shim that mimics the
 # asyncio.get_running_loop().time() source. (The real bot uses
@@ -245,7 +245,7 @@ def test_sleep_tools_allow_non_admin():
 
 def test_sleep_tool_with_real_bot_helpers():
     """End-to-end: SleepTool.set_sleep() interacts correctly with the
-    FakeBot-shaped object that mirrors MaxwellBot's sleep API."""
+    FakeBot-shaped object that mirrors DameCurieBot's sleep API."""
     bot = FakeBot()
     tool = bot_tools.SleepTool(bot)
     asyncio.run(
@@ -259,7 +259,7 @@ def test_sleep_tool_with_real_bot_helpers():
 
 
 def _gate_bot():
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     bot = SimpleNamespace(
         _control={"enable_sleep": True},
@@ -269,13 +269,13 @@ def _gate_bot():
         _watch_debounce={},
         user=_BOT_USER,
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._cancel_watch_debounce = MaxwellBot._cancel_watch_debounce.__get__(bot)
-    bot._drop_watches_for_sleep = MaxwellBot._drop_watches_for_sleep.__get__(bot)
-    bot._is_sleeping = MaxwellBot._is_sleeping.__get__(bot)
-    bot.set_sleep = MaxwellBot.set_sleep.__get__(bot)
-    bot._format_sleep_remaining = MaxwellBot._format_sleep_remaining.__get__(bot)
-    bot._check_sleep_gate = MaxwellBot._check_sleep_gate.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._cancel_watch_debounce = DameCurieBot._cancel_watch_debounce.__get__(bot)
+    bot._drop_watches_for_sleep = DameCurieBot._drop_watches_for_sleep.__get__(bot)
+    bot._is_sleeping = DameCurieBot._is_sleeping.__get__(bot)
+    bot.set_sleep = DameCurieBot.set_sleep.__get__(bot)
+    bot._format_sleep_remaining = DameCurieBot._format_sleep_remaining.__get__(bot)
+    bot._check_sleep_gate = DameCurieBot._check_sleep_gate.__get__(bot)
     return bot
 
 
@@ -358,7 +358,7 @@ def test_sleep_gate_disabled_by_control_flag():
 
 
 def _presence_bot():
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     bot = SimpleNamespace(
         _control={"enable_sleep": True},
@@ -371,17 +371,17 @@ def _presence_bot():
         _sleep_presence_overlay=False,
     )
     bot._push_presence = AsyncMock()
-    bot._build_activities = MaxwellBot._build_activities.__get__(bot)
-    bot._sleep_window_active = MaxwellBot._sleep_window_active.__get__(bot)
-    bot.change_presence = MaxwellBot.change_presence.__get__(bot)
-    bot._apply_sleep_presence = MaxwellBot._apply_sleep_presence.__get__(bot)
-    bot._schedule_sleep_presence = MaxwellBot._schedule_sleep_presence.__get__(bot)
-    bot._arm_sleep_wake = MaxwellBot._arm_sleep_wake.__get__(bot)
-    bot._cancel_sleep_wake = MaxwellBot._cancel_sleep_wake.__get__(bot)
-    bot._sleep_wake_when_due = MaxwellBot._sleep_wake_when_due.__get__(bot)
-    bot.set_sleep = MaxwellBot.set_sleep.__get__(bot)
-    bot.clear_sleep = MaxwellBot.clear_sleep.__get__(bot)
-    bot._is_sleeping = MaxwellBot._is_sleeping.__get__(bot)
+    bot._build_activities = DameCurieBot._build_activities.__get__(bot)
+    bot._sleep_window_active = DameCurieBot._sleep_window_active.__get__(bot)
+    bot.change_presence = DameCurieBot.change_presence.__get__(bot)
+    bot._apply_sleep_presence = DameCurieBot._apply_sleep_presence.__get__(bot)
+    bot._schedule_sleep_presence = DameCurieBot._schedule_sleep_presence.__get__(bot)
+    bot._arm_sleep_wake = DameCurieBot._arm_sleep_wake.__get__(bot)
+    bot._cancel_sleep_wake = DameCurieBot._cancel_sleep_wake.__get__(bot)
+    bot._sleep_wake_when_due = DameCurieBot._sleep_wake_when_due.__get__(bot)
+    bot.set_sleep = DameCurieBot.set_sleep.__get__(bot)
+    bot.clear_sleep = DameCurieBot.clear_sleep.__get__(bot)
+    bot._is_sleeping = DameCurieBot._is_sleeping.__get__(bot)
     return bot
 
 

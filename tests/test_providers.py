@@ -985,7 +985,7 @@ GEMINI_PROMPT_BLOCK = (
 
 
 def test_policy_block_text_detected_and_normal_replies_are_not():
-    """Gemini hands the prompt block back as a 200 body; Maxwell relayed it."""
+    """Gemini hands the prompt block back as a 200 body; Curie relayed it."""
     assert _is_policy_block_text(GEMINI_PROMPT_BLOCK)
     assert _is_policy_block_text("the prompt could not be submitted")
     # Ordinary replies, including plain model refusals, must not trip it.

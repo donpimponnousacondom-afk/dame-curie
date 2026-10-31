@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from bot_tools import FetchUrlTool, SeeImageTool
 from image_media import ImageMediaError
 
@@ -82,7 +82,7 @@ def test_see_image_conversion_failure_is_tool_error(monkeypatch):
 
 
 def test_bare_svg_link_is_admitted_for_visual_normalization():
-    assert MaxwellBot._media_link_refs("https://example.test/a.svg") == [("https://example.test/a.svg", ".svg")]
+    assert DameCurieBot._media_link_refs("https://example.test/a.svg") == [("https://example.test/a.svg", ".svg")]
 
 
 def test_embed_svg_with_generic_mime_is_admitted_without_changing_original(monkeypatch):
@@ -90,7 +90,7 @@ def test_embed_svg_with_generic_mime_is_admitted_without_changing_original(monke
         _fetch_public_payload=AsyncMock(return_value=("https://example.test/a.svg", "application/octet-stream", SVG)),
         _is_gif_page_url=lambda _: False, _media_item=lambda **kwargs: kwargs,
     )
-    result = asyncio.run(MaxwellBot._download_embed_media(fake, "https://example.test/a.svg", "original.svg", 10000, 1))
+    result = asyncio.run(DameCurieBot._download_embed_media(fake, "https://example.test/a.svg", "original.svg", 10000, 1))
     assert result["mime_type"] == "image/svg+xml" and result["is_image"]
     assert base64.b64decode(result["b64"]) == SVG
     assert result["url"] == "https://example.test/a.svg"

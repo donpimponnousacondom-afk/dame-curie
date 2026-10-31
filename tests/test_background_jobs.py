@@ -13,7 +13,7 @@ import discord
 import pytest
 
 from control_defaults import SERVER_PROMPT_MAX_BYTES
-from bot import MaxwellBot
+from bot import DameCurieBot
 from error_reporting import PUBLIC_ERROR_TEXT
 from job_routing import JobProvider, parse_background_request
 from tool_schemas import TOOL_PARAMETERS
@@ -146,10 +146,10 @@ class AllowlistBot:
     command_prefix = "!"
     user = SimpleNamespace(id=42)
 
-    _channel_allowed = MaxwellBot._channel_allowed
-    _solo_blocks = MaxwellBot._solo_blocks
-    _solo_channel_for = MaxwellBot._solo_channel_for
-    _message_update_allowed = MaxwellBot._message_update_allowed
+    _channel_allowed = DameCurieBot._channel_allowed
+    _solo_blocks = DameCurieBot._solo_blocks
+    _solo_channel_for = DameCurieBot._solo_channel_for
+    _message_update_allowed = DameCurieBot._message_update_allowed
 
     def __init__(self, allowed=(), blocked=()):
         self._control = {
@@ -356,7 +356,7 @@ def test_spawn_tool_second_spawn_tells_model_to_ack(tmp_path):
 class RunnerStubBot(StubBot):
     """Runner seams plus the allowlist gate the real bot always has."""
 
-    _channel_allowed = MaxwellBot._channel_allowed
+    _channel_allowed = DameCurieBot._channel_allowed
 
     def __init__(self, manager):
         super().__init__(manager)
@@ -748,9 +748,9 @@ def test_job_command_shows_thread_link_or_honest_thread_failure(tmp_path):
         )
         manager.mark(threadless.id, thread_error="Forbidden")
         message.content = f"!job {linked.id}"
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         message.content = f"!job {threadless.id}"
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         return channel
 
     channel = asyncio.run(scenario())
@@ -796,16 +796,16 @@ def test_channel_allowed_inherits_an_allowed_parent_but_not_a_blocked_one(monkey
 def test_edit_gate_applies_the_same_parent_rule(monkeypatch):
     monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
     bot = AllowlistBot(allowed=["100"], blocked=["200"])
-    assert MaxwellBot._message_update_allowed(bot, GateMessage(FakeChannel("100"))) is True
-    assert MaxwellBot._message_update_allowed(bot, GateMessage(FakeChannel("999"))) is False
+    assert DameCurieBot._message_update_allowed(bot, GateMessage(FakeChannel("100"))) is True
+    assert DameCurieBot._message_update_allowed(bot, GateMessage(FakeChannel("999"))) is False
     assert (
-        MaxwellBot._message_update_allowed(
+        DameCurieBot._message_update_allowed(
             bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="100")))
         )
         is True
     )
     assert (
-        MaxwellBot._message_update_allowed(
+        DameCurieBot._message_update_allowed(
             bot, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
         )
         is False
@@ -813,7 +813,7 @@ def test_edit_gate_applies_the_same_parent_rule(monkeypatch):
     # Same explicit-choice rule through the edit gate.
     explicit = AllowlistBot(allowed=["100", "555"], blocked=["200"])
     assert (
-        MaxwellBot._message_update_allowed(
+        DameCurieBot._message_update_allowed(
             explicit, GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
         )
         is True
@@ -824,7 +824,7 @@ def test_on_message_gate_denies_a_thread_of_a_blocked_parent(monkeypatch):
     monkeypatch.setattr(discord, "Thread", FakeThreadChannel)
     bot = AllowlistBot(allowed=["100"], blocked=["200"])
     message = GateMessage(FakeThreadChannel(SimpleNamespace(id="200")))
-    asyncio.run(MaxwellBot._on_message_impl(bot, message))
+    asyncio.run(DameCurieBot._on_message_impl(bot, message))
     assert bot.dispatched == []
 
 

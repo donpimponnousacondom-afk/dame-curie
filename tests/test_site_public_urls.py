@@ -9,13 +9,12 @@ from bot_tools import ImageGeneratorTool
 
 
 LOCAL = "http://127.0.0.1:8081"
-LOCAL_SITE = LOCAL + "/bot"
 PUBLIC = "https://redroom.zombiedawn.net/dame"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 URL_CASES = [
-    pytest.param((None, LOCAL_SITE), id="unset"),
-    pytest.param(("", LOCAL_SITE), id="empty"),
-    pytest.param((" \t", LOCAL_SITE), id="whitespace"),
+    pytest.param((None, ""), id="unset"),
+    pytest.param(("", ""), id="empty"),
+    pytest.param((" \t", ""), id="whitespace"),
     pytest.param((PUBLIC, PUBLIC), id="explicit"),
     pytest.param((PUBLIC + "/", PUBLIC), id="trailing-slash"),
     pytest.param((" " + PUBLIC + "/// ", PUBLIC), id="surrounding-space-and-slashes"),
@@ -31,7 +30,7 @@ def site_case(request, tmp_path, monkeypatch):
     root.mkdir()
     data.mkdir()
     config = SimpleNamespace(
-        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_PUBLIC_BASE_URL=LOCAL + "///",
+        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_IMAGE_PUBLIC_BASE_URL=LOCAL + "///",
         DATA_DIR=str(data), IMAGE_GEN_PROTOCOL="images",
         IMAGE_GEN_BASE_URL="https://images.example.invalid/v1",
         IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
@@ -67,7 +66,7 @@ def test_website_override_leaves_image_delivery_urls_and_bytes_unchanged(site_ca
     assert files[0].read_bytes() == PNG
     assert files[0].with_suffix(".txt").read_bytes() == b"synthetic image"
     assert files[0].with_suffix(".txt").name not in result
-    assert f"Permanent URL: {LOCAL_SITE}/_images/{files[0].name} " in result
+    assert f"Permanent URL: {LOCAL}/{files[0].name} " in result
     assert "redroom.zombiedawn.net" not in result
     assert f"Local path: {files[0]} " in result
     if auto_send:
@@ -77,4 +76,4 @@ def test_website_override_leaves_image_delivery_urls_and_bytes_unchanged(site_ca
         case.message.channel.send.assert_not_awaited()
         assert "NOT sent" in result
     assert case.bot.config.DAME_CURIE_SITE_DIR == str(case.root)
-    assert case.bot.config.DAME_CURIE_PUBLIC_BASE_URL == LOCAL + "///"
+    assert case.bot.config.DAME_CURIE_IMAGE_PUBLIC_BASE_URL == LOCAL + "///"

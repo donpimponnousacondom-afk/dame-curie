@@ -8,9 +8,12 @@ come from the live tool instances at request time so they stay in sync with
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _obj(
@@ -1785,10 +1788,12 @@ def recover_text_tool_calls(
 # turn walks off the end of the context window mid-loop. Per-result truncation
 # is not enough on its own: 24 rounds of a 32k-capped result is still ~768k
 # chars riding on top of an already-full prompt.
-TOOL_TAIL_MAX_MESSAGES = 12
-TOOL_TAIL_MAX_CHARS = 36_000
+# The tail has its own allowance in the prompt budget (bot._apply_prompt_budget),
+# so a tool turn keeps about 20 single-call rounds without growing chat prompts.
+TOOL_TAIL_MAX_MESSAGES = 42
+TOOL_TAIL_MAX_CHARS = 96_000
 TOOL_TAIL_NEWEST_GROUP_CHARS = 24_000
-TOOL_RESULT_COMPACT_CHARS = 4_000
+TOOL_RESULT_COMPACT_CHARS = 8_000
 _HISTORY_MARKER_RE = re.compile(
     r"\n… \[(\d+) chars truncated from (?:earlier tool result|tool result|tool history)\]$"
 )
@@ -1907,6 +1912,50 @@ def _fit_tool_group(group: list[dict], limit: int) -> None:
         msg["content"] = _truncate_history_text(msg["content"], low, label)
 
 
+_DROPPED_ROUNDS_RE = re.compile(
+    r"\[Earlier in this turn (\d+) tool round\(s\) were dropped from context: ([^\]]*)\. "
+    r"Their results are no longer visible\.\]\n"
+)
+
+
+def _round_marker_message(group: list[dict]) -> dict | None:
+    """Return the first harness-written message of a group: a tool result."""
+    return next((msg for msg in group if msg.get("role") in {"tool", "user"}), None)
+
+
+_TEXT_RESULTS_HEADER = "=== TOOL RESULTS ===\n"
+
+
+def _results_header(content: str) -> str:
+    """The text-protocol header that must stay first so the group is recognised."""
+    return _TEXT_RESULTS_HEADER if content.startswith(_TEXT_RESULTS_HEADER) else ""
+
+
+def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str], bool]:
+    """Remove the dropped-rounds marker; return its round count, names and "and others"."""
+    msg = _round_marker_message(group)
+    content = msg.get("content") if msg else None
+    if not isinstance(content, str):
+        return 0, [], False
+    header = _results_header(content)
+    match = _DROPPED_ROUNDS_RE.match(content, len(header))
+    if not match:
+        return 0, [], False
+    msg["content"] = header + content[match.end():]
+    names = [name for name in match.group(2).split(", ") if name]
+    others = "and others" in names
+    return int(match.group(1)), [name for name in names if name != "and others"], others
+
+
+def _round_tool_names(group: list[dict]) -> list[str]:
+    calls = group[0].get("tool_calls") or [] if group else []
+    names = [
+        re.sub(r"[^A-Za-z0-9_.-]", "_", str((call.get("function") or {}).get("name") or "tool"))[:40]
+        for call in calls
+    ]
+    return names or ["text tool round"]
+
+
 def trim_tool_tail(
     tail: list[dict],
     *,
@@ -1920,8 +1969,14 @@ def trim_tool_tail(
     the char cap must be rejected by the caller before executing their tools.
     """
     groups = tool_tail_groups(tail)
+    dropped_groups = 0
+    dropped_chars = 0
+    marker_rounds, marker_names, marker_others = _take_dropped_marker(groups[0]) if groups else (0, [], False)
     while len(groups) > 1 and sum(map(len, groups)) > max_messages:
-        groups.pop(0)
+        dropped = groups.pop(0)
+        dropped_chars += sum(message_chars(msg) for msg in dropped)
+        dropped_groups += 1
+        marker_names += _round_tool_names(dropped)
     if not groups:
         return []
     if len(groups[-1]) > max_messages:
@@ -1942,7 +1997,34 @@ def trim_tool_tail(
             if used <= max_chars:
                 break
         dropped = groups.pop(0)
+        dropped_groups += 1
+        dropped_chars += sum(message_chars(msg) for msg in dropped)
+        marker_names += _round_tool_names(dropped)
         used -= sum(message_chars(msg) for msg in dropped)
+    if dropped_groups:
+        logger.info(
+            "Tool history dropped %d older round(s), %d chars, to fit %d messages and %d chars",
+            dropped_groups, dropped_chars, max_messages, max_chars,
+        )
+    marker_rounds += dropped_groups
+    target = _round_marker_message(groups[0]) if marker_rounds else None
+    if marker_rounds and (target is None or not isinstance(target.get("content"), str)):
+        raise ValueError(
+            f"Tool history dropped {marker_rounds} round(s), but the oldest kept group "
+            "has no text tool result to carry the dropped-rounds marker"
+        )
+    if target is not None:
+        names = list(dict.fromkeys(marker_names))
+        # Names past the first 8 are not kept, so no count of them is claimed.
+        others = marker_others or len(names) > 8
+        names = names[:8] + (["and others"] if others else [])
+        header = _results_header(target["content"])
+        target["content"] = (
+            header
+            + f"[Earlier in this turn {marker_rounds} tool round(s) were dropped from context: "
+            f"{', '.join(names)}. Their results are no longer visible.]\n"
+            + target["content"][len(header):]
+        )
     return [msg for group in groups for msg in group]
 
 

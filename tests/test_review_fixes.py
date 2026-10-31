@@ -10,7 +10,7 @@ from tool_schemas import TOOL_PARAMETERS, build_openai_tools
 
 
 def test_native_calls_from_string_does_not_consume_stash():
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     consumed = {"n": 0}
 
@@ -19,7 +19,7 @@ def test_native_calls_from_string_does_not_consume_stash():
         return [{"id": "stale"}]
 
     bot = SimpleNamespace(_consume_native_tool_calls=consume)
-    assert MaxwellBot._native_calls_from(bot, "quota exceeded") == []
+    assert DameCurieBot._native_calls_from(bot, "quota exceeded") == []
     assert consumed["n"] == 0
 
 

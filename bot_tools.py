@@ -950,18 +950,48 @@ def _parse_overwrite_pairs(raw) -> dict:
 
 
 def _public_image_target(bot) -> tuple[str, str]:
-    """Return the existing local image directory and stable mirrored URL base.
+    """Return the local image directory and the public URL of its mirror.
 
-    Files land in <DAME_CURIE_SITE_DIR>/_images/; the independent publisher
-    mirrors them at <DAME_CURIE_PUBLIC_BASE_URL>/bot/_images/<file>.
+    Files land in <DAME_CURIE_SITE_DIR>/_images/. The independent publisher
+    mirrors them flat to its image_root, which is public at
+    <DAME_CURIE_IMAGE_PUBLIC_BASE_URL>/<file>. An unset base gives "".
     """
     cfg = getattr(bot, "config", None)
     site_dir = str(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
-    pub = str(
-        getattr(cfg, "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid")
-        or "https://dame-curie.example.invalid"
-    ).rstrip("/")
-    return os.path.join(site_dir, "_images"), f"{pub}/bot/_images"
+    pub = str(getattr(cfg, "DAME_CURIE_IMAGE_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    return os.path.join(site_dir, "_images"), pub
+
+
+_OWN_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
+def _own_image_path(bot, ref: str) -> str | None:
+    """Return the local file for one of the bot's own images, or None.
+
+    The publisher mirrors a new image in 5 to 7 seconds, so its public URL
+    returns 404 until then. A public URL under the image base or a path in
+    the image directory therefore resolves to the local file.
+    """
+    img_dir, pub_base = _public_image_target(bot)
+    ref = str(ref or "").strip()
+    if "\x00" in ref:
+        return None
+    if pub_base and ref.startswith(pub_base + "/"):
+        name = ref[len(pub_base) + 1 :].split("?", 1)[0].split("#", 1)[0]
+        if not name or "/" in name or name in {".", ".."}:
+            return None
+        ref = os.path.join(img_dir, name)
+    elif ref.startswith(("http://", "https://")):
+        return None
+    root = os.path.realpath(img_dir)
+    path = os.path.realpath(ref)
+    if (
+        not path.startswith(root + os.sep)
+        or Path(path).suffix.lower() not in _OWN_IMAGE_SUFFIXES
+        or not os.path.isfile(path)
+    ):
+        return None
+    return path
 
 
 def _persist_public_image(
@@ -1001,7 +1031,7 @@ def _persist_public_image(
                 temporary_path.unlink(missing_ok=True)
             except OSError as error:
                 logger.warning("Image prompt sidecar cleanup failed (%s)", type(error).__name__)
-    return path, f"{pub_base}/{name}"
+    return path, (f"{pub_base}/{name}" if pub_base else None)
 
 
 class ImageRequestLog:
@@ -1220,7 +1250,10 @@ class ImageGeneratorTool(Tool):
             except Exception:
                 return None, "malformed data: URI"
 
-        if ref.startswith(("http://", "https://")):
+        own = _own_image_path(self.bot, ref)
+        if own is not None:
+            ref = own
+        elif ref.startswith(("http://", "https://")):
             if not _is_safe_url(ref):
                 return None, f"refusing to fetch invalid HTTP(S) image URL {ref[:80]}"
             try:
@@ -1260,6 +1293,8 @@ class ImageGeneratorTool(Tool):
                 path == root or path.startswith(root + os.sep) for root in allowed
             ):
                 return None, f"local path outside the allowed image dirs: {ref[:80]}"
+            if Path(path).suffix.lower() not in _OWN_IMAGE_SUFFIXES:
+                return None, f"not an image file (.png, .jpg, .jpeg, .gif, .webp): {ref[:80]}"
             if not os.path.isfile(path):
                 return None, f"no such file: {ref[:80]}"
             if os.path.getsize(path) > self.MAX_INPUT_BYTES:
@@ -1455,7 +1490,9 @@ class ImageGeneratorTool(Tool):
         if perm_url:
             result += (
                 f"\nPermanent URL: {perm_url} "
-                "(never expires - use this directly in HTML <img> tags or curl)"
+                "(never expires - use this directly in HTML <img> tags. The publisher "
+                "mirrors it in 5 to 10 seconds; until then it returns 404. "
+                "see_image and image_generator read it from disk at once.)"
             )
         if local_path:
             result += (
@@ -5772,7 +5809,8 @@ class SeeImageTool(Tool):
             "you can actually see it. Use for Tenor/Giphy/imgur GIF pages, "
             "Discord CDN links, or any direct jpg/png/gif/webp/svg that was not "
             "already attached to the message. Prefer this over fetch_url for "
-            "pictures. Params: url (required)."
+            "pictures. Your own generated images load from disk by their "
+            "Permanent URL or Local path. Params: url (required)."
         )
 
     @classmethod
@@ -5861,7 +5899,8 @@ class SeeImageTool(Tool):
     async def execute(self, message: Message, url: str | None = None, **kwargs) -> str:
         if not url:
             return "Error: url is required"
-        if not _is_safe_url(url):
+        own = _own_image_path(self.bot, url)
+        if own is None and not _is_safe_url(url):
             return "Error: URL must use HTTP(S) and include a hostname"
         control = getattr(self.bot, "_control", None) or {}
         if not parse_bool(control.get("process_images"), True):
@@ -5872,9 +5911,20 @@ class SeeImageTool(Tool):
         if hasattr(self.bot, "_max_media_bytes"):
             with contextlib.suppress(Exception):
                 max_size = self.bot._max_media_bytes()
-        item = await self.bot._download_embed_media(
-            url, "see-image", max_size, getattr(message, "id", None)
-        )
+        if own is not None:
+            if os.path.getsize(own) > max_size:
+                return f"Error: {url} is larger than {max_size} bytes"
+            local = await asyncio.to_thread(Path(own).read_bytes)
+            item = {
+                "b64": base64.b64encode(local).decode("ascii"),
+                "mime_type": image_mime(local, ""),
+                "filename": os.path.basename(own),
+                "url": url,
+            }
+        else:
+            item = await self.bot._download_embed_media(
+                url, "see-image", max_size, getattr(message, "id", None)
+            )
         if not item or not item.get("b64"):
             return f"Error: could not load an image from {url}"
         blob = base64.b64decode(item["b64"])
@@ -7575,7 +7625,7 @@ class UpdateBasePersonalityTool(Tool):
     """Rewrite the global base_personality that ships in every prompt.
 
     This is what the model reads as its tone / do-don'ts / identity safety
-    section. The MAXWELL_BASE_KNOWLEDGE block (identity, slang, voice, memes)
+    section. The DAME_CURIE_BASE_KNOWLEDGE block (identity, slang, voice, memes)
     is ALWAYS-ON and lives in code - it is NOT editable through this tool.
     This tool only rewrites the per-runtime personality paragraph that lives
     in bot_control.json under `base_personality`.
@@ -7625,7 +7675,7 @@ class UpdateBasePersonalityTool(Tool):
         return (
             f"base_personality updated. {len(text)} chars written to "
             f"{store.personality_path}. The change is live on the next turn - no "
-            "restart needed. MAXWELL_BASE_KNOWLEDGE (in code) was NOT "
+            "restart needed. DAME_CURIE_BASE_KNOWLEDGE (in code) was NOT "
             "touched; only the per-runtime personality paragraph was rewritten."
         )
 
@@ -7674,7 +7724,7 @@ class UpdateServerPromptTool(Tool):
                 return (
                     f"Cleared per-server prompt for server_id={server_id}. "
                     "The bot will fall back to base_personality + "
-                    "MAXWELL_BASE_KNOWLEDGE in that server from now on."
+                    "DAME_CURIE_BASE_KNOWLEDGE in that server from now on."
                 )
             self.bot.memory.set_server_prompt(server_id, text_str)
         except Exception as e:
@@ -7877,8 +7927,8 @@ def _chess_is_bot_resign(who: str, bot=None) -> bool:
         return True
     name = _chess_bot_name(bot).lower()
     aliases = {name}
-    if name == "maxwell":
-        aliases.add("max")
+    if name == "dame curie":
+        aliases.add("curie")
     return token in aliases
 
 

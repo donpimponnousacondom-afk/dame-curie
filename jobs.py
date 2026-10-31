@@ -50,7 +50,7 @@ from utils import _spawn_background
 if TYPE_CHECKING:
     from discord import Message
 
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
 logger = logging.getLogger(__name__)
 
@@ -467,7 +467,7 @@ async def _post_thread(thread, text: str, *, context: dict[str, str] | None = No
 
 
 def background_messages(
-    bot: MaxwellBot, job: BackgroundJob, message: Message, platform: str,
+    bot: DameCurieBot, job: BackgroundJob, message: Message, platform: str,
 ) -> list[dict[str, str]]:
     """Use canonical identity and only the origin's configured server prompt."""
     server_id = str(message.guild.id) if message.guild else "DM"

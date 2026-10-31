@@ -49,11 +49,11 @@ def protect(event, args):
 
 
 sys.addaudithook(protect)
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 async def construct():
-    instance = MaxwellBot()
+    instance = DameCurieBot()
     data = Path(instance.config.DATA_DIR)
     assert data == state / 'data'
     assert instance.plugin_manager.data_dir == data
@@ -77,7 +77,7 @@ async def construct():
     instance.memory._db.close()
     await instance.close()
     assert not blocked, blocked
-    print('actual MaxwellBot constructor passed without login or network')
+    print('actual DameCurieBot constructor passed without login or network')
 
 
 asyncio.run(construct())
@@ -142,5 +142,5 @@ def test_actual_bot_constructor_keeps_state_outside_read_only_source(
         timeout=45,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "actual MaxwellBot constructor passed" in result.stdout
+    assert "actual DameCurieBot constructor passed" in result.stdout
     assert not (app / "data").exists()

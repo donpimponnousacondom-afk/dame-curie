@@ -1,4 +1,4 @@
-"""RAG vector memory for Maxwell Bot.
+"""RAG vector memory for Dame Curie Bot.
 
 Replaces the old MemoryManager (memory.py) and ContextCleanupEngine
 (context_cleanup.py) with a single SQLite + numpy vector store backed by
@@ -149,7 +149,7 @@ MAX_BACKGROUND_EMBED_TASKS = int(
 # batch migration path in _embed_pending_all agrees with the single path -
 # they used to disagree, and the batch path silently truncated at 8000.
 # Local ollama loads qwen3-embedding:0.6b at num_ctx=4096 (CPU default), so
-# 30k-char chunks overflow the runner and hang until Maxwell's 30s timeout.
+# 30k-char chunks overflow the runner and hang until Dame Curie's 30s timeout.
 EMBED_MAX_CHARS = 6000
 EMBED_CHUNK_OVERLAP = 200
 # The pre-2026-08-09 hard cutoff. Rows embedded before that commit were

@@ -12,7 +12,7 @@ conversation.
 import asyncio
 from types import SimpleNamespace
 
-from bot import MaxwellBot, ToolCircuitBreaker
+from bot import DameCurieBot, ToolCircuitBreaker
 
 
 class _Memory:
@@ -71,9 +71,9 @@ def _bot(memory, control=None):
         _recent_users={},
         _conversation_watch={},
         _tool_system_prompt=lambda *args, **kwargs: "",
-        bot_name="Maxwell",
+        bot_name="Curie",
         memory=memory,
-        user=SimpleNamespace(display_name="Maxwell", id=1),
+        user=SimpleNamespace(display_name="Curie", id=1),
     )
     for name in (
         "_reply_parent",
@@ -86,7 +86,7 @@ def _bot(memory, control=None):
         "_conversation_watch_active",
         "_is_short_live_turn",
     ):
-        setattr(bot, name, getattr(MaxwellBot, name).__get__(bot))
+        setattr(bot, name, getattr(DameCurieBot, name).__get__(bot))
     return bot
 
 
@@ -105,13 +105,13 @@ def _message():
 # the lookup tiers are deliberately skipped for those (see
 # _is_short_live_turn). Anything testing those tiers has to be a real turn.
 LONG_TURN = (
-    "hey maxwell, do you remember what we agreed about the deploy schedule "
+    "hey curie, do you remember what we agreed about the deploy schedule "
     "for the staging cluster last week? I want to double-check before friday."
 )
 
 
 def _prompt(bot, text=LONG_TURN):
-    messages = asyncio.run(MaxwellBot._build_messages(bot, _message(), text))
+    messages = asyncio.run(DameCurieBot._build_messages(bot, _message(), text))
     return "\n".join(str(m.get("content") or "") for m in messages)
 
 
@@ -191,7 +191,7 @@ def test_the_entity_tier_follows_the_person_across_channels():
     def prompt_for_channel(cid):
         msg = _message()
         msg.channel = SimpleNamespace(id=cid)
-        messages = asyncio.run(MaxwellBot._build_messages(bot, msg, LONG_TURN))
+        messages = asyncio.run(DameCurieBot._build_messages(bot, msg, LONG_TURN))
         return "\n".join(str(m.get("content") or "") for m in messages)
 
     first = prompt_for_channel(123)
@@ -226,7 +226,7 @@ def test_a_failing_tier_does_not_break_the_turn():
 
     prompt = _prompt(_bot(_Broken()))
     assert "About this person" not in prompt
-    assert "You are Maxwell" in prompt or prompt
+    assert "You are Curie" in prompt or prompt
 
 
 # ─── the budget plan itself ──────────────────────────────────────────────
@@ -234,7 +234,7 @@ def test_a_failing_tier_does_not_break_the_turn():
 
 def test_disabled_tiers_are_excluded_from_the_split():
     bot = _bot(_Memory(), {"cross_context_enabled": False, "entity_memory_enabled": False})
-    plan = MaxwellBot._context_budget_plan(bot, _message(), LONG_TURN, ["prefix"])
+    plan = DameCurieBot._context_budget_plan(bot, _message(), LONG_TURN, ["prefix"])
     assert plan.budget_for("facts") == 0
     assert plan.budget_for("entity") == 0
     # Their share goes to the transcript rather than being lost.
@@ -243,8 +243,8 @@ def test_disabled_tiers_are_excluded_from_the_split():
 
 def test_the_plan_never_promises_more_than_the_prompt_can_hold():
     bot = _bot(_Memory(), {"prompt_context_budget": 96000})
-    base = MaxwellBot._context_budget_plan(bot, _message(), LONG_TURN, ["x" * 5000])
-    plan = MaxwellBot._context_budget_plan(
+    base = DameCurieBot._context_budget_plan(bot, _message(), LONG_TURN, ["x" * 5000])
+    plan = DameCurieBot._context_budget_plan(
         bot,
         _message(),
         LONG_TURN,
@@ -255,7 +255,7 @@ def test_the_plan_never_promises_more_than_the_prompt_can_hold():
     base_total = sum(t.budget for t in base.tiers.values())
     total = sum(t.budget for t in plan.tiers.values())
     assert base_total - total == 38000
-    assert total <= MaxwellBot._prompt_budget_chars(bot)
+    assert total <= DameCurieBot._prompt_budget_chars(bot)
 
 
 def test_operator_weights_move_the_split():
@@ -267,7 +267,7 @@ def test_operator_weights_move_the_split():
             "context_tier_ltm_weight": 80,
         },
     )
-    plan = MaxwellBot._context_budget_plan(bot, _message(), LONG_TURN, ["prefix"])
+    plan = DameCurieBot._context_budget_plan(bot, _message(), LONG_TURN, ["prefix"])
     assert plan.budget_for("ltm") > plan.budget_for("recent")
 
 
@@ -276,7 +276,7 @@ def test_an_ambient_turn_gives_the_lookup_tiers_budget_to_the_transcript():
     # watch/ambient turn needs the running thread, not a research pass. The
     # budget has to follow, or the transcript pays for tiers that never render.
     bot = _bot(_Memory(), {"long_term_memory_enabled": True, "cross_context_enabled": True})
-    plan = MaxwellBot._context_budget_plan(bot, _message(), "lol", ["prefix"])
+    plan = DameCurieBot._context_budget_plan(bot, _message(), "lol", ["prefix"])
     assert plan.budget_for("ltm") == 0
     assert plan.budget_for("facts") == 0
     assert plan.budget_for("web") == 0

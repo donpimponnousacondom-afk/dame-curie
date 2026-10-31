@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 import response_observability as observability
 
 
@@ -79,7 +79,7 @@ def test_actual_version_dispatch_only_uses_frozen_boot_snapshot(monkeypatch, tmp
     message = SimpleNamespace(content="!version", author=SimpleNamespace(id=7),
                               channel=SimpleNamespace(id=8, send=send), guild=None)
     monkeypatch.setattr(observability, "read_startup_git_snapshot", Mock(side_effect=AssertionError("queried after boot")))
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert len(connections) == 1
     assert sent[0].startswith("```\nProvenance: checkout at boot")
     assert sent[0].endswith("\n```")

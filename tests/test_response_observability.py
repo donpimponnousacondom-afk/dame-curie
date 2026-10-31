@@ -144,7 +144,7 @@ def test_broken_observer_cannot_cost_a_delivery(metrics):
 
 
 def test_run_queued_reply_brackets_the_turn_with_the_observer():
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     async def scenario():
         observer = RecordingObserver()
@@ -156,7 +156,7 @@ def test_run_queued_reply_brackets_the_turn_with_the_observer():
 
         bot = SimpleNamespace(_turn_observer=observer, _handle_message=handle)
         message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
-        result = await MaxwellBot._run_queued_reply(bot, message, "hi")
+        result = await DameCurieBot._run_queued_reply(bot, message, "hi")
         return observer, seen, result
 
     observer, seen, result = asyncio.run(scenario())
@@ -168,7 +168,7 @@ def test_run_queued_reply_brackets_the_turn_with_the_observer():
 
 
 def test_run_queued_reply_closes_the_input_when_the_turn_raises():
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     async def scenario():
         observer = RecordingObserver()
@@ -179,7 +179,7 @@ def test_run_queued_reply_closes_the_input_when_the_turn_raises():
         bot = SimpleNamespace(_turn_observer=observer, _handle_message=handle)
         message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
         with pytest.raises(RuntimeError):
-            await MaxwellBot._run_queued_reply(bot, message, "hi")
+            await DameCurieBot._run_queued_reply(bot, message, "hi")
         return observer
 
     observer = asyncio.run(scenario())
@@ -187,7 +187,7 @@ def test_run_queued_reply_closes_the_input_when_the_turn_raises():
 
 
 def test_run_queued_reply_forwards_unchanged_without_an_observer():
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     async def scenario():
         async def handle(message, content):
@@ -195,7 +195,7 @@ def test_run_queued_reply_forwards_unchanged_without_an_observer():
 
         bot = SimpleNamespace(_handle_message=handle)
         message = SimpleNamespace(id=77, channel=SimpleNamespace(id=100))
-        return await MaxwellBot._run_queued_reply(bot, message, "hi")
+        return await DameCurieBot._run_queued_reply(bot, message, "hi")
 
     assert asyncio.run(scenario()) == "answer"
 
@@ -249,11 +249,11 @@ def test_persisted_bad_format_falls_back(metrics, bad):
 
 
 def test_split_reserves_footer_once_preserves_body_and_fences(metrics):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     text = "```python\n" + "x = 123\n" * 650 + "```"
     bot = fake_bot(_control={"footer_format": "x" * 300})
-    clean, wire = prepare_delivery(bot, text, metrics, MaxwellBot._split_response)
+    clean, wire = prepare_delivery(bot, text, metrics, DameCurieBot._split_response)
     assert len(wire) > 1
     assert all(len(chunk) <= 2000 for chunk in wire)
     assert sum(FOOTER_MARKER in chunk for chunk in wire) == 1
@@ -315,13 +315,13 @@ def test_registry_channel_exact_reply_eviction_and_no_call(metrics):
 
 
 def test_usage_empty_or_plain_string_never_borrows(metrics):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
     from providers import ProviderResult
 
     bot = fake_bot(ai_provider=SimpleNamespace(_last_usage={"prompt_tokens": 99999}))
-    assert MaxwellBot._usage_from(bot, "static") == {}
-    assert MaxwellBot._usage_from(bot, ProviderResult("answer", usage={})) == {}
-    assert MaxwellBot._usage_from(
+    assert DameCurieBot._usage_from(bot, "static") == {}
+    assert DameCurieBot._usage_from(bot, ProviderResult("answer", usage={})) == {}
+    assert DameCurieBot._usage_from(
         bot, ProviderResult("answer", usage={"prompt_tokens": 12})
     ) == {"prompt_tokens": 12}
 
@@ -476,7 +476,7 @@ def test_footer_commands_auth_validation_and_static_replies(
     metrics, monkeypatch, tmp_path
 ):
     import response_observability as observability
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     writes = []
     atomic_write = observability._atomic_json_write_sync
@@ -496,22 +496,22 @@ def test_footer_commands_auth_validation_and_static_replies(
             _sync_audio_input_flags=lambda: None,
             _conversation_watch_enabled=lambda: True,
         )
-        bot._load_control = lambda force: MaxwellBot._load_control(bot, force=force)
+        bot._load_control = lambda force: DameCurieBot._load_control(bot, force=force)
         message = Message()
         record_delivery(bot, message.channel, SimpleNamespace(id=999), metrics)
-        await MaxwellBot._handle_footer_command(bot, message, "disable")
+        await DameCurieBot._handle_footer_command(bot, message, "disable")
         assert bot._control["footer_enabled"] is False
-        await MaxwellBot._handle_footer_command(bot, message, "enable")
+        await DameCurieBot._handle_footer_command(bot, message, "enable")
         assert bot._control["footer_enabled"] is True
-        await MaxwellBot._handle_footer_command(
+        await DameCurieBot._handle_footer_command(
             bot, message, "format {{MODEL}} {{CONTEXT}}"
         )
         assert bot._control["footer_format"] == "{{MODEL}} {{CONTEXT}}"
-        await MaxwellBot._handle_footer_command(bot, message, "format " + "x" * 301)
+        await DameCurieBot._handle_footer_command(bot, message, "format " + "x" * 301)
         message.author.id = 8
-        await MaxwellBot._handle_footer_command(bot, message, "off")
+        await DameCurieBot._handle_footer_command(bot, message, "off")
         assert message.channel.sent[-1].content.startswith("not authorized\n")
-        await MaxwellBot._handle_footer_command(bot, message, "status")
+        await DameCurieBot._handle_footer_command(bot, message, "status")
         assert "Footer: on" in message.channel.sent[-1].content
         assert FOOTER_MARKER not in message.channel.sent[0].content
         assert message.channel.sent[1].content.endswith(
@@ -532,7 +532,7 @@ def test_footer_commands_auth_validation_and_static_replies(
 
 
 def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     async def scenario():
         build = RunningBuild(
@@ -543,16 +543,16 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
         )
         message = Message(content="!debug")
         record_delivery(bot, message.channel, SimpleNamespace(id=999), metrics)
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert "message: 999" in message.channel.sent[-1].content
         message.reference = SimpleNamespace(message_id=123, channel_id=100)
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert "No measurements" in message.channel.sent[-1].content
         message.reference = SimpleNamespace(message_id=999, channel_id=200)
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert "must be in this channel" in message.channel.sent[-1].content
         message.content = "!version"
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert "Provenance: checkout at boot" in message.channel.sent[-1].content
         assert all(
             sent.content.startswith("```\n") and sent.content.endswith("\n```")
@@ -564,11 +564,11 @@ def test_debug_command_exact_reference_and_version_are_unmeasured(metrics):
         )
         assert len(bot._delivery_measurements.records) == 1
         bot._control["footer_enabled"] = False
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert message.channel.sent[-1].content == "```\n" + build.format() + "\n```"
         message.content = "!debug"
         message.author.id = 8
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert message.channel.sent[-1].content == "not authorized"
 
     asyncio.run(scenario())
@@ -612,7 +612,7 @@ def test_debug_runtime_provider_labels_only_expose_hostname(runtime_provider, ba
 
 @pytest.mark.parametrize("footer_enabled", [True, False])
 def test_debug_loaded_runtime_before_completion_without_config_reads(runtime_provider, footer_enabled):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     class UnreadableConfig:
         def __getattribute__(self, name):
@@ -625,7 +625,7 @@ def test_debug_loaded_runtime_before_completion_without_config_reads(runtime_pro
             ai_provider=runtime_provider, config=UnreadableConfig(),
         )
         message = Message(content="!debug")
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         text = message.channel.sent[-1].content
         assert text.startswith("```\nLoaded runtime configuration:\n")
         assert text.endswith("\n```")
@@ -649,7 +649,7 @@ def test_debug_loaded_runtime_before_completion_without_config_reads(runtime_pro
 
 @pytest.mark.parametrize("measured_endpoint", ["primary", "fallback", "vision"])
 def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metrics, measured_endpoint):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     async def scenario():
         bot = fake_bot(
@@ -659,7 +659,7 @@ def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metr
         message = Message(content="!debug")
         measured = replace(metrics, model="old-request-override", provider="old.example", endpoint=measured_endpoint)
         record_delivery(bot, message.channel, SimpleNamespace(id=999), measured)
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         text = message.channel.sent[-1].content
         runtime, measurement = text.split("\n\n", 1)
         assert "Primary model: loaded-model" in runtime
@@ -681,7 +681,7 @@ def test_debug_separates_loaded_primary_from_last_request(runtime_provider, metr
 
 
 def test_debug_fences_every_chunk_and_neutralizes_embedded_fences(runtime_provider):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     async def scenario():
         runtime_provider._endpoints[0] = replace(
@@ -689,10 +689,10 @@ def test_debug_fences_every_chunk_and_neutralizes_embedded_fences(runtime_provid
         )
         bot = fake_bot(
             _is_admin=lambda uid: True, command_prefix="!", ai_provider=runtime_provider,
-            _split_response=MaxwellBot._split_response,
+            _split_response=DameCurieBot._split_response,
         )
         message = Message(content="!debug")
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert len(message.channel.sent) > 1
         for sent in message.channel.sent:
             assert sent.content.startswith("```\n") and sent.content.endswith("\n```")
@@ -752,14 +752,14 @@ def test_version_is_frozen_after_source_head_changes(
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_fenced_report_bounds_footer_hygiene_and_embedded_fences(enabled):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     bot = fake_bot(_control={"footer_enabled": enabled, "footer_format": "```" * 100})
     clean, wire = prepare_delivery(
         bot,
         "Subject: ```example```\n" * 200,
         None,
-        MaxwellBot._split_response,
+        DameCurieBot._split_response,
         unmeasured=True,
         code_block=True,
     )
@@ -934,7 +934,7 @@ def test_dispatch_overwrites_forged_metrics_without_polluting_tool_history(
     metrics, monkeypatch, has_metrics
 ):
     import bot as bot_module
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     trace = AsyncMock()
     monkeypatch.setattr(bot_module, "record_explanation", trace)
@@ -952,7 +952,7 @@ def test_dispatch_overwrites_forged_metrics_without_polluting_tool_history(
             _render_custom_emojis=lambda text, guild: text,
         )
         measured = metrics if has_metrics else None
-        result = await MaxwellBot._execute_tool_by_name(
+        result = await DameCurieBot._execute_tool_by_name(
             bot,
             Message(),
             "send_message",
@@ -969,21 +969,21 @@ def test_dispatch_overwrites_forged_metrics_without_polluting_tool_history(
 
 
 def test_self_memory_and_reply_quote_strip_footer_before_persistence(metrics):
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     message = Message(
-        content="answer\n" + render_footer(DEFAULT_FOOTER_FORMAT, metrics, "Maxwell")
+        content="answer\n" + render_footer(DEFAULT_FOOTER_FORMAT, metrics, "Curie")
     )
     bot = fake_bot(_recent_users={}, _payload_attr_list=lambda *args: [])
     message.author.id = 42
-    assert MaxwellBot._message_memory_content(bot, message) == "answer"
+    assert DameCurieBot._message_memory_content(bot, message) == "answer"
     child = Message(content="reply")
     child.reference = SimpleNamespace(resolved=message, message_id=message.id)
     assert (
-        MaxwellBot._reply_meta_from_message(bot, child)["reply_to_content"] == "answer"
+        DameCurieBot._reply_meta_from_message(bot, child)["reply_to_content"] == "answer"
     )
     message.author.id = 7
-    assert FOOTER_MARKER in MaxwellBot._message_memory_content(bot, message)
+    assert FOOTER_MARKER in DameCurieBot._message_memory_content(bot, message)
 
 
 def test_version_without_git_is_honest_unknown(monkeypatch, tmp_path):

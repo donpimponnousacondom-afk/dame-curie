@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from response_observability import FOOTER_MARKER
 
 
@@ -19,7 +19,7 @@ def command_report():
         load_log=AsyncMock(return_value=[{"timestamp": "synthetic-time", "action_kind": "test", "content_summary": "synthetic", "result": detail}]),
     )
     bot = SimpleNamespace(
-        _control={"footer_enabled": True}, _split_response=MaxwellBot._split_response,
+        _control={"footer_enabled": True}, _split_response=DameCurieBot._split_response,
         _is_admin=lambda uid: True, config=SimpleNamespace(ENABLE_VC=True),
         command_prefix="!",
         _vc_get_client=lambda guild, channel: None, _vc_is_listening=lambda vc: False,
@@ -44,7 +44,7 @@ def command_report():
 def test_dense_reports_emit_balanced_bounded_code_blocks(command_report, footer_enabled, handler, args, heading):
     bot, message = command_report
     bot._control["footer_enabled"] = footer_enabled
-    asyncio.run(getattr(MaxwellBot, handler)(bot, message, args))
+    asyncio.run(getattr(DameCurieBot, handler)(bot, message, args))
     calls = message.channel.send.await_args_list
     assert calls and heading in calls[0].args[0]
     assert len(calls) > 1 if handler != "_handle_vc_command" else len(calls) == 1
@@ -68,12 +68,12 @@ def test_short_command_responses_stay_plain(command_report, handler, args, expec
     bot.memory.get_relevant_shared_context.return_value = []
     bot.rem_store.load_runs.return_value = []
     bot.autonomy_engine.store.load_log.return_value = []
-    asyncio.run(getattr(MaxwellBot, handler)(bot, message, args))
+    asyncio.run(getattr(DameCurieBot, handler)(bot, message, args))
     message.channel.send.assert_awaited_once_with(expected)
 
 
 def test_link_and_command_help_keeps_inline_markdown(command_report):
     bot, message = command_report
-    asyncio.run(MaxwellBot._handle_vc_command(bot, message, "help"))
+    asyncio.run(DameCurieBot._handle_vc_command(bot, message, "help"))
     content = message.channel.send.await_args.args[0]
     assert "`!vc join`" in content and "```" not in content

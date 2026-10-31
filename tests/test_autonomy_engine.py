@@ -263,7 +263,7 @@ def test_exec_run_tool_react_uses_target_message_id(tmp_path):
         _auto_channels={"100"},
         _control={"tools_enabled": True, "disabled_tools": []},
         tools={"react": ReactTool()},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         get_channel=lambda channel_id: channel if channel_id == 100 else None,
         fetch_channel=None,
     )
@@ -404,8 +404,8 @@ def test_exec_post_channel_records_autonomy_message_as_self_memory(tmp_path):
         _auto_channels={"100"},
         _control={"store_memory": True},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
-        bot_name="Maxwell",
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
+        bot_name="Curie",
         memory=memory,
         get_channel=lambda channel_id: channel if channel_id == 100 else None,
         fetch_channel=None,
@@ -426,7 +426,7 @@ def test_exec_post_channel_records_autonomy_message_as_self_memory(tmp_path):
     datetime.fromisoformat(item.pop("timestamp"))
     assert channel_id == "100"
     assert item == {
-        "author": "Maxwell",
+        "author": "Curie",
         "author_id": "42",
         "author_is_bot": True,
         "content": "that was me",
@@ -531,7 +531,7 @@ def test_gather_context_uses_numbered_channels_and_messages(tmp_path):
         _auto_channels={"100"},
         _control={"bot_enabled": True},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[
             SimpleNamespace(
                 id=1,
@@ -610,7 +610,7 @@ def test_gather_context_keeps_every_active_room(tmp_path):
         _auto_channels={str(ch.id) for ch in rooms},
         _control={"bot_enabled": True},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[
             SimpleNamespace(
                 id=1,
@@ -683,7 +683,7 @@ def test_gather_context_reads_watch_rooms_outside_auto_channels(tmp_path):
         _auto_channels=set(),
         _control={"bot_enabled": True},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[
             SimpleNamespace(
                 id=1,
@@ -737,13 +737,13 @@ def test_gather_context_includes_normal_channel_memory(tmp_path):
         {
             "100": [
                 {
-                    "author": "Maxwell",
+                    "author": "Curie",
                     "author_id": "42",
                     "author_is_bot": True,
-                    "content": "i already said this like maxwell",
+                    "content": "i already said this like curie",
                 },
                 {
-                    "author": "Maxwell",
+                    "author": "Curie",
                     "author_is_bot": True,
                     "content": "old self row with missing id",
                 }
@@ -756,7 +756,7 @@ def test_gather_context_includes_normal_channel_memory(tmp_path):
         _auto_channels={"100"},
         _control={"bot_enabled": True},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[SimpleNamespace(text_channels=[], me=SimpleNamespace())],
         private_channels=[],
         rem_log=RemLog(),
@@ -770,7 +770,7 @@ def test_gather_context_includes_normal_channel_memory(tmp_path):
     context = asyncio.run(engine.gather_context())
 
     assert "RECENT CONTEXT MEMORY" in context
-    assert "You/Dame Curie(42): i already said this like maxwell" in context
+    assert "You/Dame Curie(42): i already said this like curie" in context
     assert "You/Dame Curie: old self row with missing id" in context
 
 
@@ -785,8 +785,8 @@ def _bot_with_user(tmp_path, *, control=None, tools=None):
         _auto_channels=set(),
         _control=control or {},
         tools=tools or {},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
-        bot_name="Maxwell",
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
+        bot_name="Curie",
     )
 
 
@@ -907,7 +907,7 @@ def test_goal_age_uses_last_progress_not_last_acted(tmp_path):
     # Regression for the staleness/all-bump conflict: a goal whose
     # last_acted_on is fresh (bumped by the all-goals "alive" path) but whose
     # last_progress_at is old MUST still count as stale. last_acted_on is the
-    # "Maxwell is alive" signal and must not mask staleness.
+    # "Curie is alive" signal and must not mask staleness.
     engine = AutonomyEngine(
         _bot_with_user(tmp_path, control={"autonomy_goal_stale_days": 14})
     )
@@ -966,7 +966,7 @@ def test_gather_context_omits_drives_section(tmp_path):
         _auto_channels=set(),
         _control={"bot_enabled": True, "autonomy_reflect_enabled": False},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[SimpleNamespace(text_channels=[], me=SimpleNamespace())],
         private_channels=[],
         rem_log=RemLog(),
@@ -1011,7 +1011,7 @@ def test_gather_context_flags_stale_goal_and_nudges_complete_goal(tmp_path):
         _auto_channels=set(),
         _control={"bot_enabled": True, "autonomy_goal_stale_days": 14},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[SimpleNamespace(text_channels=[], me=SimpleNamespace())],
         private_channels=[],
         rem_log=RemLog(),
@@ -1031,7 +1031,7 @@ def test_gather_context_flags_stale_goal_and_nudges_complete_goal(tmp_path):
 def test_log_tick_bumps_last_acted_for_all_but_progress_only_for_referenced(tmp_path):
     # Real store so the goal-bump block in _log_tick persists. Confirms:
     #  - last_acted_on advances for EVERY active goal on a successful tick
-    #    (the "Maxwell is alive" signal), AND
+    #    (the "Curie is alive" signal), AND
     #  - last_progress_at advances ONLY for the goal explicitly referenced
     #    (by a goal_id in a successful action's reason), so a goal merely
     #    "alive" but never formally touched keeps going stale.
@@ -1228,7 +1228,7 @@ def test_register_conversation_fetches_when_the_guild_cache_is_cold(tmp_path):
 
     get_channel() returns None for perfectly real channels there. The first
     registration fixes a room's kind for the whole tick, so writing them off
-    as unreachable stranded Maxwell with nowhere to post - observed live as
+    as unreachable stranded Curie with nowhere to post - observed live as
     `unreachable=X1=COOLDOWN` for #grandpa-general seconds after a restart.
     """
     real = SimpleNamespace(id=17, name="grandpa-general", guild=SimpleNamespace(name="g"))

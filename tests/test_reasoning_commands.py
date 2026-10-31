@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 import bot as bot_module
-from bot import MaxwellBot
+from bot import DameCurieBot
 from control_defaults import DEFAULT_CONTROL
 from providers import OpenAICompatibleProvider
 from utils import FileLock
@@ -31,8 +31,8 @@ def reasoning_bot(tmp_path, *, admin=True, direct=False):
         _sync_audio_input_flags=Mock(),
         _conversation_watch_enabled=lambda: True,
     )
-    bot._load_control = MethodType(MaxwellBot._load_control, bot)
-    bot._handle_reasoning_command = MethodType(MaxwellBot._handle_reasoning_command, bot)
+    bot._load_control = MethodType(DameCurieBot._load_control, bot)
+    bot._handle_reasoning_command = MethodType(DameCurieBot._handle_reasoning_command, bot)
     bot.ai_provider = OpenAICompatibleProvider(
         "https://api.deepseek.com/v1" if direct else "https://openrouter.ai/api/v1",
         "deepseek-flash" if direct else "deepseek/deepseek-v4.1-flash", 64000, 0.6,
@@ -43,7 +43,7 @@ def reasoning_bot(tmp_path, *, admin=True, direct=False):
 
 def command(bot, content):
     message = SimpleNamespace(content=content, channel=Channel(), author=SimpleNamespace(id=7), guild=None)
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     return "\n".join(message.channel.sent)
 
 
@@ -210,8 +210,8 @@ def test_main_constructor_wires_live_control_callback(tmp_path, monkeypatch, max
                   OPENAI_TOP_K=20, OPENAI_RETRY_ATTEMPTS=1, OPENAI_EXTRA_HEADERS={},
                   OPENAI_EXTRA_BODY={"reasoning": {"effort": 37}}, ENABLE_AUDIO_INPUT=False)
     bot = SimpleNamespace(config=SimpleNamespace(**config), _control={"deepseek_reasoning": "low"})
-    bot._create_main_provider = MethodType(MaxwellBot._create_main_provider, bot)
-    MaxwellBot._setup_ai(bot)
+    bot._create_main_provider = MethodType(DameCurieBot._create_main_provider, bot)
+    DameCurieBot._setup_ai(bot)
     assert captured["api_key"] == api_key
     assert "reasoning_control" not in captured
     assert "disable_reasoning" not in captured

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def mention_bot():
         "_solo_blocks",
         "_channel_allowed",
     ):
-        setattr(bot, name, getattr(MaxwellBot, name).__get__(bot))
+        setattr(bot, name, getattr(DameCurieBot, name).__get__(bot))
     return bot
 
 
@@ -71,7 +71,7 @@ def test_raw_self_mention_dispatches_without_parsed_mentions(
     app_message.author.bot = author_is_bot
     app_message.author.display_name = "test sender"
     app_message.content = f"<{marker}{mention_bot.user.id}> generate an image"
-    asyncio.run(MaxwellBot._on_message_impl(mention_bot, app_message))
+    asyncio.run(DameCurieBot._on_message_impl(mention_bot, app_message))
     mention_bot._dispatch_reply.assert_called_once_with(
         app_message, "generate an image", directed=True
     )
@@ -79,7 +79,7 @@ def test_raw_self_mention_dispatches_without_parsed_mentions(
 
 def test_raw_self_mention_with_another_parsed_user_dispatches(mention_bot, app_message):
     app_message.mentions = [SimpleNamespace(id=100000000000000006)]
-    asyncio.run(MaxwellBot._on_message_impl(mention_bot, app_message))
+    asyncio.run(DameCurieBot._on_message_impl(mention_bot, app_message))
     mention_bot._dispatch_reply.assert_called_once()
 
 
@@ -96,7 +96,7 @@ def test_raw_self_mention_with_another_parsed_user_dispatches(mention_bot, app_m
 )
 def test_non_user_or_nonself_tokens_do_not_dispatch(mention_bot, app_message, content):
     app_message.content = content
-    asyncio.run(MaxwellBot._on_message_impl(mention_bot, app_message))
+    asyncio.run(DameCurieBot._on_message_impl(mention_bot, app_message))
     mention_bot._dispatch_reply.assert_not_called()
 
 
@@ -116,19 +116,19 @@ def test_raw_mentions_do_not_bypass_existing_controls(
     mention_bot, app_message, control
 ):
     mention_bot._control.update(control)
-    asyncio.run(MaxwellBot._on_message_impl(mention_bot, app_message))
+    asyncio.run(DameCurieBot._on_message_impl(mention_bot, app_message))
     mention_bot._dispatch_reply.assert_not_called()
 
 
 def test_raw_mentions_do_not_bypass_blacklist(mention_bot, app_message):
     mention_bot._blacklist.add(str(app_message.author.id))
-    asyncio.run(MaxwellBot._on_message_impl(mention_bot, app_message))
+    asyncio.run(DameCurieBot._on_message_impl(mention_bot, app_message))
     mention_bot._dispatch_reply.assert_not_called()
 
 
 def test_self_message_with_raw_self_mention_never_dispatches(mention_bot, app_message):
     app_message.author.id = mention_bot.user.id
-    asyncio.run(MaxwellBot._on_message_impl(mention_bot, app_message))
+    asyncio.run(DameCurieBot._on_message_impl(mention_bot, app_message))
     mention_bot._dispatch_reply.assert_not_called()
 
 

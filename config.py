@@ -1,8 +1,8 @@
-"""Configuration management for Maxwell Bot.
+"""Configuration management for Dame Curie Bot.
 
 Design note - optional features
 -------------------------------
-Maxwell only *requires* two things: a Discord token and an OpenAI-compatible
+Dame Curie only *requires* two things: a Discord token and an OpenAI-compatible
 model endpoint. Everything else (voice, YouTube, web search, TTS,
 video frames, RAG embeddings) is optional and gated behind an ``ENABLE_*``
 switch.
@@ -389,9 +389,7 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 
     DAME_CURIE_SITE_DIR = os.getenv("DAME_CURIE_SITE_DIR", "public/bot")
-    DAME_CURIE_PUBLIC_BASE_URL = os.getenv(
-        "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
-    )
+    DAME_CURIE_IMAGE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_IMAGE_PUBLIC_BASE_URL", "").strip()
     DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
 
     # Owner allowlist. Re-exported here so Config is the single
@@ -456,13 +454,18 @@ class Config:
             )
         if cls.OPENAI_MAX_TOKENS is not None and cls.OPENAI_MAX_TOKENS < 1:
             raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
+        if os.getenv("DAME_CURIE_PUBLIC_BASE_URL") is not None:
+            raise ValueError(
+                "DAME_CURIE_PUBLIC_BASE_URL is retired. Set DAME_CURIE_IMAGE_PUBLIC_BASE_URL "
+                "to the public URL of the publisher's image_root and remove the old line."
+            )
         # Soft warnings - these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is
         # confusing without a hint. Log via the standard logging facility
         # so pm2 captures it.
         import logging
 
-        _log = logging.getLogger("maxwell.config")
+        _log = logging.getLogger("dame_curie.config")
 
         if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(

@@ -1,4 +1,4 @@
-"""Maxwell's notification inbox.
+"""Dame Curie's notification inbox.
 
 Friend requests and other actionable events land here. The planner sees
 unread items only in the volatile context tail - never in the cached

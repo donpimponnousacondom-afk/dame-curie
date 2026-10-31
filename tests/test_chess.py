@@ -300,14 +300,14 @@ def test_chess_state_text_and_resign_use_bot_name():
     )
     text = bot_tools._chess_state_text(g, bot_name="Uni")
     assert "Uni=white" in text
-    assert "Maxwell=" not in text
+    assert "Curie=" not in text
     assert "It is Uni's move." in text
     host = SimpleNamespace(bot_name="Uni")
     assert bot_tools._chess_is_bot_resign("uni", host)
     assert bot_tools._chess_is_bot_resign("bot", host)
-    assert not bot_tools._chess_is_bot_resign("maxwell", host)
+    assert not bot_tools._chess_is_bot_resign("curie", host)
     assert bot_tools._chess_is_bot_resign(
-        "maxwell", SimpleNamespace(bot_name="Maxwell")
+        "curie", SimpleNamespace(bot_name="Curie")
     )
 
 
@@ -317,12 +317,12 @@ def test_chess_start_description_uses_bot_name():
     tool = bot_tools.ChessStartTool(SimpleNamespace(bot_name="Uni"))
     desc = tool.get_description()
     assert "Uni" in desc
-    assert "Maxwell" not in desc
+    assert "Curie" not in desc
     assert "opponent=" in desc
 
 
 # --------------------------------------------------------------------------
-# Maxwell picks his own moves. The search stays only as a wedge-breaker, so
+# Curie picks his own moves. The search stays only as a wedge-breaker, so
 # what matters is that the position he is handed is actually playable from.
 # --------------------------------------------------------------------------
 
@@ -407,7 +407,7 @@ def test_position_notes_report_being_down_material():
     assert "-900" in notes
 
 
-def test_state_text_hands_maxwell_the_full_annotated_move_list():
+def test_state_text_hands_dame_curie_the_full_annotated_move_list():
     """On his own turn he must see every move - a truncated list hides the
     one move that does not lose."""
     import bot_tools
@@ -435,7 +435,7 @@ def test_state_text_truncates_only_the_opponents_list():
         channel_id="c",
         player_id="p",
         player_name="Alice",
-        bot_color=False,  # Maxwell is black, so white/Alice is to move
+        bot_color=False,  # Curie is black, so white/Alice is to move
         started_at="",
     )
     text = bot_tools._chess_state_text(g, bot_name="Uni")
@@ -462,7 +462,7 @@ def test_state_text_stops_at_the_result_when_the_game_is_over():
     assert "YOUR LEGAL MOVES" not in text
 
 
-def test_move_tool_description_says_maxwell_chooses():
+def test_move_tool_description_says_dame_curie_chooses():
     import bot_tools
 
     desc = bot_tools.ChessMoveTool(SimpleNamespace(bot_name="Uni")).get_description()

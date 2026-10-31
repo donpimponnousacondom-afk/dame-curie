@@ -1,17 +1,17 @@
-"""Conversational turn-taking for Maxwell's autonomy loop.
+"""Conversational turn-taking for Dame Curie's autonomy loop.
 
 The autonomy loop runs on a timer. Conversation runs on turns. Those two
 clocks have nothing to do with each other, and reconciling them is the whole
 job of this module.
 
 Without it, autonomy wakes up mid-conversation and posts - over a reply the
-main bot is still writing, or on top of a line Maxwell just said that nobody
+main bot is still writing, or on top of a line Dame Curie just said that nobody
 has answered yet. From the outside that reads as a bot barging into its own
 conversation, because that is exactly what it is.
 
 People don't need a rule for this. They read the room: who spoke last, whether
 anyone is waiting on them, whether two other people are mid-exchange. This
-module does that reading and returns a per-channel verdict - does Maxwell hold
+module does that reading and returns a per-channel verdict - does Dame Curie hold
 the floor here right now, and if not, why not.
 
 The verdict is used twice, deliberately:
@@ -21,7 +21,7 @@ The verdict is used twice, deliberately:
 2. As a *gate* - re-checked against live state immediately before anything
    sends, because the plan was made seconds ago and rooms change.
 
-Nothing here restricts WHAT Maxwell does. It only answers WHERE and WHEN
+Nothing here restricts WHAT Dame Curie does. It only answers WHERE and WHEN
 speaking is his turn. Every non-speaking action (research, memory, goals,
 reflection) is untouched by this module by design.
 
@@ -39,21 +39,21 @@ from typing import Any, Iterable, Sequence
 # ---------------------------------------------------------------------------
 # Floor states
 # ---------------------------------------------------------------------------
-# Two groups: states where speaking is Maxwell's turn, and states where it
+# Two groups: states where speaking is Dame Curie's turn, and states where it
 # isn't. The names are written to be read by the planner LLM as much as by us,
 # so they say what's true about the room rather than what the code decided.
 
 FLOOR_REPLYING = "REPLYING"    # main bot is generating a reply here right now
-FLOOR_HOLDING = "HOLDING"      # Maxwell spoke last; nobody has answered yet
+FLOOR_HOLDING = "HOLDING"      # Dame Curie spoke last; nobody has answered yet
 FLOOR_HANDLED = "HANDLED"      # the live reply path already answered the newest ping
-FLOOR_COOLDOWN = "COOLDOWN"    # Maxwell spoke very recently; too soon to start again
+FLOOR_COOLDOWN = "COOLDOWN"    # Dame Curie spoke very recently; too soon to start again
 FLOOR_BUSY = "BUSY"            # other people are mid-exchange and not talking to him
 FLOOR_TYPING = "TYPING"        # someone is composing a message in this room right now
-FLOOR_ADDRESSED = "ADDRESSED"  # someone is waiting on Maxwell and nothing has answered
+FLOOR_ADDRESSED = "ADDRESSED"  # someone is waiting on Dame Curie and nothing has answered
 FLOOR_OPEN = "OPEN"            # recent chatter, but not aimed at him
 FLOOR_IDLE = "IDLE"            # quiet room, nothing in flight
 
-#: States in which an unprompted message is Maxwell's to send.
+#: States in which an unprompted message is Dame Curie's to send.
 #: OPEN is allowed: an active room he has not been in is fair to join.
 #: HOLDING/COOLDOWN still block rooms where he was just active.
 #: BUSY stays closed so he does not talk over two people mid-exchange.
@@ -95,14 +95,14 @@ class FloorSettings:
     Defaults are tuned to human conversational rhythm rather than to whatever
     the tick interval happens to be. They intentionally do NOT scale with
     `autonomy_interval_seconds`: how long it's polite to wait before speaking
-    again is a property of the conversation, not of how often Maxwell wakes up.
+    again is a property of the conversation, not of how often Dame Curie wakes up.
     """
 
     #: After an *autonomy* post in this room, how long before another
     #: unprompted line is allowed. Live replies do not start this window.
     #: Being addressed bypasses it.
     cooldown_seconds: float = 300.0
-    #: How long Maxwell keeps holding the floor after speaking into silence.
+    #: How long Dame Curie keeps holding the floor after speaking into silence.
     #: Past this the room has plainly moved on and a fresh start is fair.
     hold_release_seconds: float = 1800.0
     #: Window in which several messages from several people counts as an
@@ -162,15 +162,15 @@ class FloorMessage:
     """
 
     created_at: datetime | None = None
-    is_self: bool = False          # Maxwell said it
-    is_bot: bool = False           # some bot said it (including Maxwell)
-    addresses_self: bool = False   # mentions Maxwell or replies to him
+    is_self: bool = False          # Dame Curie said it
+    is_bot: bool = False           # some bot said it (including Dame Curie)
+    addresses_self: bool = False   # mentions Dame Curie or replies to him
     author_id: str = ""
 
 
 @dataclass(frozen=True)
 class FloorVerdict:
-    """Whether this room is Maxwell's to speak in, and why."""
+    """Whether this room is Dame Curie's to speak in, and why."""
 
     channel_id: str
     state: str
@@ -231,7 +231,7 @@ def floor_message_from_discord(
     cache and there's no reason to pay for that twice.
 
     `implicit_address` marks surfaces where every inbound message is aimed at
-    Maxwell regardless of mentions - a 1:1 DM being the obvious one. Nobody
+    Dame Curie regardless of mentions - a 1:1 DM being the obvious one. Nobody
     @-mentions you in a DM; the whole channel is the mention.
     """
     author = getattr(message, "author", None)
@@ -279,7 +279,7 @@ def read_floor(
     label: str = "",
     typing_names: Sequence[str] | None = None,
 ) -> FloorVerdict:
-    """Decide whether Maxwell may speak unprompted in this channel.
+    """Decide whether Dame Curie may speak unprompted in this channel.
 
     Pure: no I/O, no bot access. `messages` may be in any order and may
     include messages with no timestamp (those are ignored - an undated
@@ -355,7 +355,7 @@ def read_floor(
     last_reply_dt = _epoch_to_dt(last_bot_reply_ts)
     last_autonomy_dt = _epoch_to_dt(last_autonomy_ts)
 
-    # 2. Maxwell spoke last and the room hasn't answered. This is the exact
+    # 2. Dame Curie spoke last and the room hasn't answered. This is the exact
     #    shape of "the bot randomly barged into its own conversation": the
     #    only thing on screen is him, and autonomy wants to add more of him.
     #    Held until the room has plainly moved on.

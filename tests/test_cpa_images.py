@@ -17,7 +17,7 @@ from bot_tools import (
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 IMAGE_URI = "data:image/png;base64," + base64.b64encode(PNG).decode()
 CDN = "https://cdn.discordapp.com/attachments/10/20/image.png"
-PERMANENT = "https://images.example.invalid/bot/_images/image.png"
+PERMANENT = "https://images.example.invalid/image.png"
 
 
 @pytest.fixture

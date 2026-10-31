@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import config as config_module
-from bot import MaxwellBot
+from bot import DameCurieBot
 from bot_tools import ImageGeneratorTool
 from config import _json_env
 from tool_schemas import TOOL_PARAMETERS, build_openai_tools
@@ -252,8 +252,8 @@ def test_dynamic_schema_exposes_every_configured_model_without_mutating_shared_s
         tools={"image_generator": tool},
         _control={"tools_enabled": True, "native_tool_calls": False, "disabled_tools": []},
     )
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    guidance = MaxwellBot._tool_system_prompt(bot)
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    guidance = DameCurieBot._tool_system_prompt(bot)
     assert "image_generator" in guidance
     for model in tool.bot.config.IMAGE_GEN_MODELS:
         if model != tool.bot.config.IMAGE_GEN_MODEL:

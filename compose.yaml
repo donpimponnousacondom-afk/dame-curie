@@ -122,6 +122,10 @@ services:
       # clears the URL.
       DAME_CURIE_EMBED_MODE: local
       DAME_CURIE_EMBED_BASE_URL: http://ollama:11434
+      # Smoke harness (smoke_protocol.py). The smoke and smoke-status host
+      # directories and config.json are required; instance.py refuses to start
+      # without the directories. config.json "enabled": false keeps the worker off.
+      DAME_CURIE_DIRAC_SMOKE_CONFIG: /smoke/config.json
     volumes:
       - *host-timezone
       - type: bind
@@ -148,6 +152,17 @@ services:
       - type: bind
         source: ${INSTANCE_DIR}/shell
         target: /state/shell
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${INSTANCE_DIR}/smoke
+        target: /smoke
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${INSTANCE_DIR}/smoke-status
+        target: /smoke-status
         bind:
           create_host_path: false
     tmpfs:

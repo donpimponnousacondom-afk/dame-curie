@@ -1,6 +1,6 @@
 """Provider reload staging: dotenv resolution, idle gating, atomic swap, retirement.
 
-Driven through the real ``provider_reload`` functions, the real ``MaxwellBot``
+Driven through the real ``provider_reload`` functions, the real ``DameCurieBot``
 factory bound to a synthetic bot, and the ``FakeSession`` transport from
 ``tests/test_providers.py``. No network, no private file: every environment is
 either an explicit mapping or a file under ``tmp_path``.
@@ -15,7 +15,7 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 import job_routing
-from bot import MaxwellBot
+from bot import DameCurieBot
 from config import Config
 from jobs import BackgroundJobManager
 from message_pipeline import ReplyQueue
@@ -158,9 +158,9 @@ class _RacingPath:
 
 
 def _make_bot(tmp_path, *, text=None, inherited=None, settings=None):
-    """Build a synthetic MaxwellBot wired to the real factory and reload seams."""
+    """Build a synthetic DameCurieBot wired to the real factory and reload seams."""
     settings = dict(settings or _settings())
-    bot = MaxwellBot.__new__(MaxwellBot)
+    bot = DameCurieBot.__new__(DameCurieBot)
     bot._control = {}
     config = Config()
     vars(config).update(settings)
@@ -184,8 +184,8 @@ def _make_bot(tmp_path, *, text=None, inherited=None, settings=None):
     path = tmp_path / "bot.env"
     path.write_text(text if text is not None else _baseline_text(), encoding="utf-8")
     bot._provider_reload = ProviderReload(path, inherited or {}, settings)
-    bot._create_main_provider = MethodType(MaxwellBot._create_main_provider, bot)
-    bot.ai_slot_stats = MethodType(MaxwellBot.ai_slot_stats, bot)
+    bot._create_main_provider = MethodType(DameCurieBot._create_main_provider, bot)
+    bot.ai_slot_stats = MethodType(DameCurieBot.ai_slot_stats, bot)
     bot.ai_provider = _attach_transport(bot._create_main_provider(bot.config))
     return bot
 

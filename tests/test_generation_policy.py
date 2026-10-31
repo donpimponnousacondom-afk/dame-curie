@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import bot as bot_mod
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 @pytest.fixture
 def shared_bot():
-    bot = MaxwellBot.__new__(MaxwellBot)
+    bot = DameCurieBot.__new__(DameCurieBot)
     bot.config = SimpleNamespace(
         AUX_BASE_URL="",
         AUX_API_KEY=None,

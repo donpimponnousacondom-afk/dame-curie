@@ -1,6 +1,6 @@
 """Tests for WaitTool and the multi-terminal dispatch ordering.
 
-These tests cover the 2026-08-08 change that lets Maxwell issue multiple
+These tests cover the 2026-08-08 change that lets Curie issue multiple
 send_messages per turn, with optional `wait` calls between them, in
 declared order. Previously the dispatch loop dropped any send_message
 after the first as a 'duplicate terminal tool call'.
@@ -19,7 +19,7 @@ from bot_tools import WaitTool  # noqa: E402
 from tool_schemas import trim_tool_tail  # noqa: E402
 
 # Module-level stash used by _build_test_bot to record the original
-# MaxwellBot._execute_tool_by_name so the autouse fixture below can
+# DameCurieBot._execute_tool_by_name so the autouse fixture below can
 # restore it. Without this, tests that run AFTER our patch see the
 # fake and break (test order pollution).
 _SAVED: dict = {}
@@ -31,13 +31,13 @@ import pytest  # noqa: E402
 @pytest.fixture(autouse=True)
 def _restore_execute_tool_by_name(request):
     """Autouse fixture that runs after each test in this file and
-    restores MaxwellBot._execute_tool_by_name if _build_test_bot
+    restores DameCurieBot._execute_tool_by_name if _build_test_bot
     patched it. Without this, the patch leaks into tests that run
     AFTER the wait_tool tests."""
     yield
     if _SAVED.get("patched") and "real" in _SAVED:
-        from bot import MaxwellBot
-        MaxwellBot._execute_tool_by_name = _SAVED["real"]
+        from bot import DameCurieBot
+        DameCurieBot._execute_tool_by_name = _SAVED["real"]
         _SAVED["patched"] = False
         _SAVED.pop("real", None)
 
@@ -150,7 +150,7 @@ def test_wait_tool_description_mentions_cap_and_sleep():
 def _build_test_bot(tools_dict):
     """Build a SimpleNamespace fake bot with the attributes
     _process_native_tool_calls / _execute_tool_by_name touch. We also
-    monkey-patch MaxwellBot._execute_tool_by_name to invoke the fake
+    monkey-patch DameCurieBot._execute_tool_by_name to invoke the fake
     tool's execute directly - we don't want the real send_message's
     emoji-rendering / Discord-posting code path in a unit test of
     dispatch ordering.
@@ -160,7 +160,7 @@ def _build_test_bot(tools_dict):
     below. Without the restore, tests that run AFTER our patch see the
     fake and break (test order pollution).
     """
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     bot = SimpleNamespace()
     bot.tools = tools_dict
@@ -176,8 +176,8 @@ def _build_test_bot(tools_dict):
             return f"Error: {e}"
 
     # Save the real method BEFORE patching. The fixture restores it.
-    _SAVED["real"] = MaxwellBot._execute_tool_by_name
-    MaxwellBot._execute_tool_by_name = fake_execute_tool_by_name
+    _SAVED["real"] = DameCurieBot._execute_tool_by_name
+    DameCurieBot._execute_tool_by_name = fake_execute_tool_by_name
     _SAVED["patched"] = True
 
     bot._control = {
@@ -221,7 +221,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
     """Three terminal calls (send → wait → send) must execute in the
     order the model emitted them. Previously the second send was dropped
     as a duplicate terminal tool call."""
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     events = []
 
@@ -289,7 +289,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
     )
 
     async def run():
-        await MaxwellBot._process_native_tool_calls(
+        await DameCurieBot._process_native_tool_calls(
             bot, message, "", raw_tool_calls
         )
 
@@ -306,7 +306,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
 def test_no_response_blocks_later_send_message():
     """no_response must be exclusive - a later send_message in the same
     batch gets rejected with an error the model can see."""
-    from bot import MaxwellBot, _tool_results_need_followup
+    from bot import DameCurieBot, _tool_results_need_followup
 
     sent = []
 
@@ -363,7 +363,7 @@ def test_no_response_blocks_later_send_message():
     )
 
     async def run():
-        await MaxwellBot._process_native_tool_calls(
+        await DameCurieBot._process_native_tool_calls(
             bot, message, "", raw_tool_calls
         )
 
@@ -384,7 +384,7 @@ def test_no_response_blocks_later_send_message():
         },
     ]
     _, refused, images = asyncio.run(
-        MaxwellBot._process_native_tool_calls(
+        DameCurieBot._process_native_tool_calls(
             bot, message, "", oversized_calls, include_images=True
         )
     )
@@ -420,7 +420,7 @@ def test_no_response_blocks_later_send_message():
         for index in range(3)
     ]
     _, aggregate_refused, _ = asyncio.run(
-        MaxwellBot._process_native_tool_calls(
+        DameCurieBot._process_native_tool_calls(
             bot, message, "", aggregate_calls, include_images=True
         )
     )
@@ -441,7 +441,7 @@ def test_no_response_blocks_later_send_message():
         for index in range(12)
     ]
     _, many_refused, _ = asyncio.run(
-        MaxwellBot._process_native_tool_calls(
+        DameCurieBot._process_native_tool_calls(
             bot, message, "", many_calls, include_images=True
         )
     )
@@ -459,7 +459,7 @@ def test_no_response_blocks_later_send_message():
 
 def test_two_send_messages_in_a_row_both_fire_in_order():
     """Two send_messages back-to-back (no wait) - both must fire, in order."""
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
     sent = []
 
@@ -511,7 +511,7 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
     )
 
     async def run():
-        await MaxwellBot._process_native_tool_calls(
+        await DameCurieBot._process_native_tool_calls(
             bot, message, "", raw_tool_calls
         )
 

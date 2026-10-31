@@ -1,6 +1,6 @@
 """`,solo` - lock one server to one channel.
 
-The promise is narrow and absolute: in a soloed server Maxwell answers in the
+The promise is narrow and absolute: in a soloed server Curie answers in the
 chosen channel and nowhere else, and he does not start anything on his own
 there. Other servers must be untouched - which is the whole reason this is a
 per-guild map instead of the global allowed_channels list.
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from autonomy import AutonomyEngine
-from bot import MaxwellBot
+from bot import DameCurieBot
 from control_defaults import DEFAULT_CONTROL
 
 
@@ -34,10 +34,10 @@ def bot(tmp_path):
         _is_admin=lambda _uid: True,
         command_prefix="!",
     )
-    b._solo_channel_for = MaxwellBot._solo_channel_for.__get__(b)
-    b._solo_blocks = MaxwellBot._solo_blocks.__get__(b)
-    b._save_solo = MaxwellBot._save_solo.__get__(b)
-    b._handle_solo_command = MaxwellBot._handle_solo_command.__get__(b)
+    b._solo_channel_for = DameCurieBot._solo_channel_for.__get__(b)
+    b._solo_blocks = DameCurieBot._solo_blocks.__get__(b)
+    b._save_solo = DameCurieBot._save_solo.__get__(b)
+    b._handle_solo_command = DameCurieBot._handle_solo_command.__get__(b)
     return b
 
 

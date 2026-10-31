@@ -16,6 +16,10 @@ from pathlib import Path
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
+# compose.yaml also binds these for the smoke harness. up, start and restart
+# require them. They are not backup roots, so an archive made before the
+# harness existed still restores.
+SMOKE_ROOTS = ("smoke", "smoke-status")
 SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE"}
 OPTIONAL_SETTINGS = {"DAME_CURIE_STAGING", "DAME_CURIE_EMBED_MODE"}
 RETIRED_SETTINGS = {"WEB_IMAGE", "WEB_PORT"}
@@ -181,6 +185,16 @@ class Instance:
             directory = self.path / root
             if directory.is_symlink() or not directory.is_dir():
                 raise ValueError(f"missing or redirected state directory: {root}")
+
+    def require_smoke_roots(self) -> None:
+        """Refuse to create the bot container without the smoke bind sources."""
+        for root in SMOKE_ROOTS:
+            directory = self.path / root
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError(
+                    f"missing or redirected smoke directory: {root}; compose.yaml binds it "
+                    "(see docs/OPERATIONS.md, smoke harness on canonical Dame Curie)"
+                )
 
     def docker(self, *args: str) -> str:
         result = subprocess.run(["docker", *args], env=self.env, capture_output=True, text=True)
@@ -411,6 +425,8 @@ def main() -> None:
     else:
         account = service_account(args.instance)
     instance = Instance(args.instance, account)
+    if args.action in {"up", "start", "restart"}:
+        instance.require_smoke_roots()
     if args.action == "logs":
         lifecycle(instance, args.action, log_format=args.log_format or "auto", no_keys=args.no_keys)
         return

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Maxwell Deep Testing Harness.
+"""Dame Curie Deep Testing Harness.
 
 A comprehensive, automated deep-testing harness covering every feature, tool,
-subsystem, API, database, provider, engine, and security guardrail in Maxwell.
+subsystem, API, database, provider, engine, and security guardrail in Dame Curie.
 
 Features tested:
   1. Config & Environment System (Tri-state feature resolution, system binaries)
@@ -37,7 +37,7 @@ import chess
 # Suppress noisy logs during test run
 logging.basicConfig(level=logging.ERROR)
 
-# Import Maxwell modules
+# Import Dame Curie modules
 import config  # noqa: E402
 import control_defaults  # noqa: E402
 import rag_memory  # noqa: E402
@@ -71,7 +71,7 @@ class DeepTestHarness:
         self.temp_dirs: List[str] = []
 
     def make_temp_dir(self) -> str:
-        d = tempfile.mkdtemp(prefix="maxwell_deep_test_")
+        d = tempfile.mkdtemp(prefix="dame_curie_deep_test_")
         self.temp_dirs.append(d)
         return d
 
@@ -373,10 +373,10 @@ class DeepTestHarness:
             assert "astronomy" in entities[0]["content"]
 
             # LTM storage
-            await mgr.add_long_term_memory("Maxwell was created in 2026.")
+            await mgr.add_long_term_memory("Dame Curie was created in 2026.")
             ltm = mgr.get_long_term_memory()
             assert len(ltm) >= 1
-            assert any("Maxwell was created" in f["content"] for f in ltm)
+            assert any("Dame Curie was created" in f["content"] for f in ltm)
 
             # Shared context
             await mgr.add_shared_context({

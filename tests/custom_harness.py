@@ -1,4 +1,4 @@
-"""Custom comprehensive test harness for Maxwell tools and live model invocation.
+"""Custom comprehensive test harness for Curie tools and live model invocation.
 Validates all registered tools in the bot environment and executes sample tools
 with the live provider.
 """
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bot_tools
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 class FakeDiscordChannel:
@@ -57,7 +57,7 @@ class FakeDiscordMessage:
 
 async def run_custom_tool_harness():
     print("=== STARTING CUSTOM HARNESS: TOOL CONTRACT & REGISTRY AUDIT ===")
-    bot = MaxwellBot()
+    bot = DameCurieBot()
     bot._setup_ai()
 
     print(f"Total registered tools: {len(bot.tools)}")
@@ -129,7 +129,7 @@ async def run_custom_tool_harness():
     print(f"Invoking provider: base_url={provider.base_url}, model={provider.model}")
 
     messages = [
-        {"role": "system", "content": "You are Maxwell, a sharp AI bot. If the user asks for calculation, reply with the answer."},
+        {"role": "system", "content": "You are Curie, a sharp AI bot. If the user asks for calculation, reply with the answer."},
         {"role": "user", "content": "What is 42 plus 58? Answer only with the number."},
     ]
 

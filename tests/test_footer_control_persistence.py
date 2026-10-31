@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 import bot as bot_module
-from bot import MaxwellBot
+from bot import DameCurieBot
 import response_observability as observability
 from response_observability import update_footer_control
 from utils import FileLock, FileLockTimeout, _atomic_json_write_sync
@@ -32,13 +32,13 @@ def control_bot(tmp_path):
         },
         config=SimpleNamespace(DATA_DIR=str(tmp_path), DAME_CURIE_PROMPTS_DIR="external"),
         command_prefix="!",
-        bot_name="Maxwell",
+        bot_name="Curie",
         _is_admin=lambda uid: True,
         _ai_concurrency=2,
         _sync_audio_input_flags=Mock(),
         _conversation_watch_enabled=lambda: True,
     )
-    bot._load_control = MethodType(MaxwellBot._load_control, bot)
+    bot._load_control = MethodType(DameCurieBot._load_control, bot)
     return bot
 
 
@@ -79,7 +79,7 @@ def test_footer_updates_retain_api_patch_and_refresh_after_delayed_completion(
         bot = control_bot(tmp_path)
         message = SimpleNamespace(author=SimpleNamespace(id=7), channel=Channel())
         format_task = asyncio.create_task(
-            MaxwellBot._handle_footer_command(bot, message, "format {{MODEL}}")
+            DameCurieBot._handle_footer_command(bot, message, "format {{MODEL}}")
         )
         assert await asyncio.to_thread(format_written.wait, 5)
         with FileLock(path) as api_lock:
@@ -87,7 +87,7 @@ def test_footer_updates_retain_api_patch_and_refresh_after_delayed_completion(
             current["bot_enabled"] = False
             _atomic_json_write_sync(path, current)
             assert api_lock.lock_path == Path(str(path) + ".lock")
-        await MaxwellBot._handle_footer_command(bot, message, "off")
+        await DameCurieBot._handle_footer_command(bot, message, "off")
         assert bot._control["bot_enabled"] is False
         assert bot._control["footer_enabled"] is False
         release_format.set()

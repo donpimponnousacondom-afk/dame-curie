@@ -52,7 +52,7 @@ def _engine(tmp_path, channel, control=None, tools=None):
         _auto_channels={"100"},
         _control=control if control is not None else {},
         tools=tools or {},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         get_channel=lambda cid: channel if cid == 100 else None,
         fetch_channel=None,
         is_closed=lambda: False,

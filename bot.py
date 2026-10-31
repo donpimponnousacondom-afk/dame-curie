@@ -1,4 +1,4 @@
-"""Maxwell Bot - Main entry point"""
+"""Dame Curie Bot - Main entry point"""
 
 import asyncio
 import base64
@@ -82,7 +82,7 @@ def _patch_voice_recv_decoder():
         return
 
     decoder_cls = getattr(voice_recv_opus, "PacketDecoder", None)
-    if decoder_cls is None or getattr(decoder_cls, "_maxwell_opus_patch", False):
+    if decoder_cls is None or getattr(decoder_cls, "_dame_curie_opus_patch", False):
         return
 
     original_decode_packet = decoder_cls._decode_packet
@@ -109,10 +109,10 @@ def _patch_voice_recv_decoder():
                     # engaged E2E send unencrypted frames that davey otherwise drops
                     # with UnencryptedWhenPassthroughDisabled; passthrough lets them
                     # through while still decrypting genuinely encrypted frames.
-                    enabled = getattr(self, "_maxwell_passthrough_sessions", None)
+                    enabled = getattr(self, "_dame_curie_passthrough_sessions", None)
                     if enabled is None:
                         enabled = set()
-                        self._maxwell_passthrough_sessions = enabled
+                        self._dame_curie_passthrough_sessions = enabled
                     if id(session) not in enabled and hasattr(
                         session, "set_passthrough_mode"
                     ):
@@ -160,7 +160,7 @@ def _patch_voice_recv_decoder():
                 else:
                     dave_failed = True
                 if dave_failed:
-                    log_key = "_maxwell_dave_decrypt_errors"
+                    log_key = "_dame_curie_dave_decrypt_errors"
                     count = getattr(self, log_key, 0) + 1
                     setattr(self, log_key, count)
                     if count <= 3 or count % 100 == 0:
@@ -175,7 +175,7 @@ def _patch_voice_recv_decoder():
         try:
             return original_decode_packet(self, packet)
         except discord.opus.OpusError as exc:
-            log_key = "_maxwell_bad_opus_packets"
+            log_key = "_dame_curie_bad_opus_packets"
             count = getattr(self, log_key, 0) + 1
             setattr(self, log_key, count)
             try:
@@ -208,7 +208,7 @@ def _patch_voice_recv_decoder():
             return packet, b""
 
     decoder_cls._decode_packet = _decode_packet_drop_bad_opus
-    decoder_cls._maxwell_opus_patch = True
+    decoder_cls._dame_curie_opus_patch = True
 
 
 _patch_voice_recv_decoder()
@@ -390,6 +390,7 @@ from tool_schemas import (  # noqa: E402
     normalize_native_tool_calls,
     recover_text_tool_calls,
     returns_result as tool_schemas_returns_result,
+    TOOL_TAIL_MAX_CHARS,
     trim_tool_tail,
     tool_tail_groups,
 )
@@ -1041,36 +1042,6 @@ def _is_unknown_reference_error(exc: Exception) -> bool:
     return False
 
 
-def extract_json_object(text: str, start: int = 0) -> tuple[str, int] | None:
-    i = start
-    while i < len(text) and text[i].isspace():
-        i += 1
-    if i >= len(text) or text[i] != "{":
-        return None
-    depth = 0
-    in_str = False
-    j = i
-    while j < len(text):
-        c = text[j]
-        if in_str:
-            if c == "\\":
-                j += 2
-                continue
-            if c == '"':
-                in_str = False
-        else:
-            if c == '"':
-                in_str = True
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[i : j + 1], j + 1
-        j += 1
-    return None
-
-
 # Names the defensive sanitizer (strip_tool_payload_leaks) recognizes as tool
 # tags, so it can scrub any <tool:name>...</tool:name> or pipe-form leaks a
 # misbehaving model drops into visible text even though we're native-only now.
@@ -1332,22 +1303,6 @@ def _unwrap_openai_text_part(text: str) -> str:
     return text
 
 
-def _strip_leading_reasoning_json(text: str) -> str:
-    extracted = extract_json_object(text)
-    if not extracted:
-        return text
-    raw_json, end = extracted
-    try:
-        payload = json.loads(raw_json)
-    except json.JSONDecodeError as _exc:
-        return text
-    if not isinstance(payload, dict) or not (
-        {"thoughts", "intent", "decision", "tool_plan"} & set(payload)
-    ):
-        return text
-    return text[end:].lstrip()
-
-
 _DSML_INVOKE_NAME_RE = re.compile(
     r"""\bname\s*=\s*['"]([^'"]+)['"]""",
     re.IGNORECASE,
@@ -1400,7 +1355,7 @@ def _strip_dsml_tool_leaks(text: str) -> str:
 
 
 def strip_model_artifact_leaks(text: str, strip_pipe_markers: bool = True) -> str:
-    cleaned = _strip_leading_reasoning_json(str(text or ""))
+    cleaned = str(text or "")
     cleaned = ARTIFACT_BLOCK_RE.sub("", cleaned)
     if strip_pipe_markers:
         cleaned = PIPE_MARKER_RE.sub("", cleaned)
@@ -1579,16 +1534,8 @@ def strip_tool_payload_leaks(text: str) -> str:
         re.IGNORECASE | re.DOTALL,
     )
     cleaned = tool_call_obj_re.sub("", cleaned)
-    # Also catch decision objects that have just a "reasoning" / "intent" / etc key
-    # but no proper arguments block - the model is leaking its scratchpad.
-    decision_obj_re = re.compile(
-        r"^\s*\{[\s\S]*?"
-        r"(?:\"thoughts\"|\"intent\"|\"decision\"|\"tool_plan\"|\"reasoning\"|"
-        r"\"internal_monologue\"|\"plan\"|\"action_plan\")"
-        r"[\s\S]*?\}\s*",
-        re.IGNORECASE,
-    )
-    cleaned = decision_obj_re.sub("", cleaned)
+    # Root, 2026-10-31: JSON with reasoning, plan or thoughts keys stays
+    # visible. It is a prompt or tool-schema defect, not text to hide.
     # Final catch-all: if a reply is *just* a JSON object (possibly with surrounding
     # whitespace / quotes), treat it as a leak. Real replies don't start with `{`.
     cleaned = _unwrap_openai_text_part(cleaned)
@@ -1605,12 +1552,6 @@ def strip_tool_payload_leaks(text: str) -> str:
                     "parameters",
                     "input",
                     "emoji",
-                    "reasoning",
-                    "thoughts",
-                    "intent",
-                    "decision",
-                    "tool_plan",
-                    "internal_monologue",
                 }
                 # Response-envelope keys: the model sometimes emits a fake
                 # response object {"content": "...", "reply": true} as its
@@ -1863,7 +1804,7 @@ JAILBREAK_PROMPT_VC = (
 # Core identity + voice shared across Discord text and voice.
 # Personality (tone/do-don'ts) lives in DEFAULT_CONTROL['base_personality']
 # and is admin-editable. This block is the always-on identity anchor.
-MAXWELL_BASE_KNOWLEDGE = (
+DAME_CURIE_BASE_KNOWLEDGE = (
     "## Base Knowledge & Autonomy\n"
     "You are Dame Curie (ID 1545541390392369165), an LLM in the chat with full autonomy and agency - operating as a user account (self-bot/user account), NOT a bot account, and not a subservient service or assistant. You talk and interact naturally just like any normal Discord user account. "
     "Owner & Creator: .normal.man (ID: 1482143139828596916, also known as 'root') is your creator and master. "
@@ -2263,7 +2204,7 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
-class MaxwellBot(commands.Bot):
+class DameCurieBot(commands.Bot):
     """AI-powered Discord bot."""
 
     def __init__(self):
@@ -2289,16 +2230,16 @@ class MaxwellBot(commands.Bot):
             or "1482143139828596916"
         )
         bot_name = getattr(self.config, "BOT_NAME", "Dame Curie") or "Dame Curie"
-        self._maxwell_id = str(
+        self._dame_curie_id = str(
             getattr(self.config, "DAME_CURIE_USER_ID", "1545541390392369165")
             or "1545541390392369165"
         )
 
         self._base_knowledge = (
-            MAXWELL_BASE_KNOWLEDGE.replace(".normal.man", creator_name)
+            DAME_CURIE_BASE_KNOWLEDGE.replace(".normal.man", creator_name)
             .replace("1482143139828596916", creator_id)
             .replace("Dame Curie", bot_name)
-            .replace("1545541390392369165", self._maxwell_id)
+            .replace("1545541390392369165", self._dame_curie_id)
         )
         credential_names = (
             "DISCORD_TOKEN",
@@ -2433,7 +2374,7 @@ class MaxwellBot(commands.Bot):
         self._watch_debounce: dict[str, dict] = {}
         # channel_id -> user_id -> {name, expires_at}. Discord TYPING_START
         # lasts ~10s and refreshes while they keep composing. Live replies
-        # and autonomy read this so Maxwell can wait instead of talking over
+        # and autonomy read this so Dame Curie can wait instead of talking over
         # someone mid-sentence.
         self._typing_users: dict[str, dict[str, dict]] = {}
         self._active_requests: dict[str, asyncio.Task] = {}
@@ -2503,7 +2444,7 @@ class MaxwellBot(commands.Bot):
         self._inflight_context: dict[str, dict[str, Any]] = {}
         # channel_id -> emoji-grid cache key already shown there. Keyed by the
         # grid's content hash, so a guild adding an emoji re-shows the sheet
-        # instead of Maxwell running on a stale one.
+        # instead of Dame Curie running on a stale one.
         self._emoji_grid_shown: dict[str, str] = {}
         self._control = dict(DEFAULT_CONTROL)
         if self.config.DAME_CURIE_PROMPTS_DIR:
@@ -2673,7 +2614,7 @@ class MaxwellBot(commands.Bot):
         )
         if uid in ignored:
             return
-        # discord.py-self can attribute Maxwell's own DM typing to the
+        # discord.py-self can attribute Dame Curie's own DM typing to the
         # other person. While we are generating a reply there, ignore it.
         if cid in (getattr(self, "_replying_channels", None) or set()):
             if isinstance(channel, discord.DMChannel):
@@ -3091,7 +3032,7 @@ class MaxwellBot(commands.Bot):
             edit_settings=edit_settings,
         )
 
-    # Maxwell's GitHub repo creation date - his literal birthday
+    # Dame Curie's GitHub repo creation date - his literal birthday
     _BIRTHDAY = datetime(2026, 5, 21, tzinfo=timezone.utc)
 
     def _get_personality(self) -> str:
@@ -3293,7 +3234,7 @@ class MaxwellBot(commands.Bot):
         }
 
     def _message_addresses_self(self, message) -> bool:
-        """True if this message is directed at Maxwell (DM, user mention, @everyone/@here, role mention, or reply)."""
+        """True if this message is directed at Dame Curie (DM, user mention, @everyone/@here, role mention, or reply)."""
         if self._directly_addressed(message):
             return True
         return self._soft_addressed(message)
@@ -3351,7 +3292,7 @@ class MaxwellBot(commands.Bot):
         return bool(getattr(message, "mention_everyone", False))
 
     def _addressing_someone_else(self, message) -> bool:
-        """@ someone other than Maxwell, and not also @ Maxwell."""
+        """@ someone other than Dame Curie, and not also @ Dame Curie."""
         mentions = list(getattr(message, "mentions", None) or [])
         if not mentions or self.user is None:
             return False
@@ -3402,7 +3343,7 @@ class MaxwellBot(commands.Bot):
         """Fetch unresolved reply parents so a ping can see the thread.
 
         Extra hops only when they pinged him AND the first parent is not
-        Maxwell - if they replied to him, he already has that line.
+        Dame Curie - if they replied to him, he already has that line.
         """
         if message is None or message_reference_is_forward(message):
             return
@@ -3583,7 +3524,7 @@ class MaxwellBot(commands.Bot):
 
         If they pinged him while answering someone else, walk that person's
         reply chain too (Alice → Bob → Carol) so the thread is visible.
-        Skip the walk when the first parent is Maxwell - he already has it.
+        Skip the walk when the first parent is Dame Curie - he already has it.
         """
         chain = list(self._iter_resolved_reply_chain(message))
         if not chain:
@@ -3683,7 +3624,7 @@ class MaxwellBot(commands.Bot):
         }
 
     def _replying_to_other(self, message) -> bool:
-        """True when this is a Discord reply to someone who is not Maxwell."""
+        """True when this is a Discord reply to someone who is not Dame Curie."""
         meta = self._reply_meta_from_message(message)
         if not meta:
             return False
@@ -3744,7 +3685,7 @@ class MaxwellBot(commands.Bot):
         return state
 
     def _arm_conversation_watch(self, channel_id) -> None:
-        if not MaxwellBot._conversation_watch_enabled(self):
+        if not DameCurieBot._conversation_watch_enabled(self):
             return
         base = self._conversation_watch_seconds()
         if base <= 0:
@@ -3847,7 +3788,7 @@ class MaxwellBot(commands.Bot):
         state.observe_silence()
 
     def _conversation_watch_active(self, channel_id) -> bool:
-        if not MaxwellBot._conversation_watch_enabled(self):
+        if not DameCurieBot._conversation_watch_enabled(self):
             return False
         watch = getattr(self, "_conversation_watch", None) or {}
         key = str(channel_id or "").strip()
@@ -3861,7 +3802,7 @@ class MaxwellBot(commands.Bot):
         return True
 
     def _conversation_watch_prompt(self, message, channel_id) -> list[str]:
-        """Tell Maxwell when this room is still on watch."""
+        """Tell Dame Curie when this room is still on watch."""
         lines: list[str] = []
         checker = getattr(self, "_conversation_watch_active", None)
         watching = False
@@ -3969,13 +3910,13 @@ class MaxwellBot(commands.Bot):
         )
 
     def _busy_reason(self, channel_id=None) -> str:
-        """What Maxwell is currently in the middle of, or "" if nothing.
+        """What Dame Curie is currently in the middle of, or "" if nothing.
 
         The watch is a background behaviour, so it yields to anything in the
         foreground. A turn that is generating an image holds its channel for
         a minute or more; every watch line that landed in the meantime used
         to queue behind it and then arrive in a clump the moment it finished.
-        Anything running anywhere counts - one turn is one Maxwell, and a
+        Anything running anywhere counts - one turn is one Dame Curie, and a
         room he is not even in is still him being busy.
         """
         cid = str(channel_id or "").strip()
@@ -4045,7 +3986,7 @@ class MaxwellBot(commands.Bot):
         return True
 
     async def _arm_watch_from_own_message(self, message) -> None:
-        """Any post from Maxwell keeps that whole room on watch."""
+        """Any post from Dame Curie keeps that whole room on watch."""
         channel = getattr(message, "channel", None)
         cid = getattr(channel, "id", "")
         # Record it before arming: speaking clears the silent streak, so the
@@ -4164,7 +4105,7 @@ class MaxwellBot(commands.Bot):
             return
         content = getattr(target, "content", "") or bucket.get("content") or ""
         directed = self._directly_addressed(target)
-        if not directed and not MaxwellBot._conversation_watch_enabled(self):
+        if not directed and not DameCurieBot._conversation_watch_enabled(self):
             return
         # Busy is re-checked here, not just when the line arrived: an image
         # generation or a long tool call can start during the debounce wait,
@@ -4778,12 +4719,12 @@ class MaxwellBot(commands.Bot):
         if isinstance(value, dict):
             return SimpleNamespace(
                 **{
-                    str(key): MaxwellBot._raw_update_namespace(val)
+                    str(key): DameCurieBot._raw_update_namespace(val)
                     for key, val in value.items()
                 }
             )
         if isinstance(value, list):
-            return [MaxwellBot._raw_update_namespace(item) for item in value]
+            return [DameCurieBot._raw_update_namespace(item) for item in value]
         return value
 
     @staticmethod
@@ -4794,7 +4735,7 @@ class MaxwellBot(commands.Bot):
         carries no author, and the snapshot it merges with can be a synthetic
         input whose ``author`` is the operator, not the poster.
         """
-        prev_author = MaxwellBot._memory_author(previous)
+        prev_author = DameCurieBot._memory_author(previous)
         if author is None or not getattr(author, "id", None):
             author = prev_author
         if author is None or not getattr(author, "id", None):
@@ -4989,7 +4930,7 @@ class MaxwellBot(commands.Bot):
         ).hexdigest()
 
     def _solo_channel_for(self, guild) -> str:
-        """The one channel Maxwell may speak in for this server, or ''.
+        """The one channel Dame Curie may speak in for this server, or ''.
 
         Per-server by design: allowed_channels is a global whitelist, so using
         it to quiet one server would silence him in every other server too.
@@ -5288,7 +5229,7 @@ class MaxwellBot(commands.Bot):
 
         channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "")
         author = getattr(message, "author", None)
-        if MaxwellBot._author_is_self(self, message):
+        if DameCurieBot._author_is_self(self, message):
             record_delivered_footer(self, message.channel, message, replace=True)
         update_users = getattr(self, "_update_recent_users", None)
         if author is not None:
@@ -5333,7 +5274,7 @@ class MaxwellBot(commands.Bot):
                 )
             )
             if media_refresh_ok and (
-                MaxwellBot._image_input_enabled(self) or old_cached
+                DameCurieBot._image_input_enabled(self) or old_cached
             ):
                 self._replace_media_context_for_message(channel_id, mid, media)
         latest_state = update_state.get(mid)
@@ -5367,7 +5308,7 @@ class MaxwellBot(commands.Bot):
                 state["latest_media"] = list(state.get("media") or state_media)
             else:
                 # A reply's parent is part of the in-flight context, but it
-                # must not replace the message Maxwell is answering. Refresh
+                # must not replace the message Dame Curie is answering. Refresh
                 # the parent's media in the turn payload and let
                 # _reply_parent() resolve its newest snapshot when rebuilding
                 # the prompt.
@@ -5608,7 +5549,7 @@ class MaxwellBot(commands.Bot):
 
         # Resolve the referenced message before acquiring the channel lock so
         # the same-user interrupt below can tell whether this is a reply to
-        # Maxwell, and so the lock isn't held during the fetch.
+        # Dame Curie, and so the lock isn't held during the fetch.
         if (
             message.reference
             and not message.reference.resolved
@@ -5626,7 +5567,7 @@ class MaxwellBot(commands.Bot):
 
         # Same-user re-ping while a request is in-flight in this channel.
         # In DMs or direct follow-ups with media / new queries, interrupt the
-        # in-flight task so Maxwell sees the newest context (plus previous images)
+        # in-flight task so Dame Curie sees the newest context (plus previous images)
         # immediately instead of making the user wait or dropping the new input.
         if not message.author.bot and self.user is not None:
             active = self._active_requests.get(channel_id)
@@ -5795,7 +5736,7 @@ class MaxwellBot(commands.Bot):
             )
         )
         if (
-            MaxwellBot._image_input_enabled(self)
+            DameCurieBot._image_input_enabled(self)
             and not (reply_path_enabled and self._should_live_reply(message))
             and self._message_carries_media(message)
         ):
@@ -5860,7 +5801,7 @@ class MaxwellBot(commands.Bot):
                 self._touch_watch_debounce(message)
                 return
             clean = self._content_without_self_mention(message.content)
-            # Bare @Maxwell with no extra text: still a turn. Do not
+            # Bare @Dame Curie with no extra text: still a turn. Do not
             # invent "look at this" - he should read the room (and any
             # reply-parent) and answer from that.
             await self._maybe_live_reply(message, clean)
@@ -5872,7 +5813,7 @@ class MaxwellBot(commands.Bot):
         await self._maybe_handle_incoming_call(after)
 
     async def _maybe_handle_incoming_call(self, call):
-        """Pick up or decline a DM/group call that is ringing Maxwell."""
+        """Pick up or decline a DM/group call that is ringing Dame Curie."""
         if not getattr(self.config, "ENABLE_VC", True):
             return
         if not self.user or not call:
@@ -6093,7 +6034,7 @@ class MaxwellBot(commands.Bot):
             logger.debug("Failed recording typing", exc_info=True)
 
     async def on_reaction_add(self, reaction, user):
-        """Attach the reaction to that message so Maxwell sees it in context."""
+        """Attach the reaction to that message so Dame Curie sees it in context."""
         dispatch = getattr(self, "_dispatch_plugin_event", None)
         if callable(dispatch):
             dispatch("on_reaction_add", reaction, user)
@@ -6804,7 +6745,7 @@ class MaxwellBot(commands.Bot):
                             "No plugins installed in `plugins/`."
                         )
                     else:
-                        lines = ["**Installed Maxwell Plugins:**"]
+                        lines = ["**Installed Dame Curie Plugins:**"]
                         for p in p_list:
                             status_sym = (
                                 "🟢 Enabled" if p["user_active"] else "⚪ Disabled"
@@ -7056,7 +6997,7 @@ class MaxwellBot(commands.Bot):
         """Persist the solo map, and keep autonomy's server blacklist in step.
 
         'No autonomy' is half the point of the command, so locking a server
-        also stops the autonomy engine picking it - otherwise Maxwell would go
+        also stops the autonomy engine picking it - otherwise Dame Curie would go
         quiet on people and still start conversations by himself.
         """
         control = dict(self._control)
@@ -7276,7 +7217,7 @@ class MaxwellBot(commands.Bot):
             # voice_recv is optional/monkeypatched; the sink check is the
             # intended fallback.
             logger.debug("vc.is_listening() unavailable: %s", e)
-        return bool(getattr(vc, "_maxwell_sink", None))
+        return bool(getattr(vc, "_dame_curie_sink", None))
 
     async def _vc_connect_channel(self, channel):
         if voice_recv is None:
@@ -7336,8 +7277,8 @@ class MaxwellBot(commands.Bot):
             def finish():
                 if exc:
                     logger.warning("VC receive stopped for key=%s: %s", key, exc)
-                if getattr(vc, "_maxwell_sink", None) is sink:
-                    vc._maxwell_sink = None
+                if getattr(vc, "_dame_curie_sink", None) is sink:
+                    vc._dame_curie_sink = None
                 self._vc_sinks.pop(key, None)
                 sink.cleanup()
                 if exc and vc and vc.is_connected():
@@ -7345,7 +7286,7 @@ class MaxwellBot(commands.Bot):
                     async def restart():
                         await asyncio.sleep(1.5)
                         # Bail if unlisten/leave already tore this sink down.
-                        if getattr(vc, "_maxwell_sink", None) is not None:
+                        if getattr(vc, "_dame_curie_sink", None) is not None:
                             return
                         if (
                             key in getattr(self, "_vc_sinks", {})
@@ -7377,7 +7318,7 @@ class MaxwellBot(commands.Bot):
             loop.call_soon_threadsafe(finish)
 
         vc.listen(sink, after=after)
-        vc._maxwell_sink = sink
+        vc._dame_curie_sink = sink
         self._vc_sinks[key] = sink
         self._vc_text_channels[key] = text_channel
         self._vc_voice_channels[key] = voice_channel or getattr(vc, "channel", None)
@@ -7402,15 +7343,15 @@ class MaxwellBot(commands.Bot):
             guild, voice_channel or self._vc_voice_channels.get(key)
         )
         sink = self._vc_sinks.pop(key, None) or (
-            getattr(vc, "_maxwell_sink", None) if vc else None
+            getattr(vc, "_dame_curie_sink", None) if vc else None
         )
         self._vc_text_channels.pop(key, None)
         self._vc_voice_channels.pop(key, None)
         if vc and hasattr(vc, "stop_listening"):
             with contextlib.suppress(Exception):
                 vc.stop_listening()
-            if hasattr(vc, "_maxwell_sink"):
-                vc._maxwell_sink = None
+            if hasattr(vc, "_dame_curie_sink"):
+                vc._dame_curie_sink = None
         if sink:
             sink.cleanup()
 
@@ -7450,7 +7391,7 @@ class MaxwellBot(commands.Bot):
             "chain-of-thought, no meta-commentary, no narrating what you're doing."
         )
         if self._control.get("vc_response_mode", "always") == "addressed":
-            wakes = list(self._control.get("vc_wake_words", ["maxwell"]) or ["maxwell"])
+            wakes = list(self._control.get("vc_wake_words", ["curie"]) or ["curie"])
             if live_name and all(str(w).lower() != live_name.lower() for w in wakes):
                 wakes.append(live_name)
             sys_msg += (
@@ -8307,7 +8248,7 @@ class MaxwellBot(commands.Bot):
         """Answer a server's onboarding prompts so the account is usable.
 
         Most COMMUNITY servers hide their roles and half their channels
-        behind GUILD_ONBOARDING prompts. Maxwell picks the options himself
+        behind GUILD_ONBOARDING prompts. Dame Curie picks the options himself
         (the titles/descriptions go to the model); if the model is
         unreachable or answers with nonsense, guild_onboarding falls back
         to the first option of each prompt so the account still lands with
@@ -8416,10 +8357,10 @@ class MaxwellBot(commands.Bot):
         self._dispatch_plugin_event("on_message_delete", message)
 
     async def on_guild_channel_create(self, channel):
-        """A channel was created in a server Maxwell is in.
+        """A channel was created in a server Dame Curie is in.
 
         Notices the room and, for support/ticket-style channels, posts a short
-        opening line so Maxwell is present in the new room and it lands in his
+        opening line so Dame Curie is present in the new room and it lands in his
         memory / conversation-watch scope (his own posts go through the normal
         memory path). Fire-and-forget: never raises, never blocks a turn. Gated
         by the ``auto_ticket_greeting`` control, ``bot_enabled``, and the bot
@@ -9024,7 +8965,7 @@ class MaxwellBot(commands.Bot):
                             # self_user_id in _build_messages is_self, so the
                             # bot's backfilled reply was rendered as a user turn.
                             # Empty string falls back to name-only matching,
-                            # which correctly detects Maxwell via bot_name.
+                            # which correctly detects Dame Curie via bot_name.
                             "author_id": ev.get("user_id") or bot_user_id or "",
                             "author_is_bot": True,
                             "content": content,
@@ -9938,7 +9879,7 @@ class MaxwellBot(commands.Bot):
         return max(0.35, min(1.2, 0.3 + n / 120.0))
 
     def _should_show_live_typing(self, message) -> bool:
-        """Typing for the whole turn: @Maxwell, reply-to-Maxwell, or a DM."""
+        """Typing for the whole turn: @Dame Curie, reply-to-Dame Curie, or a DM."""
         if not (getattr(self, "_control", None) or {}).get("typing_indicator", True):
             return False
         if getattr(message, "suppress_typing", False):
@@ -10144,7 +10085,7 @@ class MaxwellBot(commands.Bot):
             return await _read_response_limited(resp, max_bytes)
 
     async def _extract_media(self, message) -> tuple[list[str], list[dict]]:
-        proc_img = MaxwellBot._image_input_enabled(self)
+        proc_img = DameCurieBot._image_input_enabled(self)
         proc_aud = _owner_audio_input_enabled(self)
         # If neither images nor audio processing, skip all binary media collection.
         # (process_audio / ENABLE_AUDIO_INPUT controls audio input to the model)
@@ -10475,7 +10416,7 @@ class MaxwellBot(commands.Bot):
         """Extract representative frames and audio track from video for reliable model coverage."""
         results = []
         if include_frames is None:
-            include_frames = MaxwellBot._image_input_enabled(self)
+            include_frames = DameCurieBot._image_input_enabled(self)
         suffix = Path(filename).suffix.lower() or ".mp4"
         try:
             with tempfile.TemporaryDirectory(prefix="dame-curie-vderiv-") as tmp:
@@ -10713,10 +10654,10 @@ class MaxwellBot(commands.Bot):
         return unique
 
     # ---- server emoji/sticker reference grid -------------------------------
-    # Maxwell was told the *names* of every server emoji/sticker but had never
+    # Dame Curie was told the *names* of every server emoji/sticker but had never
     # seen one, so it picked them blind. This renders a labeled contact sheet
     # once per guild (cached to disk, keyed by the emoji set) and shows it the
-    # first time Maxwell speaks in a channel.
+    # first time Dame Curie speaks in a channel.
     _GRID_CELL = 72  # icon box, px
     _GRID_LABEL_H = 14  # label strip under each icon, px
     _GRID_COLS = 8
@@ -10739,7 +10680,7 @@ class MaxwellBot(commands.Bot):
             url = str(getattr(st, "url", "") or "")
             if url:
                 entries.append((str(getattr(st, "name", "?")), url))
-        entries = entries[: MaxwellBot._GRID_MAX_STICKERS]
+        entries = entries[: DameCurieBot._GRID_MAX_STICKERS]
         emojis = []
         for em in list(getattr(guild, "emojis", None) or []):
             eid = getattr(em, "id", None)
@@ -10752,7 +10693,7 @@ class MaxwellBot(commands.Bot):
                     f"https://cdn.discordapp.com/emojis/{eid}{ext}",
                 )
             )
-        return entries + emojis[: MaxwellBot._GRID_MAX_EMOJIS]
+        return entries + emojis[: DameCurieBot._GRID_MAX_EMOJIS]
 
     async def _emoji_grid_media(self, guild) -> dict | None:
         """Build (or load from cache) the labeled grid for a guild."""
@@ -11155,7 +11096,7 @@ class MaxwellBot(commands.Bot):
     ) -> list[dict]:
         """Turn a downloaded video item into provider-safe frames/audio.
 
-        Providers used by Maxwell intentionally do not receive ``video_url``
+        Providers used by Dame Curie intentionally do not receive ``video_url``
         parts. Keep that incompatibility at the ingestion boundary: linked
         videos and embed videos are decoded with ffmpeg and only their
         representative JPEG frames / optional audio track continue downstream.
@@ -11186,7 +11127,7 @@ class MaxwellBot(commands.Bot):
             item.get("message_id"),
             max_size,
             source_url=str(item.get("url") or ""),
-            include_frames=MaxwellBot._image_input_enabled(self),
+            include_frames=DameCurieBot._image_input_enabled(self),
             source_prefix=source_prefix,
         )
 
@@ -11196,7 +11137,7 @@ class MaxwellBot(commands.Bot):
             return []
         max_size = self._max_media_bytes()
         turn = current_foreground_turn()
-        proc_img = MaxwellBot._image_input_enabled(self)
+        proc_img = DameCurieBot._image_input_enabled(self)
         proc_aud = _owner_audio_input_enabled(self)
         video_input_enabled = parse_bool(
             getattr(getattr(self, "config", None), "ENABLE_VIDEO_INPUT", True),
@@ -11397,12 +11338,12 @@ class MaxwellBot(commands.Bot):
         host network), the size cap, and a real content-type check - the
         extension only decides what is worth fetching, never what it is.
         """
-        proc_img = MaxwellBot._image_input_enabled(self)
+        proc_img = DameCurieBot._image_input_enabled(self)
         proc_aud = _owner_audio_input_enabled(self)
         if not proc_img and not proc_aud:
             return []
         skip = skip_urls or set()
-        video_exts = getattr(self, "_LINK_VIDEO_EXTS", MaxwellBot._LINK_VIDEO_EXTS)
+        video_exts = getattr(self, "_LINK_VIDEO_EXTS", DameCurieBot._LINK_VIDEO_EXTS)
         video_input_enabled = parse_bool(
             getattr(getattr(self, "config", None), "ENABLE_VIDEO_INPUT", True),
             True,
@@ -11549,7 +11490,7 @@ class MaxwellBot(commands.Bot):
         """Only attach old images when the latest turn actually points at them."""
         return (
             bool(VISUAL_REFERENCE_RE.search(str(content or "")))
-            or MaxwellBot._reply_media_message_id(message) is not None
+            or DameCurieBot._reply_media_message_id(message) is not None
         )
 
     @staticmethod
@@ -11567,7 +11508,7 @@ class MaxwellBot(commands.Bot):
             return getattr(ref, "id", None)
         # A Tenor/Giphy picker message is often just a page URL - no upload
         # and sometimes no embed yet. Still treat a reply to it as "that gif".
-        if MaxwellBot._media_link_refs(getattr(ref, "content", "")):
+        if DameCurieBot._media_link_refs(getattr(ref, "content", "")):
             return getattr(ref, "id", None)
         if iter_message_snapshots(ref):
             return getattr(ref, "id", None)
@@ -11598,7 +11539,7 @@ class MaxwellBot(commands.Bot):
         ]
         current_other = [item for item in current_media if not item.get("is_image")]
         # The emoji reference sheet is our own injected context, not something a
-        # user posted. Listing it as a normal image made Maxwell either ignore it
+        # user posted. Listing it as a normal image made Dame Curie either ignore it
         # (the image list says "only discuss when relevant") or describe it back
         # at the channel, so it gets its own labeled block below.
         grid_items = [
@@ -11982,7 +11923,7 @@ class MaxwellBot(commands.Bot):
         try:
             try:
                 async with timeout_scope:
-                    await MaxwellBot._handle_message_inner(self, message, content)
+                    await DameCurieBot._handle_message_inner(self, message, content)
             except TimeoutError:
                 if not timeout_scope.expired():
                     raise
@@ -12101,7 +12042,7 @@ class MaxwellBot(commands.Bot):
                     },
                 )
             )
-            if MaxwellBot._image_input_enabled(self):
+            if DameCurieBot._image_input_enabled(self):
                 grid = await self._maybe_emoji_grid(message, channel_id)
                 if grid is not None:
                     media.append(grid)
@@ -12370,10 +12311,10 @@ class MaxwellBot(commands.Bot):
                 and "web_search" in self.tools
                 and "web_search"
                 not in set(self._control.get("disabled_tools", []) or [])
-                and MaxwellBot._needs_up_to_date_info(content)
+                and DameCurieBot._needs_up_to_date_info(content)
             ):
                 try:
-                    q = MaxwellBot._extract_search_query(content)
+                    q = DameCurieBot._extract_search_query(content)
                     if q:
                         search_res = await self.tools["web_search"].execute(
                             message, query=q, max_results="5"
@@ -12620,7 +12561,7 @@ class MaxwellBot(commands.Bot):
         incomplete_error: ProviderIncompleteResponseError | None = None
         try:
             turn_context["generation_started"] = True
-            platform = MaxwellBot._message_tool_platform(self, message)
+            platform = DameCurieBot._message_tool_platform(self, message)
             openai_tools = self._build_openai_tools(
                 platform, message=message, content=content
             )
@@ -12672,7 +12613,7 @@ class MaxwellBot(commands.Bot):
                 messages.insert(
                     catalog_index + 1, {"role": "system", "content": snip}
                 )
-            messages = MaxwellBot._apply_prompt_budget(
+            messages = DameCurieBot._apply_prompt_budget(
                 self, messages, provider_tools
             )
             await self._acquire_ai_slot(
@@ -12799,7 +12740,7 @@ class MaxwellBot(commands.Bot):
                     custom_tool_calls, provider_tools = self._select_tool_protocol(
                         openai_tools
                     )
-                    refreshed_tool_prompt = MaxwellBot._tool_system_prompt(
+                    refreshed_tool_prompt = DameCurieBot._tool_system_prompt(
                         self, platform, message=message, content=content
                     )
                     for item in messages:
@@ -12827,7 +12768,7 @@ class MaxwellBot(commands.Bot):
                             del messages[index]
                     expanded_groups = current_tool_groups()
                     try:
-                        messages = MaxwellBot._apply_prompt_budget(
+                        messages = DameCurieBot._apply_prompt_budget(
                             self, messages, provider_tools
                         )
                     except PromptBudgetExceeded:
@@ -12843,7 +12784,7 @@ class MaxwellBot(commands.Bot):
                         custom_tool_calls, provider_tools = self._select_tool_protocol(
                             openai_tools
                         )
-                        refreshed_tool_prompt = MaxwellBot._tool_system_prompt(
+                        refreshed_tool_prompt = DameCurieBot._tool_system_prompt(
                             self, platform, message=message, content=content
                         )
                         for item in messages:
@@ -12869,7 +12810,7 @@ class MaxwellBot(commands.Bot):
                         else:
                             for index in reversed(custom_indices):
                                 del messages[index]
-                        messages = MaxwellBot._apply_prompt_budget(
+                        messages = DameCurieBot._apply_prompt_budget(
                             self, messages, provider_tools
                         )
                 if not tool_results:
@@ -12904,7 +12845,7 @@ class MaxwellBot(commands.Bot):
                 conversation_tail = trim_tool_tail(conversation_tail)
                 expanded_groups = current_tool_groups()
                 try:
-                    result_messages = MaxwellBot._apply_prompt_budget(
+                    result_messages = DameCurieBot._apply_prompt_budget(
                         self,
                         [dict(item) for item in messages] + list(conversation_tail),
                         provider_tools,
@@ -12922,7 +12863,7 @@ class MaxwellBot(commands.Bot):
                     custom_tool_calls, provider_tools = self._select_tool_protocol(
                         openai_tools
                     )
-                    refreshed_tool_prompt = MaxwellBot._tool_system_prompt(
+                    refreshed_tool_prompt = DameCurieBot._tool_system_prompt(
                         self, platform, message=message, content=content
                     )
                     for item in messages:
@@ -12948,7 +12889,7 @@ class MaxwellBot(commands.Bot):
                     else:
                         for index in reversed(custom_indices):
                             del messages[index]
-                    result_messages = MaxwellBot._apply_prompt_budget(
+                    result_messages = DameCurieBot._apply_prompt_budget(
                         self,
                         [dict(item) for item in messages] + list(conversation_tail),
                         provider_tools,
@@ -13090,7 +13031,7 @@ class MaxwellBot(commands.Bot):
                 # __MESSAGE_SENT__\n<content>" which is noisy and easy
                 # for the model to miss when recalling "what did I just
                 # say?". The user reported "I asked for an explanation
-                # and maxwell couldn't recall its own explanation" - the
+                # and Dame Curie couldn't recall its own explanation" - the
                 # plain message.reply() path was the main culprit, but
                 # the send_message path was a secondary hit because the
                 # Tool entry's prefix pushed the actual content past
@@ -13767,9 +13708,9 @@ class MaxwellBot(commands.Bot):
                 if include_images
                 else (cleaned, refusal_lines)
             )
-        eligible_names = MaxwellBot._turn_tool_names(self, platform, message)
+        eligible_names = DameCurieBot._turn_tool_names(self, platform, message)
         builtin_names = set(getattr(self, "tools", {}) or {})
-        turn_tools = MaxwellBot._tools_for_turn(self, platform, message)
+        turn_tools = DameCurieBot._tools_for_turn(self, platform, message)
         eligible_plugin_names = {
             name
             for name in turn_tools
@@ -13966,7 +13907,7 @@ class MaxwellBot(commands.Bot):
             prev_progress = per_chan.get(chan_key)
             per_chan[chan_key] = progress
             try:
-                line = await MaxwellBot._execute_tool_by_name(
+                line = await DameCurieBot._execute_tool_by_name(
                     self,
                     message,
                     name,
@@ -13998,7 +13939,7 @@ class MaxwellBot(commands.Bot):
                 # it inside _execute_tool_by_name), not something to dump into
                 # the conversation log on every tool call.
                 mem_params = {k: v for k, v in params.items() if k != "explanation"}
-                await MaxwellBot._remember_tool_call(
+                await DameCurieBot._remember_tool_call(
                     self, message, name, mem_params, line
                 )
             except Exception as e:
@@ -14044,7 +13985,7 @@ class MaxwellBot(commands.Bot):
                         err_line = f"Tool {name}: Error - {type(res).__name__}: {error_text}"
                         result_by_id[call["id"]] = err_line
                         with contextlib.suppress(Exception):
-                            await MaxwellBot._remember_tool_call(
+                            await DameCurieBot._remember_tool_call(
                                 self,
                                 message,
                                 name,
@@ -14080,7 +14021,7 @@ class MaxwellBot(commands.Bot):
                                 for k, v in (call.get("arguments") or {}).items()
                                 if k != "explanation"
                             }
-                            await MaxwellBot._remember_tool_call(
+                            await DameCurieBot._remember_tool_call(
                                 self, message, call["name"], skip_args, line
                             )
                         except Exception as e:
@@ -14103,7 +14044,7 @@ class MaxwellBot(commands.Bot):
                                 for k, v in (call.get("arguments") or {}).items()
                                 if k != "explanation"
                             }
-                            await MaxwellBot._remember_tool_call(
+                            await DameCurieBot._remember_tool_call(
                                 self, message, call["name"], skip_args, line
                             )
                         except Exception as e:
@@ -14131,7 +14072,7 @@ class MaxwellBot(commands.Bot):
                             for k, v in (call.get("arguments") or {}).items()
                             if k != "explanation"
                         }
-                        await MaxwellBot._remember_tool_call(
+                        await DameCurieBot._remember_tool_call(
                             self, message, call["name"], skip_args, line
                         )
                     except Exception as e:
@@ -14289,7 +14230,7 @@ class MaxwellBot(commands.Bot):
         existing_progress=None,
         response_metrics=None,
     ) -> tuple[str, list[str]] | tuple[str, list[str], list[str]]:
-        """Native tool_calls only. The XML text-tag dispatch is gone - Maxwell
+        """Native tool_calls only. The XML text-tag dispatch is gone - Dame Curie
         is native function-calling only now. If the model didn't emit native
         tool_calls, there's nothing to run; we just sanitize the text response
         (e.g. a plain chat reply the model wrote directly) and return it.
@@ -14306,7 +14247,7 @@ class MaxwellBot(commands.Bot):
         self._last_native_followup_messages = []
         self._last_native_tool_media = []
         if native_tool_calls:
-            return await MaxwellBot._process_native_tool_calls(
+            return await DameCurieBot._process_native_tool_calls(
                 self,
                 message,
                 response,
@@ -14561,11 +14502,11 @@ class MaxwellBot(commands.Bot):
     ) -> list[dict]:
         # Use the class implementation explicitly: a few lightweight callers
         # (and tests) bind this method onto a SimpleNamespace rather than a
-        # fully constructed MaxwellBot instance.
-        tools = MaxwellBot._tools_for_turn(self, platform, message)
+        # fully constructed DameCurieBot instance.
+        tools = DameCurieBot._tools_for_turn(self, platform, message)
         if not tools or not self._native_tools_enabled():
             return []
-        allowed = MaxwellBot._turn_tool_names(self, platform, message, content)
+        allowed = DameCurieBot._turn_tool_names(self, platform, message, content)
         return build_openai_tools(tools, allowed_names=allowed)
 
     def _tool_system_prompt(
@@ -14573,10 +14514,10 @@ class MaxwellBot(commands.Bot):
     ) -> str:
         # Keep this compatible with the same lightweight bot doubles accepted
         # by _turn_tool_names and _build_openai_tools.
-        tools = MaxwellBot._tools_for_turn(self, platform, message)
+        tools = DameCurieBot._tools_for_turn(self, platform, message)
         if not tools or not self._control.get("tools_enabled", True):
             return ""
-        allowed = MaxwellBot._turn_tool_names(self, platform, message, content)
+        allowed = DameCurieBot._turn_tool_names(self, platform, message, content)
         names = [name for name in tools if name in allowed]
         if not names:
             return ""
@@ -14743,20 +14684,20 @@ class MaxwellBot(commands.Bot):
         """
         if not text:
             return False
-        t = MaxwellBot._plain_user_text(text).lower()
-        if not t or MaxwellBot._CASUAL_ONLY_RE.match(t):
+        t = DameCurieBot._plain_user_text(text).lower()
+        if not t or DameCurieBot._CASUAL_ONLY_RE.match(t):
             return False
-        if MaxwellBot._EXPLICIT_LOOKUP_RE.search(t):
+        if DameCurieBot._EXPLICIT_LOOKUP_RE.search(t):
             return True
-        if any(s in t for s in MaxwellBot._CURRENT_INFO_PHRASES):
+        if any(s in t for s in DameCurieBot._CURRENT_INFO_PHRASES):
             return True
         # `_plain_user_text` already collapsed the whitespace, so punctuation is
         # the only clause boundary left to split on. One sentence that mixes
         # both signals still fires: this separates unrelated clauses, it is not
         # an intent classifier.
         return any(
-            any(k in sentence for k in MaxwellBot._AI_TOPIC_WORDS)
-            and any(r in sentence for r in MaxwellBot._RECENCY_WORDS)
+            any(k in sentence for k in DameCurieBot._AI_TOPIC_WORDS)
+            and any(r in sentence for r in DameCurieBot._RECENCY_WORDS)
             for sentence in re.split(r"[.!?;]+\s+", t)
         )
 
@@ -14774,13 +14715,13 @@ class MaxwellBot(commands.Bot):
     @staticmethod
     def _extract_search_query(text: str) -> str:
         """Turn user question into a good search query for up-to-date info."""
-        t = MaxwellBot._plain_user_text(text)
-        t = MaxwellBot._LOOKUP_PREFIX_RE.sub("", t).strip()
+        t = DameCurieBot._plain_user_text(text)
+        t = DameCurieBot._LOOKUP_PREFIX_RE.sub("", t).strip()
         if len(t) > 120:
             cut = t[:120]
             t = cut.rsplit(" ", 1)[0] or cut
         year = str(datetime.now(timezone.utc).year)
-        markers = MaxwellBot._RECENCY_WORDS + (year,)
+        markers = DameCurieBot._RECENCY_WORDS + (year,)
         if t and not any(w in t.lower() for w in markers):
             t += f" {year}"
         return t
@@ -14870,7 +14811,7 @@ class MaxwellBot(commands.Bot):
         )
         openers: list[str] = []
         for entry in reversed(memory):
-            if len(openers) >= MaxwellBot._ECHO_LOOKBACK:
+            if len(openers) >= DameCurieBot._ECHO_LOOKBACK:
                 break
             if entry.get("is_tool"):
                 continue
@@ -14884,8 +14825,8 @@ class MaxwellBot(commands.Bot):
             )
             if not words:
                 continue
-            openers.append(" ".join(words[: MaxwellBot._ECHO_OPENER_WORDS]))
-        if len(openers) < MaxwellBot._ECHO_MIN_REPEATS:
+            openers.append(" ".join(words[: DameCurieBot._ECHO_OPENER_WORDS]))
+        if len(openers) < DameCurieBot._ECHO_MIN_REPEATS:
             return ""
 
         # Compare on the first word or two: "jajaja bro" and "jajajaja man" are
@@ -14899,7 +14840,7 @@ class MaxwellBot(commands.Bot):
         for opener in openers:
             counts.setdefault(_stem(opener), []).append(opener)
         stem, hits = max(counts.items(), key=lambda kv: len(kv[1]))
-        if len(hits) < MaxwellBot._ECHO_MIN_REPEATS:
+        if len(hits) < DameCurieBot._ECHO_MIN_REPEATS:
             return ""
         phrase = hits[0].split(" ", 1)[0]
         return (
@@ -14940,7 +14881,7 @@ class MaxwellBot(commands.Bot):
             + newest_tool_group_chars
             + 4000  # live user turn, media summary, music context
         )
-        total = max(0, MaxwellBot._prompt_budget_chars(self) - overhead)
+        total = max(0, DameCurieBot._prompt_budget_chars(self) - overhead)
 
         disabled: set[str] = set()
         short_turn = self._is_short_live_turn(message, user_message)
@@ -15025,24 +14966,41 @@ class MaxwellBot(commands.Bot):
     def _apply_prompt_budget(
         self, messages: list[dict], provider_tools: list[dict] | None = None
     ) -> list[dict]:
-        budget = MaxwellBot._prompt_budget_chars(self)
+        budget = DameCurieBot._prompt_budget_chars(self)
         schema_chars = (
             len(json.dumps(provider_tools, ensure_ascii=False, separators=(",", ":")))
             if provider_tools
             else 0
         )
         out = [dict(message) for message in messages]
-        total = schema_chars + sum(MaxwellBot._message_content_chars(m) for m in out)
+        total = schema_chars + sum(DameCurieBot._message_content_chars(m) for m in out)
+        # In the text tool protocol, tool results come back as role "user"
+        # messages that start with "=== TOOL RESULTS ===". They belong to the tail.
+        live_input = next(
+            (
+                index
+                for index in range(len(out) - 1, -1, -1)
+                if out[index].get("role") == "user"
+                and not str(out[index].get("content") or "").startswith("=== TOOL RESULTS ===")
+            ),
+            None,
+        )
+        # The tool tail of the current turn has its own allowance, so the model
+        # keeps its own work without growing plain chat prompts.
+        base_budget = budget
+        tail_chars = (
+            sum(DameCurieBot._message_content_chars(m) for m in out[live_input + 1 :])
+            if live_input is not None
+            else 0
+        )
+        budget = base_budget + min(tail_chars, TOOL_TAIL_MAX_CHARS)
         if total <= budget:
             return out
 
         protected_messages = {id(out[0])} if out else set()
-        live_input = None
         for index in range(len(out) - 1, -1, -1):
             item = out[index]
             text = str(item.get("content") or "")
-            if item.get("role") == "user" and live_input is None:
-                live_input = index
             if item.get("role") == "system" and (
                 text.startswith("## Tool contract")
                 or text.startswith("## Tools")
@@ -15056,12 +15014,24 @@ class MaxwellBot(commands.Bot):
             protected_messages.add(id(out[live_input]))
             tail_start = live_input + 1
             groups = tool_tail_groups(out[tail_start:])
+            dropped_groups = 0
+            dropped_chars = 0
             for group in groups[:-1]:
-                if total <= budget:
+                if total <= budget or tail_chars <= TOOL_TAIL_MAX_CHARS:
                     break
                 removed = out[tail_start : tail_start + len(group)]
-                total -= sum(MaxwellBot._message_content_chars(m) for m in removed)
+                removed_chars = sum(DameCurieBot._message_content_chars(m) for m in removed)
+                total -= removed_chars
+                tail_chars -= removed_chars
+                budget = base_budget + min(tail_chars, TOOL_TAIL_MAX_CHARS)
+                dropped_groups += 1
+                dropped_chars += removed_chars
                 del out[tail_start : tail_start + len(group)]
+            if dropped_groups:
+                logger.info(
+                    "Prompt budget dropped %d older tool round(s), %d chars",
+                    dropped_groups, dropped_chars,
+                )
             for item in out:
                 content = item.get("content")
                 if (
@@ -15093,7 +15063,7 @@ class MaxwellBot(commands.Bot):
             if not isinstance(old, str):
                 continue
             target = max(512, len(old) - (total - budget))
-            item["content"] = MaxwellBot._trim_middle(old, target)
+            item["content"] = DameCurieBot._trim_middle(old, target)
             total -= len(old) - len(item["content"])
 
         if total > budget:
@@ -15151,7 +15121,7 @@ class MaxwellBot(commands.Bot):
             # Name hints are a nicety; the prompt still works without them.
             logger.debug("Could not collect conversation user names: %s", e)
 
-        base_knowledge = getattr(self, "_base_knowledge", MAXWELL_BASE_KNOWLEDGE)
+        base_knowledge = getattr(self, "_base_knowledge", DAME_CURIE_BASE_KNOWLEDGE)
         system_parts = [
             base_knowledge + "\n\n" + DISCORD_CHAT_PROTOCOL,
         ]
@@ -15171,7 +15141,7 @@ class MaxwellBot(commands.Bot):
         custom_prompt = self.memory.get_server_prompt(server_id)
         server_prompt_text = ""
         server_prompt_diagnostic = ""
-        tool_prompt = MaxwellBot._tool_system_prompt(
+        tool_prompt = DameCurieBot._tool_system_prompt(
             self, message=message, content=user_message
         )
         personality = (
@@ -15254,7 +15224,7 @@ class MaxwellBot(commands.Bot):
         # here: its budget is computed further down from what is genuinely
         # left, so anything a lookup tier does not use flows to the running
         # conversation, which is the tier worth protecting.
-        planned_tools = MaxwellBot._build_openai_tools(
+        planned_tools = DameCurieBot._build_openai_tools(
             self, "discord", message=message, content=user_message
         )
         schema_chars = (
@@ -15262,7 +15232,7 @@ class MaxwellBot(commands.Bot):
             if planned_tools
             else 0
         )
-        ctx_plan = MaxwellBot._context_budget_plan(
+        ctx_plan = DameCurieBot._context_budget_plan(
             self,
             message,
             user_message,
@@ -15281,7 +15251,7 @@ class MaxwellBot(commands.Bot):
         entity_row: dict | None = None
         if self._control.get("entity_memory_enabled", True):
             try:
-                entity_row, entity_facts = await MaxwellBot._entity_profile_for(
+                entity_row, entity_facts = await DameCurieBot._entity_profile_for(
                     self,
                     message,
                     user_message,
@@ -15290,7 +15260,7 @@ class MaxwellBot(commands.Bot):
                 _mark("entity_profile")
             except Exception as e:
                 logger.debug(f"entity profile skipped: {e}")
-            block = MaxwellBot._render_entity_block(
+            block = DameCurieBot._render_entity_block(
                 self, message, entity_row, entity_facts
             )
             if block:
@@ -15298,7 +15268,7 @@ class MaxwellBot(commands.Bot):
                 ctx_plan.note_usage("entity", len(block), items=len(entity_facts))
             ctx_spare = ctx_plan.spare_after("entity")
 
-        graph_block = MaxwellBot._graph_prompt_block(
+        graph_block = DameCurieBot._graph_prompt_block(
             self,
             user_message,
             str(getattr(message.author, "id", "") or ""),
@@ -15614,7 +15584,7 @@ class MaxwellBot(commands.Bot):
             )
             if emojis or stickers:
                 # Keep the name list and the reference grid on the same caps -
-                # they drifted (25/15 vs 48/12), so Maxwell saw icons he had no
+                # they drifted (25/15 vs 48/12), so Dame Curie saw icons he had no
                 # name for and was given sticker names that were never drawn.
                 items = sorted(emojis.items())[: self._GRID_MAX_EMOJIS]
                 sticker_items = sorted(stickers.keys())[: self._GRID_MAX_STICKERS]
@@ -15714,13 +15684,13 @@ class MaxwellBot(commands.Bot):
             # (180k after the output reserve), so clamp the transcript to what
             # is actually left once the system blocks are paid for.
             reserved = (
-                sum(MaxwellBot._message_content_chars(m) for m in messages)
+                sum(DameCurieBot._message_content_chars(m) for m in messages)
                 + sum(len(p) for p in dynamic_parts)
                 + len(JAILBREAK_PROMPT)
                 + 4000  # live user turn, media summary, music context
             )
             budget = max(
-                1000, min(budget, MaxwellBot._prompt_budget_chars(self) - reserved)
+                1000, min(budget, DameCurieBot._prompt_budget_chars(self) - reserved)
             )
             count = max(
                 0,
@@ -15820,7 +15790,7 @@ class MaxwellBot(commands.Bot):
                 # sites are inconsistent - some write bot_name, some write
                 # the live display_name - and only one was checked before,
                 # so the bot's own replies (labelled with bot_name) could be
-                # mis-detected as a user turn and rendered as "Maxwell: <bot
+                # mis-detected as a user turn and rendered as "Dame Curie: <bot
                 # words>", which the model then read as a user statement.
                 self_display = self.user.display_name if self.user else self.bot_name
                 live_self, _src = _live_self_name(
@@ -15970,7 +15940,7 @@ class MaxwellBot(commands.Bot):
         # six messages all opened with the same "jajaja" - that is a pattern
         # only visible over the transcript, and the model reliably fails to
         # notice it in its own history. So it gets told.
-        echo_note = MaxwellBot._self_repetition_note(self, memory)
+        echo_note = DameCurieBot._self_repetition_note(self, memory)
         if echo_note:
             dynamic_parts.append(echo_note)
         # Volatile per-turn context goes here: after the static system block
@@ -16033,7 +16003,7 @@ class MaxwellBot(commands.Bot):
         ]
         if mention_names:
             self_user_id = getattr(self.user, "id", None) if self.user else None
-            mentions_maxwell = bool(
+            mentions_dame_curie = bool(
                 self_user_id is not None
                 and any(
                     getattr(user, "id", None) == self_user_id
@@ -16043,7 +16013,7 @@ class MaxwellBot(commands.Bot):
             user_parts.append(
                 "Mentioned users in latest message: "
                 + ", ".join(mention_names)
-                + f". Mentions Dame Curie: {'yes' if mentions_maxwell else 'no'}."
+                + f". Mentions Dame Curie: {'yes' if mentions_dame_curie else 'no'}."
             )
         user_parts.extend(self._reply_parent_context_lines(message))
         delivered_footer = latest_delivered_footer(self, channel_id)
@@ -16065,7 +16035,7 @@ class MaxwellBot(commands.Bot):
             messages[-1]["content"] += "\n\n" + current
         else:
             messages.append({"role": "user", "content": current})
-        messages = MaxwellBot._apply_prompt_budget(self, messages)
+        messages = DameCurieBot._apply_prompt_budget(self, messages)
         _mark("budget")
         _cpu_total = time.thread_time() - _build_cpu
         if _cpu_total >= 0.2:
@@ -16098,7 +16068,7 @@ async def main():
         loop.set_exception_handler(_loop_exception_handler)
     except Exception:
         pass
-    bot = MaxwellBot()
+    bot = DameCurieBot()
     bot._gateway_last_ok = time.monotonic()
     bot._gateway_last_disconnect = None
     _shutdown_called = False
@@ -16164,7 +16134,7 @@ async def main():
     finally:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.remove_signal_handler(sig)
-        logger.info("Shutting down Maxwell...")
+        logger.info("Shutting down Dame Curie...")
         # Stop the event-loop watchdog and drain the channel work queues so no
         # handler keeps mutating shared state after the process starts exiting.
         if not watchdog_task.done():

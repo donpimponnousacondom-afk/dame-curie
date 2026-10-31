@@ -155,10 +155,10 @@ def test_pressure_is_a_probability():
 
 
 def test_his_name_follows_a_rename_rather_than_a_word_list():
-    assert name_mentioned("hey maxwell you there", ["Maxwell"]) is True
-    assert name_mentioned("hey MAXWELL", ["maxwell"]) is True
+    assert name_mentioned("hey curie you there", ["Curie"]) is True
+    assert name_mentioned("hey CURIE", ["curie"]) is True
     # Substring hits don't count: he is not being addressed here.
-    assert name_mentioned("maxwellian physics", ["maxwell"]) is False
+    assert name_mentioned("curieian physics", ["curie"]) is False
     # A one- or two-letter nickname is too noisy to match on.
     assert name_mentioned("ok", ["ok"]) is False
 

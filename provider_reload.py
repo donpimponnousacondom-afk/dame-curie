@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from bot import MaxwellBot
+    from bot import DameCurieBot
     from providers import OpenAICompatibleProvider
 
 from dotenv.parser import parse_stream
@@ -92,7 +92,7 @@ class ProviderReload:
 
 
 @asynccontextmanager
-async def provider_round(bot: MaxwellBot):
+async def provider_round(bot: DameCurieBot):
     """Hold provider profiles across multi-call maintenance work, including between-call gaps."""
     bot._provider_rounds_active += 1
     try:
@@ -101,7 +101,7 @@ async def provider_round(bot: MaxwellBot):
         bot._provider_rounds_active -= 1
 
 
-def providers_idle(bot: MaxwellBot, excluding: asyncio.Task | None = None) -> bool:
+def providers_idle(bot: DameCurieBot, excluding: asyncio.Task | None = None) -> bool:
     """Require complete rounds and transport calls to finish, including between-tool gaps."""
     slots = bot.ai_slot_stats()
     tasks = [
@@ -121,7 +121,7 @@ def providers_idle(bot: MaxwellBot, excluding: asyncio.Task | None = None) -> bo
     )
 
 
-def apply_provider_reload(bot: MaxwellBot, *, excluding: asyncio.Task | None = None) -> bool:
+def apply_provider_reload(bot: DameCurieBot, *, excluding: asyncio.Task | None = None) -> bool:
     """Swap validated settings synchronously at idle; no network or await can split the swap."""
     reload = getattr(bot, "_provider_reload", None)
     settings = reload.poll() if reload is not None else None
@@ -149,14 +149,14 @@ def apply_provider_reload(bot: MaxwellBot, *, excluding: asyncio.Task | None = N
     return True
 
 
-def retire_provider(bot: MaxwellBot, provider: OpenAICompatibleProvider) -> None:
+def retire_provider(bot: DameCurieBot, provider: OpenAICompatibleProvider) -> None:
     """Retain displaced role/main transports for idle cleanup rather than closing in-flight calls."""
     retired = vars(bot).setdefault("_retired_providers", [])
     if all(item is not provider for item in retired):
         retired.append(provider)
 
 
-async def close_retired_providers(bot: MaxwellBot, *, shutdown: bool = False) -> None:
+async def close_retired_providers(bot: DameCurieBot, *, shutdown: bool = False) -> None:
     """Keep retired transports reachable until whole rounds and their close have finished."""
     retired = tuple(getattr(bot, "_retired_providers", ()))
     if not retired or (not shutdown and not providers_idle(bot)):

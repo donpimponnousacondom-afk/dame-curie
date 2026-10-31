@@ -27,7 +27,7 @@ from importlib import import_module, reload
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-logger = logging.getLogger("maxwell.plugins")
+logger = logging.getLogger("dame_curie.plugins")
 
 # Events a plugin may subscribe to. An allowlist rather than "anything goes":
 # a typo like "on_mesage" would otherwise register a listener that silently
@@ -79,7 +79,7 @@ class PluginContext:
         self._manager = manager
         self.name = plugin_name
         self.bot = manager.bot
-        self.log = logging.getLogger(f"maxwell.plugins.{plugin_name}")
+        self.log = logging.getLogger(f"dame_curie.plugins.{plugin_name}")
 
     # -- storage ----------------------------------------------------------- #
     @property

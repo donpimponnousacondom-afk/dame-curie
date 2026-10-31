@@ -327,7 +327,7 @@ def test_dispatcher_redacts_image_result_without_changing_model_result(encoded, 
     caplog.set_level(logging.INFO, logger="bot")
 
     params = {"prompt": "synthetic dispatcher prompt"} if tool_name == "image_generator" else {"command": "synthetic"}
-    result = asyncio.run(bot_module.MaxwellBot._execute_tool_by_name(
+    result = asyncio.run(bot_module.DameCurieBot._execute_tool_by_name(
         bot, message, tool_name, params,
         disabled=set(), compatible={tool_name},
     ))
