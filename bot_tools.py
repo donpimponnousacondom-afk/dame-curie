@@ -971,6 +971,8 @@ def _own_image_path(bot, ref: str) -> str | None:
     """
     img_dir, pub_base = _public_image_target(bot)
     ref = str(ref or "").strip()
+    if "\x00" in ref:
+        return None
     if pub_base and ref.startswith(pub_base + "/"):
         name = ref[len(pub_base) + 1 :].split("?", 1)[0].split("#", 1)[0]
         if not name or "/" in name or name in {".", ".."}:

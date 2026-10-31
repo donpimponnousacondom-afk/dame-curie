@@ -776,6 +776,23 @@ def test_prompt_budget_trims_large_background_blocks():
     assert contract["content"] == "## Tool contract\n" + "c" * 300
     assert server["content"] == "Server-specific instructions:\n" + "s" * 300
 
+    # Text tool protocol: results come back as role "user" messages. They are
+    # tail, not the live input, so they get the same allowance.
+    text_call = {"role": "assistant", "content": "calling send_message"}
+    text_result = {"role": "user", "content": "=== TOOL RESULTS ===\n" + "r" * (len(paired_result["content"]) + len(paired_call["tool_calls"][0]["function"]["name"]))}
+    text_trimmed = DameCurieBot._apply_prompt_budget(bot, messages[:-2] + [text_call, text_result], schemas)
+    assert text_result in text_trimmed
+    assert any(item.get("content") == "[RESPOND TO THIS]\nlatest" for item in text_trimmed)
+    text_transcript = next(
+        item["content"] for item in text_trimmed
+        if str(item.get("content") or "").startswith("<previous_conversation>\n")
+    )
+    assert "history 349" in text_transcript
+    text_total = sum(DameCurieBot._message_content_chars(m) for m in text_trimmed) + len(
+        json.dumps(schemas, ensure_ascii=False, separators=(",", ":"))
+    )
+    assert 72000 < text_total <= 72000 + DameCurieBot._message_content_chars(text_call) + DameCurieBot._message_content_chars(text_result)
+
     too_large = [
         core,
         {"role": "system", "content": "## Available tools\n" + "t" * 80000},

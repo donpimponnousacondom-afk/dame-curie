@@ -14974,8 +14974,15 @@ class DameCurieBot(commands.Bot):
         )
         out = [dict(message) for message in messages]
         total = schema_chars + sum(DameCurieBot._message_content_chars(m) for m in out)
+        # In the text tool protocol, tool results come back as role "user"
+        # messages that start with "=== TOOL RESULTS ===". They belong to the tail.
         live_input = next(
-            (index for index in range(len(out) - 1, -1, -1) if out[index].get("role") == "user"),
+            (
+                index
+                for index in range(len(out) - 1, -1, -1)
+                if out[index].get("role") == "user"
+                and not str(out[index].get("content") or "").startswith("=== TOOL RESULTS ===")
+            ),
             None,
         )
         # The tool tail of the current turn has its own allowance, so the model
