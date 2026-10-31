@@ -195,12 +195,12 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
     assert odd_trimmed[1]["content"].startswith(
         "[Earlier in this turn 12 tool round(s) were dropped from context: bad_name_0, "
     )
-    assert ", and 4 more. Their results are no longer visible.]\nx" in odd_trimmed[1]["content"]
+    assert ", and others. Their results are no longer visible.]\nx" in odd_trimmed[1]["content"]
     odd_snapshot = copy.deepcopy(odd_trimmed)
     assert trim_tool_tail(odd_trimmed) == odd_snapshot
     odd_later = trim_tool_tail(odd_trimmed + round_msgs(61))
     assert odd_later[1]["content"].startswith("[Earlier in this turn 13 tool round(s) were dropped")
-    assert ", and 5 more. Their results" in odd_later[1]["content"]
+    assert odd_later[1]["content"].count("and others") == 1
 
     # Text tool protocol: the marker goes after the results header, so the
     # message still opens a tool group.

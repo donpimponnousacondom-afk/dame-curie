@@ -1931,26 +1931,20 @@ def _results_header(content: str) -> str:
     return _TEXT_RESULTS_HEADER if content.startswith(_TEXT_RESULTS_HEADER) else ""
 
 
-def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str], int]:
-    """Remove the dropped-rounds marker; return its round count, names and unnamed extras."""
+def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str], bool]:
+    """Remove the dropped-rounds marker; return its round count, names and "and others"."""
     msg = _round_marker_message(group)
     content = msg.get("content") if msg else None
     if not isinstance(content, str):
-        return 0, [], 0
+        return 0, [], False
     header = _results_header(content)
     match = _DROPPED_ROUNDS_RE.match(content, len(header))
     if not match:
-        return 0, [], 0
+        return 0, [], False
     msg["content"] = header + content[match.end():]
-    names: list[str] = []
-    extra = 0
-    for name in match.group(2).split(", "):
-        more = re.fullmatch(r"and (\d+) more", name)
-        if more:
-            extra += int(more.group(1))
-        elif name:
-            names.append(name)
-    return int(match.group(1)), names, extra
+    names = [name for name in match.group(2).split(", ") if name]
+    others = "and others" in names
+    return int(match.group(1)), [name for name in names if name != "and others"], others
 
 
 def _round_tool_names(group: list[dict]) -> list[str]:
@@ -1977,7 +1971,7 @@ def trim_tool_tail(
     groups = tool_tail_groups(tail)
     dropped_groups = 0
     dropped_chars = 0
-    marker_rounds, marker_names, marker_extra = _take_dropped_marker(groups[0]) if groups else (0, [], 0)
+    marker_rounds, marker_names, marker_others = _take_dropped_marker(groups[0]) if groups else (0, [], False)
     while len(groups) > 1 and sum(map(len, groups)) > max_messages:
         dropped = groups.pop(0)
         dropped_chars += sum(message_chars(msg) for msg in dropped)
@@ -2021,8 +2015,9 @@ def trim_tool_tail(
         )
     if target is not None:
         names = list(dict.fromkeys(marker_names))
-        extra = marker_extra + max(0, len(names) - 8)
-        names = names[:8] + ([f"and {extra} more"] if extra else [])
+        # Names past the first 8 are not kept, so no count of them is claimed.
+        others = marker_others or len(names) > 8
+        names = names[:8] + (["and others"] if others else [])
         header = _results_header(target["content"])
         target["content"] = (
             header
