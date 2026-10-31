@@ -407,6 +407,30 @@ def test_no_response_blocks_later_send_message():
     assert [result["content"] for result in replay[1:]] == refused
     assert "x" * 16_000 not in str(replay)
 
+    aggregate_calls = [
+        {
+            "id": f"call_wide_{index}",
+            "type": "function",
+            "function": {
+                "name": "send_message",
+                "arguments": '{"explanation":"' + "x" * 12_000 + '","content":"hi"}',
+            },
+        }
+        for index in range(3)
+    ]
+    _, aggregate_refused, _ = asyncio.run(
+        MaxwellBot._process_native_tool_calls(
+            bot, message, "", aggregate_calls, include_images=True
+        )
+    )
+    assert sent == ["NO_RESPONSE"]
+    assert aggregate_refused == [
+        "Tool send_message: Error - batch refused because the batch carries "
+        "36,099 bytes of arguments; the limit is 32,000; no calls in this batch "
+        "were executed."
+    ] * 3
+    assert _tool_results_need_followup(aggregate_refused) is True
+
 
 def test_two_send_messages_in_a_row_both_fire_in_order():
     """Two send_messages back-to-back (no wait) - both must fire, in order."""
