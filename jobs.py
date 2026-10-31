@@ -995,6 +995,10 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     )
                     for start_at in range(0, len(summary), 1900):
                         if not await _post_thread(thread, summary[start_at:start_at + 1900], context=job_context):
+                            logger.error(
+                                "background job %s: summary posting stopped at character %d of %d",
+                                job.id, start_at, len(summary),
+                            )
                             break
     except TimeoutError as exc:
         if not timeout_scope.expired():

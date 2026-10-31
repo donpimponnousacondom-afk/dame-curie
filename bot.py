@@ -15093,7 +15093,10 @@ class DameCurieBot(commands.Bot):
         )
 
     async def _post_progress_update(self, message, text: str) -> bool:
-        """Post model text written next to tool calls; True only when every chunk sent."""
+        """Post model text written next to tool calls; True when it was posted.
+
+        A Discord send error is not caught: the turn stops with that error.
+        """
         text = _sanitize_visible_reply(
             text, scrub_repeats=bool(self._control.get("scrub_repetitions", True))
         )
@@ -15106,14 +15109,7 @@ class DameCurieBot(commands.Bot):
         for chunk in chunks:
             if not chunk.strip():
                 continue
-            try:
-                sent = await message.channel.send(chunk)
-            except discord.HTTPException as exc:
-                logger.error(
-                    "Progress update could not be sent (%s chunk(s) sent before the failure): %s",
-                    "some" if sent_any else "no", exc,
-                )
-                return False
+            sent = await message.channel.send(chunk)
             sent_any = True
             if self._control.get("store_memory", True) and getattr(self, "memory", None) is not None:
                 await self.add_message_to_memory(
