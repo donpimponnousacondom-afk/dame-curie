@@ -12721,6 +12721,9 @@ class DameCurieBot(commands.Bot):
             # cleanup, so a no-reply notice can name its exact cause.
             last_model_text = str(response or "")
             final_without_calls = False
+            # Text the model writes next to tool calls, posted at once as a
+            # progress update so the chat sees the work as it happens.
+            posted_updates: list[str] = []
             # Media from tools stays attached for the rest of the turn, in a
             # message after the tool results. The turn media cap (12 items,
             # 20 MiB) bounds tool media; the user's media has its own cap of
@@ -12740,6 +12743,7 @@ class DameCurieBot(commands.Bot):
                         final_without_calls = True
                     break
                 last_model_text = str(response or "")
+                round_had_calls = bool(pending_native)
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
                     response,
@@ -12763,6 +12767,18 @@ class DameCurieBot(commands.Bot):
                     getattr(self, "_last_native_followup_messages", None) or []
                 )
                 all_tool_results.extend(tool_results)
+                if (
+                    round_had_calls
+                    and str(response or "").strip()
+                    and _tool_results_need_followup(tool_results)
+                    and not any(
+                        marker in result
+                        for result in tool_results
+                        for marker in (*_DELIVERY_MARKERS, "__NO_RESPONSE__")
+                    )
+                    and await DameCurieBot._post_progress_update(self, message, response)
+                ):
+                    posted_updates.append(str(response).strip())
                 current_tool_names = tuple(
                     sorted(self._turn_tool_names(platform, message, content))
                 )
@@ -13077,6 +13093,12 @@ class DameCurieBot(commands.Bot):
             if incomplete_error is None and _should_skip_plaintext_after_send(
                 tool_results, all_tool_results, followup_turn_ran, response
             ):
+                if final_without_calls and not last_model_text.strip():
+                    # Root, 2026-10-31: flag it so its rate can be measured.
+                    logger.warning(
+                        "Turn ended with an empty final response after an earlier delivery "
+                        "(message, file, media or image) in channel %s", channel_id,
+                    )
                 await self._ensure_reasoning_trace(
                     message, all_tool_results, response, "send_message"
                 )
@@ -13136,11 +13158,18 @@ class DameCurieBot(commands.Bot):
                 and not (response or "").strip()
             ):
                 return
+            repeated_update = bool(posted_updates) and str(response or "").strip() == posted_updates[-1]
+            if repeated_update:
+                # The loop ended on the text that is already posted as the
+                # newest progress update; it is not posted twice.
+                response = ""
             response = _sanitize_visible_reply(
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
             )
-            delivered = any(
+            # A final answer equal to the newest update was delivered by that
+            # update; an empty final answer after an update was not.
+            delivered = (repeated_update and bool(last_model_text.strip())) or any(
                 marker in result
                 for result in all_tool_results
                 for marker in _DELIVERY_MARKERS
@@ -15062,6 +15091,40 @@ class DameCurieBot(commands.Bot):
             "About this person (global - carries across servers and DMs; "
             "background, don't recite):\n" + "\n".join(lines)
         )
+
+    async def _post_progress_update(self, message, text: str) -> bool:
+        """Post model text written next to tool calls; True when it was posted.
+
+        A Discord send error is not caught: the turn stops with that error.
+        """
+        text = _sanitize_visible_reply(
+            text, scrub_repeats=bool(self._control.get("scrub_repetitions", True))
+        )
+        if not text:
+            return False
+        text = _auto_format_discord(text)
+        text = self._render_custom_emojis(text, message.guild)
+        _, chunks = prepare_delivery(self, text, None, self._split_response)
+        sent_any = False
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
+            sent = await message.channel.send(chunk)
+            sent_any = True
+            if self._control.get("store_memory", True) and getattr(self, "memory", None) is not None:
+                await self.add_message_to_memory(
+                    str(message.channel.id),
+                    {
+                        "author": self.bot_name,
+                        "author_id": str(self.user.id) if self.user else "",
+                        "author_is_bot": True,
+                        "content": chunk,
+                        "message_id": f"bot_update:{getattr(sent, 'id', '')}",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    message,
+                )
+        return sent_any
 
     def _apply_prompt_budget(
         self, messages: list[dict], provider_tools: list[dict] | None = None
