@@ -350,13 +350,15 @@ def test_native_local_reference_uses_existing_allowed_image_paths(native_image, 
         alias.symlink_to(reference)
         reference = alias
     result = asyncio.run(case.tool.execute(case.message, prompt="edit", image=str(reference)))
-    if allowed:
-        assert not result.startswith("Error")
-        assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}]
-    else:
-        assert "outside the allowed image dirs" in result
-        case.get_session.assert_not_awaited()
-        case.session.post.assert_not_called()
+    # Root, 2026-10-31: any file the bot can read can be a reference, inside
+    # or outside the image directory. A file that is not an image is refused.
+    assert not result.startswith("Error")
+    assert case.session.post.call_args.kwargs["json"]["images"] == [{"image_url": IMAGE_URI}]
+    notes = directory / "notes.txt"
+    notes.write_text("not an image")
+    refused = asyncio.run(case.tool.execute(case.message, prompt="edit", image=str(notes)))
+    assert "not an image file" in refused
+    assert case.session.post.call_count == 1
 
 
 def test_native_local_reference_retains_file_size_limit(native_image, tmp_path, monkeypatch):

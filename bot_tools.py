@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar, cast
-from urllib.parse import parse_qs, urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlsplit, urlunsplit
 
 import aiohttp
 import asyncio
@@ -962,36 +962,34 @@ def _public_image_target(bot) -> tuple[str, str]:
     return os.path.join(site_dir, "_images"), pub
 
 
-_OWN_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+def _local_media_path(bot, ref: str) -> str | None:
+    """Return the local file a media reference names, or None for a remote URL.
 
-
-def _own_image_path(bot, ref: str) -> str | None:
-    """Return the local file for one of the bot's own images, or None.
-
-    The publisher mirrors a new image in 5 to 7 seconds, so its public URL
-    returns 404 until then. A public URL under the image base or a path in
-    the image directory therefore resolves to the local file.
+    Root, 2026-10-31: the model may read every file it can reach. The bot's own
+    public image and site URLs map to their local files, because the publisher
+    mirrors new files 5 to 7 seconds late. A path may be absolute, start with
+    "~", or be relative to the shell home. Returns None for any other URL and
+    for a path that is not an existing file.
     """
-    img_dir, pub_base = _public_image_target(bot)
+    img_dir, img_base = _public_image_target(bot)
+    cfg = getattr(bot, "config", None)
+    site_dir = str(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
+    site_base = str(getattr(cfg, "DAME_CURIE_SITE_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
     ref = str(ref or "").strip()
-    if "\x00" in ref:
+    if not ref or "\x00" in ref:
         return None
-    if pub_base and ref.startswith(pub_base + "/"):
-        name = ref[len(pub_base) + 1 :].split("?", 1)[0].split("#", 1)[0]
-        if not name or "/" in name or name in {".", ".."}:
+    for base, root in ((img_base, img_dir), (site_base, site_dir)):
+        if base and ref.startswith(base + "/"):
+            ref = os.path.join(root, unquote(ref[len(base) + 1 :].split("?", 1)[0].split("#", 1)[0]))
+            break
+    else:
+        if "://" in ref:
             return None
-        ref = os.path.join(img_dir, name)
-    elif ref.startswith(("http://", "https://")):
-        return None
-    root = os.path.realpath(img_dir)
-    path = os.path.realpath(ref)
-    if (
-        not path.startswith(root + os.sep)
-        or Path(path).suffix.lower() not in _OWN_IMAGE_SUFFIXES
-        or not os.path.isfile(path)
-    ):
-        return None
-    return path
+    path = os.path.expanduser(ref)
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.expanduser("~"), path)
+    path = os.path.realpath(path)
+    return path if os.path.isfile(path) else None
 
 
 def _persist_public_image(
@@ -1250,9 +1248,9 @@ class ImageGeneratorTool(Tool):
             except Exception:
                 return None, "malformed data: URI"
 
-        own = _own_image_path(self.bot, ref)
-        if own is not None:
-            ref = own
+        local = _local_media_path(self.bot, ref)
+        if local is not None:
+            ref = local
         elif ref.startswith(("http://", "https://")):
             if not _is_safe_url(ref):
                 return None, f"refusing to fetch invalid HTTP(S) image URL {ref[:80]}"
@@ -1284,24 +1282,19 @@ class ImageGeneratorTool(Tool):
             except Exception as e:
                 return None, f"could not fetch {ref[:80]}: {e}"
 
-        # Local path - only from the dirs Dame Curie itself writes images to.
+        # Local path: any file the bot can read (root, 2026-10-31).
         try:
-            img_dir, _ = _public_image_target(self.bot)
-            allowed = [os.path.realpath(img_dir), os.path.realpath("temp")]
-            path = os.path.realpath(ref)
-            if not any(
-                path == root or path.startswith(root + os.sep) for root in allowed
-            ):
-                return None, f"local path outside the allowed image dirs: {ref[:80]}"
-            if Path(path).suffix.lower() not in _OWN_IMAGE_SUFFIXES:
-                return None, f"not an image file (.png, .jpg, .jpeg, .gif, .webp): {ref[:80]}"
-            if not os.path.isfile(path):
+            path = local or _local_media_path(self.bot, ref)
+            if path is None:
                 return None, f"no such file: {ref[:80]}"
             if os.path.getsize(path) > self.MAX_INPUT_BYTES:
                 return None, f"file too large: {ref[:80]}"
             # Off-thread: images run up to MAX_INPUT_BYTES and this is on the
             # event loop, so a blocking read stalls unrelated chats.
-            return await asyncio.to_thread(Path(path).read_bytes), ""
+            data = await asyncio.to_thread(Path(path).read_bytes)
+            if not image_mime(data, "application/octet-stream").startswith("image/"):
+                return None, f"not an image file: {ref[:80]}"
+            return data, ""
         except Exception as e:
             return None, f"could not read {ref[:80]}: {e}"
 
@@ -5809,8 +5802,8 @@ class SeeImageTool(Tool):
             "you can actually see it. Use for Tenor/Giphy/imgur GIF pages, "
             "Discord CDN links, or any direct jpg/png/gif/webp/svg that was not "
             "already attached to the message. Prefer this over fetch_url for "
-            "pictures. Your own generated images load from disk by their "
-            "Permanent URL or Local path. Params: url (required)."
+            "pictures. Local files load from disk: a path, or your own image or "
+            "site URL. Params: url (required)."
         )
 
     @classmethod
@@ -5899,7 +5892,9 @@ class SeeImageTool(Tool):
     async def execute(self, message: Message, url: str | None = None, **kwargs) -> str:
         if not url:
             return "Error: url is required"
-        own = _own_image_path(self.bot, url)
+        own = _local_media_path(self.bot, url)
+        if own is None and "://" not in str(url):
+            return f"Error: no such file: {url}"
         if own is None and not _is_safe_url(url):
             return "Error: URL must use HTTP(S) and include a hostname"
         control = getattr(self.bot, "_control", None) or {}
