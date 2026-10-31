@@ -12735,6 +12735,9 @@ class DameCurieBot(commands.Bot):
                             "tool call(s) not run"
                         )
                         logger.warning("Tool loop stopped: %s", loop_end)
+                    else:
+                        last_model_text = str(response or "")
+                        final_without_calls = True
                     break
                 last_model_text = str(response or "")
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
@@ -13042,6 +13045,9 @@ class DameCurieBot(commands.Bot):
                         f"{len(pending_native)} tool call(s) not run"
                     )
                     logger.warning("Tool loop stopped: %s", loop_end)
+                else:
+                    last_model_text = str(response or "")
+                    final_without_calls = True
             # Terminal silence only for explicit no_response (not TTS).
             if any(
                 tr.startswith("Tool no_response:") and "__NO_RESPONSE__" in tr

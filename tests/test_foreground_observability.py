@@ -377,7 +377,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "cleanup_empty", "blank_followup", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -528,6 +528,13 @@ def test_real_foreground_handler_preserves_producing_call(
                 ProviderResult(" ", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "limit_cleanup_empty":
+            bot._control["max_tool_iterations"] = 1
+            responses = [
+                ProviderResult("", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("<system-reminder>internal</system-reminder>", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "cleanup_empty":
             responses = [ProviderResult("<system-reminder>internal</system-reminder>", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
@@ -603,6 +610,13 @@ def test_real_foreground_handler_preserves_producing_call(
             # A tool round followed by a blank answer is stated, not silent.
             assert [sent.content for sent in message.channel.sent] == [
                 "No reply: my final response was empty.",
+            ]
+            return
+        if mode == "limit_cleanup_empty":
+            # The round limit ends the loop right after a text answer that
+            # cleanup empties; the cause is still stated.
+            assert [sent.content for sent in message.channel.sent] == [
+                "No reply: my final response had no text left after reply cleanup.",
             ]
             return
         if mode == "cleanup_empty":
