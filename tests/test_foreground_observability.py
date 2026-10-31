@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import discord
 import pytest
 
-from bot import DameCurieBot, TokenBudgetTracker
+from bot import DameCurieBot, TokenBudgetTracker, strip_tool_payload_leaks
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from control_defaults import DEFAULT_CONTROL
 from dirac_runtime import _NoticeInput
@@ -294,7 +294,8 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
                 {"role": "assistant", "content": str(response), "tool_calls": paired_calls},
                 *paired_results,
             ]
-        return str(response), results, []
+        # Like the real dispatch, return the text after leak cleanup.
+        return strip_tool_payload_leaks(str(response)), results, []
 
     bot._dispatch_tool_calls = AsyncMock(side_effect=dispatch)
 
@@ -376,7 +377,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "cleanup_empty", "blank_followup", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -521,6 +522,12 @@ def test_real_foreground_handler_preserves_producing_call(
         elif mode == "plain":
             responses = [ProviderResult("plain answer", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "blank_followup":
+            responses = [
+                ProviderResult("", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult(" ", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "cleanup_empty":
             responses = [ProviderResult("<system-reminder>internal</system-reminder>", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
@@ -592,6 +599,12 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        if mode == "blank_followup":
+            # A tool round followed by a blank answer is stated, not silent.
+            assert [sent.content for sent in message.channel.sent] == [
+                "No reply: my final response was empty.",
+            ]
+            return
         if mode == "cleanup_empty":
             # A final response that reply cleanup empties is stated, not silent.
             assert [sent.content for sent in message.channel.sent] == [

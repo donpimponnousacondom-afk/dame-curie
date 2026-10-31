@@ -12717,6 +12717,10 @@ class DameCurieBot(commands.Bot):
             promise_followups = 0
             tool_results: list[str] = []
             loop_end = ""
+            # The provider text of the newest model response, before any
+            # cleanup, so a no-reply notice can name its exact cause.
+            last_model_text = str(response or "")
+            final_without_calls = False
             # Media from tools stays attached for the rest of the turn, in a
             # message after the tool results. The turn media cap (12 items,
             # 20 MiB) bounds tool media; the user's media has its own cap of
@@ -12732,6 +12736,7 @@ class DameCurieBot(commands.Bot):
                         )
                         logger.warning("Tool loop stopped: %s", loop_end)
                     break
+                last_model_text = str(response or "")
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
                     response,
@@ -13025,6 +13030,8 @@ class DameCurieBot(commands.Bot):
                         response = followup or ""
                         followup_turn_ran = True
                     else:
+                        last_model_text = str(followup or "")
+                        final_without_calls = True
                         break
                 finally:
                     await self._release_ai_slot()
@@ -13123,7 +13130,6 @@ class DameCurieBot(commands.Bot):
                 and not (response or "").strip()
             ):
                 return
-            raw_final = str(response or "")
             response = _sanitize_visible_reply(
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
@@ -13135,10 +13141,10 @@ class DameCurieBot(commands.Bot):
             )
             # A final batch of silent tools (react, wait) is a chosen silent
             # ending; only a final response without tool calls must carry text.
-            if not response and not tool_results and not delivered:
+            if not response and (not tool_results or final_without_calls) and not delivered:
                 cause = (
                     "my final response was empty"
-                    if not raw_final.strip()
+                    if not last_model_text.strip()
                     else "my final response had no text left after reply cleanup"
                 )
                 logger.warning("Turn ended with no reply in channel %s: %s", channel_id, cause)
