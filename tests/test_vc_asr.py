@@ -50,7 +50,7 @@ def test_transcribe_riva_wav_sync_parses_results(monkeypatch, tmp_path):
             return SimpleNamespace(
                 results=[
                     SimpleNamespace(
-                        alternatives=[SimpleNamespace(transcript=" hey Maxwell ")]
+                        alternatives=[SimpleNamespace(transcript=" hey Curie ")]
                     )
                 ]
             )
@@ -66,7 +66,7 @@ def test_transcribe_riva_wav_sync_parses_results(monkeypatch, tmp_path):
         lambda **kwargs: SimpleNamespace(**kwargs),
     )
     text = botmod._transcribe_riva_wav_sync(str(wav_path))
-    assert text == "hey Maxwell"
+    assert text == "hey Curie"
     monkeypatch.setattr(botmod.Config, "ASR_RIVA_FUNCTION_ID", "")
     with pytest.raises(RuntimeError, match="ASR_RIVA_FUNCTION_ID is not configured"):
         botmod._transcribe_riva_wav_sync(str(wav_path))

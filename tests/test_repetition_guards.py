@@ -11,7 +11,7 @@ last reply as evidence of what it sounds like and does it again.
 
 from types import SimpleNamespace
 
-from bot import MaxwellBot, _sanitize_visible_reply
+from bot import DameCurieBot, _sanitize_visible_reply
 
 
 # ─── within one reply ────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ def _mine(*contents):
 
 
 def test_a_repeated_opener_is_named_back_at_him():
-    note = MaxwellBot._self_repetition_note(
+    note = DameCurieBot._self_repetition_note(
         _bot(),
         _mine(
             "jajaja bro that is wild",
@@ -100,14 +100,14 @@ def test_a_repeated_opener_is_named_back_at_him():
 def test_laugh_runs_of_different_lengths_count_as_one_tic():
     # "jajaja" and "jajajajaja" are the same habit; an exact-match check on the
     # opener would see two different strings and stay quiet.
-    note = MaxwellBot._self_repetition_note(
+    note = DameCurieBot._self_repetition_note(
         _bot(), _mine("jajaja a", "jajajajaja b", "jaja c")
     )
     assert note
 
 
 def test_varied_openers_say_nothing():
-    note = MaxwellBot._self_repetition_note(
+    note = DameCurieBot._self_repetition_note(
         _bot(), _mine("hi", "there you go", "what is up", "ok then")
     )
     assert note == ""
@@ -118,7 +118,7 @@ def test_other_peoples_messages_are_not_his_habit():
         {"author_is_bot": False, "author_id": "9", "content": "jajaja hey"}
         for _ in range(6)
     ]
-    assert MaxwellBot._self_repetition_note(_bot(), others) == ""
+    assert DameCurieBot._self_repetition_note(_bot(), others) == ""
 
 
 def test_tool_rows_are_not_speech():
@@ -126,17 +126,17 @@ def test_tool_rows_are_not_speech():
         {"author_is_bot": True, "is_tool": True, "content": "Called x with {}"}
         for _ in range(6)
     ]
-    assert MaxwellBot._self_repetition_note(_bot(), rows) == ""
+    assert DameCurieBot._self_repetition_note(_bot(), rows) == ""
 
 
 def test_an_empty_or_short_history_says_nothing():
-    assert MaxwellBot._self_repetition_note(_bot(), []) == ""
-    assert MaxwellBot._self_repetition_note(_bot(), None) == ""
-    assert MaxwellBot._self_repetition_note(_bot(), _mine("jaja a", "jaja b")) == ""
+    assert DameCurieBot._self_repetition_note(_bot(), []) == ""
+    assert DameCurieBot._self_repetition_note(_bot(), None) == ""
+    assert DameCurieBot._self_repetition_note(_bot(), _mine("jaja a", "jaja b")) == ""
 
 
 def test_the_nudge_can_be_switched_off():
-    note = MaxwellBot._self_repetition_note(
+    note = DameCurieBot._self_repetition_note(
         _bot({"self_repetition_note_enabled": False}),
         _mine("jaja a", "jaja b", "jaja c"),
     )
@@ -148,4 +148,4 @@ def test_messages_attributed_by_id_count_too():
     rows = [
         {"author_id": "1", "content": c} for c in ("jaja a", "jaja b", "jaja c")
     ]
-    assert MaxwellBot._self_repetition_note(_bot(self_id=1), rows)
+    assert DameCurieBot._self_repetition_note(_bot(self_id=1), rows)

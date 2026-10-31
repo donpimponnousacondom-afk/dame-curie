@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from utils import (
     iter_message_snapshots,
     message_combined_content,
@@ -120,30 +120,30 @@ def test_silent_image_forward_is_not_an_empty_message():
     assert "pic.jpg" in rendered
 
 
-def test_forward_of_maxwell_is_not_a_reply_ping():
+def test_forward_of_dame_curie_is_not_a_reply_ping():
     bot = SimpleNamespace(user=SimpleNamespace(id=1), _message_snapshots={})
     original = SimpleNamespace(id=88, author=bot.user, content="I said this")
     msg = _forwarded_message(resolved=original)
-    assert MaxwellBot._directly_addressed(bot, msg) is False
-    assert MaxwellBot._reply_parent(bot, msg) is None
-    assert MaxwellBot._reply_meta_from_message(bot, msg) == {}
+    assert DameCurieBot._directly_addressed(bot, msg) is False
+    assert DameCurieBot._reply_parent(bot, msg) is None
+    assert DameCurieBot._reply_meta_from_message(bot, msg) == {}
 
 
-def test_mention_plus_forward_still_addresses_maxwell():
+def test_mention_plus_forward_still_addresses_dame_curie():
     bot = SimpleNamespace(user=SimpleNamespace(id=1), _message_snapshots={})
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._content_without_self_mention = MaxwellBot._content_without_self_mention.__get__(
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._content_without_self_mention = DameCurieBot._content_without_self_mention.__get__(
         bot
     )
     msg = _forwarded_message(mentions=[bot.user], content=f"<@{bot.user.id}>")
-    assert MaxwellBot._directly_addressed(bot, msg) is True
-    assert MaxwellBot._is_bare_ping(bot, msg) is False
+    assert DameCurieBot._directly_addressed(bot, msg) is True
+    assert DameCurieBot._is_bare_ping(bot, msg) is False
 
 
 def test_bare_ping_with_forwarded_image_is_not_empty():
     bot = SimpleNamespace(user=SimpleNamespace(id=1), _message_snapshots={})
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._content_without_self_mention = MaxwellBot._content_without_self_mention.__get__(
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._content_without_self_mention = DameCurieBot._content_without_self_mention.__get__(
         bot
     )
     att = SimpleNamespace(filename="x.png", content_type="image/png")
@@ -152,7 +152,7 @@ def test_bare_ping_with_forwarded_image_is_not_empty():
         mentions=[bot.user],
         snapshot=_snapshot(attachments=[att]),
     )
-    assert MaxwellBot._is_bare_ping(bot, msg) is False
+    assert DameCurieBot._is_bare_ping(bot, msg) is False
 
 
 def test_reply_to_a_forward_still_resolves_the_wrapper():
@@ -166,7 +166,7 @@ def test_reply_to_a_forward_still_resolves_the_wrapper():
         reference=SimpleNamespace(resolved=forwarded, message_id=forwarded.id),
         guild=None,
     )
-    assert MaxwellBot._reply_parent(bot, reply) is forwarded
+    assert DameCurieBot._reply_parent(bot, reply) is forwarded
 
 
 def _media_bot():
@@ -176,17 +176,17 @@ def _media_bot():
     bot = SimpleNamespace(
         _control={"process_images": True, "process_audio": False},
         config=SimpleNamespace(ENABLE_VIDEO_INPUT=True),
-        _payload_attr_list=MaxwellBot._payload_attr_list,
-        _media_item=MaxwellBot._media_item,
+        _payload_attr_list=DameCurieBot._payload_attr_list,
+        _media_item=DameCurieBot._media_item,
         _extract_sticker_emoji_media=_no_stickers,
-        _media_link_refs=MaxwellBot._media_link_refs,
-        _LINK_IMAGE_EXTS=MaxwellBot._LINK_IMAGE_EXTS,
-        _LINK_AUDIO_EXTS=MaxwellBot._LINK_AUDIO_EXTS,
-        _LINK_VIDEO_EXTS=MaxwellBot._LINK_VIDEO_EXTS,
+        _media_link_refs=DameCurieBot._media_link_refs,
+        _LINK_IMAGE_EXTS=DameCurieBot._LINK_IMAGE_EXTS,
+        _LINK_AUDIO_EXTS=DameCurieBot._LINK_AUDIO_EXTS,
+        _LINK_VIDEO_EXTS=DameCurieBot._LINK_VIDEO_EXTS,
         _recent_users={},
     )
-    bot._max_media_bytes = MaxwellBot._max_media_bytes.__get__(bot)
-    bot._read_attachment_bytes = MaxwellBot._read_attachment_bytes.__get__(bot)
+    bot._max_media_bytes = DameCurieBot._max_media_bytes.__get__(bot)
+    bot._read_attachment_bytes = DameCurieBot._read_attachment_bytes.__get__(bot)
     return bot
 
 
@@ -233,7 +233,7 @@ def test_extract_media_reads_forwarded_attachments(
     attachment.url = f"https://cdn.discordapp.com/{filename}"
     attachment.read_count = 0
     msg = _forwarded_message(snapshot=_snapshot(attachments=[attachment]))
-    images, media = asyncio.run(MaxwellBot._extract_media(bot, msg))
+    images, media = asyncio.run(DameCurieBot._extract_media(bot, msg))
     assert bool(images) is accepted
     assert bool(media) is accepted
     assert attachment.read_count == read_count
@@ -276,7 +276,7 @@ def test_extract_media_fetches_snapshot_attachment_without_read(monkeypatch):
         url="https://cdn.discordapp.com/cat.png",
     )
     msg = _forwarded_message(snapshot=_snapshot(attachments=[att]))
-    images, media = asyncio.run(MaxwellBot._extract_media(bot, msg))
+    images, media = asyncio.run(DameCurieBot._extract_media(bot, msg))
     assert images
     assert media[0]["filename"] == "cat.png"
     assert media[0]["source"] == "forward"
@@ -290,10 +290,10 @@ def test_linked_media_and_embeds_come_from_snapshots(monkeypatch):
             embeds=[SimpleNamespace(title="preview", url="https://example.com")],
         )
     )
-    assert MaxwellBot._message_carries_media(bot, msg) is True
-    refs = MaxwellBot._media_link_refs(message_combined_content(msg))
+    assert DameCurieBot._message_carries_media(bot, msg) is True
+    refs = DameCurieBot._media_link_refs(message_combined_content(msg))
     assert refs and refs[0][0].endswith("/x.png")
-    embeds = MaxwellBot._payload_attr_list(msg, "embeds", 8)
+    embeds = DameCurieBot._payload_attr_list(msg, "embeds", 8)
     assert embeds and embeds[0].title == "preview"
 
     archive_url = "https://cdn.example.com/x.zip"
@@ -303,7 +303,7 @@ def test_linked_media_and_embeds_come_from_snapshots(monkeypatch):
     )
     bot._is_gif_page_url = lambda _url: False
     downloaded = asyncio.run(
-        MaxwellBot._download_embed_media(bot, archive_url, "x.zip", 4, 1)
+        DameCurieBot._download_embed_media(bot, archive_url, "x.zip", 4, 1)
     )
     assert downloaded is None
     bot._fetch_public_payload.assert_awaited_once_with(archive_url, 4)
@@ -318,14 +318,14 @@ def test_reply_media_id_sees_snapshot_media_on_parent():
     reply = SimpleNamespace(
         reference=SimpleNamespace(resolved=parent, message_id=parent.id)
     )
-    assert MaxwellBot._reply_media_message_id(reply) == parent.id
+    assert DameCurieBot._reply_media_message_id(reply) == parent.id
 
 
 def test_memory_content_includes_forwarded_attachment_name():
     bot = _media_bot()
     att = SimpleNamespace(filename="secret.png", content_type="image/png")
     msg = _forwarded_message(snapshot=_snapshot(content="peek", attachments=[att]))
-    text = MaxwellBot._message_memory_content(bot, msg)
+    text = DameCurieBot._message_memory_content(bot, msg)
     assert "secret.png" in text
     assert "peek" in text
     assert "forwarded message" in text

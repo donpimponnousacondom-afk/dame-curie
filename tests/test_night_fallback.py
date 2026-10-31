@@ -4,7 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import bot as bot_mod
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 class _FakeProvider:
@@ -17,7 +17,7 @@ class _FakeProvider:
 
 
 def _make_bot():
-    bot = MaxwellBot.__new__(MaxwellBot)
+    bot = DameCurieBot.__new__(DameCurieBot)
     bot._control = {
         "enable_night_fallback": True,
         "night_fallback_start_hour": 22,

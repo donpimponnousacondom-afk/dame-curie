@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from bot import MaxwellBot, _is_unknown_reference_error  # noqa: E402
+from bot import DameCurieBot, _is_unknown_reference_error  # noqa: E402
 
 
 def _http_exc(status, code, message, errors_key=None):
@@ -60,7 +60,7 @@ class _FakeParent:
 
 
 class _StubBot:
-    """Just enough of MaxwellBot to exercise _send_with_slowmode."""
+    """Just enough of DameCurieBot to exercise _send_with_slowmode."""
 
     def __init__(self):
         self.marked = []
@@ -71,7 +71,7 @@ class _StubBot:
     def _mark_bot_sent(self, channel):
         self.marked.append(channel)
 
-    _send_with_slowmode = MaxwellBot._send_with_slowmode
+    _send_with_slowmode = DameCurieBot._send_with_slowmode
 
 
 def test_unknown_reference_detects_the_400_flavour():

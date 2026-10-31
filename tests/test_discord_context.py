@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from tool_schemas import RESULT_TOOL_NAMES, result_contract
 from utils import (
     message_has_visible_payload,
@@ -177,9 +177,9 @@ def test_presence_includes_game_and_voice():
         timed_out_until=None,
     )
     msg = SimpleNamespace(author=author, content="hey")
-    text = MaxwellBot._get_music_context(
+    text = DameCurieBot._get_music_context(
         SimpleNamespace(
-            _format_presence_activity=MaxwellBot._format_presence_activity
+            _format_presence_activity=DameCurieBot._format_presence_activity
         ),
         msg,
     )

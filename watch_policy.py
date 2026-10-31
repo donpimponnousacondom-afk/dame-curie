@@ -1,4 +1,4 @@
-"""When Maxwell should speak up, and when a message is worth remembering.
+"""When Dame Curie should speak up, and when a message is worth remembering.
 
 Two decisions used to be made by fixed constants and a list of trigger
 phrases:
@@ -252,7 +252,7 @@ def reply_pressure(signal: AddressSignal, state: WatchState, now: float,
     # about in the silent direction.
     if signal.reply_to_other:
         score -= 0.45
-    # Naming him no longer rescues this: "maxwell is why @alice can't get in"
+    # Naming him no longer rescues this: "curie is why @alice can't get in"
     # is a line about him, said to Alice. Being talked about is the single
     # most common way he used to butt into a conversation he wasn't in.
     if signal.mentions_other:

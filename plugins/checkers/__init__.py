@@ -10,7 +10,7 @@ from .tools import (
 
 
 def setup(bot):
-    """Register tools into Maxwell's plugin ecosystem."""
+    """Register tools into Dame Curie's plugin ecosystem."""
     return [
         CheckersStartTool(bot),
         CheckersMoveTool(bot),

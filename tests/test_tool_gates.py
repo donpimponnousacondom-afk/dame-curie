@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import bot_tools
-from bot import MaxwellBot
+from bot import DameCurieBot
 from bot_tools import FetchUrlTool, ShellTool
 
 
@@ -55,7 +55,7 @@ def test_dispatch_respects_shell_actor_after_fetch(
         _control={},
     )
     bot.tools.update({"fetch_url": FetchUrlTool(bot), "shell": ShellTool(bot)})
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
     message = SimpleNamespace(
         author=SimpleNamespace(id=actor_id),
         guild=None,
@@ -64,7 +64,7 @@ def test_dispatch_respects_shell_actor_after_fetch(
     compatible = set(bot.tools)
 
     async def dispatch() -> tuple[str, str]:
-        fetched_result = await MaxwellBot._execute_tool_by_name(
+        fetched_result = await DameCurieBot._execute_tool_by_name(
             bot,
             message,
             "fetch_url",
@@ -72,7 +72,7 @@ def test_dispatch_respects_shell_actor_after_fetch(
             disabled=set(),
             compatible=compatible,
         )
-        shell_result = await MaxwellBot._execute_tool_by_name(
+        shell_result = await DameCurieBot._execute_tool_by_name(
             bot,
             message,
             tool_name,
@@ -85,7 +85,7 @@ def test_dispatch_respects_shell_actor_after_fetch(
     fetch_result, shell_result = asyncio.run(dispatch())
     assert fetch_result == "Tool fetch_url: synthetic page text"
     assert fetched == [("https://example.test/reference", FetchUrlTool.MAX_BYTES)]
-    assert ("shell" in MaxwellBot._turn_tool_names(bot, "discord", message)) is allowed
+    assert ("shell" in DameCurieBot._turn_tool_names(bot, "discord", message)) is allowed
     if allowed:
         assert shell_result == "Tool shell: synthetic shell output"
         assert shell_commands == ["printf synthetic"]
@@ -98,4 +98,4 @@ def test_dispatch_respects_shell_actor_after_fetch(
 
 
 def test_ordinary_chat_still_travels_light():
-    assert not MaxwellBot._ACTION_TOOL_HINT_RE.search("lol yeah exactly")
+    assert not DameCurieBot._ACTION_TOOL_HINT_RE.search("lol yeah exactly")

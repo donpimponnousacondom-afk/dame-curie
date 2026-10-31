@@ -9,7 +9,7 @@ import pytest
 
 import bot as bot_module
 import error_reporting
-from bot import MaxwellBot
+from bot import DameCurieBot
 from bot_tools import ToolFailure
 from error_reporting import PUBLIC_ERROR_TEXT, IncidentLoggingHandler, configure_incident_store
 from operator_commands import (
@@ -59,7 +59,7 @@ def operator_case(tmp_path, monkeypatch):
         user=SimpleNamespace(id=42, bot=False), command_prefix="!", bot_name="Curie",
         _control={"error_replies": True, "error_details": True, "footer_enabled": True},
         _is_admin=lambda uid: uid == 7, _forward_locks={}, _forward_delete_ids=set(),
-        _split_response=MaxwellBot._split_response, tools={},
+        _split_response=DameCurieBot._split_response, tools={},
         memory={"messages": ["sacred"], "embeddings": [1, 2, 3]},
         rem_store={"events": ["sacred"]}, _media_context={"23": ["sacred"]},
         tool_history=["sacred"], _message_snapshots={"existing": "sacred"},
@@ -83,8 +83,8 @@ def own_message(bot, channel, message_id, *, content="ordinary own message"):
 
     async def delete():
         channel.messages.remove(message)
-        await MaxwellBot.on_message_delete(bot, message)
-        await MaxwellBot.on_message_delete(bot, message)
+        await DameCurieBot.on_message_delete(bot, message)
+        await DameCurieBot.on_message_delete(bot, message)
 
     message.delete = AsyncMock(side_effect=delete)
     return message
@@ -95,7 +95,7 @@ def test_error_always_uses_requesting_admin_dm_with_fences_and_no_footer(operato
     bot, message, dm, store = operator_case
     message.guild = guild
     incident_id = store.record("provider", "failed @everyone", details="body ```embedded``` synthetic-credential END")
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert not message.channel.sent
     message.author.create_dm.assert_awaited_once()
     content = dm.sent[0]["content"]
@@ -116,7 +116,7 @@ def test_guild_administrator_is_not_implicitly_bot_admin(operator_case, command)
     message.author.guild_permissions = SimpleNamespace(administrator=True)
     message.content = command
     store.record("private", "never disclose")
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert [item["content"] for item in message.channel.sent] == ["not authorized"]
     assert not dm.sent and not message.channel.history_calls
     message.author.create_dm.assert_not_awaited()
@@ -125,7 +125,7 @@ def test_guild_administrator_is_not_implicitly_bot_admin(operator_case, command)
 def test_bare_error_keeps_roots_requested_usage_text_private(operator_case):
     bot, message, dm, store = operator_case
     message.content = "!error"
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert not message.channel.sent
     text = dm.sent[0]["content"]
     assert text == (
@@ -256,14 +256,14 @@ def test_marked_own_reports_skip_create_edit_raw_edit_and_memory(operator_case):
     bot.rem_log = SimpleNamespace(record=AsyncMock())
 
     async def run():
-        await MaxwellBot.on_message(bot, report)
-        await MaxwellBot.on_message_edit(bot, report, report)
-        await MaxwellBot.on_raw_message_edit(bot, SimpleNamespace(cached_message=report))
+        await DameCurieBot.on_message(bot, report)
+        await DameCurieBot.on_message_edit(bot, report, report)
+        await DameCurieBot.on_raw_message_edit(bot, SimpleNamespace(cached_message=report))
         bot._message_from_raw_update.assert_not_awaited()
-        await MaxwellBot.on_raw_message_edit(bot, SimpleNamespace(cached_message=None))
-        await MaxwellBot._refresh_edited_message(bot, report)
-        await MaxwellBot.add_message_to_memory(bot, "71", {"content": "private"}, report)
-        await MaxwellBot._record_rem_event(bot, report, "assistant", "private")
+        await DameCurieBot.on_raw_message_edit(bot, SimpleNamespace(cached_message=None))
+        await DameCurieBot._refresh_edited_message(bot, report)
+        await DameCurieBot.add_message_to_memory(bot, "71", {"content": "private"}, report)
+        await DameCurieBot._record_rem_event(bot, report, "assistant", "private")
 
     asyncio.run(run())
     bot._dispatch_plugin_event.assert_not_called()
@@ -288,10 +288,10 @@ def test_operator_command_ingress_bypasses_plugins_and_memory_but_dispatches(ope
     bot.rem_log = SimpleNamespace(record=AsyncMock())
 
     async def run():
-        await MaxwellBot.on_message(bot, message)
-        await MaxwellBot.on_message_edit(bot, message, message)
-        await MaxwellBot.add_message_to_memory(bot, "23", {"content": content}, message)
-        await MaxwellBot._record_rem_event(bot, message, "user", content)
+        await DameCurieBot.on_message(bot, message)
+        await DameCurieBot.on_message_edit(bot, message, message)
+        await DameCurieBot.add_message_to_memory(bot, "23", {"content": content}, message)
+        await DameCurieBot._record_rem_event(bot, message, "user", content)
 
     asyncio.run(run())
     bot._dispatch_plugin_event.assert_not_called()
@@ -330,7 +330,7 @@ def test_forward_deletes_only_own_prior_posts_and_preserves_all_memory(operator_
     other = SimpleNamespace(id=90, author=SimpleNamespace(id=8, bot=True), channel=message.channel)
     foreign = own_message(bot, dm, 95)
     message.channel.messages = [old, first, second, future, other, message, foreign]
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     first.delete.assert_awaited_once()
     second.delete.assert_awaited_once()
     old.delete.assert_not_awaited()
@@ -341,7 +341,7 @@ def test_forward_deletes_only_own_prior_posts_and_preserves_all_memory(operator_
     assert plugin.call_count == 0
     assert state == {name: getattr(bot, name) for name in state}
     assert state_path.read_bytes() == state_before
-    asyncio.run(MaxwellBot.on_message_delete(bot, other))
+    asyncio.run(DameCurieBot.on_message_delete(bot, other))
     plugin.assert_called_once_with("on_message_delete", other)
 
 
@@ -421,7 +421,7 @@ def test_forward_actual_delete_failure_is_private_and_public_reply_generic(opera
     first, second = own_message(bot, message.channel, 90), own_message(bot, message.channel, 80)
     first.delete.side_effect = RuntimeError("synthetic detailed deletion failure")
     message.channel.messages = [first, second]
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert bot._forward_delete_ids == {90}
     second.delete.assert_not_awaited()
     assert [item["content"] for item in message.channel.sent] == [PUBLIC_ERROR_TEXT]
@@ -439,7 +439,7 @@ def test_forward_partial_failure_captures_batch_progress_without_message_bodies(
     )
     selected[2].delete.side_effect = RuntimeError("synthetic partial failure")
     message.channel.messages = list(selected)
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     incident = store.get(0)
     assert incident.source == "discord.forward"
     for field in (
@@ -463,7 +463,7 @@ def test_forward_history_failure_captures_selection_phase_before_deletion(operat
         raise RuntimeError("synthetic history failure")
 
     message.channel.history = history
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     details = store.get(0).details
     assert "requested_count: 3" in details and "phase: history" in details
     assert "selected_ids: [90]" in details and "completed_ids: []" in details
@@ -480,7 +480,7 @@ def test_forward_cancellation_propagates_without_an_error_incident(operator_case
     candidate.delete.side_effect = asyncio.CancelledError()
     message.channel.messages = [candidate]
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(MaxwellBot._handle_command(bot, message))
+        asyncio.run(DameCurieBot._handle_command(bot, message))
     assert not message.channel.sent
     assert store.get(0) is None
     assert bot._forward_delete_ids == {90}
@@ -502,7 +502,7 @@ def test_guide_projects_only_structured_failures_not_arbitrary_text(operator_cas
     text = "Error: this is intentional quoted model/log prose"
     result = ToolFailure(text, None) if structured else text
     bot.tools["guide"] = SimpleNamespace(execute=AsyncMock(return_value=result))
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert message.channel.sent[0]["content"] == (PUBLIC_ERROR_TEXT if structured else text)
     assert str(result) == text
 
@@ -511,7 +511,7 @@ def test_plugin_failure_projects_only_typed_result(operator_case):
     bot, message, dm, store = operator_case
     message.content = "!plugin reload"
     bot.plugin_manager = SimpleNamespace(reload_plugins=Mock(return_value=PluginReloadFailure("private reload failure")))
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert message.channel.sent[0]["content"] == PUBLIC_ERROR_TEXT
 
 
@@ -519,7 +519,7 @@ def test_help_is_bounded_and_lists_operator_commands(operator_case):
     bot, message, dm, store = operator_case
     bot.command_prefix = "?"
     message.content = "?help"
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert all(len(item["content"]) <= 2000 for item in message.channel.sent)
     combined = "".join(item["content"] for item in message.channel.sent)
     assert "?error 0..9" in combined and "?forward N" in combined
@@ -528,7 +528,7 @@ def test_help_is_bounded_and_lists_operator_commands(operator_case):
     message.channel.sent.clear()
     message.content = "?job"
     bot.bg_jobs = SimpleNamespace(get=lambda _job_id: None)
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert message.channel.sent[0]["content"] == "usage: `?job <id>` or `?job cancel <id>`"
 
 
@@ -540,7 +540,7 @@ def test_job_status_does_not_echo_stored_failure_progress(operator_case):
         requested_route="requested main, model=configured",
     )
     bot.bg_jobs = SimpleNamespace(get=lambda job_id: job)
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert "PRIVATE JOB PROGRESS" not in message.channel.sent[0]["content"]
 
 
@@ -549,11 +549,11 @@ def test_rem_runtime_failure_is_generic_but_already_running_remains_validation(o
     bot, message, dm, store = operator_case
     bot._control["error_replies"] = error_replies
     bot._run_rem_once_guarded = AsyncMock(return_value=(False, "PRIVATE REM FAILURE", None))
-    asyncio.run(MaxwellBot._handle_rem_command(bot, message, "now"))
+    asyncio.run(DameCurieBot._handle_rem_command(bot, message, "now"))
     assert [item["content"] for item in message.channel.sent] == ([PUBLIC_ERROR_TEXT] if error_replies else [])
     message.channel.sent.clear()
     bot._run_rem_once_guarded.return_value = (False, "REM is already running", None)
-    asyncio.run(MaxwellBot._handle_rem_command(bot, message, "now"))
+    asyncio.run(DameCurieBot._handle_rem_command(bot, message, "now"))
     assert [item["content"] for item in message.channel.sent] == ["REM not started: REM is already running"]
 
 
@@ -562,6 +562,6 @@ def test_vc_real_failures_use_generic_public_projection(operator_case, monkeypat
     bot.config = SimpleNamespace(ENABLE_VC=True)
     monkeypatch.setattr(bot_module, "voice_recv", None)
     monkeypatch.setattr(bot_module, "_voice_recv_import_error", ImportError("private VC import error"))
-    asyncio.run(MaxwellBot._handle_vc_command(bot, message, "join"))
+    asyncio.run(DameCurieBot._handle_vc_command(bot, message, "join"))
     assert message.channel.sent[-1]["content"] == PUBLIC_ERROR_TEXT
     assert "private VC import error" in store.get(0).traceback

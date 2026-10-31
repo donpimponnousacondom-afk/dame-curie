@@ -100,7 +100,7 @@ STOP_NAMES = frozenset(
         "for",
         "with",
         "from",
-        "maxwell",
+        "curie",
         "user",
         "site",
         "bot",

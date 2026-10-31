@@ -1,6 +1,6 @@
 """Per-server nickname is injected into the prompt each turn.
 
-Maxwell's core personality still says he is Maxwell, but the live Discord
+Curie's core personality still says he is Curie, but the live Discord
 guild nick (or account name in DMs) must appear in the per-turn context so
 he knows what people in that room actually call him. The nick is read from
 the guild member object every call - not cached on the bot.
@@ -10,7 +10,7 @@ import asyncio
 from types import SimpleNamespace
 
 from bot import (
-    MaxwellBot,
+    DameCurieBot,
     ToolCircuitBreaker,
     _live_account_name,
     _live_self_identity_line,
@@ -42,28 +42,28 @@ def _bot(memory=None):
             "music_context_enabled": False,
             "tools_enabled": False,
             "vc_response_mode": "always",
-            "vc_wake_words": ["maxwell"],
+            "vc_wake_words": ["curie"],
         },
         _drugged_until={},
         _guild_emojis={},
         _recent_users={},
         _conversation_watch={},
         _tool_system_prompt=lambda *args, **kwargs: "",
-        bot_name="Maxwell",
+        bot_name="Curie",
         memory=memory or FakeMemory(),
-        user=SimpleNamespace(display_name="Maxwell", name="maxwell", id=1),
+        user=SimpleNamespace(display_name="Curie", name="curie", id=1),
     )
-    bot._reply_parent = MaxwellBot._reply_parent.__get__(bot)
-    bot._replying_to_own_message = MaxwellBot._replying_to_own_message.__get__(bot)
-    bot._render_reply_parent = MaxwellBot._render_reply_parent.__get__(bot)
-    bot._author_is_self = MaxwellBot._author_is_self.__get__(bot)
-    bot._iter_resolved_reply_chain = MaxwellBot._iter_resolved_reply_chain.__get__(bot)
-    bot._reply_parent_context_lines = MaxwellBot._reply_parent_context_lines.__get__(
+    bot._reply_parent = DameCurieBot._reply_parent.__get__(bot)
+    bot._replying_to_own_message = DameCurieBot._replying_to_own_message.__get__(bot)
+    bot._render_reply_parent = DameCurieBot._render_reply_parent.__get__(bot)
+    bot._author_is_self = DameCurieBot._author_is_self.__get__(bot)
+    bot._iter_resolved_reply_chain = DameCurieBot._iter_resolved_reply_chain.__get__(bot)
+    bot._reply_parent_context_lines = DameCurieBot._reply_parent_context_lines.__get__(
         bot
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._conversation_watch_active = MaxwellBot._conversation_watch_active.__get__(bot)
-    bot._is_short_live_turn = MaxwellBot._is_short_live_turn.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._conversation_watch_active = DameCurieBot._conversation_watch_active.__get__(bot)
+    bot._is_short_live_turn = DameCurieBot._is_short_live_turn.__get__(bot)
     bot._get_personality = lambda: "test"
     bot._jailbreak_enabled = lambda gid: False
     return bot
@@ -80,9 +80,9 @@ def _message(*, guild=None):
     )
 
 
-def _guild(*, nick=None, display_name="Maxwell", me=True):
+def _guild(*, nick=None, display_name="Curie", me=True):
     member = SimpleNamespace(
-        nick=nick, display_name=display_name, name="maxwell", id=1
+        nick=nick, display_name=display_name, name="curie", id=1
     )
     if me:
         return SimpleNamespace(id=99, name="Cool Guild", me=member)
@@ -101,43 +101,43 @@ def _volatile(messages):
 
 
 def test_live_self_name_prefers_guild_nick():
-    user = SimpleNamespace(display_name="Maxwell", name="maxwell", id=1)
+    user = SimpleNamespace(display_name="Curie", name="curie", id=1)
     guild = _guild(nick="Sparky", display_name="Sparky")
-    assert _live_self_name(user, guild, "Maxwell") == ("Sparky", "nick")
-    line = _live_self_identity_line(user, guild, "Maxwell")
+    assert _live_self_name(user, guild, "Curie") == ("Sparky", "nick")
+    line = _live_self_identity_line(user, guild, "Curie")
     assert "Your name here: Sparky" in line
     assert "server nickname" in line
-    assert "Account name: Maxwell" in line
+    assert "Account name: Curie" in line
 
 
 def test_live_self_name_falls_back_to_account_when_no_nick():
-    user = SimpleNamespace(display_name="Maxwell", name="maxwell", id=1)
-    guild = _guild(nick=None, display_name="Maxwell")
-    assert _live_self_name(user, guild, "Maxwell") == ("Maxwell", "account")
-    line = _live_self_identity_line(user, guild, "Maxwell")
-    assert "Your name here: Maxwell" in line
+    user = SimpleNamespace(display_name="Curie", name="curie", id=1)
+    guild = _guild(nick=None, display_name="Curie")
+    assert _live_self_name(user, guild, "Curie") == ("Curie", "account")
+    line = _live_self_identity_line(user, guild, "Curie")
+    assert "Your name here: Curie" in line
     assert "no server nickname" in line
 
 
 def test_live_self_name_treats_blank_nick_as_missing():
-    user = SimpleNamespace(display_name="Maxwell", name="maxwell", id=1)
-    guild = _guild(nick="   ", display_name="Maxwell")
-    assert _live_self_name(user, guild, "Maxwell") == ("Maxwell", "account")
+    user = SimpleNamespace(display_name="Curie", name="curie", id=1)
+    guild = _guild(nick="   ", display_name="Curie")
+    assert _live_self_name(user, guild, "Curie") == ("Curie", "account")
 
 
 def test_live_self_name_uses_get_member_when_me_missing():
-    user = SimpleNamespace(display_name="Maxwell", name="maxwell", id=1)
+    user = SimpleNamespace(display_name="Curie", name="curie", id=1)
     guild = _guild(nick="Sparky", display_name="Sparky", me=False)
-    assert _live_self_name(user, guild, "Maxwell") == ("Sparky", "nick")
+    assert _live_self_name(user, guild, "Curie") == ("Sparky", "nick")
 
 
 def test_live_self_name_dm_uses_account_name():
-    user = SimpleNamespace(display_name="Maxwell", name="maxwell", id=1)
-    assert _live_self_name(user, None, "Bot") == ("Maxwell", "account")
+    user = SimpleNamespace(display_name="Curie", name="curie", id=1)
+    assert _live_self_name(user, None, "Bot") == ("Curie", "account")
     line = _live_self_identity_line(user, None, "Bot")
-    assert "Your name here: Maxwell" in line
+    assert "Your name here: Curie" in line
     assert "no server nickname" in line
-    assert _live_account_name(None, "Maxwell") == "Maxwell"
+    assert _live_account_name(None, "Curie") == "Curie"
 
 
 def test_build_messages_injects_guild_nick_into_dynamic_context():
@@ -145,7 +145,7 @@ def test_build_messages_injects_guild_nick_into_dynamic_context():
     message = _message(guild=_guild(nick="Sparky", display_name="Sparky"))
 
     async def run():
-        return await MaxwellBot._build_messages(bot, message, "latest")
+        return await DameCurieBot._build_messages(bot, message, "latest")
 
     messages = asyncio.run(run())
     static = messages[0]["content"]
@@ -160,16 +160,16 @@ def test_build_messages_injects_guild_nick_into_dynamic_context():
     assert "a real person" not in static
 
 
-def test_build_messages_guild_without_nick_still_says_maxwell():
+def test_build_messages_guild_without_nick_still_says_curie():
     bot = _bot()
-    message = _message(guild=_guild(nick=None, display_name="Maxwell"))
+    message = _message(guild=_guild(nick=None, display_name="Curie"))
 
     async def run():
-        return await MaxwellBot._build_messages(bot, message, "hello")
+        return await DameCurieBot._build_messages(bot, message, "hello")
 
     messages = asyncio.run(run())
     volatile = _volatile(messages)
-    assert "Your name here: Maxwell" in volatile
+    assert "Your name here: Curie" in volatile
     assert "no server nickname" in volatile
 
 
@@ -178,11 +178,11 @@ def test_build_messages_dm_uses_account_name():
     message = _message(guild=None)
 
     async def run():
-        return await MaxwellBot._build_messages(bot, message, "hey")
+        return await DameCurieBot._build_messages(bot, message, "hey")
 
     messages = asyncio.run(run())
     volatile = _volatile(messages)
-    assert "Your name here: Maxwell" in volatile
+    assert "Your name here: Curie" in volatile
     assert "no server nickname" in volatile
     assert "Your Discord access" not in volatile
 
@@ -193,7 +193,7 @@ def test_build_messages_author_without_bot_flag():
     del message.author.bot
 
     async def run():
-        return await MaxwellBot._build_messages(bot, message, "hey")
+        return await DameCurieBot._build_messages(bot, message, "hey")
 
     messages = asyncio.run(run())
     assert messages
@@ -201,13 +201,13 @@ def test_build_messages_author_without_bot_flag():
 
 def test_build_messages_reads_live_nick_each_turn():
     """A mid-session nick change must show up on the next _build_messages call."""
-    me = SimpleNamespace(nick="Sparky", display_name="Sparky", name="maxwell", id=1)
+    me = SimpleNamespace(nick="Sparky", display_name="Sparky", name="curie", id=1)
     guild = SimpleNamespace(id=99, name="Cool Guild", me=me)
     bot = _bot()
     message = _message(guild=guild)
 
     async def run():
-        return await MaxwellBot._build_messages(bot, message, "latest")
+        return await DameCurieBot._build_messages(bot, message, "latest")
 
     first = _volatile(asyncio.run(run()))
     assert "Your name here: Sparky" in first
@@ -219,16 +219,16 @@ def test_build_messages_reads_live_nick_each_turn():
 
 
 def test_different_guilds_get_different_names():
-    user = SimpleNamespace(display_name="Maxwell", name="maxwell", id=1)
+    user = SimpleNamespace(display_name="Curie", name="curie", id=1)
     a = _live_self_identity_line(
-        user, _guild(nick="Sparky", display_name="Sparky"), "Maxwell"
+        user, _guild(nick="Sparky", display_name="Sparky"), "Curie"
     )
     other = SimpleNamespace(
         id=100,
         name="Other Guild",
-        me=SimpleNamespace(nick=None, display_name="Maxwell", name="maxwell", id=1),
+        me=SimpleNamespace(nick=None, display_name="Curie", name="curie", id=1),
     )
-    b = _live_self_identity_line(user, other, "Maxwell")
+    b = _live_self_identity_line(user, other, "Curie")
     assert "Sparky" in a and "Cool Guild" in a
     assert "Sparky" not in b
     assert "Other Guild" in b
@@ -238,7 +238,7 @@ def test_vc_prompt_includes_guild_nick():
     bot = _bot()
     guild = _guild(nick="Sparky", display_name="Sparky")
     user = SimpleNamespace(display_name="alice")
-    prompt = MaxwellBot._vc_build_system_prompt(bot, user, guild, [])
+    prompt = DameCurieBot._vc_build_system_prompt(bot, user, guild, [])
     assert "Your name here: Sparky" in prompt
     assert "server nickname" in prompt
 
@@ -248,8 +248,8 @@ def test_vc_addressed_mode_wakes_on_server_nick():
     bot._control["vc_response_mode"] = "addressed"
     guild = _guild(nick="Sparky", display_name="Sparky")
     user = SimpleNamespace(display_name="alice")
-    prompt = MaxwellBot._vc_build_system_prompt(bot, user, guild, [])
+    prompt = DameCurieBot._vc_build_system_prompt(bot, user, guild, [])
     assert "talking to you (Sparky)" in prompt
     assert "Sparky" in prompt
     # Stored wake-word list is not mutated.
-    assert bot._control["vc_wake_words"] == ["maxwell"]
+    assert bot._control["vc_wake_words"] == ["curie"]

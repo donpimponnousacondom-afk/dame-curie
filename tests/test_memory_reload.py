@@ -90,7 +90,7 @@ def test_channel_memory_clear(tmp_path):
         })
         await mgr.add_to_channel_memory("chan1", {
             "message_id": "b1",
-            "author": "Maxwell",
+            "author": "Curie",
             "author_id": "999",
             "author_is_bot": True,
             "content": "bot line that is long enough to store",

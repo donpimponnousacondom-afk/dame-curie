@@ -11,7 +11,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from bot import MaxwellBot, ToolCircuitBreaker, _format_context_timestamp
+from bot import DameCurieBot, ToolCircuitBreaker, _format_context_timestamp
 from tool_schemas import trim_tool_tail
 
 
@@ -44,21 +44,21 @@ def _bot(memory):
         _recent_users={},
         _conversation_watch={},
         _tool_system_prompt=lambda *args, **kwargs: "",
-        bot_name="Maxwell",
+        bot_name="Curie",
         memory=memory,
-        user=SimpleNamespace(display_name="Maxwell", id=1),
+        user=SimpleNamespace(display_name="Curie", id=1),
     )
-    bot._reply_parent = MaxwellBot._reply_parent.__get__(bot)
-    bot._replying_to_own_message = MaxwellBot._replying_to_own_message.__get__(bot)
-    bot._render_reply_parent = MaxwellBot._render_reply_parent.__get__(bot)
-    bot._author_is_self = MaxwellBot._author_is_self.__get__(bot)
-    bot._iter_resolved_reply_chain = MaxwellBot._iter_resolved_reply_chain.__get__(bot)
-    bot._reply_parent_context_lines = MaxwellBot._reply_parent_context_lines.__get__(
+    bot._reply_parent = DameCurieBot._reply_parent.__get__(bot)
+    bot._replying_to_own_message = DameCurieBot._replying_to_own_message.__get__(bot)
+    bot._render_reply_parent = DameCurieBot._render_reply_parent.__get__(bot)
+    bot._author_is_self = DameCurieBot._author_is_self.__get__(bot)
+    bot._iter_resolved_reply_chain = DameCurieBot._iter_resolved_reply_chain.__get__(bot)
+    bot._reply_parent_context_lines = DameCurieBot._reply_parent_context_lines.__get__(
         bot
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._conversation_watch_active = MaxwellBot._conversation_watch_active.__get__(bot)
-    bot._is_short_live_turn = MaxwellBot._is_short_live_turn.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._conversation_watch_active = DameCurieBot._conversation_watch_active.__get__(bot)
+    bot._is_short_live_turn = DameCurieBot._is_short_live_turn.__get__(bot)
     return bot
 
 
@@ -95,15 +95,15 @@ def test_static_prefix_and_transcript_are_identical_across_turns():
     memory = FakeMemory(
         [
             {"author": "alice", "author_id": "456", "content": "hi", "timestamp": old},
-            {"author": "Maxwell", "content": "hey", "timestamp": old},
+            {"author": "Curie", "content": "hey", "timestamp": old},
         ]
     )
     bot = _bot(memory)
 
     async def run():
         return (
-            await MaxwellBot._build_messages(bot, _message(), "latest"),
-            await MaxwellBot._build_messages(bot, _message(), "latest"),
+            await DameCurieBot._build_messages(bot, _message(), "latest"),
+            await DameCurieBot._build_messages(bot, _message(), "latest"),
         )
 
     first, second = asyncio.run(run())
@@ -123,7 +123,7 @@ def test_volatile_block_sits_after_the_transcript():
     )
 
     async def run():
-        return await MaxwellBot._build_messages(_bot(memory), _message(), "latest")
+        return await DameCurieBot._build_messages(_bot(memory), _message(), "latest")
 
     messages = asyncio.run(run())
     # The per-turn user/time line is what changes every call; it must not be in
@@ -190,7 +190,7 @@ def test_trim_conversation_tail_enforces_char_budget():
         ]
 
     trimmed = trim_tool_tail(tail)
-    used = sum(MaxwellBot._message_content_chars(m) for m in trimmed)
+    used = sum(DameCurieBot._message_content_chars(m) for m in trimmed)
     assert used <= 96_000
     # The newest round always survives, even on its own.
     assert trimmed[-1]["tool_call_id"] == "call_9"
@@ -224,14 +224,14 @@ def test_trim_tool_tail_compacts_older_tool_results():
 
 def test_is_connected_uses_the_gateway_websocket():
     bot = SimpleNamespace(is_closed=lambda: False, ws=SimpleNamespace(open=True))
-    assert MaxwellBot.is_connected(bot) is True
+    assert DameCurieBot.is_connected(bot) is True
     bot.ws.open = False
-    assert MaxwellBot.is_connected(bot) is False
+    assert DameCurieBot.is_connected(bot) is False
     bot.ws = None
-    assert MaxwellBot.is_connected(bot) is False
+    assert DameCurieBot.is_connected(bot) is False
     bot.is_closed = lambda: True
     bot.ws = SimpleNamespace(open=True)
-    assert MaxwellBot.is_connected(bot) is False
+    assert DameCurieBot.is_connected(bot) is False
 
 
 def test_message_content_chars_counts_tool_call_arguments():
@@ -240,7 +240,7 @@ def test_message_content_chars_counts_tool_call_arguments():
         "content": None,
         "tool_calls": [{"function": {"name": "create_site", "arguments": "y" * 5_000}}],
     }
-    assert MaxwellBot._message_content_chars(msg) >= 5_000
+    assert DameCurieBot._message_content_chars(msg) >= 5_000
 
 
 def test_history_window_start_holds_still_when_a_new_message_arrives():
@@ -261,7 +261,7 @@ def test_history_window_start_holds_still_when_a_new_message_arrives():
 
     def first_line():
         async def run():
-            messages = await MaxwellBot._build_messages(bot, _message(), "latest")
+            messages = await DameCurieBot._build_messages(bot, _message(), "latest")
             block = next(
                 m for m in messages if "<previous_conversation>" in str(m["content"])
             )

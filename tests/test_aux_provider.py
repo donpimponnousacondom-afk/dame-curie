@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import job_routing
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 class _FakeProvider:
@@ -48,7 +48,7 @@ def _make_bot(monkeypatch, *, control=None, aux_env=None, auto_env=None):
         "OPENAI_EMPTY_RESPONSE_RETRIES": None,
         "ENABLE_AUDIO_INPUT": False,
     }
-    inst = MaxwellBot.__new__(MaxwellBot)
+    inst = DameCurieBot.__new__(DameCurieBot)
     inst.config = SimpleNamespace(**cfg)
     inst._control = control or {}
     inst.ai_provider = _FakeProvider("main")

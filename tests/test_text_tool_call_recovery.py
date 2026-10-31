@@ -1,6 +1,6 @@
 """Recovery of tool calls a model wrote as visible text instead of tool_calls.
 
-Maxwell only ever advertises native ``tools=``, but models keep answering in
+Curie only ever advertises native ``tools=``, but models keep answering in
 their own text dialect anyway. Before recovery both outcomes were wrong: a
 dialect the scrubber recognized was deleted (the reply vanished and the turn
 went silent) and one it did not recognize was posted to the channel as a raw
@@ -12,7 +12,7 @@ cases that must NOT be mistaken for a tool call.
 """
 
 import json
-from bot import KNOWN_TOOL_NAMES, MaxwellBot
+from bot import KNOWN_TOOL_NAMES, DameCurieBot
 from tool_schemas import recover_text_tool_calls
 
 
@@ -91,11 +91,11 @@ def test_recovers_bare_json_call_and_keeps_surrounding_prose():
 def test_recovers_harmony_channel_call_without_leaving_markers():
     calls, leftover = _recover(
         "<|start|>assistant<|channel|>commentary to=functions.web_search "
-        '<|constrain|>json<|message|>{"explanation":"current info","query":"maxwell",'
+        '<|constrain|>json<|message|>{"explanation":"current info","query":"curie",'
         '"max_results":"5"}'
     )
     assert calls == [
-        ("web_search", {"explanation": "current info", "query": "maxwell", "max_results": 5})
+        ("web_search", {"explanation": "current info", "query": "curie", "max_results": 5})
     ]
     assert leftover == ""
 
@@ -319,7 +319,7 @@ class _Bot:
     def __init__(self, tools_enabled=True):
         self._control = {"tools_enabled": tools_enabled}
 
-    _recover_text_tool_calls = MaxwellBot._recover_text_tool_calls
+    _recover_text_tool_calls = DameCurieBot._recover_text_tool_calls
 
 
 def test_recovery_returns_provider_shaped_calls():

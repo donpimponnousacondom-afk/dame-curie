@@ -1,6 +1,6 @@
-"""New-channel / ticket-channel detection for Maxwell.
+"""New-channel / ticket-channel detection for Dame Curie.
 
-Maxwell watches for channels being created. Two things matter:
+Dame Curie watches for channels being created. Two things matter:
 
 * A brand-new **text** channel is a fresh room he has never seen. To be useful
   there he has to notice it - which is what posting a self-authored opening
@@ -91,8 +91,8 @@ def channel_kind(name: str) -> str:
     return "ticket" if is_ticket_channel(name) else "normal"
 
 
-def greeting_for(name: str, bot_name: str = "maxwell") -> str:
-    """The opening line Maxwell posts into a brand-new ticket channel.
+def greeting_for(name: str, bot_name: str = "Dame Curie") -> str:
+    """The opening line Dame Curie posts into a brand-new ticket channel.
 
     Short and calm. The room is brand new, so this is both a presence marker
     and a promise to help - not an essay.

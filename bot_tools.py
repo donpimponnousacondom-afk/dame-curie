@@ -7573,7 +7573,7 @@ class UpdateBasePersonalityTool(Tool):
     """Rewrite the global base_personality that ships in every prompt.
 
     This is what the model reads as its tone / do-don'ts / identity safety
-    section. The MAXWELL_BASE_KNOWLEDGE block (identity, slang, voice, memes)
+    section. The DAME_CURIE_BASE_KNOWLEDGE block (identity, slang, voice, memes)
     is ALWAYS-ON and lives in code - it is NOT editable through this tool.
     This tool only rewrites the per-runtime personality paragraph that lives
     in bot_control.json under `base_personality`.
@@ -7623,7 +7623,7 @@ class UpdateBasePersonalityTool(Tool):
         return (
             f"base_personality updated. {len(text)} chars written to "
             f"{store.personality_path}. The change is live on the next turn - no "
-            "restart needed. MAXWELL_BASE_KNOWLEDGE (in code) was NOT "
+            "restart needed. DAME_CURIE_BASE_KNOWLEDGE (in code) was NOT "
             "touched; only the per-runtime personality paragraph was rewritten."
         )
 
@@ -7672,7 +7672,7 @@ class UpdateServerPromptTool(Tool):
                 return (
                     f"Cleared per-server prompt for server_id={server_id}. "
                     "The bot will fall back to base_personality + "
-                    "MAXWELL_BASE_KNOWLEDGE in that server from now on."
+                    "DAME_CURIE_BASE_KNOWLEDGE in that server from now on."
                 )
             self.bot.memory.set_server_prompt(server_id, text_str)
         except Exception as e:
@@ -7875,8 +7875,8 @@ def _chess_is_bot_resign(who: str, bot=None) -> bool:
         return True
     name = _chess_bot_name(bot).lower()
     aliases = {name}
-    if name == "maxwell":
-        aliases.add("max")
+    if name == "dame curie":
+        aliases.add("curie")
     return token in aliases
 
 

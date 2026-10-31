@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 def _bot(*, cached=None, recent=None):
@@ -20,8 +20,8 @@ def _bot(*, cached=None, recent=None):
 
     bot.get_user = get_user
     bot.fetch_user = fetch_user
-    bot._cached_user_display_name = MaxwellBot._cached_user_display_name.__get__(bot)
-    bot._user_label = MaxwellBot._user_label.__get__(bot)
+    bot._cached_user_display_name = DameCurieBot._cached_user_display_name.__get__(bot)
+    bot._user_label = DameCurieBot._user_label.__get__(bot)
     return bot
 
 
@@ -32,7 +32,7 @@ def test_user_label_prefers_guild_display_name():
 
     async def run():
         assert (
-            await MaxwellBot._user_label(bot, "147", guild=guild)
+            await DameCurieBot._user_label(bot, "147", guild=guild)
             == "Z3ki (147)"
         )
 
@@ -43,7 +43,7 @@ def test_user_label_falls_back_to_recent_rooms_then_id():
     bot = _bot(recent={"ch": {"99": "Alice"}})
 
     async def run():
-        assert await MaxwellBot._user_label(bot, "99") == "Alice (99)"
-        assert await MaxwellBot._user_label(bot, "123") == "123"
+        assert await DameCurieBot._user_label(bot, "99") == "Alice (99)"
+        assert await DameCurieBot._user_label(bot, "123") == "123"
 
     asyncio.run(run())

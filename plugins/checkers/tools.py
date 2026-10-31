@@ -1,5 +1,5 @@
 """
-Checkers game tools for Maxwell.
+Checkers game tools for Dame Curie.
 Registers checkers_start, checkers_move, checkers_state, checkers_resign.
 """
 from __future__ import annotations
@@ -31,8 +31,8 @@ def remove_game(channel_id: str):
     _ACTIVE_GAMES.pop(str(channel_id), None)
 
 
-def _run_maxwell_turn(game: CheckersGame) -> list[str]:
-    """Finish Maxwell's turn, including every forced jump in a chain."""
+def _run_dame_curie_turn(game: CheckersGame) -> list[str]:
+    """Finish Dame Curie's turn, including every forced jump in a chain."""
     moves = []
     for _ in range(32):  # a checkers position cannot need more than 32 captures
         if game.winner or game.turn == game.human_color:
@@ -58,7 +58,7 @@ class CheckersStartTool(Tool):
 
     def get_description(self) -> str:
         return (
-            "Start a new Checkers (draughts) match in this channel against Maxwell. "
+            "Start a new Checkers (draughts) match in this channel against Dame Curie. "
             "Red moves first; choose user_color red or black."
         )
 
@@ -83,14 +83,14 @@ class CheckersStartTool(Tool):
         user_name = getattr(message.author, "display_name", "User")
         user_id = getattr(message.author, "id", None)
         game = CheckersGame(
-            red_player=user_name if user_color == "red" else "Maxwell",
-            black_player="Maxwell" if user_color == "red" else user_name,
+            red_player=user_name if user_color == "red" else "Dame Curie",
+            black_player="Dame Curie" if user_color == "red" else user_name,
             human_color=user_color,
             human_player_id=user_id,
         )
-        opening_moves = _run_maxwell_turn(game)
+        opening_moves = _run_dame_curie_turn(game)
         opening = (
-            "Maxwell played " + " ".join(f"`{move}`" for move in opening_moves) + "."
+            "Dame Curie played " + " ".join(f"`{move}`" for move in opening_moves) + "."
             if opening_moves
             else ""
         )
@@ -149,20 +149,20 @@ class CheckersMoveTool(Tool):
         ):
             return "Error: only the player who started this match can move."
         if game.turn != game.human_color:
-            return f"Error: it is {game.turn}'s turn; Maxwell is thinking."
+            return f"Error: it is {game.turn}'s turn; Dame Curie is thinking."
 
         ok, msg = game.make_move(move)
         if not ok:
             return f"Move failed: {msg}"
 
-        # Let Maxwell finish every forced jump in one turn. American checkers
+        # Let Dame Curie finish every forced jump in one turn. American checkers
         # requires a capture chain to stay with the same piece, so handing
         # control back after only the first AI jump can strand the match on
-        # Maxwell's turn forever.
-        ai_moves = _run_maxwell_turn(game)
+        # Dame Curie's turn forever.
+        ai_moves = _run_dame_curie_turn(game)
         ai_msg = ""
         if ai_moves:
-            ai_msg = "\n" + " ".join(f"Maxwell played `{item}`." for item in ai_moves)
+            ai_msg = "\n" + " ".join(f"Dame Curie played `{item}`." for item in ai_moves)
 
         png_bytes = game.render_board_png()
         file = discord.File(io.BytesIO(png_bytes), filename="checkers_board.png")

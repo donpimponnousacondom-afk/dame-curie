@@ -1,6 +1,6 @@
 """Tests for UpdateBasePersonalityTool and UpdateServerPromptTool.
 
-These tools let Maxwell rewrite its own base personality paragraph and
+These tools let Curie rewrite its own base personality paragraph and
 per-server prompts at runtime. Only admins can call them. Tests cover:
 
 - non-admin call: refused without mutation

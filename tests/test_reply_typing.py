@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from bot_tools import SendMessageTool
 
 
@@ -38,19 +38,19 @@ def _bot(*, typing=True, delay=0.0):
         _reply_typing_delay=lambda _content: delay,
         user=SimpleNamespace(id=1382894657624866889),
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._should_show_live_typing = MaxwellBot._should_show_live_typing.__get__(bot)
-    bot._enter_live_typing = MaxwellBot._enter_live_typing.__get__(bot)
-    bot._exit_live_typing = MaxwellBot._exit_live_typing.__get__(bot)
-    bot._reply_typing = MaxwellBot._reply_typing.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._should_show_live_typing = DameCurieBot._should_show_live_typing.__get__(bot)
+    bot._enter_live_typing = DameCurieBot._enter_live_typing.__get__(bot)
+    bot._exit_live_typing = DameCurieBot._exit_live_typing.__get__(bot)
+    bot._reply_typing = DameCurieBot._reply_typing.__get__(bot)
     return bot
 
 
 def test_reply_typing_delay_scales_and_clamps():
     bot = SimpleNamespace()
-    assert MaxwellBot._reply_typing_delay(bot, "") == 0.35
-    assert 0.35 <= MaxwellBot._reply_typing_delay(bot, "hi") <= 1.2
-    assert MaxwellBot._reply_typing_delay(bot, "x" * 5000) == 1.2
+    assert DameCurieBot._reply_typing_delay(bot, "") == 0.35
+    assert 0.35 <= DameCurieBot._reply_typing_delay(bot, "hi") <= 1.2
+    assert DameCurieBot._reply_typing_delay(bot, "x" * 5000) == 1.2
 
 
 def test_ping_shows_live_typing_for_the_whole_turn():
@@ -66,10 +66,10 @@ def test_ping_shows_live_typing_for_the_whole_turn():
     )
 
     async def run():
-        assert MaxwellBot._should_show_live_typing(bot, msg) is True
-        cm = await MaxwellBot._enter_live_typing(bot, msg)
+        assert DameCurieBot._should_show_live_typing(bot, msg) is True
+        cm = await DameCurieBot._enter_live_typing(bot, msg)
         assert channel.log == ["enter"]
-        await MaxwellBot._exit_live_typing(bot, cm)
+        await DameCurieBot._exit_live_typing(bot, cm)
         assert channel.log == ["enter", "exit"]
 
     asyncio.run(run())
@@ -94,11 +94,11 @@ def test_unpinged_or_suppressed_turn_does_not_start_live_typing():
     )
 
     async def run():
-        assert MaxwellBot._should_show_live_typing(bot, quiet) is False
-        assert await MaxwellBot._enter_live_typing(bot, quiet) is None
+        assert DameCurieBot._should_show_live_typing(bot, quiet) is False
+        assert await DameCurieBot._enter_live_typing(bot, quiet) is None
         assert channel.log == []
-        assert MaxwellBot._should_show_live_typing(bot, suppressed) is False
-        assert await MaxwellBot._enter_live_typing(bot, suppressed) is None
+        assert DameCurieBot._should_show_live_typing(bot, suppressed) is False
+        assert await DameCurieBot._enter_live_typing(bot, suppressed) is None
         assert channel.log == []
 
     asyncio.run(run())

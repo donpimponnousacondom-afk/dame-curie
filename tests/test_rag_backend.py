@@ -764,7 +764,7 @@ def test_doctor_checks_real_vectors_and_configured_backend(
     assert url == "http://configured.invalid/v1/embeddings"
     assert kwargs["json"]["model"] == "configured-model"
     assert kwargs["headers"]["Authorization"] == "Bearer synthetic-key"
-    assert kwargs["json"] == {"model": "configured-model", "input": "maxwell doctor probe"}
+    assert kwargs["json"] == {"model": "configured-model", "input": "dame-curie doctor probe"}
     assert kwargs["allow_redirects"] is False
     assert len(transport.calls) == 1
     transport = install_transport(monkeypatch, Reply({}, status))

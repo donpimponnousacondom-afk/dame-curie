@@ -173,7 +173,7 @@ def prepare_delivery(
         footer = render_footer(
             template,
             metrics,
-            str(getattr(bot, "bot_name", "Maxwell")),
+            str(getattr(bot, "bot_name", "Dame Curie")),
             code_block=code_block,
         )
     limit = min(limit, 2000 - len(footer) - 1) if footer else limit

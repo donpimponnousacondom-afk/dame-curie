@@ -78,7 +78,7 @@ def _patch_voice_recv_dm_hook() -> None:
         from discord.voice_state import VoiceConnectionState
     except Exception:
         return
-    if getattr(gw.hook, "_maxwell_dm_hook", False):
+    if getattr(gw.hook, "_dame_curie_dm_hook", False):
         return
 
     log = gw.log
@@ -160,7 +160,7 @@ def _patch_voice_recv_dm_hook() -> None:
                 else None,
             )
 
-    hook._maxwell_dm_hook = True  # type: ignore[attr-defined]
+    hook._dame_curie_dm_hook = True  # type: ignore[attr-defined]
     gw.hook = hook
     VoiceRecvClient.create_connection_state = lambda self: VoiceConnectionState(
         self, hook=hook
@@ -180,7 +180,7 @@ def _patch_voice_recv_reader_lookup() -> None:
         from discord.ext.voice_recv.reader import SpeakingTimer
     except Exception:
         return
-    if getattr(SpeakingTimer._lookup_member, "_maxwell_dm_lookup", False):
+    if getattr(SpeakingTimer._lookup_member, "_dame_curie_dm_lookup", False):
         return
 
     def _lookup_member(self, ssrc: int):
@@ -189,5 +189,5 @@ def _patch_voice_recv_reader_lookup() -> None:
             return None
         return _vc_member(self.voice_client, whoid)
 
-    _lookup_member._maxwell_dm_lookup = True  # type: ignore[attr-defined]
+    _lookup_member._dame_curie_dm_lookup = True  # type: ignore[attr-defined]
     SpeakingTimer._lookup_member = _lookup_member

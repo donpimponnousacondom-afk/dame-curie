@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import discord
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from dirac_runtime import _NoticeInput
 
 
@@ -65,7 +65,7 @@ def _delivery_message(message_id, content):
 
 
 def _bot():
-    bot = object.__new__(MaxwellBot)
+    bot = object.__new__(DameCurieBot)
     bot._control = {
         "store_memory": True,
         "process_images": True,
@@ -88,7 +88,7 @@ def _bot():
         await bot.memory.add_to_channel_memory(channel_id, row)
 
     bot.add_message_to_memory = add_message_to_memory
-    bot._cache_media_context = MaxwellBot._cache_media_context.__get__(bot)
+    bot._cache_media_context = DameCurieBot._cache_media_context.__get__(bot)
     return bot
 
 
@@ -131,7 +131,7 @@ def test_message_edit_replaces_memory_text_and_visual_cache():
         ]
 
     bot._extract_context_media = extract
-    asyncio.run(MaxwellBot.on_message_edit(bot, old, after))
+    asyncio.run(DameCurieBot.on_message_edit(bot, old, after))
 
     assert "new text" in bot.memory.rows[-1][1]["content"]
     assert "old text" not in bot.memory.rows[-1][1]["content"]
@@ -174,8 +174,8 @@ def test_embed_mutation_refreshes_text_without_redownloading_same_media():
         ]
 
     bot._extract_context_media = extract
-    assert asyncio.run(MaxwellBot._refresh_edited_message(bot, first)) is True
-    assert asyncio.run(MaxwellBot._refresh_edited_message(bot, second)) is True
+    assert asyncio.run(DameCurieBot._refresh_edited_message(bot, first)) is True
+    assert asyncio.run(DameCurieBot._refresh_edited_message(bot, second)) is True
 
     assert calls == ["first"]
     assert "second" in bot.memory.rows[-1][1]["content"]
@@ -186,7 +186,7 @@ def test_text_edit_notifies_inflight_turn_without_dispatching_reply():
     bot = _bot()
     before = _message(99, "before")
     after = _message(99, "after")
-    state = MaxwellBot._begin_inflight_context(bot, before, before.content)
+    state = DameCurieBot._begin_inflight_context(bot, before, before.content)
     state["media"] = [
         {
             "b64": "aW1hZ2U=",
@@ -197,8 +197,8 @@ def test_text_edit_notifies_inflight_turn_without_dispatching_reply():
         }
     ]
     bot._message_update_state["99"] = (
-        MaxwellBot._message_update_fingerprint(before),
-        MaxwellBot._message_media_fingerprint(before),
+        DameCurieBot._message_update_fingerprint(before),
+        DameCurieBot._message_media_fingerprint(before),
         0.0,
     )
     bot._extract_context_media = lambda _message: None
@@ -208,7 +208,7 @@ def test_text_edit_notifies_inflight_turn_without_dispatching_reply():
 
     bot._extract_context_media = no_media
     assert asyncio.run(
-        MaxwellBot._refresh_edited_message(bot, after, before=before)
+        DameCurieBot._refresh_edited_message(bot, after, before=before)
     ) is True
     assert state["latest_content"] == "after"
     assert state["latest_media"] == state["media"]
@@ -235,7 +235,7 @@ def test_raw_partial_update_merges_with_cached_message():
         },
     )
 
-    merged = asyncio.run(MaxwellBot._message_from_raw_update(bot, payload))
+    merged = asyncio.run(DameCurieBot._message_from_raw_update(bot, payload))
 
     assert merged.content == "keep this text"
     assert merged.embeds[0].title == "late preview"
@@ -256,7 +256,7 @@ def test_raw_author_without_bot_flag_is_human():
             "author": {"id": "11", "username": "alice"},
         },
     )
-    merged = asyncio.run(MaxwellBot._message_from_raw_update(bot, payload))
+    merged = asyncio.run(DameCurieBot._message_from_raw_update(bot, payload))
     assert merged.author.bot is False
     assert merged.author.display_name == "alice"
 
@@ -397,8 +397,8 @@ def test_partial_update_without_author_keeps_the_poster_not_the_actor():
 
     assert merged.author.id == self_account.id
     assert merged.author.id != operator.id
-    assert MaxwellBot._memory_author(merged).id == self_account.id
-    assert MaxwellBot._memory_author_is_bot(bot, merged.author) is True
+    assert DameCurieBot._memory_author(merged).id == self_account.id
+    assert DameCurieBot._memory_author_is_bot(bot, merged.author) is True
 
 
 def test_partial_update_without_author_survives_a_failed_fetch():
@@ -422,4 +422,4 @@ def test_partial_update_without_author_survives_a_failed_fetch():
 
     assert merged.author.id == self_account.id
     assert merged.author.id != operator.id
-    assert MaxwellBot._memory_author_is_bot(bot, merged.author) is True
+    assert DameCurieBot._memory_author_is_bot(bot, merged.author) is True

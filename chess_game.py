@@ -439,7 +439,7 @@ def _material_balance(board: chess.Board) -> int:
 def annotate_legal_moves(board: chess.Board) -> list[str]:
     """Legal moves in SAN, each tagged with what it actually does.
 
-    Maxwell picks his own moves now, and a bare list of forty SAN strings is
+    Dame Curie picks his own moves now, and a bare list of forty SAN strings is
     how a language model misses free material and walks into mate - reading
     "Nxe5" tells it nothing about what sits on e5. Every tag here is something
     a human player sees at a glance: what the move captures, whether it checks
@@ -537,10 +537,10 @@ def choose_bot_move(
 ) -> tuple[chess.Move, str]:
     """Fallback move picker. Returns ``(move, san)``.
 
-    Maxwell plays his own chess: the model reads the annotated position and
+    Dame Curie plays his own chess: the model reads the annotated position and
     names the move (see ``ChessMoveTool``). This search stays only as the
     safety net for when the model has repeatedly failed to name a legal move -
-    a game wedged forever on Maxwell's turn is worse than an average move.
+    a game wedged forever on Dame Curie's turn is worse than an average move.
 
     ``jitter`` in [0,1] adds strength-varying randomness among near-equal moves
     so opening play is not sterile. ``depth<=0`` or no legal moves -> random.

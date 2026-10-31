@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import discord
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from concurrency_safety import KeyedLocks
 
 
@@ -38,8 +38,8 @@ def _bot(control=None, admins=()):
         _last_bot_reply={},
         _last_bot_send={},
         _current_progress_by_channel={},
-        bot_name="Maxwell",
-        user=SimpleNamespace(id=1, display_name="Maxwell", name="maxwell"),
+        bot_name="Curie",
+        user=SimpleNamespace(id=1, display_name="Curie", name="curie"),
     )
     for name in (
         "_watch_state",
@@ -62,7 +62,7 @@ def _bot(control=None, admins=()):
         "_reply_meta_from_message",
         "_prune_per_channel_state",
     ):
-        setattr(bot, name, getattr(MaxwellBot, name).__get__(bot))
+        setattr(bot, name, getattr(DameCurieBot, name).__get__(bot))
     bot._is_admin = lambda uid: str(uid) in {str(a) for a in admins}
     return bot
 
@@ -98,7 +98,7 @@ def test_a_room_that_ignores_him_stops_being_watched_so_long():
         loop = asyncio.get_running_loop()
         msg = _msg()
         # He speaks, arming the room the normal way.
-        await MaxwellBot._arm_watch_from_own_message.__get__(bot)(msg)
+        await DameCurieBot._arm_watch_from_own_message.__get__(bot)(msg)
         generous = bot._conversation_watch["ch1"] - loop.time()
 
         # Four soft follow-ups he declines to answer.
@@ -136,7 +136,7 @@ def test_speaking_again_restores_the_full_window():
             follow = _msg()
             follow._watch_followup = True
             bot._note_watch_silence(follow)
-        await MaxwellBot._arm_watch_from_own_message.__get__(bot)(_msg())
+        await DameCurieBot._arm_watch_from_own_message.__get__(bot)(_msg())
         assert bot._watch_state("ch1").silent_streak == 0
         assert bot._conversation_watch["ch1"] - loop.time() > 180
 
@@ -180,7 +180,7 @@ def test_reading_who_a_message_is_aimed_at():
         assert plain.direct is False and plain.names_him is False
         assert plain.text_length == 3
 
-        named = bot._watch_address_signal(_msg("maxwell you around?"))
+        named = bot._watch_address_signal(_msg("curie you around?"))
         assert named.names_him is True
         assert named.is_question is True
         assert named.direct is False  # named is not pinged

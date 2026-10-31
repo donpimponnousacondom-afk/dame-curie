@@ -1,6 +1,6 @@
 """Tests for the new explanation-in-tool-calls + native-only dispatch.
 
-The XML ``collect_tool_calls`` dispatcher is gone (Maxwell is native
+The XML ``collect_tool_calls`` dispatcher is gone (Curie is native
 function-calling only now). What stays is ``strip_tool_payload_leaks`` - the
 defensive sanitizer that scrubs any leaked ``<tool:...>`` tags a misbehaving
 model drops into visible text even in native mode. These tests cover that
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot import MaxwellBot, strip_tool_payload_leaks
+from bot import DameCurieBot, strip_tool_payload_leaks
 from tool_registry import extract_explanation, _sanitize_explanation, record_explanation
 from tool_schemas import (
     EXPLANATION_PARAM,
@@ -316,7 +316,7 @@ def test_select_tool_protocol_native_wins_over_custom():
         _control={"native_tool_calls": True, "tools_enabled": True},
     )
     bot._native_tools_enabled = lambda: True
-    custom, provider_tools = MaxwellBot._select_tool_protocol(bot, tools)
+    custom, provider_tools = DameCurieBot._select_tool_protocol(bot, tools)
     assert custom is False
     assert provider_tools == tools
 
@@ -328,7 +328,7 @@ def test_select_tool_protocol_custom_only_when_native_off():
         _control={"native_tool_calls": False, "tools_enabled": True},
     )
     bot._native_tools_enabled = lambda: False
-    custom, provider_tools = MaxwellBot._select_tool_protocol(bot, tools)
+    custom, provider_tools = DameCurieBot._select_tool_protocol(bot, tools)
     assert custom is True
     assert provider_tools is None
 

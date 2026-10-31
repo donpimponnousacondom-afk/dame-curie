@@ -9,7 +9,7 @@ import asyncio
 import base64
 from types import SimpleNamespace
 
-from bot import MaxwellBot
+from bot import DameCurieBot
 from bot_tools import FetchUrlTool, SeeImageTool
 from tool_schemas import RESULT_TOOL_NAMES, TOOL_PARAMETERS
 from utils import is_direct_image_url, is_gif_page_url
@@ -33,12 +33,12 @@ def test_og_image_extracted_from_either_attr_order():
       <meta content="https://media.tenor.com/x/clip.mp4" property="og:video">
     </head></html>
     """
-    assert MaxwellBot._og_media_urls(html) == [
+    assert DameCurieBot._og_media_urls(html) == [
         "https://media.tenor.com/x/tenor.gif",
         "https://media.tenor.com/x/clip.mp4",
     ]
     html_rev = '<meta content="https://i.giphy.com/abc.gif" name="twitter:image">'
-    assert MaxwellBot._og_media_urls(html_rev) == ["https://i.giphy.com/abc.gif"]
+    assert DameCurieBot._og_media_urls(html_rev) == ["https://i.giphy.com/abc.gif"]
 
 
 def test_gif_page_helpers():
@@ -137,4 +137,4 @@ def test_reply_to_tenor_link_counts_as_media():
         content="https://tenor.com/view/cat-dancing-gif-123",
     )
     message = SimpleNamespace(reference=SimpleNamespace(resolved=parent))
-    assert MaxwellBot._reply_media_message_id(message) == 55
+    assert DameCurieBot._reply_media_message_id(message) == 55

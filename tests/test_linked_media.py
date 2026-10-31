@@ -9,10 +9,10 @@ import asyncio
 
 import pytest
 
-from bot import MaxwellBot, _owner_audio_input_enabled
+from bot import DameCurieBot, _owner_audio_input_enabled
 
 
-refs = MaxwellBot._media_link_refs
+refs = DameCurieBot._media_link_refs
 
 
 def test_picks_up_image_and_audio_links():
@@ -131,10 +131,10 @@ def _harness(control):
         config=types.SimpleNamespace(ENABLE_VIDEO_INPUT=True),
         _max_media_bytes=lambda: 10 * 1024 * 1024,
         _download_embed_media=_download,
-        _media_link_refs=MaxwellBot._media_link_refs,
-        _LINK_IMAGE_EXTS=MaxwellBot._LINK_IMAGE_EXTS,
-        _LINK_AUDIO_EXTS=MaxwellBot._LINK_AUDIO_EXTS,
-        _LINK_VIDEO_EXTS=MaxwellBot._LINK_VIDEO_EXTS,
+        _media_link_refs=DameCurieBot._media_link_refs,
+        _LINK_IMAGE_EXTS=DameCurieBot._LINK_IMAGE_EXTS,
+        _LINK_AUDIO_EXTS=DameCurieBot._LINK_AUDIO_EXTS,
+        _LINK_VIDEO_EXTS=DameCurieBot._LINK_VIDEO_EXTS,
     )
     return fake, calls
 
@@ -142,7 +142,7 @@ def _harness(control):
 def _run(control, content, **kwargs):
     fake, calls = _harness(control)
     media = asyncio.run(
-        MaxwellBot._extract_linked_media(fake, _FakeMessage(content), **kwargs)
+        DameCurieBot._extract_linked_media(fake, _FakeMessage(content), **kwargs)
     )
     return media, [u for u, _ in calls]
 
@@ -237,7 +237,7 @@ def test_video_link_is_downloaded_and_reduced_to_provider_safe_derivatives():
 
     fake._extract_video_item_derivatives = _derive
     media = asyncio.run(
-        MaxwellBot._extract_linked_media(
+        DameCurieBot._extract_linked_media(
             fake, _FakeMessage("https://e.com/clip.mp4")
         )
     )
@@ -265,7 +265,7 @@ def test_video_link_can_keep_audio_when_images_are_disabled():
 
     fake._extract_video_item_derivatives = _derive
     media = asyncio.run(
-        MaxwellBot._extract_linked_media(
+        DameCurieBot._extract_linked_media(
             fake, _FakeMessage("https://e.com/clip.mp4")
         )
     )
@@ -279,7 +279,7 @@ def test_video_link_is_skipped_when_video_input_is_disabled():
     fake, calls = _harness({"process_images": True, "process_audio": True})
     fake.config.ENABLE_VIDEO_INPUT = False
     media = asyncio.run(
-        MaxwellBot._extract_linked_media(
+        DameCurieBot._extract_linked_media(
             fake, _FakeMessage("https://e.com/clip.mp4")
         )
     )

@@ -249,7 +249,7 @@ def synthetic_bot(monkeypatch):
         "OPENAI_EXTRA_BODY": '{"reasoning_effort":"high","custom":{"main_only":true}}',
         "OPENAI_EXTRA_HEADERS": '{"X-Primary-Only":"synthetic"}',
     }), ENABLE_AUDIO_INPUT=False)
-    instance = bot_module.MaxwellBot.__new__(bot_module.MaxwellBot)
+    instance = bot_module.DameCurieBot.__new__(bot_module.DameCurieBot)
     instance.config = config
     instance._control = {}
     instance.autonomy_provider = None

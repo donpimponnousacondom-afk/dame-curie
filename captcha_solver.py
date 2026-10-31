@@ -1,4 +1,4 @@
-"""Discord CAPTCHA solving for the Maxwell self-bot.
+"""Discord CAPTCHA solving for the Dame Curie self-bot.
 
 Discord challenges certain API actions (most commonly accepting a server
 invite, but also login/phone flows) with an hCaptcha or reCAPTCHA

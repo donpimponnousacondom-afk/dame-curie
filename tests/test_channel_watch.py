@@ -51,9 +51,9 @@ def test_normalise_and_partial_matching():
 
 
 def test_greeting_is_short_and_on_point():
-    g = channel_watch.greeting_for("ticket", "maxwell")
+    g = channel_watch.greeting_for("ticket", "curie")
     assert "ticket" in g
-    assert "maxwell" in g
+    assert "curie" in g
     assert len(g) < 200
 
 

@@ -1,4 +1,4 @@
-"""Turn-taking rules: does Maxwell hold the floor in this room right now.
+"""Turn-taking rules: does Curie hold the floor in this room right now.
 
 The unit tests below drive `read_floor` directly with synthetic message
 windows - no Discord, no bot - because the rules are the part worth pinning
@@ -85,7 +85,7 @@ def test_replying_beats_typing():
     assert verdict.may_speak is False
 
 
-def test_maxwell_spoke_last_holds_the_floor():
+def test_dame_curie_spoke_last_holds_the_floor():
     """The headline bug: autonomy adding a second line under its own first one."""
     verdict = _read([_msg(300, author="user1"), _msg(120, is_self=True)])
     assert verdict.state == FLOOR_HOLDING
@@ -430,7 +430,7 @@ def _gate_bot(tmp_path, channel, *, replying=(), last_reply=None, control=None):
         _auto_channels={"100"},
         _control=control if control is not None else {},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         get_channel=lambda cid: channel if cid == 100 else None,
         fetch_channel=None,
         is_closed=lambda: False,
@@ -601,7 +601,7 @@ def _ctx_bot(tmp_path, channel, *, replying=(), private_channels=()):
         _auto_channels={str(channel.id)},
         _control={"bot_enabled": True, "autonomy_reflect_enabled": False},
         tools={},
-        user=SimpleNamespace(id=42, display_name="Maxwell", name="Maxwell"),
+        user=SimpleNamespace(id=42, display_name="Curie", name="Curie"),
         guilds=[SimpleNamespace(id=1, text_channels=[channel], me=SimpleNamespace())],
         private_channels=list(private_channels),
         rem_log=_CtxRemLog(),
@@ -638,7 +638,7 @@ def _ctx_msg(mid, seconds_ago, *, author_id, bot=False, mentions=(), content="hi
         author=SimpleNamespace(
             id=author_id, display_name="Alice", name="alice", bot=bot
         ),
-        mentions=[SimpleNamespace(id=m, display_name="Maxwell", name="max") for m in mentions],
+        mentions=[SimpleNamespace(id=m, display_name="Curie", name="max") for m in mentions],
         reference=None,
         attachments=[],
         embeds=[],

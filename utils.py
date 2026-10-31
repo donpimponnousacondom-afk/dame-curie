@@ -1,4 +1,4 @@
-"""Shared utility functions used across Maxwell modules.
+"""Shared utility functions used across Dame Curie modules.
 
 Don't duplicate these in other files. Import from here.
 """
@@ -419,7 +419,7 @@ def _forward_origin_label(message: Any) -> str:
 
 
 def message_has_visible_payload(message: Any) -> bool:
-    """True when a Discord message carries anything Maxwell should remember."""
+    """True when a Discord message carries anything Dame Curie should remember."""
     if str(getattr(message, "content", "") or "").strip():
         return True
     if list(getattr(message, "attachments", None) or []):

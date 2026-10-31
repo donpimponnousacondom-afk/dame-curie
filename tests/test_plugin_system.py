@@ -1,5 +1,5 @@
 """
-Unit tests for Maxwell's Plugin Architecture.
+Unit tests for Curie's Plugin Architecture.
 """
 import json
 import pytest

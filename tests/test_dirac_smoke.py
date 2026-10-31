@@ -4,7 +4,7 @@ No Discord, no bot process, no provider and no network: the fake client's
 ``send_message`` returns the raw payload dict the SDK's own HTTP client returns,
 the fake channel routes its sends through that method, the fake bot's
 ``_generate_response`` stands in for the provider the runtime observes, and the
-reply queue and ``MaxwellBot._run_queued_reply`` are the real ones. What is faked
+reply queue and ``DameCurieBot._run_queued_reply`` are the real ones. What is faked
 is the transport, not the path - the notice, its injection, the correlation
 ContextVar and the single record all run the code that runs against the live bot.
 
@@ -26,7 +26,7 @@ import discord
 import pytest
 
 import dirac_runtime
-from bot import MaxwellBot
+from bot import DameCurieBot
 from providers import ProviderResult
 from tool_progress import ToolProgress
 from dirac_runtime import DiracSmokeRuntime, _TurnObserver, sent_message_id
@@ -145,10 +145,10 @@ class _Input:
 
 
 class _FakeBot:
-    """The parts of ``MaxwellBot`` the smoke runtime touches, and no more."""
+    """The parts of ``DameCurieBot`` the smoke runtime touches, and no more."""
 
     # The real classmethod, so a turn can drive the real late-embed refresh.
-    _media_link_refs = MaxwellBot._media_link_refs
+    _media_link_refs = DameCurieBot._media_link_refs
 
     def __init__(self, settings) -> None:
         self.user = SimpleNamespace(id=555000111)
@@ -213,7 +213,7 @@ class _FakeBot:
 
     async def _run_queued_reply(self, message, content=None):
         """The bot's own wrapper, so the observer bracketing under test is real."""
-        return await MaxwellBot._run_queued_reply(self, message, content)
+        return await DameCurieBot._run_queued_reply(self, message, content)
 
     async def _default_generate(self):
         """One model completion, in the shape the provider really returns."""
@@ -444,11 +444,11 @@ def test_a_refreshed_notice_keeps_the_granted_actor(tmp_path):
         seen = {}
 
         async def refreshing(message, content):
-            refreshed = await MaxwellBot._wait_for_late_embeds(bot, message, content)
+            refreshed = await DameCurieBot._wait_for_late_embeds(bot, message, content)
             # The refresh is a fresh fetch of the notice, posted by the bot.
             assert refreshed is not message
             assert refreshed.author.id == bot.user.id
-            message = MaxwellBot._preserve_input_actor(message, refreshed)
+            message = DameCurieBot._preserve_input_actor(message, refreshed)
             seen["actor"] = message.author.id
             seen["author"] = message.notice_author.id
             await bot._generate_response([{"role": "user", "content": content}])
@@ -480,12 +480,12 @@ def test_a_refreshed_snapshot_cannot_change_the_notice_provenance(tmp_path):
                 {"id": str(message.id)}, message.channel, author=message.author
             )
             assert snapshot.author.id == settings.operator_id
-            rebound = MaxwellBot._preserve_input_actor(message, snapshot)
-            author = MaxwellBot._memory_author(rebound)
+            rebound = DameCurieBot._preserve_input_actor(message, snapshot)
+            author = DameCurieBot._memory_author(rebound)
             seen["actor"] = rebound.author.id
             seen["author"] = rebound.notice_author.id
             seen["row_author"] = author.id
-            seen["row_is_bot"] = MaxwellBot._memory_author_is_bot(bot, author)
+            seen["row_is_bot"] = DameCurieBot._memory_author_is_bot(bot, author)
             await bot._generate_response([{"role": "user", "content": content}])
             await message.channel.send("answered")
 
@@ -607,10 +607,10 @@ def test_the_notice_row_is_the_self_accounts_own_not_human_traffic(tmp_path):
         assert getattr(bot.user, "bot", False) is False
         assert getattr(posted.author, "bot", False) is False
         for message in (notice, posted):
-            author = MaxwellBot._memory_author(message)
+            author = DameCurieBot._memory_author(message)
             assert author.id == bot.user.id
-            assert MaxwellBot._memory_author_is_bot(bot, author) is True
-        writer = object.__new__(MaxwellBot)
+            assert DameCurieBot._memory_author_is_bot(bot, author) is True
+        writer = object.__new__(DameCurieBot)
         writer._connection = SimpleNamespace(user=bot.user)
         writer._message_memory_content = lambda message: message.content
         writer._reply_meta_from_message = lambda message: {}
@@ -621,20 +621,20 @@ def test_the_notice_row_is_the_self_accounts_own_not_human_traffic(tmp_path):
             assert _detect_source(row) == "bot"
         # A raw payload carries the id as text while the client holds an int.
         assert (
-            MaxwellBot._memory_author_is_bot(
+            DameCurieBot._memory_author_is_bot(
                 bot, SimpleNamespace(id=str(bot.user.id), display_name="dame", bot=False)
             )
             is True
         )
         assert (
-            MaxwellBot._memory_author_is_bot(
+            DameCurieBot._memory_author_is_bot(
                 bot,
                 SimpleNamespace(id=str(settings.operator_id), display_name="root", bot=False),
             )
             is False
         )
         # The operator is still a person, and still the permission actor.
-        assert MaxwellBot._memory_author_is_bot(bot, notice.author) is False
+        assert DameCurieBot._memory_author_is_bot(bot, notice.author) is False
         assert notice.author.id == settings.operator_id
         await runtime.stop()
         await bot._reply_queue.close()

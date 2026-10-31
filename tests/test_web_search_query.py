@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from bot import TOOL_PROTOCOL, MaxwellBot
+from bot import TOOL_PROTOCOL, DameCurieBot
 from bot_tools import (
     FetchUrlTool,
     WebSearchTool,
@@ -15,60 +15,60 @@ from tool_schemas import RESULT_TOOL_NAMES, build_openai_tools
 
 GLUED = (
     "How much usage would I get with this on ollama cloud 20$ plan\n"
-    "[Latest message replies to you/Maxwell(1382894657624866889): they don't "
+    "[Latest message replies to you/Curie(1382894657624866889): they don't "
     "publish a number. **ol"
 )
 
 
 def test_plain_user_text_strips_reply_glue():
-    assert "Maxwell" not in MaxwellBot._plain_user_text(GLUED)
-    assert "ollama cloud" in MaxwellBot._plain_user_text(GLUED).lower()
+    assert "Curie" not in DameCurieBot._plain_user_text(GLUED)
+    assert "ollama cloud" in DameCurieBot._plain_user_text(GLUED).lower()
 
 
 def test_extract_search_query_does_not_include_reply_blob():
-    q = MaxwellBot._extract_search_query(GLUED)
+    q = DameCurieBot._extract_search_query(GLUED)
     assert "Latest message replies" not in q
     assert "1382894657624866889" not in q
     assert "ollama" in q.lower()
 
 
 def test_extract_search_query_strips_lookup_prefix():
-    q = MaxwellBot._extract_search_query("look this up: mat dickie")
+    q = DameCurieBot._extract_search_query("look this up: mat dickie")
     assert "look this up" not in q.lower()
     assert "mat dickie" in q.lower()
 
 
-def test_needs_up_to_date_ignores_glued_maxwell_reply():
+def test_needs_up_to_date_ignores_glued_dame_curie_reply():
     casual = (
-        "lol\n[Latest message replies to you/Maxwell(1): glm 5.3 just released "
+        "lol\n[Latest message replies to you/Curie(1): glm 5.3 just released "
         "new model today]"
     )
-    assert MaxwellBot._needs_up_to_date_info(casual) is False
+    assert DameCurieBot._needs_up_to_date_info(casual) is False
 
 
 def test_needs_up_to_date_skips_banter():
     for line in ("lol", "lmao", "wyd", "gm", "yeah", "how's it going"):
-        assert MaxwellBot._needs_up_to_date_info(line) is False, line
+        assert DameCurieBot._needs_up_to_date_info(line) is False, line
 
 
 def test_needs_up_to_date_explicit_lookup():
-    assert MaxwellBot._needs_up_to_date_info("look this up") is True
-    assert MaxwellBot._needs_up_to_date_info("search for ollama cloud pricing") is True
-    assert MaxwellBot._needs_up_to_date_info("google that") is True
-    assert MaxwellBot._needs_up_to_date_info("can you find out who that is") is True
+    assert DameCurieBot._needs_up_to_date_info("look this up") is True
+    assert DameCurieBot._needs_up_to_date_info("search for ollama cloud pricing") is True
+    assert DameCurieBot._needs_up_to_date_info("google that") is True
+    assert DameCurieBot._needs_up_to_date_info("can you find out who that is") is True
 
 
 def test_needs_up_to_date_current_events():
-    assert MaxwellBot._needs_up_to_date_info("who won last night") is True
-    assert MaxwellBot._needs_up_to_date_info("what's the weather in nyc") is True
-    assert MaxwellBot._needs_up_to_date_info("what's the latest grok model") is True
-    assert MaxwellBot._needs_up_to_date_info("new model drop today") is True
+    assert DameCurieBot._needs_up_to_date_info("who won last night") is True
+    assert DameCurieBot._needs_up_to_date_info("what's the weather in nyc") is True
+    assert DameCurieBot._needs_up_to_date_info("what's the latest grok model") is True
+    assert DameCurieBot._needs_up_to_date_info("new model drop today") is True
 
 
 def test_needs_up_to_date_stable_trivia_is_not_auto_search():
     # The model should still *choose* to search; auto-search is only a backup
     # for current/lookup turns, not every factoid.
-    assert MaxwellBot._needs_up_to_date_info("what is the capital of france") is False
+    assert DameCurieBot._needs_up_to_date_info("what is the capital of france") is False
 
 
 SMOKE_TASK = (
@@ -98,19 +98,19 @@ def test_needs_up_to_date_ignores_the_wrapped_harness_status_request():
         operator_name="root", operator_id=1482143139828596916,
         bot_id=1504398705539944560,
     )
-    assert MaxwellBot._needs_up_to_date_info(notice.removesuffix(SMOKE_TASK)) is False
-    assert MaxwellBot._needs_up_to_date_info(notice) is False
+    assert DameCurieBot._needs_up_to_date_info(notice.removesuffix(SMOKE_TASK)) is False
+    assert DameCurieBot._needs_up_to_date_info(notice) is False
 
 
 def test_needs_up_to_date_separates_model_and_recency_clauses():
     assert (
-        MaxwellBot._needs_up_to_date_info(
+        DameCurieBot._needs_up_to_date_info(
             "print the provider/model field for these jobs. there is nothing new here."
         )
         is False
     )
     assert (
-        MaxwellBot._needs_up_to_date_info(
+        DameCurieBot._needs_up_to_date_info(
             "the model column is stale; no new jobs were queued"
         )
         is False
@@ -118,8 +118,8 @@ def test_needs_up_to_date_separates_model_and_recency_clauses():
 
 
 def test_needs_up_to_date_same_sentence_ai_recency_still_fires():
-    assert MaxwellBot._needs_up_to_date_info("is there a new deepseek model out?") is True
-    assert MaxwellBot._needs_up_to_date_info("any recent mistral benchmarks?") is True
+    assert DameCurieBot._needs_up_to_date_info("is there a new deepseek model out?") is True
+    assert DameCurieBot._needs_up_to_date_info("any recent mistral benchmarks?") is True
 
 
 def test_needs_up_to_date_keeps_lookup_and_current_event_positives():
@@ -133,7 +133,7 @@ def test_needs_up_to_date_keeps_lookup_and_current_event_positives():
         "what's the latest grok model",
         "new model drop today",
     ):
-        assert MaxwellBot._needs_up_to_date_info(line) is True, line
+        assert DameCurieBot._needs_up_to_date_info(line) is True, line
 
 
 def test_sanitize_web_query_truncates_unclosed_bracket():
@@ -183,8 +183,8 @@ def test_native_tool_prompt_includes_lookup_contract():
             "native_tool_calls": True,
         },
     )
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    prompt = MaxwellBot._tool_system_prompt(bot, "discord")
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    prompt = DameCurieBot._tool_system_prompt(bot, "discord")
     assert "XML text tags only" not in prompt
     assert "Look things up" in prompt
     assert "web_search" in prompt

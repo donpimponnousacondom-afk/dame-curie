@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Maxwell install check: what works, what doesn't, and what to do about it.
+"""Dame Curie install check: what works, what doesn't, and what to do about it.
 
     .venv/bin/python doctor.py            # report
     .venv/bin/python doctor.py --probe    # also call the model + embedding endpoints
@@ -159,7 +159,7 @@ async def _probe_embeddings(cfg) -> tuple[str, str]:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
-                json={"model": cfg.EMBED_MODEL, "input": "maxwell doctor probe"},
+                json={"model": cfg.EMBED_MODEL, "input": "dame-curie doctor probe"},
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=15),
                 allow_redirects=False,
@@ -196,7 +196,7 @@ def probe(cfg) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check a Maxwell install.")
+    parser = argparse.ArgumentParser(description="Check a Dame Curie install.")
     parser.add_argument(
         "--probe",
         action="store_true",
@@ -204,7 +204,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    print(f"{BOLD}Maxwell install check{RESET}  {DIM}{APP_ROOT}{RESET}")
+    print(f"{BOLD}Dame Curie install check{RESET}  {DIM}{APP_ROOT}{RESET}")
     check_python()
     check_core_packages()
     check_env_file()

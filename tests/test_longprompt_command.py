@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 import bot as bot_module
-from bot import MaxwellBot
+from bot import DameCurieBot
 from prompt_storage import PromptStore
 
 
@@ -87,7 +87,7 @@ def test_longprompt_upload_preserves_exact_text_and_uses_guild_or_dm_scope(
     message.attachments = [attachment]
     message.guild = guild
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.set_server_prompt.assert_called_once_with(scope, prompt)
     memory.get_server_prompt.assert_not_called()
@@ -113,7 +113,7 @@ def test_longprompt_accepts_whitespace_only_text_without_trimming(longprompt_cas
     )
     message.attachments = [attachment]
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.set_server_prompt.assert_called_once_with("31", payload.decode("utf-8"))
     attachment.read.assert_awaited_once()
@@ -141,7 +141,7 @@ def test_longprompt_upload_enforces_declared_and_actual_byte_limits(
     )
     message.attachments = [attachment]
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     if accepted:
         memory.set_server_prompt.assert_called_once_with("31", payload.decode("utf-8"))
@@ -173,7 +173,7 @@ def test_longprompt_rejects_empty_or_malformed_utf8_without_mutating(
     )
     message.attachments = [attachment]
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.set_server_prompt.assert_not_called()
     assert memory.get_server_prompt.return_value == previous
@@ -203,7 +203,7 @@ def test_longprompt_rejects_wrong_extension_inline_args_and_multiple_files(
     message.content = "?longprompt" + (f" {arguments}" if arguments else "")
     message.attachments = attachments
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.set_server_prompt.assert_not_called()
     memory.get_server_prompt.assert_not_called()
@@ -222,7 +222,7 @@ def test_longprompt_admin_gate_precedes_prompt_access_and_attachment_read(longpr
     message.attachments = [attachment] if upload else []
     bot._is_admin = lambda user_id: False
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     assert [item["content"] for item in message.channel.sent] == ["not authorized"]
     memory.get_server_prompt.assert_not_called()
@@ -239,7 +239,7 @@ def test_longprompt_obeys_disabled_commands_before_prompt_access(longprompt_case
     message.attachments = [attachment] if upload else []
     bot._control["disabled_commands"] = ["longprompt"]
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     assert not message.channel.sent
     memory.get_server_prompt.assert_not_called()
@@ -261,7 +261,7 @@ def test_longprompt_export_is_utf8_byte_exact_short_and_mention_safe(longprompt_
     memory.get_server_prompt.return_value = prompt
     message.guild = guild
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.get_server_prompt.assert_called_once_with(scope)
     memory.set_server_prompt.assert_not_called()
@@ -282,7 +282,7 @@ def test_longprompt_export_is_utf8_byte_exact_short_and_mention_safe(longprompt_
     message.content = f"{bot.command_prefix}prompt"
     short_prompt = "small prompt @everyone"
     memory.get_server_prompt.return_value = short_prompt
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert len(message.channel.sent) == 1
     assert message.channel.sent[0]["content"] == (
         f"Current prompt for this server:\n```\n{short_prompt}\n```"
@@ -313,7 +313,7 @@ def test_longprompt_export_enforces_utf8_byte_limit_without_truncation(
     memory.get_server_prompt.return_value = prompt
     message.content = f"{bot.command_prefix}{command}"
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.get_server_prompt.assert_called_once_with("31")
     memory.set_server_prompt.assert_not_called()
@@ -344,12 +344,12 @@ def test_longprompt_round_trips_exact_text_through_prompt_store(longprompt_case,
         )
     ]
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     assert store.read_servers() == {"31": prompt}
     message.channel.sent.clear()
     message.attachments = []
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert message.channel.sent[0]["file_bytes"] == payload
 
 
@@ -362,7 +362,7 @@ def test_longprompt_attachment_read_failure_leaves_prompt_unchanged(longprompt_c
     public_error = AsyncMock()
     monkeypatch.setattr(bot_module, "send_public_error", public_error)
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     attachment.read.assert_awaited_once()
     memory.set_server_prompt.assert_not_called()
@@ -385,7 +385,7 @@ def test_longprompt_ack_failure_does_not_roll_back_saved_prompt(
     public_error = AsyncMock()
     monkeypatch.setattr(bot_module, "send_public_error", public_error)
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     attachment.read.assert_awaited_once()
     assert store.read_servers() == {"31": prompt}
@@ -399,7 +399,7 @@ def test_longprompt_export_send_failure_closes_file_buffer(longprompt_case, monk
     public_error = AsyncMock()
     monkeypatch.setattr(bot_module, "send_public_error", public_error)
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     prompt_file = message.channel.send.await_args.kwargs["file"]
     assert prompt_file.fp.closed
@@ -415,7 +415,7 @@ def test_longprompt_without_stored_prompt_returns_a_short_upload_hint(
     bot.command_prefix = prefix
     message.content = f"{prefix}longprompt"
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.get_server_prompt.assert_called_once_with("31")
     memory.set_server_prompt.assert_not_called()
@@ -429,7 +429,7 @@ def test_longprompt_without_stored_prompt_returns_a_short_upload_hint(
 
     message.channel.sent.clear()
     message.content = f"{prefix}help"
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     help_text = "".join(item["content"] for item in message.channel.sent)
     upload_help = next(
         line
@@ -445,7 +445,7 @@ def test_prompt_and_clearprompt_retain_their_existing_command_behavior(longpromp
     prompt = "legacy inline @everyone\r\n```"
     message.content = "?prompt " + prompt
 
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
 
     memory.set_server_prompt.assert_called_once_with("31", prompt)
     assert message.channel.sent[0]["content"] == "Prompt updated."
@@ -459,7 +459,7 @@ def test_prompt_and_clearprompt_retain_their_existing_command_behavior(longpromp
     message.channel.sent.clear()
     memory.get_server_prompt.return_value = prompt
     message.content = "?prompt"
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     assert message.channel.sent[0]["content"] == (
         f"Current prompt for this server:\n```\n{prompt}\n```"
     )
@@ -469,14 +469,14 @@ def test_prompt_and_clearprompt_retain_their_existing_command_behavior(longpromp
     message.channel.sent.clear()
     oversized = "x" * (bot_module.SERVER_PROMPT_MAX_BYTES + 1)
     message.content = "?prompt " + oversized
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     memory.set_server_prompt.assert_not_called()
     assert oversized not in message.channel.sent[0]["content"]
     assert "16 kib" in message.channel.sent[0]["content"].lower()
 
     message.channel.sent.clear()
     message.content = "?clearprompt"
-    asyncio.run(MaxwellBot._handle_command(bot, message))
+    asyncio.run(DameCurieBot._handle_command(bot, message))
     memory.clear_server_prompt.assert_called_once_with("31")
     assert [item["content"] for item in message.channel.sent] == ["Server prompt cleared."]
     assert not message.channel.sent[0]["allowed_mentions"].everyone

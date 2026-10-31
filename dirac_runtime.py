@@ -50,7 +50,7 @@ from smoke_protocol import (
 )
 
 if TYPE_CHECKING:
-    from bot import MaxwellBot
+    from bot import DameCurieBot
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +243,7 @@ class _NoticeInput:
 class DiracSmokeRuntime:
     """One pending request per poll, delivered to the real bot, recorded once."""
 
-    def __init__(self, bot: MaxwellBot, settings: SmokeSettings) -> None:
+    def __init__(self, bot: DameCurieBot, settings: SmokeSettings) -> None:
         self.bot = bot
         self.settings = settings
         self._observer = _TurnObserver()

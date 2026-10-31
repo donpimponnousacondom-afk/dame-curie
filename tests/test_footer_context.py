@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from bot import MaxwellBot, ToolCircuitBreaker
+from bot import DameCurieBot, ToolCircuitBreaker
 from error_reporting import PUBLIC_ERROR_TEXT
 import response_observability as observability
 
@@ -44,7 +44,7 @@ def make_bot(rows=None):
         "_author_is_self", "_iter_resolved_reply_chain", "_reply_parent_context_lines",
         "_directly_addressed", "_conversation_watch_active", "_is_short_live_turn",
     ):
-        setattr(bot, name, getattr(MaxwellBot, name).__get__(bot))
+        setattr(bot, name, getattr(DameCurieBot, name).__get__(bot))
     return bot
 
 
@@ -80,7 +80,7 @@ def test_exact_delivered_footer_reaches_actual_next_payload_without_memory_mutat
     bot._control["footer_format"] = "NEW TEMPLATE NOT ACTUALLY SENT"
     current = message("What did your footer say?")
     input_before = current.content
-    payload = asyncio.run(MaxwellBot._build_messages(bot, current, current.content))
+    payload = asyncio.run(DameCurieBot._build_messages(bot, current, current.content))
     assert payload[-1]["role"] == "user"
     assert actual in str(payload[-1]["content"])
     assert actual not in str(payload[0]["content"])
@@ -89,8 +89,8 @@ def test_exact_delivered_footer_reaches_actual_next_payload_without_memory_mutat
     assert rows == before
     assert current.content == input_before
     assert sent.content == wire_before
-    assert actual not in MaxwellBot._message_memory_content(bot, sent)
-    assert observability.FOOTER_MARKER not in MaxwellBot._message_memory_content(bot, sent)
+    assert actual not in DameCurieBot._message_memory_content(bot, sent)
+    assert observability.FOOTER_MARKER not in DameCurieBot._message_memory_content(bot, sent)
 
 
 def test_actual_payload_is_channel_isolated_and_uses_latest_delivered_value():
@@ -100,8 +100,8 @@ def test_actual_payload_is_channel_isolated_and_uses_latest_delivered_value():
     delivered(bot, "latest-in-channel", message_id=902)
     first = message(channel_id=123)
     second = message(channel_id=999)
-    first_payload = asyncio.run(MaxwellBot._build_messages(bot, first, first.content))
-    second_payload = asyncio.run(MaxwellBot._build_messages(bot, second, second.content))
+    first_payload = asyncio.run(DameCurieBot._build_messages(bot, first, first.content))
+    second_payload = asyncio.run(DameCurieBot._build_messages(bot, second, second.content))
     assert "latest-in-channel" in str(first_payload[-1]["content"])
     assert "old-in-channel" not in str(first_payload)
     assert "other-channel-private-footer" not in str(first_payload)
@@ -123,16 +123,16 @@ def test_fetched_pre_restart_reply_footer_is_visible_but_storage_quote_stays_cle
     current.channel.fetch_message = AsyncMock(return_value=parent)
 
     async def build():
-        await MaxwellBot._ensure_reply_chain_resolved(bot, current)
-        return await MaxwellBot._build_messages(bot, current, current.content)
+        await DameCurieBot._ensure_reply_chain_resolved(bot, current)
+        return await DameCurieBot._build_messages(bot, current, current.content)
 
     payload = asyncio.run(build())
     current.channel.fetch_message.assert_awaited_once_with(777)
     assert old_footer in str(payload[-1]["content"])
     assert all(observability.FOOTER_MARKER not in str(item["content"]) for item in payload)
-    assert old_footer in MaxwellBot._render_reply_parent(bot, current, parent)
-    assert old_footer not in MaxwellBot._message_memory_content(bot, parent)
-    stored_quote = MaxwellBot._reply_meta_from_message(bot, current)
+    assert old_footer in DameCurieBot._render_reply_parent(bot, current, parent)
+    assert old_footer not in DameCurieBot._message_memory_content(bot, parent)
+    stored_quote = DameCurieBot._reply_meta_from_message(bot, current)
     assert "historic answer" in stored_quote["reply_to_content"]
     assert old_footer not in stored_quote["reply_to_content"]
     assert observability.FOOTER_MARKER not in stored_quote["reply_to_content"]
@@ -189,7 +189,7 @@ def test_public_generic_error_never_acquires_a_fake_footer_in_model_payload():
     notice = message(PUBLIC_ERROR_TEXT, message_id=900, author_id=1)
     observability.record_delivery(bot, notice.channel, notice, None)
     current = message("What happened?")
-    payload = asyncio.run(MaxwellBot._build_messages(bot, current, current.content))
+    payload = asyncio.run(DameCurieBot._build_messages(bot, current, current.content))
     assert observability.latest_delivered_footer(bot, "123") == ""
     assert "CURRENT TEMPLATE MUST NOT BE RECONSTRUCTED" not in str(payload)
     assert all(observability.FOOTER_MARKER not in str(item["content"]) for item in payload)
@@ -256,7 +256,7 @@ def test_edit_tool_records_returned_sdk_message_not_unchanged_original(call_metr
     assert actual_footer in annotation
     assert "OLD WIRE FOOTER" not in annotation
     assert bot._delivery_measurements.lookup("123", "900")[1] is call_metrics
-    payload = asyncio.run(MaxwellBot._build_messages(bot, current, "What does your footer say now?"))
+    payload = asyncio.run(DameCurieBot._build_messages(bot, current, "What does your footer say now?"))
     assert actual_footer in str(payload[-1]["content"])
     assert "OLD WIRE FOOTER" not in str(payload[-1]["content"])
 

@@ -5,7 +5,7 @@ import pytest
 
 discord = pytest.importorskip("discord")
 
-from bot import MaxwellBot  # noqa: E402
+from bot import DameCurieBot  # noqa: E402
 from rag_memory import RemEventLog  # noqa: E402
 from rem import RemStore  # noqa: E402
 
@@ -27,12 +27,12 @@ class FakeAuthor:
 
 class FakeMention:
     id = 99
-    display_name = "Maxwell"
+    display_name = "Curie"
 
 
 class FakeReferencedAuthor:
     id = 99
-    display_name = "Maxwell"
+    display_name = "Curie"
 
 
 class FakeReferencedMessage:
@@ -56,7 +56,7 @@ class FakeMessage:
 
 
 def test_rem_command_admin_gating_and_on_off_fix(tmp_path):
-    bot = cast(Any, MaxwellBot.__new__(MaxwellBot))
+    bot = cast(Any, DameCurieBot.__new__(DameCurieBot))
     bot.command_prefix = ","
     bot.config = type(
         "Cfg",
@@ -75,22 +75,22 @@ def test_rem_command_admin_gating_and_on_off_fix(tmp_path):
 
     async def run():
         msg = FakeMessage(",rem")
-        await MaxwellBot._handle_command(bot, msg)
+        await DameCurieBot._handle_command(bot, msg)
         assert msg.channel.sent == ["not authorized"]
 
         bot._admins = {"42"}
         msg = FakeMessage(",rem on")
-        await MaxwellBot._handle_command(bot, msg)
+        await DameCurieBot._handle_command(bot, msg)
         assert bot.rem_enabled is True
         msg = FakeMessage(",rem off")
-        await MaxwellBot._handle_command(bot, msg)
+        await DameCurieBot._handle_command(bot, msg)
         assert bot.rem_enabled is False
         msg = FakeMessage(",rem fix")
-        await MaxwellBot._handle_command(bot, msg)
+        await DameCurieBot._handle_command(bot, msg)
         assert "Assimilate the short-term slice" in bot.rem_prompt_body
 
         msg = FakeMessage(",rem invalid")
-        await MaxwellBot._handle_command(bot, msg)
+        await DameCurieBot._handle_command(bot, msg)
         assert msg.channel.sent == [
             "Usage: `,rem`, `,rem now`, `,rem on`, `,rem off`, `,rem audit [N]`, `,rem fix`"
         ]
@@ -99,9 +99,9 @@ def test_rem_command_admin_gating_and_on_off_fix(tmp_path):
 
 
 def test_record_rem_event_user_and_assistant_metadata(tmp_path):
-    bot = cast(Any, MaxwellBot.__new__(MaxwellBot))
+    bot = cast(Any, DameCurieBot.__new__(DameCurieBot))
     bot.rem_log = RemEventLog(str(tmp_path), max_events=10)
-    bot.bot_name = "Maxwell"
+    bot.bot_name = "Curie"
     bot._auto_channels = {"1"}
     bot._recent_users = {}
     bot._recorded_rem_msg_ids = set()
@@ -111,8 +111,8 @@ def test_record_rem_event_user_and_assistant_metadata(tmp_path):
     msg.reference = FakeReference()
 
     async def run():
-        await MaxwellBot._record_rem_event(bot, msg, "user")
-        await MaxwellBot._record_rem_event(
+        await DameCurieBot._record_rem_event(bot, msg, "user")
+        await DameCurieBot._record_rem_event(
             bot, msg, "assistant", "visible <think>hidden</think> reply"
         )
         events = await bot.rem_log.drain_slice(None)
@@ -122,13 +122,13 @@ def test_record_rem_event_user_and_assistant_metadata(tmp_path):
         assert events[0]["auto_mode"] is True
         assert events[0]["content"] == "hello <think>secret</think>"
         assert events[0]["message_id"] == "123"
-        assert events[0]["mentions"] == [{"id": "99", "name": "Maxwell"}]
+        assert events[0]["mentions"] == [{"id": "99", "name": "Curie"}]
         assert events[0]["reply_to_message_id"] == "555"
         assert events[0]["reply_to_author_id"] == "99"
         assert events[0]["reply_to_self"] is True
         assert events[1]["role"] == "assistant"
         assert events[1]["user_id"] == "99"
-        assert events[1]["user_name"] == "Maxwell"
+        assert events[1]["user_name"] == "Curie"
         assert events[1]["content"] == "visible <think>hidden</think> reply"
 
     asyncio.run(run())

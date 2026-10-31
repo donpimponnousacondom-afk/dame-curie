@@ -50,7 +50,7 @@ class CheckersGame:
     def __init__(
         self,
         red_player: str = "User",
-        black_player: str = "Maxwell",
+        black_player: str = "Dame Curie",
         *,
         human_color: str = "red",
         human_player_id: str | None = None,

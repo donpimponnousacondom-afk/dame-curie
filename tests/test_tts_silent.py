@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from bot import (
-    MaxwellBot,
+    DameCurieBot,
     PromptBudgetExceeded,
     ToolCircuitBreaker,
     _auto_format_discord,
@@ -108,7 +108,7 @@ def test_dispatch_native_runs_tool_and_records_reasoning():
     raw = [_native_call("tts", {"text": "say this", "explanation": "user wants speech"})]
 
     async def run():
-        return await MaxwellBot._dispatch_tool_calls(
+        return await DameCurieBot._dispatch_tool_calls(
             bot, message, "", native_tool_calls=raw
         )
 
@@ -187,15 +187,15 @@ def test_send_message_with_followup_tool_triggers_followup():
     assert not _tool_results_need_followup(["Tool no_response: __NO_RESPONSE__"])
 
 
-def test_reaction_on_maxwell_message_does_not_invoke_handler():
+def test_reaction_on_dame_curie_message_does_not_invoke_handler():
     calls = []
-    maxwell_user = SimpleNamespace(id=42, display_name="Maxwell", bot=True)
+    curie_user = SimpleNamespace(id=42, display_name="Curie", bot=True)
     reacting_user = SimpleNamespace(
         id=99, display_name="alice", name="alice", bot=False
     )
     original = SimpleNamespace(
         id=777,
-        author=maxwell_user,
+        author=curie_user,
         channel=SimpleNamespace(id=123),
         guild=SimpleNamespace(id=9),
     )
@@ -205,24 +205,24 @@ def test_reaction_on_maxwell_message_does_not_invoke_handler():
         calls.append((message, content))
 
     bot = SimpleNamespace(
-        user=maxwell_user,
+        user=curie_user,
         _load_control=lambda: None,
         _control={"bot_enabled": True, "reply_to_bots": True, "ignore_users": []},
         _blacklist=set(),
         _message_reactions={},
         _message_reactions_order=[],
         memory=None,
-        _MAX_REACTION_MESSAGES=MaxwellBot._MAX_REACTION_MESSAGES,
-        _MAX_REACTORS_PER_MESSAGE=MaxwellBot._MAX_REACTORS_PER_MESSAGE,
+        _MAX_REACTION_MESSAGES=DameCurieBot._MAX_REACTION_MESSAGES,
+        _MAX_REACTORS_PER_MESSAGE=DameCurieBot._MAX_REACTORS_PER_MESSAGE,
         _handle_message=handle_message,
         _dispatch_plugin_event=lambda *a, **k: None,
     )
-    bot._remember_reaction_message = MaxwellBot._remember_reaction_message.__get__(bot)
-    bot._record_message_reaction = MaxwellBot._record_message_reaction.__get__(bot)
-    bot._persist_message_reactions = MaxwellBot._persist_message_reactions.__get__(bot)
-    bot._note_reaction = MaxwellBot._note_reaction.__get__(bot)
+    bot._remember_reaction_message = DameCurieBot._remember_reaction_message.__get__(bot)
+    bot._record_message_reaction = DameCurieBot._record_message_reaction.__get__(bot)
+    bot._persist_message_reactions = DameCurieBot._persist_message_reactions.__get__(bot)
+    bot._note_reaction = DameCurieBot._note_reaction.__get__(bot)
 
-    asyncio.run(MaxwellBot.on_reaction_add(bot, reaction, reacting_user))
+    asyncio.run(DameCurieBot.on_reaction_add(bot, reaction, reacting_user))
 
     assert calls == []
     assert bot._message_reactions["777"][0]["emoji"] == "😂"
@@ -240,7 +240,7 @@ def test_dispatch_native_runs_nonterminal_tool():
     ]
 
     async def run():
-        return await MaxwellBot._dispatch_tool_calls(
+        return await DameCurieBot._dispatch_tool_calls(
             bot, message, "", native_tool_calls=raw
         )
 
@@ -259,7 +259,7 @@ def test_dispatch_native_runs_nonterminal_tool():
         {"id": "bad", "type": "function", "function": {"name": "web_search", "arguments": "{} tail"}},
     ]
     with pytest.raises(ValueError, match="Malformed native tool-call batch"):
-        asyncio.run(MaxwellBot._dispatch_tool_calls(bot, message, "", native_tool_calls=malformed))
+        asyncio.run(DameCurieBot._dispatch_tool_calls(bot, message, "", native_tool_calls=malformed))
     assert (react.calls, broken.calls) == calls_before
 
 
@@ -306,14 +306,14 @@ def test_dispatch_native_records_tool_history_in_memory():
     ]
     token = TOOL_GROUPS_CONTEXT.set(set())
     try:
-        catalog = MaxwellBot._build_openai_tools(bot, message=message)
+        catalog = DameCurieBot._build_openai_tools(bot, message=message)
         catalog_names = {item["function"]["name"] for item in catalog}
         assert "shell" in catalog_names
         assert "tool_bash" not in catalog_names
         assert "tool_shell" not in catalog_names
 
         async def run():
-            return await MaxwellBot._dispatch_tool_calls(
+            return await DameCurieBot._dispatch_tool_calls(
                 bot, message, "", native_tool_calls=raw
             )
 
@@ -380,7 +380,7 @@ def test_dispatch_native_strips_disabled_tool():
     raw = [_native_call("react", {"emoji": "catjam"})]
 
     async def run():
-        return await MaxwellBot._dispatch_tool_calls(
+        return await DameCurieBot._dispatch_tool_calls(
             bot, message, "", native_tool_calls=raw
         )
 
@@ -392,19 +392,19 @@ def test_dispatch_native_strips_disabled_tool():
 def test_dispatch_native_rejects_platform_incompatible_tool():
     react = FakeTool("Reacted")
     bot = _native_bot({"react": react}, native_tool_calls=True)
-    bot._native_tools_enabled = MaxwellBot._native_tools_enabled.__get__(bot)
+    bot._native_tools_enabled = DameCurieBot._native_tools_enabled.__get__(bot)
     bot._message_tool_platform = lambda _message: "synthetic"
     bot._compatible_tool_names = lambda _platform: set()
     message = SimpleNamespace(
         guild=None, channel=SimpleNamespace(id=123), tool_platform="synthetic"
     )
-    assert MaxwellBot._build_openai_tools(
+    assert DameCurieBot._build_openai_tools(
         bot, platform="synthetic", message=message
     ) == []
     raw = [_native_call("react", {"emoji": "catjam"})]
 
     async def run():
-        return await MaxwellBot._dispatch_tool_calls(
+        return await DameCurieBot._dispatch_tool_calls(
             bot, message, "", native_tool_calls=raw
         )
 
@@ -436,7 +436,7 @@ def test_dispatch_native_skips_no_response_after_send_message():
     ]
 
     async def run():
-        return await MaxwellBot._dispatch_tool_calls(
+        return await DameCurieBot._dispatch_tool_calls(
             bot, message, "", native_tool_calls=raw
         )
 
@@ -455,7 +455,7 @@ def test_dispatch_no_native_calls_just_sanitizes_text():
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=123))
 
     async def run():
-        return await MaxwellBot._dispatch_tool_calls(
+        return await DameCurieBot._dispatch_tool_calls(
             bot, message, "hello <tool:send_message>leaked</tool:send_message> world"
         )
 
@@ -476,8 +476,8 @@ def test_tool_prompt_keeps_discord_tools_for_discord():
         tools={"send_file": FakeTool("sent"), "react": FakeTool("Reacted")},
     )
 
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    prompt = MaxwellBot._tool_system_prompt(bot, "discord")
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    prompt = DameCurieBot._tool_system_prompt(bot, "discord")
 
     assert "send_file:" in prompt
     assert "react:" in prompt
@@ -496,8 +496,8 @@ def test_tool_prompt_describes_reasoning_inside_tool_calls():
         tools={"send_message": FakeTool("sent")},
     )
 
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    prompt = MaxwellBot._tool_system_prompt(bot, "discord")
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    prompt = DameCurieBot._tool_system_prompt(bot, "discord")
 
     assert "reasoning_log" not in prompt.lower()
     assert "explanation" in prompt.lower()
@@ -527,7 +527,7 @@ def test_ensure_reasoning_trace_backfills_only_when_no_tool_ran():
     message = SimpleNamespace()
 
     async def run():
-        await MaxwellBot._ensure_reasoning_trace(bot, message, [], "hi", "reply")
+        await DameCurieBot._ensure_reasoning_trace(bot, message, [], "hi", "reply")
 
     asyncio.run(run())
     assert len(bot.traces) == 1
@@ -554,7 +554,7 @@ def test_ensure_reasoning_trace_skips_when_tools_ran():
     message = SimpleNamespace()
 
     async def run():
-        await MaxwellBot._ensure_reasoning_trace(
+        await DameCurieBot._ensure_reasoning_trace(
             bot,
             message,
             ["Tool send_message: __MESSAGE_SENT__\nsent"],
@@ -611,21 +611,21 @@ def test_build_messages_caps_tool_history_outside_recent_count():
         _recent_users={},
         _conversation_watch={},
         _tool_system_prompt=lambda *args, **kwargs: "",
-        bot_name="Maxwell",
+        bot_name="Curie",
         memory=memory,
-        user=SimpleNamespace(display_name="Maxwell", id=1),
+        user=SimpleNamespace(display_name="Curie", id=1),
     )
-    bot._reply_parent = MaxwellBot._reply_parent.__get__(bot)
-    bot._replying_to_own_message = MaxwellBot._replying_to_own_message.__get__(bot)
-    bot._render_reply_parent = MaxwellBot._render_reply_parent.__get__(bot)
-    bot._author_is_self = MaxwellBot._author_is_self.__get__(bot)
-    bot._iter_resolved_reply_chain = MaxwellBot._iter_resolved_reply_chain.__get__(bot)
-    bot._reply_parent_context_lines = MaxwellBot._reply_parent_context_lines.__get__(
+    bot._reply_parent = DameCurieBot._reply_parent.__get__(bot)
+    bot._replying_to_own_message = DameCurieBot._replying_to_own_message.__get__(bot)
+    bot._render_reply_parent = DameCurieBot._render_reply_parent.__get__(bot)
+    bot._author_is_self = DameCurieBot._author_is_self.__get__(bot)
+    bot._iter_resolved_reply_chain = DameCurieBot._iter_resolved_reply_chain.__get__(bot)
+    bot._reply_parent_context_lines = DameCurieBot._reply_parent_context_lines.__get__(
         bot
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._conversation_watch_active = MaxwellBot._conversation_watch_active.__get__(bot)
-    bot._is_short_live_turn = MaxwellBot._is_short_live_turn.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._conversation_watch_active = DameCurieBot._conversation_watch_active.__get__(bot)
+    bot._is_short_live_turn = DameCurieBot._is_short_live_turn.__get__(bot)
     message = SimpleNamespace(
         author=SimpleNamespace(bot=False, display_name="alice", id=456),
         channel=SimpleNamespace(id=123),
@@ -636,7 +636,7 @@ def test_build_messages_caps_tool_history_outside_recent_count():
     )
 
     async def run():
-        messages = await MaxwellBot._build_messages(bot, message, "latest")
+        messages = await DameCurieBot._build_messages(bot, message, "latest")
         context = "\n".join(m["content"] for m in messages)
         assert "tool 1" not in context
         assert "tool 2" in context
@@ -678,8 +678,8 @@ def test_tool_prompt_keeps_reasoning_plain_text_rule():
         tools={"send_message": FakeTool("sent")},
     )
 
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    prompt = MaxwellBot._tool_system_prompt(bot, "discord")
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    prompt = DameCurieBot._tool_system_prompt(bot, "discord")
 
     # The prompt states the format in positive form. It does not name XML or tags.
     assert "plain text" in prompt.lower()
@@ -697,8 +697,8 @@ def test_tool_prompt_native_mode_no_xml_instructions():
         tools={"send_message": FakeTool("sent"), "react": FakeTool("Reacted")},
     )
 
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    prompt = MaxwellBot._tool_system_prompt(bot, "discord")
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    prompt = DameCurieBot._tool_system_prompt(bot, "discord")
 
     assert "native function/tool calling" in prompt.lower()
     assert "XML text tags only" not in prompt
@@ -749,14 +749,14 @@ def test_prompt_budget_trims_large_background_blocks():
     ]
     schemas = [{"type": "function", "function": {"name": "all_tools", "description": "z" * 14000}}]
 
-    trimmed = MaxwellBot._apply_prompt_budget(bot, messages, schemas)
+    trimmed = DameCurieBot._apply_prompt_budget(bot, messages, schemas)
     transcript = next(
         item["content"] for item in trimmed
         if str(item.get("content") or "").startswith("<previous_conversation>\n")
     )
 
-    tail_allowance = MaxwellBot._message_content_chars(paired_call) + MaxwellBot._message_content_chars(paired_result)
-    assert sum(MaxwellBot._message_content_chars(m) for m in trimmed) + len(
+    tail_allowance = DameCurieBot._message_content_chars(paired_call) + DameCurieBot._message_content_chars(paired_result)
+    assert sum(DameCurieBot._message_content_chars(m) for m in trimmed) + len(
         json.dumps(schemas, ensure_ascii=False, separators=(",", ":"))
     ) <= 72000 + tail_allowance
     assert "history 0" not in transcript
@@ -782,25 +782,25 @@ def test_prompt_budget_trims_large_background_blocks():
         {"role": "user", "content": "[RESPOND TO THIS]\nlatest"},
     ]
     with pytest.raises(PromptBudgetExceeded):
-        MaxwellBot._apply_prompt_budget(bot, too_large)
+        DameCurieBot._apply_prompt_budget(bot, too_large)
 
 
 def test_shared_fact_relevance_filters_broad_vague_context():
     assert (
-        MaxwellBot._shared_fact_relevant(
+        DameCurieBot._shared_fact_relevant(
             "lol", {"scope": "guild:1", "content": "project alpha uses postgres"}
         )
         is False
     )
     assert (
-        MaxwellBot._shared_fact_relevant(
+        DameCurieBot._shared_fact_relevant(
             "what database does project alpha use",
             {"scope": "guild:1", "content": "project alpha uses postgres"},
         )
         is True
     )
     assert (
-        MaxwellBot._shared_fact_relevant(
+        DameCurieBot._shared_fact_relevant(
             "lol", {"scope": "user:1", "content": "likes terse replies"}
         )
         is True
@@ -826,21 +826,21 @@ def test_build_messages_has_single_formatting_instruction():
         _recent_users={},
         _conversation_watch={},
         _tool_system_prompt=lambda *args, **kwargs: "",
-        bot_name="Maxwell",
+        bot_name="Curie",
         memory=memory,
-        user=SimpleNamespace(display_name="Maxwell", id=1),
+        user=SimpleNamespace(display_name="Curie", id=1),
     )
-    bot._reply_parent = MaxwellBot._reply_parent.__get__(bot)
-    bot._replying_to_own_message = MaxwellBot._replying_to_own_message.__get__(bot)
-    bot._render_reply_parent = MaxwellBot._render_reply_parent.__get__(bot)
-    bot._author_is_self = MaxwellBot._author_is_self.__get__(bot)
-    bot._iter_resolved_reply_chain = MaxwellBot._iter_resolved_reply_chain.__get__(bot)
-    bot._reply_parent_context_lines = MaxwellBot._reply_parent_context_lines.__get__(
+    bot._reply_parent = DameCurieBot._reply_parent.__get__(bot)
+    bot._replying_to_own_message = DameCurieBot._replying_to_own_message.__get__(bot)
+    bot._render_reply_parent = DameCurieBot._render_reply_parent.__get__(bot)
+    bot._author_is_self = DameCurieBot._author_is_self.__get__(bot)
+    bot._iter_resolved_reply_chain = DameCurieBot._iter_resolved_reply_chain.__get__(bot)
+    bot._reply_parent_context_lines = DameCurieBot._reply_parent_context_lines.__get__(
         bot
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._conversation_watch_active = MaxwellBot._conversation_watch_active.__get__(bot)
-    bot._is_short_live_turn = MaxwellBot._is_short_live_turn.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._conversation_watch_active = DameCurieBot._conversation_watch_active.__get__(bot)
+    bot._is_short_live_turn = DameCurieBot._is_short_live_turn.__get__(bot)
     message = SimpleNamespace(
         author=SimpleNamespace(bot=False, display_name="alice", id=456),
         channel=SimpleNamespace(id=123),
@@ -851,7 +851,7 @@ def test_build_messages_has_single_formatting_instruction():
     )
 
     async def run():
-        messages = await MaxwellBot._build_messages(bot, message, "hello")
+        messages = await DameCurieBot._build_messages(bot, message, "hello")
         system_content = messages[0]["content"]
         assert "MANDATORY" not in system_content
         assert "MUST format every response" not in system_content
@@ -881,25 +881,25 @@ def test_bare_ping_prompt_uses_room_context_not_look_at_this():
         _recent_users={},
         _conversation_watch={},
         _tool_system_prompt=lambda *args, **kwargs: "",
-        bot_name="Maxwell",
+        bot_name="Curie",
         memory=memory,
-        user=SimpleNamespace(display_name="Maxwell", id=1),
+        user=SimpleNamespace(display_name="Curie", id=1),
     )
-    bot._reply_parent = MaxwellBot._reply_parent.__get__(bot)
-    bot._replying_to_own_message = MaxwellBot._replying_to_own_message.__get__(bot)
-    bot._render_reply_parent = MaxwellBot._render_reply_parent.__get__(bot)
-    bot._author_is_self = MaxwellBot._author_is_self.__get__(bot)
-    bot._iter_resolved_reply_chain = MaxwellBot._iter_resolved_reply_chain.__get__(bot)
-    bot._reply_parent_context_lines = MaxwellBot._reply_parent_context_lines.__get__(
+    bot._reply_parent = DameCurieBot._reply_parent.__get__(bot)
+    bot._replying_to_own_message = DameCurieBot._replying_to_own_message.__get__(bot)
+    bot._render_reply_parent = DameCurieBot._render_reply_parent.__get__(bot)
+    bot._author_is_self = DameCurieBot._author_is_self.__get__(bot)
+    bot._iter_resolved_reply_chain = DameCurieBot._iter_resolved_reply_chain.__get__(bot)
+    bot._reply_parent_context_lines = DameCurieBot._reply_parent_context_lines.__get__(
         bot
     )
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._content_without_self_mention = MaxwellBot._content_without_self_mention.__get__(
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._content_without_self_mention = DameCurieBot._content_without_self_mention.__get__(
         bot
     )
-    bot._is_bare_ping = MaxwellBot._is_bare_ping.__get__(bot)
-    bot._conversation_watch_active = MaxwellBot._conversation_watch_active.__get__(bot)
-    bot._is_short_live_turn = MaxwellBot._is_short_live_turn.__get__(bot)
+    bot._is_bare_ping = DameCurieBot._is_bare_ping.__get__(bot)
+    bot._conversation_watch_active = DameCurieBot._conversation_watch_active.__get__(bot)
+    bot._is_short_live_turn = DameCurieBot._is_short_live_turn.__get__(bot)
     message = SimpleNamespace(
         author=SimpleNamespace(bot=False, display_name="alice", id=456),
         channel=SimpleNamespace(id=123),
@@ -914,7 +914,7 @@ def test_bare_ping_prompt_uses_room_context_not_look_at_this():
     )
 
     async def run():
-        messages = await MaxwellBot._build_messages(bot, message, "")
+        messages = await DameCurieBot._build_messages(bot, message, "")
         blob = "\n".join(m["content"] for m in messages)
         assert "look at this" not in blob.lower()
         assert "pinged you with no extra text" in blob
@@ -926,9 +926,9 @@ def test_bare_ping_prompt_uses_room_context_not_look_at_this():
 def test_cached_media_context_requires_latest_visual_reference():
     message = SimpleNamespace(reference=None)
 
-    assert not MaxwellBot._should_use_cached_media_context(message, "lol ok")
-    assert MaxwellBot._should_use_cached_media_context(message, "what's in that image?")
-    assert MaxwellBot._should_use_cached_media_context(message, "look at this")
+    assert not DameCurieBot._should_use_cached_media_context(message, "lol ok")
+    assert DameCurieBot._should_use_cached_media_context(message, "what's in that image?")
+    assert DameCurieBot._should_use_cached_media_context(message, "look at this")
 
 
 def test_cached_media_context_allowed_for_attachment_reply():
@@ -937,7 +937,7 @@ def test_cached_media_context_allowed_for_attachment_reply():
     )
     message = SimpleNamespace(reference=SimpleNamespace(resolved=replied))
 
-    assert MaxwellBot._should_use_cached_media_context(message, "what is that")
+    assert DameCurieBot._should_use_cached_media_context(message, "what is that")
 
 
 def test_cached_media_context_can_filter_by_reply_message_id():
@@ -961,14 +961,14 @@ def test_cached_media_context_can_filter_by_reply_message_id():
         },
     )
 
-    media = MaxwellBot._get_media_context(bot, "c", message_id=2)
+    media = DameCurieBot._get_media_context(bot, "c", message_id=2)
 
     assert [item["filename"] for item in media] == ["right.png"]
 
 
 def test_current_image_does_not_mix_cached_media_without_prior_reference():
-    assert not MaxwellBot._should_mix_cached_with_current("look at this")
-    assert MaxwellBot._should_mix_cached_with_current(
+    assert not DameCurieBot._should_mix_cached_with_current("look at this")
+    assert DameCurieBot._should_mix_cached_with_current(
         "compare this with the previous image"
     )
 
@@ -976,7 +976,7 @@ def test_current_image_does_not_mix_cached_media_without_prior_reference():
 def test_media_summary_does_not_tell_model_to_force_old_images():
     active = [{"filename": "old.png", "mime_type": "image/png", "message_id": 1}]
 
-    summary = MaxwellBot._format_media_summary([], active)
+    summary = DameCurieBot._format_media_summary([], active)
 
     assert "Only discuss them when relevant to the latest message" in summary
     assert "Use these actual image attachments when answering" not in summary

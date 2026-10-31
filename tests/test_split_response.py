@@ -1,10 +1,10 @@
-from bot import MaxwellBot
+from bot import DameCurieBot
 
 
 def test_split_response_closes_and_reopens_code_fence_when_chunking():
     text = "```python\n" + ("print('x')\n" * 80) + "```"
 
-    chunks = MaxwellBot._split_response(text, limit=180)
+    chunks = DameCurieBot._split_response(text, limit=180)
 
     assert len(chunks) > 1
     assert all(len(c) <= 188 for c in chunks)
@@ -14,7 +14,7 @@ def test_split_response_closes_and_reopens_code_fence_when_chunking():
 def test_split_response_preserves_custom_filename_extensions_in_code_fence():
     text = "```lol.html\n" + ("<p>hey</p>\n" * 70) + "```"
 
-    chunks = MaxwellBot._split_response(text, limit=170)
+    chunks = DameCurieBot._split_response(text, limit=170)
 
     assert len(chunks) > 1
     assert chunks[0].startswith("```lol.html")
@@ -31,7 +31,7 @@ def test_split_response_does_not_wrap_trailing_prose_in_a_code_fence():
     """
     code = "```python\n" + ("print('x')\n" * 40) + "```"
     prose = "That is the code. " + ("Hope it helps. " * 12)
-    chunks = MaxwellBot._split_response(code + "\n\n" + prose, limit=180)
+    chunks = DameCurieBot._split_response(code + "\n\n" + prose, limit=180)
 
     assert len(chunks) > 2
     assert all(c.count("```") % 2 == 0 for c in chunks)
@@ -44,7 +44,7 @@ def test_split_response_does_not_wrap_trailing_prose_in_a_code_fence():
 
 def test_split_response_reopens_fence_on_every_code_chunk():
     text = "```\n" + ("line of code\n" * 60) + "```"
-    chunks = MaxwellBot._split_response(text, limit=200)
+    chunks = DameCurieBot._split_response(text, limit=200)
 
     assert len(chunks) > 1
     for chunk in chunks:

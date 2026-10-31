@@ -1,8 +1,8 @@
-"""Configuration management for Maxwell Bot.
+"""Configuration management for Dame Curie Bot.
 
 Design note - optional features
 -------------------------------
-Maxwell only *requires* two things: a Discord token and an OpenAI-compatible
+Dame Curie only *requires* two things: a Discord token and an OpenAI-compatible
 model endpoint. Everything else (voice, YouTube, web search, TTS,
 video frames, RAG embeddings) is optional and gated behind an ``ENABLE_*``
 switch.
@@ -460,7 +460,7 @@ class Config:
         # so pm2 captures it.
         import logging
 
-        _log = logging.getLogger("maxwell.config")
+        _log = logging.getLogger("dame_curie.config")
 
         if not cls.DAME_CURIE_OWNER_IDS:
             _log.warning(

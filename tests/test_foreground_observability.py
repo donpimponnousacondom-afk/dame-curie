@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import discord
 import pytest
 
-from bot import MaxwellBot, TokenBudgetTracker
+from bot import DameCurieBot, TokenBudgetTracker
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from control_defaults import DEFAULT_CONTROL
 from dirac_runtime import _NoticeInput
@@ -83,7 +83,7 @@ def foreground_bot():
     bot = SimpleNamespace(
         _control={"max_tool_iterations": 3, "footer_format": "{{MODEL}} {{TTFT}}"},
         config=SimpleNamespace(ENABLE_IMAGE_INPUT=False, OPENAI_MAX_TOKENS=1000),
-        bot_name="Maxwell",
+        bot_name="Curie",
         user=SimpleNamespace(id=42),
         tools={},
         memory=SimpleNamespace(),
@@ -141,29 +141,29 @@ def foreground_bot():
 
     bot._apply_inflight_refresh = refresh
     bot._wait_for_late_embeds = AsyncMock(side_effect=lambda message, content: message)
-    bot._message_tool_platform = MethodType(MaxwellBot._message_tool_platform, bot)
-    bot._compatible_tool_names = MethodType(MaxwellBot._compatible_tool_names, bot)
-    bot._turn_tool_names = MethodType(MaxwellBot._turn_tool_names, bot)
-    bot._preserve_input_actor = MaxwellBot._preserve_input_actor
+    bot._message_tool_platform = MethodType(DameCurieBot._message_tool_platform, bot)
+    bot._compatible_tool_names = MethodType(DameCurieBot._compatible_tool_names, bot)
+    bot._turn_tool_names = MethodType(DameCurieBot._turn_tool_names, bot)
+    bot._preserve_input_actor = DameCurieBot._preserve_input_actor
     for name in (
         "_native_calls_from",
         "_usage_from",
         "_recover_text_tool_calls",
         "_send_with_slowmode",
     ):
-        setattr(bot, name, MethodType(getattr(MaxwellBot, name), bot))
-    bot._split_response = MaxwellBot._split_response
+        setattr(bot, name, MethodType(getattr(DameCurieBot, name), bot))
+    bot._split_response = DameCurieBot._split_response
     return bot
 
 
 @pytest.fixture
 def raw_update_foreground(foreground_bot):
-    bot = object.__new__(MaxwellBot)
+    bot = object.__new__(DameCurieBot)
     bot.__dict__.update(vars(foreground_bot))
     bot._connection = SimpleNamespace(user=foreground_bot.user)
-    bot._message_tool_platform = MethodType(MaxwellBot._message_tool_platform, bot)
-    bot._compatible_tool_names = MethodType(MaxwellBot._compatible_tool_names, bot)
-    bot._turn_tool_names = MethodType(MaxwellBot._turn_tool_names, bot)
+    bot._message_tool_platform = MethodType(DameCurieBot._message_tool_platform, bot)
+    bot._compatible_tool_names = MethodType(DameCurieBot._compatible_tool_names, bot)
+    bot._turn_tool_names = MethodType(DameCurieBot._turn_tool_names, bot)
     bot._inflight_context = {}
     bot._media_context = {}
     bot._recent_users = {}
@@ -176,7 +176,7 @@ def raw_update_foreground(foreground_bot):
         "_wait_for_late_embeds", "_message_update_fingerprint", "_message_media_fingerprint",
     ):
         delattr(bot, name)
-    bot._send_with_slowmode = MethodType(MaxwellBot._send_with_slowmode, bot)
+    bot._send_with_slowmode = MethodType(DameCurieBot._send_with_slowmode, bot)
     message = Message()
     message.embeds = []
     bot.get_channel = lambda channel_id: message.channel
@@ -406,9 +406,9 @@ def test_real_foreground_handler_preserves_producing_call(
             for name in descriptions:
                 descriptions[name] += " " + "synthetic".ljust(padding, "x")
             bot._control["prompt_context_budget"] = 96000
-            bot._build_openai_tools = MethodType(MaxwellBot._build_openai_tools, bot)
-            bot._select_tool_protocol = MethodType(MaxwellBot._select_tool_protocol, bot)
-            bot._native_tools_enabled = MethodType(MaxwellBot._native_tools_enabled, bot)
+            bot._build_openai_tools = MethodType(DameCurieBot._build_openai_tools, bot)
+            bot._select_tool_protocol = MethodType(DameCurieBot._select_tool_protocol, bot)
+            bot._native_tools_enabled = MethodType(DameCurieBot._native_tools_enabled, bot)
             bot._is_admin = lambda user_id: True
             bot._shell_whitelist = set()
             bot._reply_parent = lambda current: None
@@ -417,11 +417,11 @@ def test_real_foreground_handler_preserves_producing_call(
             bot._build_messages = AsyncMock(side_effect=lambda *args, **kwargs: [
                 {"role": "system", "content": personality},
                 {"role": "system", "content": server},
-                {"role": "system", "content": MaxwellBot._tool_system_prompt(bot, message=message)},
+                {"role": "system", "content": DameCurieBot._tool_system_prompt(bot, message=message)},
                 {"role": "user", "content": "Protected live input sentinel"},
             ])
-            budget_spy = Mock(wraps=MaxwellBot._apply_prompt_budget)
-            monkeypatch.setattr(MaxwellBot, "_apply_prompt_budget", budget_spy)
+            budget_spy = Mock(wraps=DameCurieBot._apply_prompt_budget)
+            monkeypatch.setattr(DameCurieBot, "_apply_prompt_budget", budget_spy)
         configure_dispatch(
             bot, expand_catalog=mode == "expanded_catalog_fallback",
             native_continuations=mode in {"native_continuations_unlimited", "native_continuations_limited"},
@@ -584,10 +584,10 @@ def test_real_foreground_handler_preserves_producing_call(
             bot._generate_response = AsyncMock(side_effect=responses)
         if mode == "cancelled":
             with pytest.raises(asyncio.CancelledError):
-                await MaxwellBot._handle_message(bot, message)
+                await DameCurieBot._handle_message(bot, message)
             assert not message.channel.sent
         else:
-            await MaxwellBot._handle_message(bot, message)
+            await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
         if mode in {"native_continuations_unlimited", "native_continuations_limited"}:
             expected_posts = 14 if mode == "native_continuations_unlimited" else 12
@@ -766,7 +766,7 @@ def test_real_foreground_handler_preserves_producing_call(
             assert {
                 tool["function"]["name"] for tool in core_tools
             } == CORE_TOOL_NAMES.intersection(bot.tools)
-            assert MaxwellBot._prompt_budget_chars(bot) == 72000
+            assert DameCurieBot._prompt_budget_chars(bot) == 72000
             followup_call = bot._generate_response.call_args_list[1]
             followup_messages = followup_call.args[0]
             followup_tools = followup_call.kwargs["tools"]
@@ -774,9 +774,9 @@ def test_real_foreground_handler_preserves_producing_call(
                 tool["function"]["name"] for tool in followup_tools
             } == CORE_TOOL_NAMES.intersection(bot.tools)
             followup_chars = len(json.dumps(followup_tools, ensure_ascii=False, separators=(",", ":"))) + sum(
-                MaxwellBot._message_content_chars(item) for item in followup_messages
+                DameCurieBot._message_content_chars(item) for item in followup_messages
             )
-            assert followup_chars <= MaxwellBot._prompt_budget_chars(bot)
+            assert followup_chars <= DameCurieBot._prompt_budget_chars(bot)
             assert followup_messages[0]["content"] == personality
             assert followup_messages[1]["content"] == server
             assert followup_messages[2]["content"].startswith("## Tools\n")
@@ -793,7 +793,7 @@ def test_real_foreground_handler_preserves_producing_call(
                 item["tool_call_id"] for item in paired_results
             }
             assert max(len(item["content"]) for item in paired_results) >= 20000
-            assert sum(MaxwellBot._message_content_chars(item) for item in [assistant_calls, *paired_results]) <= 24000
+            assert sum(DameCurieBot._message_content_chars(item) for item in [assistant_calls, *paired_results]) <= 24000
             assert bot._generate_response.call_args.kwargs["tools"] == followup_tools
             assert len(message.channel.sent) == 1
             assert bot._delivery_measurements.lookup(
@@ -842,7 +842,7 @@ def test_sticker_only_send_preserves_empty_clean_chunk_and_registers_once(
     async def scenario():
         bot = SimpleNamespace(
             _control={},
-            bot_name="Maxwell",
+            bot_name="Curie",
             _delivery_measurements=DeliveryMeasurements(),
             _extract_stickers_from_text=lambda text, guild: ("", ["sticker"]),
         )
@@ -876,10 +876,10 @@ def test_multichar_prefix_commands_and_help_fit_discord(command):
                 "a" * 40, "branch", "date", "subject", False, "start", "3.14"
             ),
         )
-        bot._handle_footer_command = MethodType(MaxwellBot._handle_footer_command, bot)
+        bot._handle_footer_command = MethodType(DameCurieBot._handle_footer_command, bot)
         message = Message()
         message.content = "!!" + command
-        await MaxwellBot._handle_command(bot, message)
+        await DameCurieBot._handle_command(bot, message)
         assert message.channel.sent
         assert not any(
             "Something went wrong" in sent.content for sent in message.channel.sent
@@ -920,7 +920,7 @@ def test_foreground_deferred_image_has_one_preview_reply_and_preserves_metrics(
             ProviderResult(text, metrics=final_metrics),
             ProviderResult(text, metrics=measured_call),
         ])
-        await MaxwellBot._handle_message(bot, message)
+        await DameCurieBot._handle_message(bot, message)
         assert len(message.channel.sent) == 1
         final = message.channel.sent[0]
         assert final.kwargs.get("file") is None
@@ -933,7 +933,7 @@ def test_foreground_deferred_image_has_one_preview_reply_and_preserves_metrics(
         following = Message()
         following.id = 8
         following.channel = message.channel
-        await MaxwellBot._handle_message(bot, following)
+        await DameCurieBot._handle_message(bot, following)
         assert len(message.channel.sent) == 2
         assert message.channel.sent[-1].content.startswith(text)
         assert f"<{url}>" not in message.channel.sent[-1].content
@@ -965,9 +965,9 @@ def test_foreground_image_previews_remain_enabled_across_channels(
             ProviderResult(url, metrics=measured_call),
         ])
         async with asyncio.TaskGroup() as tasks:
-            tasks.create_task(MaxwellBot._handle_message(bot, first))
+            tasks.create_task(DameCurieBot._handle_message(bot, first))
             await asyncio.wait_for(ready.wait(), timeout=1)
-            await MaxwellBot._handle_message(bot, other)
+            await DameCurieBot._handle_message(bot, other)
             release.set()
         assert other.channel.sent[-1].content.startswith(url + "\n")
         assert first.channel.sent[-1].content.startswith(url + "\n")
@@ -1005,7 +1005,7 @@ def test_foreground_image_link_progress_edit_preserves_preview(
             ProviderResult("", tool_calls=[tool_call("image_generator", prompt="synthetic")]),
             ProviderResult(f"[shot]({url})", metrics=measured_call),
         ])
-        await MaxwellBot._handle_message(bot, message)
+        await DameCurieBot._handle_message(bot, message)
         assert not message.channel.sent
         assert len(edited) == 1
         assert edited[0].content.startswith(f"[shot]({url})\n")
@@ -1034,7 +1034,7 @@ def test_foreground_delivered_image_or_caption_has_no_second_reply(
         bot._generate_response = AsyncMock(return_value=ProviderResult(
             "Redundant commentary and image URL", tool_calls=[tool_call(name, auto_send=True)], metrics=measured_call
         ))
-        await MaxwellBot._handle_message(bot, message)
+        await DameCurieBot._handle_message(bot, message)
         assert bot._generate_response.await_count == 1
         assert len(message.channel.sent) == 1
         assert message.channel.sent[0].content == caption

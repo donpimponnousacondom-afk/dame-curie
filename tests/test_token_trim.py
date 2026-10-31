@@ -8,7 +8,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from bot import MaxwellBot, ToolCircuitBreaker
+from bot import DameCurieBot, ToolCircuitBreaker
 from bot_tools import MoreToolsTool
 from rag_memory import RAGMemoryManager
 from tool_schemas import CORE_TOOL_NAMES
@@ -65,16 +65,16 @@ def _live_bot(extra_tools=None):
         _emoji_grid_shown={},
         _tool_breaker=ToolCircuitBreaker(failure_threshold=999, recovery_seconds=0),
     )
-    bot._compatible_tool_names = MaxwellBot._compatible_tool_names.__get__(bot)
-    bot._native_tools_enabled = MaxwellBot._native_tools_enabled.__get__(bot)
-    bot._directly_addressed = MaxwellBot._directly_addressed.__get__(bot)
-    bot._conversation_watch_active = MaxwellBot._conversation_watch_active.__get__(bot)
-    bot._is_short_live_turn = MaxwellBot._is_short_live_turn.__get__(bot)
-    bot._lean_chat_turn = MaxwellBot._lean_chat_turn.__get__(bot)
-    bot._turn_tool_names = MaxwellBot._turn_tool_names.__get__(bot)
-    bot._tools_for_turn = MaxwellBot._tools_for_turn.__get__(bot)
-    bot._tool_system_prompt = MaxwellBot._tool_system_prompt.__get__(bot)
-    bot._build_openai_tools = MaxwellBot._build_openai_tools.__get__(bot)
+    bot._compatible_tool_names = DameCurieBot._compatible_tool_names.__get__(bot)
+    bot._native_tools_enabled = DameCurieBot._native_tools_enabled.__get__(bot)
+    bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
+    bot._conversation_watch_active = DameCurieBot._conversation_watch_active.__get__(bot)
+    bot._is_short_live_turn = DameCurieBot._is_short_live_turn.__get__(bot)
+    bot._lean_chat_turn = DameCurieBot._lean_chat_turn.__get__(bot)
+    bot._turn_tool_names = DameCurieBot._turn_tool_names.__get__(bot)
+    bot._tools_for_turn = DameCurieBot._tools_for_turn.__get__(bot)
+    bot._tool_system_prompt = DameCurieBot._tool_system_prompt.__get__(bot)
+    bot._build_openai_tools = DameCurieBot._build_openai_tools.__get__(bot)
     return bot
 
 
@@ -92,7 +92,7 @@ def _msg(content, *, mentions=None, watch_followup=False):
 
 
 def _tool_names(bot, message, content, platform="discord"):
-    payload = MaxwellBot._build_openai_tools(
+    payload = DameCurieBot._build_openai_tools(
         bot, platform, message=message, content=content
     )
     return {item["function"]["name"] for item in payload}
@@ -134,9 +134,9 @@ def test_every_turn_offers_every_registered_tool():
 
 def test_lean_chat_turn_is_gone():
     bot = _live_bot()
-    assert MaxwellBot._lean_chat_turn(bot, _msg("wyd"), "wyd") is False
+    assert DameCurieBot._lean_chat_turn(bot, _msg("wyd"), "wyd") is False
     bot._control["lean_chat_tools"] = True
-    assert MaxwellBot._lean_chat_turn(bot, _msg("wyd"), "wyd") is False
+    assert DameCurieBot._lean_chat_turn(bot, _msg("wyd"), "wyd") is False
 
 
 def test_tool_prompt_lists_full_catalog_on_chat_turn():
@@ -146,7 +146,7 @@ def test_tool_prompt_lists_full_catalog_on_chat_turn():
     turn = ForegroundTurn(1, time.monotonic() + 60)
     token = set_foreground_turn(turn)
     try:
-        prompt = MaxwellBot._tool_system_prompt(
+        prompt = DameCurieBot._tool_system_prompt(
             bot, "discord", message=message, content="wyd"
         )
         assert "youtube" in prompt
@@ -156,7 +156,7 @@ def test_tool_prompt_lists_full_catalog_on_chat_turn():
         assert "inbox_list" not in prompt
 
         asyncio.run(MoreToolsTool(bot).execute(message, group="messaging"))
-        expanded = MaxwellBot._tool_system_prompt(
+        expanded = DameCurieBot._tool_system_prompt(
             bot, "discord", message=message, content="inbox"
         )
         assert "inbox_list" in expanded
@@ -174,7 +174,7 @@ def test_disabled_tools_still_hidden():
     assert "youtube" not in names
     assert "image_generator" not in names
     assert "send_message" in names
-    prompt = MaxwellBot._tool_system_prompt(
+    prompt = DameCurieBot._tool_system_prompt(
         bot, "discord", message=_msg(content), content=content
     )
     catalog = prompt.split("## Tool contract")[0]
@@ -187,8 +187,8 @@ def test_short_live_turn_for_watch_followup_not_hard_ping():
     bot = _live_bot()
     watch = _msg("dont be like him max", watch_followup=True)
     ping = _msg("wyd", mentions=[bot.user])
-    assert MaxwellBot._is_short_live_turn(bot, watch, "dont be like him max") is True
-    assert MaxwellBot._is_short_live_turn(bot, ping, "wyd") is False
+    assert DameCurieBot._is_short_live_turn(bot, watch, "dont be like him max") is True
+    assert DameCurieBot._is_short_live_turn(bot, ping, "wyd") is False
 
 
 def test_emoji_grid_skipped_unless_asked():
@@ -197,10 +197,10 @@ def test_emoji_grid_skipped_unless_asked():
 
     async def run():
         quiet = SimpleNamespace(guild=object(), content="wyd")
-        assert await MaxwellBot._maybe_emoji_grid(bot, quiet, "1") is None
+        assert await DameCurieBot._maybe_emoji_grid(bot, quiet, "1") is None
         assert bot._emoji_grid_media.await_count == 0
         asked = SimpleNamespace(guild=object(), content="what emoji can you use")
-        item = await MaxwellBot._maybe_emoji_grid(bot, asked, "1")
+        item = await DameCurieBot._maybe_emoji_grid(bot, asked, "1")
         assert item is not None
         assert bot._emoji_grid_media.await_count == 1
 
