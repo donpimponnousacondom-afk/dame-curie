@@ -67,7 +67,14 @@ class Transport:
             if request["action"] != "site" or not request["name"] or not request["token"]:
                 raise RemoteFailure("non-site deletion refused")
             marker_name = f".{request['marker_namespace']}-publisher-owner"
-            argv.extend(["--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}"])
+            # Root, 1 November 2026: folders that a server script creates on the
+            # remote to keep data (for example .data) persist. This filter keeps
+            # every top-level hidden folder of a site and its files, by name only.
+            # Everything else follows the local tree. See docs/PUBLISHING.md.
+            argv.extend([
+                "--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}",
+                "--filter", "P /.*/***",
+            ])
         argv.extend(["--", str(source) + "/", f"{self.config.user}@{self.config.host}:./"])
         self.execute(argv, capture=False, operation=f"{request['action']} {request['name']!r}")
 

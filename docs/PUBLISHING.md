@@ -39,7 +39,7 @@ image with a publishable suffix exists.
 
 | Local | Remote | Deletion |
 | --- | --- | --- |
-| `<root>/<site>/**` | `site_root/<site>/**` | `rsync --delete-delay`, ownership marker protected |
+| `<root>/<site>/**` | `site_root/<site>/**` | `rsync --delete-delay`, ownership marker and top-level hidden folders protected |
 | `<root>/_images/*.{png,jpg,jpeg,gif,webp}` and matching `.txt` | `image_root/*` (flat) | **never deleted** |
 
 Only **first-level directories** of the authoring root become sites. A loose file at the
@@ -62,6 +62,18 @@ SSH and remote-ownership protections remain in force.
    next sync. An operator-installed file survives only if it also exists in the local
    source tree. Files the publisher does not own - other site directories, and anything
    in `site_root` itself - are left alone.
+   **Exception: top-level hidden folders.** A hidden folder is a folder whose name starts
+   with a dot (for example `.data`). Root decided on 1 November 2026 that folders a
+   server script (PHP, Perl) creates on the remote to keep data persist. The publisher
+   implements this by name for every hidden folder at the top of a site. Root has not
+   confirmed this wider scope. A sync never deletes that folder or its files
+   (`--filter "P /.*/***"`).
+   The remote inventory does not audit it. A local file in that folder is uploaded and
+   replaces the remote file with the same name. Deleting the local file or folder does
+   not delete the remote copy. The rule uses only the name, so it also keeps a hidden
+   folder that the model made locally and then deleted. Hidden files (for example
+   `.htaccess`) and deeper hidden folders follow the local tree. Deleting the whole site
+   locally deletes the remote site folder, and its hidden folders with it.
 2. **The image archive never deletes.** Removing a local image does not remove the
    archived remote copy. Over time the archive accumulates; pruning it is a manual,
    explicit operation.

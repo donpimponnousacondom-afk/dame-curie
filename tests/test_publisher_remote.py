@@ -149,17 +149,42 @@ class PublisherRemoteTests(unittest.TestCase):
                 self.assertEqual(marker.read_bytes(), original_bytes)
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
                 (marker.parent / f".{other_namespace}-publisher-owner").unlink()
+                # Root, 1 November 2026: a hidden folder that a server script
+                # creates on the remote persists; a remote-only hidden file follows
+                # the local tree and is deleted.
+                remote_data = self.sites / "my site/.data"
+                remote_data.mkdir()
+                (remote_data / "state.json").write_bytes(b"server data")
+                self.assertNotIn("my site", mirror.inventory())
+                (self.sites / "my site/.stray").write_bytes(b"remote only")
+                self.assertIn("my site", mirror.inventory())
+                # A local file in the same hidden folder is uploaded and the
+                # remote-only file beside it stays.
+                self.put("my site/.data/keep", b"local data")
                 removed.unlink()
                 page.write_bytes(b"two")
                 mirror.reconcile()
                 self.assertEqual((self.sites / "my site/index.html").read_bytes(), b"two")
                 self.assertFalse((self.sites / "my site/old.js").exists())
+                self.assertEqual((remote_data / "state.json").read_bytes(), b"server data")
+                self.assertEqual((remote_data / "keep").read_bytes(), b"local data")
+                # The local hidden folder is skipped in the manifest too, so the
+                # remote inventory reports no drift.
+                self.assertNotIn("my site", mirror.inventory())
+                self.assertFalse((self.sites / "my site/.stray").exists())
+                # Deleting the local hidden folder does not delete the remote copy.
+                shutil.rmtree(self.config.source / "my site/.data")
+                mirror.reconcile()
+                self.assertEqual((remote_data / "state.json").read_bytes(), b"server data")
+                self.assertEqual((remote_data / "keep").read_bytes(), b"local data")
+                self.assertNotIn("my site", mirror.inventory())
                 self.assertEqual(marker.read_bytes(), original_bytes)
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
                 self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
                 command = next(command for command in transport.commands if command[0] == "rsync")
                 self.assertIn(f"P /{marker.name}", command)
                 self.assertIn(f"H /{marker.name}", command)
+                self.assertIn("P /.*/***", command)
                 shutil.rmtree(page.parent)
                 mirror.reconcile()
                 self.assertFalse((self.sites / "my site").exists())
