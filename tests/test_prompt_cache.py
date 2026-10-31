@@ -170,6 +170,16 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
         else:
             assert msg["tool_call_id"] in open_ids
     assert trimmed[-1]["tool_call_id"] == "call_29"
+    # The model is told that earlier rounds were dropped, and the count
+    # accumulates when more rounds drop later.
+    assert trimmed[1]["content"] == (
+        "[Earlier in this turn 9 tool round(s) were dropped from context: shell. "
+        "Their results are no longer visible.]\nx"
+    )
+    assert trim_tool_tail(trimmed) == trimmed
+    later = trim_tool_tail(trimmed + round_msgs(30))
+    assert later[1]["content"].startswith("[Earlier in this turn 10 tool round(s) were dropped")
+    assert later[1]["content"].endswith("visible.]\nx")
 
 
 def test_trim_conversation_tail_enforces_char_budget():

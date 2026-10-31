@@ -1912,6 +1912,34 @@ def _fit_tool_group(group: list[dict], limit: int) -> None:
         msg["content"] = _truncate_history_text(msg["content"], low, label)
 
 
+_DROPPED_ROUNDS_RE = re.compile(
+    r"^\[Earlier in this turn (\d+) tool round\(s\) were dropped from context: ([^\]]*)\. "
+    r"Their results are no longer visible\.\]\n"
+)
+
+
+def _round_marker_message(group: list[dict]) -> dict | None:
+    """Return the first harness-written message of a group: a tool result."""
+    return next((msg for msg in group if msg.get("role") in {"tool", "user"}), None)
+
+
+def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str]]:
+    """Remove the dropped-rounds marker from a group; return its count and names."""
+    msg = _round_marker_message(group)
+    content = msg.get("content") if msg else None
+    match = _DROPPED_ROUNDS_RE.match(content) if isinstance(content, str) else None
+    if not match:
+        return 0, []
+    msg["content"] = content[match.end():]
+    return int(match.group(1)), [name for name in match.group(2).split(", ") if name]
+
+
+def _round_tool_names(group: list[dict]) -> list[str]:
+    calls = group[0].get("tool_calls") or [] if group else []
+    names = [str((call.get("function") or {}).get("name") or "tool") for call in calls]
+    return names or ["text tool round"]
+
+
 def trim_tool_tail(
     tail: list[dict],
     *,
@@ -1927,9 +1955,12 @@ def trim_tool_tail(
     groups = tool_tail_groups(tail)
     dropped_groups = 0
     dropped_chars = 0
+    marker_rounds, marker_names = _take_dropped_marker(groups[0]) if groups else (0, [])
     while len(groups) > 1 and sum(map(len, groups)) > max_messages:
-        dropped_chars += sum(message_chars(msg) for msg in groups.pop(0))
+        dropped = groups.pop(0)
+        dropped_chars += sum(message_chars(msg) for msg in dropped)
         dropped_groups += 1
+        marker_names += _round_tool_names(dropped)
     if not groups:
         return []
     if len(groups[-1]) > max_messages:
@@ -1952,11 +1983,21 @@ def trim_tool_tail(
         dropped = groups.pop(0)
         dropped_groups += 1
         dropped_chars += sum(message_chars(msg) for msg in dropped)
+        marker_names += _round_tool_names(dropped)
         used -= sum(message_chars(msg) for msg in dropped)
     if dropped_groups:
         logger.info(
             "Tool history dropped %d older round(s), %d chars, to fit %d messages and %d chars",
             dropped_groups, dropped_chars, max_messages, max_chars,
+        )
+    marker_rounds += dropped_groups
+    target = _round_marker_message(groups[0]) if marker_rounds else None
+    if target is not None and isinstance(target.get("content"), str):
+        names = list(dict.fromkeys(marker_names))
+        target["content"] = (
+            f"[Earlier in this turn {marker_rounds} tool round(s) were dropped from context: "
+            f"{', '.join(names)}. Their results are no longer visible.]\n"
+            + target["content"]
         )
     return [msg for group in groups for msg in group]
 

@@ -454,6 +454,11 @@ class Config:
             )
         if cls.OPENAI_MAX_TOKENS is not None and cls.OPENAI_MAX_TOKENS < 1:
             raise ValueError("OPENAI_MAX_TOKENS must be >= 1")
+        if os.getenv("DAME_CURIE_PUBLIC_BASE_URL") is not None:
+            raise ValueError(
+                "DAME_CURIE_PUBLIC_BASE_URL is retired. Set DAME_CURIE_IMAGE_PUBLIC_BASE_URL "
+                "to the public URL of the publisher's image_root and remove the old line."
+            )
         # Soft warnings - these don't block startup but they WILL cause
         # runtime errors the first time someone hits the feature, which is
         # confusing without a hint. Log via the standard logging facility

@@ -962,6 +962,9 @@ def _public_image_target(bot) -> tuple[str, str]:
     return os.path.join(site_dir, "_images"), pub
 
 
+_OWN_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
 def _own_image_path(bot, ref: str) -> str | None:
     """Return the local file for one of the bot's own images, or None.
 
@@ -982,7 +985,11 @@ def _own_image_path(bot, ref: str) -> str | None:
         return None
     root = os.path.realpath(img_dir)
     path = os.path.realpath(ref)
-    if not path.startswith(root + os.sep) or not os.path.isfile(path):
+    if (
+        not path.startswith(root + os.sep)
+        or Path(path).suffix.lower() not in _OWN_IMAGE_SUFFIXES
+        or not os.path.isfile(path)
+    ):
         return None
     return path
 
@@ -1482,7 +1489,7 @@ class ImageGeneratorTool(Tool):
             result += (
                 f"\nPermanent URL: {perm_url} "
                 "(never expires - use this directly in HTML <img> tags. The publisher "
-                "mirrors it in about 10 seconds; until then it returns 404. "
+                "mirrors it in 5 to 10 seconds; until then it returns 404. "
                 "see_image and image_generator read it from disk at once.)"
             )
         if local_path:
