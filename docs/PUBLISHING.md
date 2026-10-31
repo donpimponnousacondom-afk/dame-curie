@@ -62,6 +62,14 @@ SSH and remote-ownership protections remain in force.
    next sync. An operator-installed file survives only if it also exists in the local
    source tree. Files the publisher does not own - other site directories, and anything
    in `site_root` itself - are left alone.
+   **Exception: top-level hidden folders.** Root decided on 1 November 2026 that a folder
+   at the top of a site whose name starts with a dot (for example `.data`) belongs to
+   the remote. A server script (PHP, Perl) can keep its data there. A sync never deletes
+   it (`--filter "P /.*/"`), and the remote inventory does not audit it. A local folder
+   of that kind is still uploaded, but deleting it locally does not delete it remotely.
+   Hidden files (for example `.htaccess`) and deeper hidden folders still follow the
+   local tree. Deleting the whole site locally deletes the remote site folder,
+   hidden folders included.
 2. **The image archive never deletes.** Removing a local image does not remove the
    archived remote copy. Over time the archive accumulates; pruning it is a manual,
    explicit operation.

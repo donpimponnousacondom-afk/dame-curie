@@ -63,8 +63,18 @@ class Snapshot:
     signatures: dict[Path, tuple[int, ...]] = field(default_factory=dict)
 
     def manifest(self, name: str) -> dict:
-        rows = [[str(path.relative_to(name)), "d", 0o755] for path in self.directories]
-        rows.extend([str(path.relative_to(name)), "f", 0o755, digest] for path, digest in self.files.items())
+        # Top-level hidden folders belong to the remote, so the inventory skips
+        # them on both sides.
+        def audited(path: Path) -> bool:
+            parts = path.relative_to(name).parts
+            return not (parts and parts[0].startswith(".") and Path(name, parts[0]) in self.directories)
+
+        rows = [[str(path.relative_to(name)), "d", 0o755] for path in self.directories if audited(path)]
+        rows.extend(
+            [str(path.relative_to(name)), "f", 0o755, digest]
+            for path, digest in self.files.items()
+            if audited(path)
+        )
         shape = [row[:2] for row in rows]
         result = {"shape": hashlib.sha256(json.dumps(sorted(shape), separators=(",", ":")).encode()).hexdigest(),
                   "tree": hashlib.sha256(json.dumps(sorted(rows), separators=(",", ":")).encode()).hexdigest()}

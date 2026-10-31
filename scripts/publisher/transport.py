@@ -67,7 +67,13 @@ class Transport:
             if request["action"] != "site" or not request["name"] or not request["token"]:
                 raise RemoteFailure("non-site deletion refused")
             marker_name = f".{request['marker_namespace']}-publisher-owner"
-            argv.extend(["--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}"])
+            # Root, 1 November 2026: top-level hidden folders of a site belong to
+            # the remote (for example .data written by a server script); a sync
+            # never deletes them. Everything else follows the local tree.
+            argv.extend([
+                "--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}",
+                "--filter", "P /.*/",
+            ])
         argv.extend(["--", str(source) + "/", f"{self.config.user}@{self.config.host}:./"])
         self.execute(argv, capture=False, operation=f"{request['action']} {request['name']!r}")
 

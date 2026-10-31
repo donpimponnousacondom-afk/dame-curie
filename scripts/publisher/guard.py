@@ -246,6 +246,9 @@ def inventory_tree(fd, prefix, metadata, rows, content, marker_name, selected=No
             continue
         path = name if prefix == "." else prefix + "/" + name
         value = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if prefix == "." and name.startswith(".") and stat.S_ISDIR(value.st_mode):
+            # Top-level hidden folders belong to the remote and are not audited.
+            continue
         if stat.S_ISDIR(value.st_mode):
             child = os.open(name, FLAGS, dir_fd=fd)
             try:
