@@ -93,6 +93,7 @@ def test_context_text_includes_forwarded_caption_and_image():
         content_type="image/png",
         duration=None,
         waveform=None,
+        url="https://cdn.discordapp.com/attachments/1/2/shot.png?ex=1",
     )
     msg = _forwarded_message(
         snapshot=_snapshot(content="the secret photo", attachments=[att])
@@ -100,7 +101,8 @@ def test_context_text_includes_forwarded_caption_and_image():
     rendered = render_discord_context_text(msg)
     assert "forwarded message" in rendered
     assert "the secret photo" in rendered
-    assert "shot.png" in rendered
+    # The URL stays in history, so a later turn can fetch the file again.
+    assert "[image: shot.png] https://cdn.discordapp.com/attachments/1/2/shot.png?ex=1" in rendered
     assert "#77" in rendered
 
 

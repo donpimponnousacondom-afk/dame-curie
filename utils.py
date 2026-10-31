@@ -272,6 +272,17 @@ def _attachment_is_clip(att: Any) -> bool:
 
 
 def _attachment_annotation(att: Any) -> str:
+    """History label for one attachment, with its Discord URL.
+
+    The URL lets the model fetch the file again in a later turn (see_image,
+    fetch_url). Discord CDN URLs are signed and stop working after about a day.
+    """
+    label = _attachment_label(att)
+    url = str(getattr(att, "url", "") or "").strip()
+    return f"{label} {url}" if url else label
+
+
+def _attachment_label(att: Any) -> str:
     name = str(getattr(att, "filename", "") or "file")
     ctype = str(getattr(att, "content_type", "") or "").split(";")[0].lower()
     lower = name.lower()
