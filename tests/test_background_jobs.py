@@ -666,11 +666,10 @@ def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discove
         )
         assert len(bot.compact_requests) == 1
     if failure == "compaction":
-        assert job.progress.startswith(
-            "context compaction failed at step 2: the newest step alone is about "
+        assert job.progress == (
+            "context compaction failed at step 1: the history has one step and the prompt "
+            "reaches the 1-token compaction limit, so nothing can be compacted"
         )
-        assert job.progress.endswith("tokens, at or above the 1-token compaction limit")
-        assert any("but the history has one step, so nothing was compacted" in text for text in channel.thread.sent)
         assert bot.compact_requests == []
     if failure == "unresolved":
         assert job.progress.startswith(

@@ -168,11 +168,11 @@ async def compact_job_messages(
 
     Keeps the system prompt, the goal and up to BG_COMPACT_KEEP_ROUNDS newest
     rounds, fewer when those rounds alone would reach ``limit_tokens``. Returns
-    the new message list and the number of rounds summarized; 0 when the job
-    has only one round. Raises when the newest round alone, or the compacted
-    prompt, still reaches ``limit_tokens``. ``overhead_tokens`` is the part of
-    the measured prompt that is not in ``messages`` (tool schemas). A fifth of
-    the limit, at most 16,000 tokens, is reserved for the summary.
+    the new message list and the number of rounds summarized. Raises when the
+    history has one round, or when the newest round alone or the compacted
+    prompt still reaches ``limit_tokens``. ``overhead_tokens`` is the estimated
+    size of the tool schemas sent with each step. A fifth of the limit, at most
+    16,000 tokens, is reserved for the summary.
     """
     from tool_schemas import tool_tail_groups
 
@@ -183,7 +183,10 @@ async def compact_job_messages(
         start = 3
     groups = tool_tail_groups(messages[start:])
     if len(groups) < 2:
-        return messages, 0
+        raise RuntimeError(
+            f"the history has one step and the prompt reaches the {limit_tokens}-token "
+            "compaction limit, so nothing can be compacted"
+        )
     head = messages[:2]
     room = limit_tokens - overhead_tokens - min(limit_tokens // 5, 16_000)
     keep = min(BG_COMPACT_KEEP_ROUNDS, len(groups) - 1)
@@ -213,13 +216,16 @@ async def compact_job_messages(
     await bot._acquire_ai_slot(timeout=float(min(timeout, 600)), priority="background", key=job.channel_id)
     try:
         response = await bot._generate_response(request, timeout=timeout)
-    finally:
+    except BaseException:
         try:
             await bot._release_ai_slot()
         except Exception as exc:
             logger.warning(
-                "background job %s: AI slot release after compaction failed: %s", job.id, exc
+                "background job %s: AI slot release after a failed compaction call failed: %s",
+                job.id, exc,
             )
+        raise
+    await bot._release_ai_slot()
     summary = str(response or "").strip()
     if not summary:
         raise RuntimeError("the compaction call returned no summary text")
@@ -954,9 +960,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                         "background job %s step %d has no provider token count; estimated %d input tokens",
                         job.id, step + 1, input_tokens,
                     )
-                # Measured prompt minus its messages: the tool schemas and any
-                # provider framing that the message estimate does not see.
-                overhead = max(0, input_tokens - sent_estimate)
+                # The tool schemas go with every step but are not in messages.
+                overhead = estimate_job_tokens(provider_tools or [])
                 estimate = input_tokens + added
                 if (
                     estimate >= compact_at
@@ -978,31 +983,18 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                         failure_text = f"context compaction failed at step {step + 1}: {exc}"
                         capture_incident("jobs", "Background context compaction failed", exception=exc, context=job_context | {"step": str(step + 1)})
                         break
-                    if summarized:
-                        compactions += 1
-                        logger.info(
-                            "background job %s compaction %d at step %d: about %d input tokens, threshold %d, %d step(s) summarized",
-                            job.id, compactions, step + 1, estimate, compact_at, summarized,
-                        )
-                        await _post_thread(
-                            thread,
-                            f"Context compacted at step {step + 1}: about {estimate} input tokens "
-                            f"(threshold {compact_at}). {summarized} older steps are summarized; "
-                            "the newest steps are kept word for word.",
-                            context=job_context,
-                        )
-                    else:
-                        logger.warning(
-                            "background job %s is at about %d input tokens (threshold %d) with one "
-                            "step in its history, so nothing was compacted",
-                            job.id, estimate, compact_at,
-                        )
-                        await _post_thread(
-                            thread,
-                            f"Context is at about {estimate} input tokens (threshold {compact_at}), "
-                            "but the history has one step, so nothing was compacted.",
-                            context=job_context,
-                        )
+                    compactions += 1
+                    logger.info(
+                        "background job %s compaction %d at step %d: about %d input tokens, threshold %d, %d step(s) summarized",
+                        job.id, compactions, step + 1, estimate, compact_at, summarized,
+                    )
+                    await _post_thread(
+                        thread,
+                        f"Context compacted at step {step + 1}: about {estimate} input tokens "
+                        f"(threshold {compact_at}). {summarized} older steps are summarized; "
+                        "the newest steps are kept word for word.",
+                        context=job_context,
+                    )
     except TimeoutError as exc:
         if not timeout_scope.expired():
             raise
