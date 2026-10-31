@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot_tools import WaitTool  # noqa: E402
+from tool_schemas import trim_tool_tail  # noqa: E402
 
 # Module-level stash used by _build_test_bot to record the original
 # MaxwellBot._execute_tool_by_name so the autouse fixture below can
@@ -430,6 +431,30 @@ def test_no_response_blocks_later_send_message():
         "were executed."
     ] * 3
     assert _tool_results_need_followup(aggregate_refused) is True
+
+    many_calls = [
+        {
+            "id": f"call_many_{index}",
+            "type": "function",
+            "function": {"name": "no_response", "arguments": "{}"},
+        }
+        for index in range(12)
+    ]
+    _, many_refused, _ = asyncio.run(
+        MaxwellBot._process_native_tool_calls(
+            bot, message, "", many_calls, include_images=True
+        )
+    )
+    assert sent == ["NO_RESPONSE"]
+    assert many_refused == [
+        "Tool no_response: Error - batch refused because the response has 12 calls; "
+        "the limit is 10; no calls in this batch were executed."
+    ] * 10
+    many_replay = bot._last_native_followup_messages
+    assert [call["id"] for call in many_replay[0]["tool_calls"]] == [
+        f"call_many_{index}" for index in range(10)
+    ]
+    assert len(trim_tool_tail(many_replay)) == 11
 
 
 def test_two_send_messages_in_a_row_both_fire_in_order():

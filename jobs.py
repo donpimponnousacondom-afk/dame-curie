@@ -649,6 +649,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     succeeded = False
     terminal_failure = None
     failure_text = ""
+    unresolved_error = ""
     deadline = time.monotonic() + float(timeout)
     turn = current_foreground_turn()
     timeout_scope = asyncio.timeout_at(turn.deadline if turn is not None else None)
@@ -743,6 +744,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     failure_text = str(terminal_failure)
                     break
                 if not calls:
+                    unresolved_error = ""
                     try:
                         cleaned = await bot._dispatch_tool_calls(orig_message, response or "", **metrics_kwargs)
                         final_text = cleaned[0] if isinstance(cleaned, (list, tuple)) else str(cleaned or "")
@@ -788,8 +790,10 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 # An ending-only batch (e.g. the model wrapped up via send_message)
                 # is the finished answer - do not loop for more.
                 named = {n for n in names if n}
-                refused = any(re.match(r"Tool [^:\n]+: Error", result) for result in tool_results)
-                if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip() and not refused:
+                unresolved_error = next(
+                    (result for result in tool_results if re.match(r"Tool [^:\n]+: Error", result)), ""
+                )
+                if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip() and not unresolved_error:
                     final_text = resp_text.strip()
                     final_metrics = response_metrics if final_text else None
                     break
@@ -820,6 +824,9 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         JOB_TURN.reset(job_turn_token)
         manager.cleanup_runtime(job.id)
 
+    if terminal_failure is None and unresolved_error:
+        failure_text = f"the job ended with an unresolved tool error: {unresolved_error}"
+        terminal_failure = RuntimeError(failure_text)
     if terminal_failure is not None or not succeeded:
         await _fail(failure_text or final_text or "the model never returned anything.", terminal_failure, partial=final_text)
         if (getattr(bot, "_control", {}) or {}).get("error_replies", True):

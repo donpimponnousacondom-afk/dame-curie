@@ -517,6 +517,7 @@ def test_runner_delivers_final_reply_with_mention(
     [
         ("generation", False), ("catalog", False),
         ("deadline", False), ("deadline", True), ("expired", True),
+        ("unresolved", False),
     ],
 )
 def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discover):
@@ -531,6 +532,9 @@ def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discove
         bot = BrokenBot(manager)
         bot.discover = discover
         bot.dispatch_delay = 0.2
+        if failure == "unresolved":
+            bot.refuse_ending = True
+            bot._control["bg_max_iters"] = 1
         provider = SimpleNamespace(
             generate_response=bot._generate_response, close=AsyncMock(),
         )
@@ -579,6 +583,11 @@ def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discove
         assert channel.thread.sent[-1] == PUBLIC_ERROR_TEXT
     if failure == "expired":
         assert bot.slot_priority is None and bot.catalog_groups == []
+    if failure == "unresolved":
+        assert job.progress.startswith(
+            "the job ended with an unresolved tool error: Tool send_message: Error - batch refused"
+        )
+        assert job.result == "refused"
 
 
 def test_manager_list_text_guild_filtering(tmp_path):
