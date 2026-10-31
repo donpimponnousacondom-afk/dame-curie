@@ -75,12 +75,12 @@ TOOL_PROTOCOL = (
     'not the authoring root. No process copies that workdir into the authoring root. '
     'Keep site images and HTML/CSS references in the same site tree. '
     "An external publisher mirrors the authoring root; do not start local hosting or "
-    "administer the remote server. The remote follows your local files one way: a "
-    "file you change, replace or delete changes the same way there, and a site you "
-    "delete is deleted there. Folders at the top of a site whose names start with a "
-    "dot (for example .data) stay on the remote with all their files; a server script "
-    "can keep its data there. A file you put in such a folder is uploaded, but "
-    "deleting it locally does not delete it there. Real line breaks or <br> in visible HTML; "
+    "administer the remote server. The remote follows your local files one way. "
+    "A file you change, replace or delete changes the same way on the remote. "
+    "A hidden folder at the top of a site (a name that starts with a dot, for example "
+    ".data) stays on the remote with all its files; a server script can keep data there. "
+    "A file you put in that folder is uploaded; deleting it locally does not delete it there. "
+    "Deleting a whole site deletes it on the remote, hidden folders included. Real line breaks or <br> in visible HTML; "
     "never literal \\n text. Full visual freedom - invent a new look each time; "
     "no house style unless the user asked.\n"
     "Sites are the work you are judged on. Build the real thing on the first "

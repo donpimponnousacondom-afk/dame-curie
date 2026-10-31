@@ -150,8 +150,8 @@ class PublisherRemoteTests(unittest.TestCase):
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
                 (marker.parent / f".{other_namespace}-publisher-owner").unlink()
                 # Root, 1 November 2026: a hidden folder that a server script
-                # creates on the remote persists; a remote-only dotfile and other
-                # remote-only files follow the local tree and are deleted.
+                # creates on the remote persists; a remote-only hidden file follows
+                # the local tree and is deleted.
                 remote_data = self.sites / "my site/.data"
                 remote_data.mkdir()
                 (remote_data / "state.json").write_bytes(b"server data")
@@ -168,6 +168,9 @@ class PublisherRemoteTests(unittest.TestCase):
                 self.assertFalse((self.sites / "my site/old.js").exists())
                 self.assertEqual((remote_data / "state.json").read_bytes(), b"server data")
                 self.assertEqual((remote_data / "keep").read_bytes(), b"local data")
+                # The local hidden folder is skipped in the manifest too, so the
+                # remote inventory reports no drift.
+                self.assertNotIn("my site", mirror.inventory())
                 self.assertFalse((self.sites / "my site/.stray").exists())
                 self.assertEqual(marker.read_bytes(), original_bytes)
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
