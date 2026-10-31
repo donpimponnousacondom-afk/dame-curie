@@ -1,6 +1,6 @@
 """Install ergonomics: feature auto-detection and endpoint normalization.
 
-These cover the "a bare clone should just work" contract — a missing
+These cover the "a bare clone should just work" contract - a missing
 dependency turns one feature off, it does not break the bot.
 """
 
@@ -98,7 +98,7 @@ def _config_value(attr, env=None):
 
 
 def test_rem_is_opt_in_by_default():
-    """REM spends tokens on a timer — it must never default to on."""
+    """REM spends tokens on a timer - it must never default to on."""
     assert _config_value("REM_ENABLED") == "False"
 
 

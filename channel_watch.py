@@ -3,7 +3,7 @@
 Maxwell watches for channels being created. Two things matter:
 
 * A brand-new **text** channel is a fresh room he has never seen. To be useful
-  there he has to notice it — which is what posting a self-authored opening
+  there he has to notice it - which is what posting a self-authored opening
   line into a support/ticket channel does (the bot's own messages go through
   the normal memory path, so the room lands in his context and his
   conversation-watch gets armed).
@@ -95,11 +95,11 @@ def greeting_for(name: str, bot_name: str = "maxwell") -> str:
     """The opening line Maxwell posts into a brand-new ticket channel.
 
     Short and calm. The room is brand new, so this is both a presence marker
-    and a promise to help — not an essay.
+    and a promise to help - not an essay.
     """
     label = (str(name or "ticket").strip() or "ticket")
     return (
-        f"New {label} channel spotted — I'm {bot_name} and I'm here. "
+        f"New {label} channel spotted - I'm {bot_name} and I'm here. "
         f"Say what you need and I'll help."
     )
 

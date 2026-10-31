@@ -64,7 +64,7 @@ def _msg(mid, channel="c1"):
 
 
 def test_queue_serializes_and_answers_everything():
-    """A second message during a slow turn waits — it is not dropped."""
+    """A second message during a slow turn waits - it is not dropped."""
 
     async def scenario():
         seen = []

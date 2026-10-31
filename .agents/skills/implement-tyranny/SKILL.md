@@ -1,9 +1,9 @@
 ---
 name: implement-tyranny
-description: Hardening Python projects with strict linting, formatting, and banning rules. Use when setting up or enforcing project quality standards — ruff config, banned patterns, type checking gates, pre-commit hooks, and structural enforcement.
+description: Hardening Python projects with strict linting, formatting, and banning rules. Use when setting up or enforcing project quality standards - ruff config, banned patterns, type checking gates, pre-commit hooks, and structural enforcement.
 ---
 
-# Implement Tyranny — Python Project Hardening
+# Implement Tyranny - Python Project Hardening
 
 ## Purpose
 Enforce strict quality standards on Python projects. No mercy, no exceptions.
@@ -27,7 +27,7 @@ Python **3.14** is mandatory for dame-curie. Apply strict standards to authorize
 4. Run checks or scoped auto-fixes only when validation is authorized, and only on the assigned files. Never run a blanket `ruff check --fix` or reformat the legacy tree by loading this skill.
 5. Report remaining violations and validation limits. This skill does not authorize application imports, tests, runtime access or new tests.
 
-## Dead-code audit — report before pruning
+## Dead-code audit - report before pruning
 
 Vulture **2.16** is the project's pinned Python 3.14-compatible static dead-code tool. Follow the repository-root `docs/DEAD_CODE.md` workflow when an audit is authorized: explicit tracked-source selection, isolated interpreter, no application imports or test execution. The first-pass evidence is in `phase-II_v2/DEAD_CODE_PASS.md`.
 
@@ -93,7 +93,7 @@ indent-style = "space"
 
 ## Banned Patterns
 
-(to be filled — waiting for user's specific ban list)
+(to be filled - waiting for user's specific ban list)
 
 ### Template bans to add to ruff config:
 
@@ -135,6 +135,6 @@ warn_unused_ignores = true
 - All public functions must have type annotations
 - All public functions must have docstrings
 - Private helpers (`_name`) must not exceed 20 lines
-- No bare `except:` — always specify exception type
+- No bare `except:` - always specify exception type
 - No `# type: ignore` without explanation comment
 - No commented-out code (ERA rules catch this)

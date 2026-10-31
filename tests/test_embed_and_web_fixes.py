@@ -9,7 +9,7 @@ Each test here pins a bug that was live in the tree at 9b6755c:
      though _embed() supports EMBED_MAX_CHARS with chunking, so the
      migration path permanently stored truncated vectors for long rows.
   3. _embed_pending_all() re-SELECTed `embedding IS NULL` forever when
-     embedding kept failing — an unbounded spin.
+     embedding kept failing - an unbounded spin.
   4. store_web_results() stored the title-weighted embed text as the row
      `content`, so the prompt rendered the title three times and spent
      the snippet budget on repetition instead of the body.
@@ -254,7 +254,7 @@ def test_web_result_snippet_strips_repeated_title():
     assert _web_result_snippet(f"{title}\n{body}", title) == body
     # Legacy row written before the fix (title twice).
     assert _web_result_snippet(f"{title}\n{title}\n{body}", title) == body
-    # No title match — content passes through untouched.
+    # No title match - content passes through untouched.
     assert _web_result_snippet(body, "unrelated") == body
     # Missing title must not blow up.
     assert _web_result_snippet(f"{title}\n{body}", "") == f"{title}\n{body}"
@@ -286,7 +286,7 @@ def test_store_web_results_honors_ttl_days_override(tmp_path, monkeypatch):
         (_t.time() - 3 * 86400, WEB_RESULT_KIND),
     )
 
-    # Store again with a 1-day TTL — the 3-day-old row must be pruned.
+    # Store again with a 1-day TTL - the 3-day-old row must be pruned.
     _run(
         mgr.store_web_results(
             "new query",
@@ -305,7 +305,7 @@ def test_store_web_results_honors_ttl_days_override(tmp_path, monkeypatch):
 
 
 def test_recall_max_age_days_filters_without_deleting(tmp_path, monkeypatch):
-    """max_age_days is a per-read filter — it must never prune the store.
+    """max_age_days is a per-read filter - it must never prune the store.
 
     A caller narrowing its own view must not destroy rows that other
     callers (other guilds, other channels) still expect to exist.

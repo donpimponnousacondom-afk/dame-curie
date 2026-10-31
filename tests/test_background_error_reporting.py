@@ -174,7 +174,7 @@ def test_job_public_progress_never_echoes_log_results_but_model_gets_full_text(t
     assert job.status == "done"
     assert raw in str(bot.model_messages[1])
     progress = next(text for text in thread.sent if text.startswith("step "))
-    assert progress == "step 1 `shell` — 1 tool call(s), 1 result(s) received"
+    assert progress == "step 1 `shell` - 1 tool call(s), 1 result(s) received"
     assert "historical private log" not in "\n".join(message.channel.sent + thread.sent)
     assert private_store.get(0) is None
 

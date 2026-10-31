@@ -40,7 +40,7 @@ def test_scrubbing_a_long_reply_is_not_quadratic():
 
     The sentence rule was one regex with a backreference over an unbounded
     word run, and the chunk scan rescanned from every position when no
-    terminator followed — 3.8s on one 19KB message, then worse. This runs on
+    terminator followed - 3.8s on one 19KB message, then worse. This runs on
     every outgoing message, synchronously, in the event loop, so "slow" here
     means the whole bot stops answering everyone.
     """

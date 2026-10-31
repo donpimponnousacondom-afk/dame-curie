@@ -152,7 +152,7 @@ def render_board_png(board: chess.Board, perspective: str = "white") -> bytes:
                     fill=_LAST_MOVE,
                 )
         except Exception as e:
-            # Cosmetic highlight only — still render the board.
+            # Cosmetic highlight only - still render the board.
             logger.debug("Could not highlight last move: %s", e)
 
     # King in check.
@@ -359,7 +359,7 @@ def _endgame(board: chess.Board) -> bool:
     queens = sum(1 for p in pieces.values() if p.piece_type == chess.QUEEN)
     material = len(pieces)
     # Queens still on the board mean middlegame orchestration, not an endgame
-    # — even a KQ vs K mate is guided better by the middlegame king table.
+    # - even a KQ vs K mate is guided better by the middlegame king table.
     if queens and material > 6:
         return False
     return material <= 16
@@ -440,7 +440,7 @@ def annotate_legal_moves(board: chess.Board) -> list[str]:
     """Legal moves in SAN, each tagged with what it actually does.
 
     Maxwell picks his own moves now, and a bare list of forty SAN strings is
-    how a language model misses free material and walks into mate — reading
+    how a language model misses free material and walks into mate - reading
     "Nxe5" tells it nothing about what sits on e5. Every tag here is something
     a human player sees at a glance: what the move captures, whether it checks
     or mates, and whether the piece lands somewhere it just gets taken.
@@ -480,7 +480,7 @@ def annotate_legal_moves(board: chess.Board) -> list[str]:
             elif defended:
                 tags.append("attacked, but defended")
             else:
-                tags.append("LOSES THE PIECE — attacked and undefended")
+                tags.append("LOSES THE PIECE - attacked and undefended")
         out.append(f"{san} ({', '.join(tags)})" if tags else san)
     return out
 
@@ -539,7 +539,7 @@ def choose_bot_move(
 
     Maxwell plays his own chess: the model reads the annotated position and
     names the move (see ``ChessMoveTool``). This search stays only as the
-    safety net for when the model has repeatedly failed to name a legal move —
+    safety net for when the model has repeatedly failed to name a legal move -
     a game wedged forever on Maxwell's turn is worse than an average move.
 
     ``jitter`` in [0,1] adds strength-varying randomness among near-equal moves
@@ -549,7 +549,7 @@ def choose_bot_move(
     if not moves:
         raise chess.IllegalMoveError("no legal moves")
 
-    # Opening book first — the engine's flat opening eval would otherwise let
+    # Opening book first - the engine's flat opening eval would otherwise let
     # a random tie-break pick 1.a3. Off-book (or past the booked lines) the
     # search takes over.
     book_move = _opening_move(board)
@@ -716,7 +716,7 @@ class ChessGame:
         self.jitter = jitter
         self.board = chess.Board()
         # SAN moves as played. Stored at push time (not recomputed from the
-        # board), because board.san() on an already-made move fails — old
+        # board), because board.san() on an already-made move fails - old
         # moves are not legal in the current position.
         self.history: list[str] = []
 
@@ -764,7 +764,7 @@ class ChessGame:
             return None
         if self.board.is_checkmate():
             winner = "black" if self.board.turn == chess.WHITE else "white"
-            return f"checkmate — {winner} wins"
+            return f"checkmate - {winner} wins"
         if self.board.is_stalemate():
             return "draw by stalemate"
         if self.board.is_insufficient_material():
@@ -827,7 +827,7 @@ class ChessGame:
         try:
             uci = chess.Move.from_uci(text)
         except Exception:
-            # Not UCI — the SAN parse below is the normal path.
+            # Not UCI - the SAN parse below is the normal path.
             uci = None
         if uci is not None:
             if uci in self.board.legal_moves:

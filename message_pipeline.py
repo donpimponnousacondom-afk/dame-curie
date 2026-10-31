@@ -2,8 +2,8 @@
 
 The old ``on_message`` did three things that lost traffic:
 
-1. It took the per-channel lock for the *whole* handler — memory write and
-   reply generation together — with a 15s acquire timeout. Because
+1. It took the per-channel lock for the *whole* handler - memory write and
+   reply generation together - with a 15s acquire timeout. Because
    ``_handle_message`` holds that same lock for its entire tool loop (which
    can legitimately run for minutes on an image or a site build), the timeout
    fired constantly and the message was dropped with a log line. Over four
@@ -11,7 +11,7 @@ The old ``on_message`` did three things that lost traffic:
 
 2. Recovery from that drop was ``_requeue_after_lock_timeout``, which only
    requeued *hard pings*, gave up after four tries, and funnelled through the
-   watch debounce — a structure that keeps one message per channel and
+   watch debounce - a structure that keeps one message per channel and
    cancels its predecessor. A burst could therefore end in zero replies.
 
 3. Nothing deduplicated inbound messages and nothing recorded how far a
@@ -129,7 +129,7 @@ class ReplyQueue:
     front of you", which is what a person in the room expects.
 
     Bounding still exists, because an unbounded queue behind a slow turn is
-    its own failure — the room would get a wall of stale replies. But the
+    its own failure - the room would get a wall of stale replies. But the
     bound evicts *soft chatter* first and only ever drops the oldest soft
     entry, so a directed message cannot be squeezed out by background noise.
 
@@ -364,7 +364,7 @@ class ReplyQueue:
     def cancel_message(self, channel_id: Any, message_id: Any) -> bool:
         """Cancel exactly one input: the pending entry, or the turn it became.
 
-        ``cancel_channel`` is the wrong tool for an expiring caller — it cancels
+        ``cancel_channel`` is the wrong tool for an expiring caller - it cancels
         whatever turn is running, which may be answering someone else. This
         matches on the message id instead, and the id also covers the window
         before the turn's task exists, when removing the pending entry is the
@@ -474,7 +474,7 @@ class Watermarks:
         self._dirty = True
         if len(self._marks) > self.max_channels:
             # Snowflakes are time-ordered, so the smallest ids are the
-            # coldest rooms — exactly the ones whose backlog matters least.
+            # coldest rooms - exactly the ones whose backlog matters least.
             keep = sorted(self._marks.items(), key=lambda kv: kv[1])[
                 -(self.max_channels // 2) :
             ]

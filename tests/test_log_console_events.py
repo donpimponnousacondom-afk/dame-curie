@@ -17,7 +17,7 @@ from scripts.log_console.scopes import VIEWER_SCOPE
 
 
 OBSERVED = datetime(2026, 9, 12, 12, 30, 45, tzinfo=UTC)
-PROMPT = '夜空の竜 🐉 — café e\u0301 "glass" \\ moon\n' * 180 + "EXACT PROMPT TAIL\n"
+PROMPT = '夜空の竜 🐉 - café e\u0301 "glass" \\ moon\n' * 180 + "EXACT PROMPT TAIL\n"
 
 
 def image_line(phase, fields):

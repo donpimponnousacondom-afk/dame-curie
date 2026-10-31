@@ -1,4 +1,4 @@
-"""Member-side guild onboarding — picking roles and channels in a server.
+"""Member-side guild onboarding - picking roles and channels in a server.
 
 Most COMMUNITY servers gate their content behind Discord's onboarding
 prompts ("What kind of roles do you want?", "Which channels interest
@@ -6,7 +6,7 @@ you?"). Until the account answers them it holds none of the opt-in roles
 and sees only the server's default channels, which is why Dame Curie can
 land in a server and still not be able to do anything in it.
 
-There is no ``/members/@me/onboarding`` route — that path 404s as an
+There is no ``/members/@me/onboarding`` route - that path 404s as an
 unknown route, so the old auto-onboard never actually submitted
 anything. The real client flow is:
 
@@ -49,7 +49,7 @@ def normalize_prompts(
 ) -> list[dict]:
     """Flatten the onboarding payload into the fields the picker needs.
 
-    Unknown/None entries are dropped rather than raised on — this parses a
+    Unknown/None entries are dropped rather than raised on - this parses a
     live API response, and a prompt with no options is useless anyway.
     """
     prompts = []
@@ -119,10 +119,10 @@ def describe_prompts(prompts: list[dict], answered: set[str] | None = None) -> s
         need = "required" if prompt["required"] else "optional"
         where = "join flow" if prompt["in_onboarding"] else "channels & roles"
         lines.append(
-            f'PROMPT {prompt["id"]} — "{prompt["title"]}" ({rule}, {need}, {where})'
+            f'PROMPT {prompt["id"]} - "{prompt["title"]}" ({rule}, {need}, {where})'
         )
         for opt in prompt["options"]:
-            desc = f" — {opt['description']}" if opt["description"] else ""
+            desc = f" - {opt['description']}" if opt["description"] else ""
             grants = []
             if opt["role_ids"]:
                 grants.append(f"{len(opt['role_ids'])} role(s)")
@@ -130,7 +130,7 @@ def describe_prompts(prompts: list[dict], answered: set[str] | None = None) -> s
                 grants.append(f"{len(opt['channel_ids'])} channel(s)")
             grant = f" [grants {', '.join(grants)}]" if grants else ""
             mark = " [already selected]" if opt["id"] in answered else ""
-            lines.append(f'  {opt["id"]} — "{opt["title"]}"{desc}{grant}{mark}')
+            lines.append(f'  {opt["id"]} - "{opt["title"]}"{desc}{grant}{mark}')
     return "\n".join(lines)
 
 
@@ -169,7 +169,7 @@ def clamp_choice(
 
 
 def fallback_choice(prompts: list[dict]) -> dict[str, list[str]]:
-    """First option of every prompt — used when the model can't be reached.
+    """First option of every prompt - used when the model can't be reached.
 
     Not clever, but it leaves the account with roles instead of stranded,
     which is the behaviour this whole path exists for.
@@ -234,7 +234,7 @@ def build_payload(
 ) -> dict:
     """Body for POST /guilds/{id}/onboarding-responses.
 
-    ``onboarding_responses`` is a flat list of the chosen *option* ids —
+    ``onboarding_responses`` is a flat list of the chosen *option* ids -
     the prompt id is implied by the option and sending the
     ``{prompt_id, option_ids}`` pairs the guild config uses gets a 400
     ("Value {...} is not snowflake"). ``*_seen`` marks the prompts and
@@ -306,7 +306,7 @@ def build_picker_messages(
     )
     system = (
         "You are Dame Curie, choosing your own roles and channels in a Discord "
-        "server you just joined. Pick what genuinely fits you — the topics "
+        "server you just joined. Pick what genuinely fits you - the topics "
         "you'd actually read, the pings you'd actually want. Skip options "
         "that don't interest you; you do not have to pick from every prompt. "
         "Respect each prompt's rule (single-select prompts take exactly one "

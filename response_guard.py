@@ -13,7 +13,7 @@ _TERMINATORS = ".!?\u2026"
 # Sentence boundaries are found by scanning for the terminators themselves.
 # A "[^.!?]*[.!?]" chunk pattern reads better and is a trap: on a stretch of
 # prose that never reaches a full stop it rescans from every position, which
-# is O(n**2) — 3.8s on one 19KB message.
+# is O(n**2) - 3.8s on one 19KB message.
 _TERMINATOR_RE = re.compile(rf"[{re.escape(_TERMINATORS)}]")
 
 
@@ -108,8 +108,8 @@ def _scrub_prose(text: str, *, max_ngram: int = 12) -> str:
     words = _WORD_RE.findall(text.lower())
     for size in range(max_ngram, 1, -1):
         # The regex below is the expensive part of this whole module, and on
-        # ordinary prose it finds nothing. Ask a linear question first — does
-        # any run of `size` words repeat back to back at all? — and only pay
+        # ordinary prose it finds nothing. Ask a linear question first - does
+        # any run of `size` words repeat back to back at all? - and only pay
         # for the regex when the answer is yes. The check is a necessary
         # condition for the pattern to match, so nothing that used to be
         # collapsed stops being collapsed.

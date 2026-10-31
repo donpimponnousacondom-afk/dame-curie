@@ -63,7 +63,7 @@ async def send_private_error_report(bot, author, text: str, *, report: bool) -> 
                 buffer, filename=f"curie-error-{index}-of-{count}.txt"
             )) as attachment:
                 await channel.send(
-                    f"```\nPrivate error report — full details attached ({index}/{count}).\n```\n"
+                    f"```\nPrivate error report - full details attached ({index}/{count}).\n```\n"
                     + PRIVATE_ERROR_REPORT_MARKER,
                     file=attachment,
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -83,7 +83,7 @@ async def handle_error_command(bot, message, args: str | None) -> None:
             "as losing time and asking the agent again what was the syntax he made up in a rush"
         )
     elif argument not in {str(index) for index in range(10)}:
-        text = f"Only the last 10 errors are kept. Use {bot.command_prefix}error 0–9: 0 is newest, 9 is oldest."
+        text = f"Only the last 10 errors are kept. Use {bot.command_prefix}error 0-9: 0 is newest, 9 is oldest."
     else:
         store = get_incident_store()
         try:

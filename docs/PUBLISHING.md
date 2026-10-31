@@ -47,7 +47,7 @@ top level is skipped entirely.
 
 Never published: loose top-level files, first-level dotfiles, `_data`, `_build`, `.env`,
 `.git`, the ownership marker, `.publisher-link`, and anything under a configured
-`private_paths` entry. A dotfile *inside* a site directory **is** published — only
+`private_paths` entry. A dotfile *inside* a site directory **is** published - only
 first-level dotfiles are excluded. That is how a per-site `.htaccess` can be shipped.
 
 Publisher file contents are transported unchanged, without credential-pattern inspection
@@ -60,17 +60,23 @@ SSH and remote-ownership protections remain in force.
 1. **The publisher owns the whole site directory.** Anything present remotely inside a
    site directory it has claimed, but absent from the local source, is **deleted** on the
    next sync. An operator-installed file survives only if it also exists in the local
-   source tree. Files the publisher does not own — other site directories, and anything
-   in `site_root` itself — are left alone.
+   source tree. Files the publisher does not own - other site directories, and anything
+   in `site_root` itself - are left alone.
 2. **The image archive never deletes.** Removing a local image does not remove the
    archived remote copy. Over time the archive accumulates; pruning it is a manual,
    explicit operation.
 
-Ownership is enforced with a private marker `.dame-curie-publisher-owner` inside each
-claimed site directory, or `.curie-publisher-owner` with the explicit legacy namespace.
-Do not create, edit or delete it. A remote directory that exists
-but is not owned is **refused**, never adopted, so a hand-made directory at a site name
-will block that site rather than be overwritten.
+Local sites are authoritative. Root confirmed this on 2026-10-03: a missing or
+recreated remote destination must not stop publication. The publisher creates missing
+configured roots, refreshes remote directory identities and replaces stale ownership
+markers for local site names. It also removes previously tracked sites deleted locally.
+Unrelated sibling sites remain untouched. The image archive remains non-deleting.
+
+The private marker is `.dame-curie-publisher-owner`, or `.curie-publisher-owner` with
+the explicit legacy namespace. Transfer still checks the current root/site identities
+and marker after claim. SSH host verification, nofollow traversal and marker-file
+permission/ownership/link checks remain. Unsafe objects or insufficient permissions
+produce an error; publication does not bypass those filesystem protections.
 
 ## Configuration
 
@@ -94,31 +100,35 @@ remote `python3 -I -S -c` as its rsync transfer guard; that is not the remote ho
 Python application.
 
 Instances are isolated by directory, not by code: use disjoint `source`, `staging` and `state` and distinct remote `site_root`/`image_root`. The SSH host/user/port or key may be shared under an explicit grant; that does not separate destinations.
-Ownership state pins the source path/device/inode, remote target tuple/root identities,
-and marker namespace. A configuration mismatch is refused, not an invitation to clear
-state. A **fresh** state directory pins the configured destination as-is, with no check
-that it belongs to this project. Verify the destination before the first write.
+Ownership state pins the source path/device/inode, remote target tuple and marker
+namespace. A configuration mismatch is refused, not an invitation to clear state.
+Remote root identities are refreshed before synchronization; they detect changes during
+transfer, not permanent ownership of a deleted inode. Verify the configured destination
+before the first write.
 
 The isolation between instances is not uniform, and the difference matters:
 
-- **Site trees are ownership-checked.** Each remote site directory carries a private
-  marker, and the guard refuses to transfer into or delete a directory whose marker and
-  device/inode identity do not match. A second instance pointed at another instance's
-  `site_root` therefore **fails closed** on a name collision — it cannot corrupt an
-  existing owned site.
+- **Site destinations must be disjoint.** Local sites now replace remote content at
+  their configured names, including directories with stale or missing markers. A second
+  publisher using the same destination and site name can overwrite the first. Markers
+  protect the claim-to-transfer boundary; they do not arbitrate two publishers.
 - **The image archive is not.** The `archive` action writes straight into `image_root`
   with no marker, no token and no per-instance namespace; the only protection is the
   root device/inode pin held in the owning instance's state. Two instances configured
   with the same `image_root` will both write there and silently overwrite same-named
   images and prompt sidecars. The archive is flat by design (one `_images` destination
-  serves all sites), so it cannot be namespaced per site — a distinct `image_root` per
+  serves all sites), so it cannot be namespaced per site - a distinct `image_root` per
   instance is the only separation.
 - **Creation is not restricted.** A second instance pointed at another instance's
   `site_root` can still create *new* directories there, because a claim succeeds for any
   name that does not already exist. Names it never claimed are never removed by it, but
   they will be served.
 
-## Claim-preserving V1 handoff — coordinator only
+## Historical claim-preserving V1 handoff - coordinator only
+
+This section records the original migration procedure. The source-authoritative repair
+above supersedes its refusal of stale remote identities and markers. It does not authorize
+starting or changing V1.
 
 For the Queen's existing remote claims, set `marker_namespace = "curie"` explicitly.
 This selects `.curie-publisher-owner` and `.curie-publisher-claim-<token>` without
@@ -152,9 +162,41 @@ The template is `scripts/publisher/config.dirac.example.toml`; the separate unit
 
 An explicitly authorized existing-key reuse needs a private regular copy owned by the process user, mode0600, link count1; symlink/hardlink reuse is refused. The publisher entry is `python -B -m scripts.publisher --config <private TOML>`; `--once` reconciles once, otherwise it watches/rescans. These are interfaces, not commands authorized by this page.
 
-The historical source review reported an **unresolved out-of-band remote-site deletion gap**: service mode can retain a cached binding to the missing directory, fail/restart and starve later sites. Its proposed `--once` re-claim recovery and any code change require a separate publisher assignment; neither was exercised or applied in this closure. Preserve that limitation rather than interpreting a prior running-service receipt as deletion-recovery acceptance. Full diagnosis and earlier lane-specific grants remain in the immutable phase record above, not as renewed authority.
+The 2026-10-03 repair resolves the service-mode remote-deletion gap. The later inventory
+update removes the initial repair's repeated per-site rsync calls.
 
-## Verifying a publication — separate grant required
+- Local edits use inotify with the configured settling delay (production: 0.3 seconds).
+- Each periodic check uses one short-lived remote Python process over SSH. JSON goes
+  through stdin, not a command-line argument that grows with the site count.
+- The remote process checks filesystem metadata for all requested sites. A verified
+  fingerprint includes names, device/inode, type/mode, link count, size, mtime and ctime.
+  An unchanged site needs no content reads and no rsync call.
+- Changed metadata first triggers a tree-shape comparison. Missing/extra paths queue a
+  repair without reading unexpected file contents. Matching shapes are content-hashed
+  only when the metadata baseline changed. Before/after metadata must agree before a
+  new baseline is accepted. Marker and transfer identity checks remain in force.
+- The image archive compares only locally expected files; remote extras remain intact.
+- Only differences and local changes queue transfers. Failed transfers/deletions retry;
+  busy local sites do not prevent other sites' checks. Local and repair jobs share turns.
+- Unchanged periodic checks are quiet after the first summary. Actual reconciliation
+  logs `changes synchronized`; errors retain the affected site and cause.
+
+A single worker owns transfers, scans and caches, so audits never overlap transfers or
+other audits. The next periodic check starts after the prior check plus `rescan_seconds`
+(production: 30 seconds). Queue/scan/transfer time adds latency; this is not a hard
+instant-delivery promise. No manual `--once` is needed for ordinary remote recovery.
+
+Verified fingerprints live in the local process. Restarting it requires one cold content
+check, not a forced upload. No remote daemon, cron job, installed helper or cache file is
+created. Each remote command exits after returning its differences.
+
+Scale limits: metadata work remains O(total files), and request manifests remain O(sites)
+plus the current image filenames. Remote checks share `timeout_seconds` and return at
+completion; they do not retain partial progress after a timeout. The live 31-target
+observation is not a 50,000-site benchmark. Very large cold inventories need measured
+capacity and possibly bounded/resumable batches before such a deployment.
+
+## Verifying a publication - separate grant required
 
 These examples access service/private state or the remote host. They are not permitted by the current source/Dirac-remediation assignment. Under a suitable publisher grant, local checks include:
 
@@ -178,13 +220,19 @@ ssh -i <key> -o StrictHostKeyChecking=yes <user>@<host> \
   'command -v python3; command -v rsync'
 ```
 
-A public URL is **not** evidence that publication succeeded. Nor is the absence of an
-error: the publisher reports remote failures as a single refusal string by design.
+A public URL or absence of errors is not proof that files match. Compare the actual
+local and remote file hashes. The service journal reports completion and failure per site.
 
 ## Troubleshooting
 
-The publisher reports failures as short fixed messages and never prints remote output,
-credentials or file contents.
+Remote failures include the action, site, program exit code, and guard exception
+location/errno or a recognized transport failure. Raw remote stderr, credentials and
+file contents are not printed. Guard refusal messages identify marker and identity
+mismatches. The journal command is:
+
+```sh
+sudo journalctl -u dame-curie-publisher.service -f -n 50
+```
 
 | Message | Usual cause |
 | --- | --- |
@@ -197,7 +245,7 @@ credentials or file contents.
 | `SSH credential path expansion refused` | A `%`, `${` or newline in the key, `known_hosts` or `state` path. |
 | `hardlinked source refused` | A source file has `st_nlink != 1`. |
 | `source root replacement refused` | The authoring root was moved or replaced under the running publisher. |
-| `remote operation refused or failed` | Any remote-side refusal or transport failure, including a root identity mismatch or an unowned directory at a site name. |
+| `<action> '<site>': <program> exit=<code>: ...` | Specific remote guard failure or recognized SSH/rsync error. The affected site retries on a later scan. |
 | `publisher: configuration or filesystem operation failed` | Startup failure before the watcher began. |
 
 ## PHP, Perl and CGI
@@ -208,14 +256,14 @@ and cannot be.
 `scripts/publisher/static.htaccess` is a static-only template: `Options
 -Indexes -ExecCGI -Includes`, `default-handler`, and `ForceType text/plain` for PHP, CGI,
 Perl, Python, shell and ASP extensions. **No code in this repository references, copies or
-installs it** — a scoped search finds no hit outside the file itself. Its presence proves
+installs it** - a scoped search finds no hit outside the file itself. Its presence proves
 nothing about the remote site's effective policy, and the publisher does not apply it.
 
 The publisher uploads with `--chmod=D755,F755`, so published files land mode 0755
 (executable). It transports bytes and permission bits; it neither enables nor disables
 server-side execution. Whether a site can execute anything is decided by the remote
 host's configuration, by whether it honours per-directory overrides, and by what the
-operator places in that remote root — for example opting out of the static policy by not
+operator places in that remote root - for example opting out of the static policy by not
 deploying that `.htaccess` inside the site directory.
 
 The project provides no PHP/Perl/CGI hosting setup or local web-server feature; Compose publishes no ports. This does not certify the absence of incidental language utilities in inherited distribution packages, or constrain everything an authorized same-UID shell can execute. There is no supported opt-in executable-hosting mode.
@@ -223,8 +271,9 @@ The project provides no PHP/Perl/CGI hosting setup or local web-server feature; 
 ## What the publisher never does
 
 It never starts a local server, never installs a language runtime, never rewrites remote
-web-server configuration, never follows symlinks, never copies devices or specials, and
-never adopts a remote directory it did not create. It does not read
+web-server configuration, never follows symlinks and never copies devices or specials.
+It replaces remote content only at configured local or previously tracked site names.
+It does not read
 `DAME_CURIE_PUBLIC_BASE_URL` or `DAME_CURIE_SITE_PUBLIC_BASE_URL`; the latter has no
 reader in production code at all, so configuring it does nothing. Destination selection is
-the TOML only — there are no environment keys for it.
+the TOML only - there are no environment keys for it.

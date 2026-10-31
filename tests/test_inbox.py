@@ -352,7 +352,7 @@ def test_a_read_notice_leaves_the_prompt_tail(tmp_path):
     """The reported bug: the same email announced three times, reworded.
 
     Nothing marked a notice as said, and `read` kept it in the tail, so every
-    prompt carried it again and he narrated it again — "update from z3ki…",
+    prompt carried it again and he narrated it again - "update from z3ki…",
     "z3ki already replied…", "update: z3ki just replied…".
     """
     store = InboxStore(str(tmp_path))

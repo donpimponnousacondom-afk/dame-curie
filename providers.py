@@ -46,7 +46,7 @@ from utils import _spawn_background as _fire_and_forget  # noqa: E402
 # huge field like send_file's `content`, so once this regex matches the value's
 # closing quote is in hand and we can surface the reasoning to the live
 # progress message without waiting for the rest of the stream.
-_PARTIAL_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_PARTIAL_EXPLANATION_RE = re.compile(r'"explanation"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ _PARTIAL_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"')
 # the tool call as part of the normal text stream (not the API's tool_calls
 # field), and our SSE reader incrementally extracts it AS IT STREAMS. The
 # model already knows raw JSON (no new syntax to learn) and the marker
-# lands at ~12% of stream time vs ~88% for native — a real per-token
+# lands at ~12% of stream time vs ~88% for native - a real per-token
 # progress signal for the user.
 #
 # Protocol shape (one JSON object on its own line, no fence, no tag):
@@ -80,7 +80,7 @@ _PARTIAL_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"')
 #   1. Accumulates text deltas into a single buffer.
 #   2. As soon as a `{"name": "..."` substring is visible, fires a
 #      ``on_partial_name`` callback so the progress message can switch
-#      from "thinking: …" to "<tool>: …" — even if the args haven't
+#      from "thinking: …" to "<tool>: …" - even if the args haven't
 #      finished streaming.
 #   3. As soon as the outer JSON's closing brace is matched (counting
 #      braces + tracking strings/escapes), parses it and returns a
@@ -91,10 +91,10 @@ _PARTIAL_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"')
 # The parser is conservative: if braces don't balance, the buffer is
 # retained (we haven't hit the closing brace yet, just keep streaming).
 # If JSON.parse fails on what we thought was complete, we rewind by one
-# character and try again — handles the edge case where a brace inside
+# character and try again - handles the edge case where a brace inside
 # a string fooled the counter.
 
-# Matches the opening of a tool call — `{"name": "<tool>"`. We use this to
+# Matches the opening of a tool call - `{"name": "<tool>"`. We use this to
 # find the start position even before we know the full JSON will parse.
 _CUSTOM_TOOL_OPEN_RE = re.compile(r'\{\s*"name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"')
 
@@ -112,7 +112,7 @@ _GIVE_UP_BYTES = 65536
 # visible. The opener `{"name": "<value>"` can be up to ~50 chars depending
 # on the tool name; 256 chars is comfortably larger and keeps a near-zero
 # memory footprint. This is what lets the buffer find a tool call whose
-# opener arrives split across many small SSE deltas — without it, the
+# opener arrives split across many small SSE deltas - without it, the
 # leading chunk would be released as visible and the partial opener lost
 # forever.
 _HOLD_BACK = 256
@@ -120,7 +120,7 @@ _HOLD_BACK = 256
 # Conservative upper bound on the length of one opener match
 # (e.g. `{"name": "<30-char tool name>"}`). If the unreleased tail is
 # no longer than this, no future chunk can still split an opener
-# across a boundary — release it all as visible. Keeping a separate
+# across a boundary - release it all as visible. Keeping a separate
 # constant from _HOLD_BACK (which is the "ambiguous" window for chunks
 # still arriving) makes the intent obvious at the call site.
 _CUSTOM_TOOL_OPEN_RE_MAX_LEN = 64
@@ -142,7 +142,7 @@ class _CustomToolCallBuffer:
         straight into the existing dispatch flow.
 
     Anything in the stream that isn't a tool call JSON is preserved as
-    ``text`` — the model's reply to the user, minus the JSON objects we
+    ``text`` - the model's reply to the user, minus the JSON objects we
     stripped out.
     """
 
@@ -173,7 +173,7 @@ class _CustomToolCallBuffer:
           1. Append delta to _buf.
           2. Search _buf for the first opener past _released_len.
           3. If found, the text from _released_len to the opener is
-             plain visible — emit it now and advance _released_len to
+             plain visible - emit it now and advance _released_len to
              the opener position. Then try to find a balanced end for
              the opener.
           4. If balanced end found, parse the candidate. Real tool
@@ -209,7 +209,7 @@ class _CustomToolCallBuffer:
                 # that could be a "starter" for a future opener is a
                 # bare `{` that's not yet followed by enough text. Find
                 # the last `{` in the unreleased region and hold back
-                # from there — anything before that `{` cannot grow
+                # from there - anything before that `{` cannot grow
                 # into an opener, so it's safe to release as visible.
                 # If there's no `{` at all, release the whole thing.
                 unreleased = self._buf[self._released_len :]
@@ -246,7 +246,7 @@ class _CustomToolCallBuffer:
             end = _find_balanced_json_end(self._buf, m.start())
             if end is None:
                 # Opener mid-JSON. Hold unless the held region is huge (unescaped
-                # quotes in embedded HTML, CSS `{`, etc.) — then skip the
+                # quotes in embedded HTML, CSS `{`, etc.) - then skip the
                 # false opener so a later valid tool call can still parse.
                 if len(self._buf) - m.start() > _GIVE_UP_BYTES:
                     self._released_len = m.start() + 1
@@ -258,14 +258,14 @@ class _CustomToolCallBuffer:
             # json.loads here, a create_site whose body contains
             # `href="..."` failed to parse, the opener was skipped as a
             # "false positive", and the whole malformed blob shipped to
-            # the channel as raw visible text while the tool never ran —
+            # the channel as raw visible text while the tool never ran -
             # the exact 2026-08-02 incident the repair pass was written
             # for. The repair was only ever reachable from a dead code
             # path, so the live streaming path never benefited from it.
             candidate = self._buf[m.start() : end]
             obj = _safe_parse_tool_call_candidate(candidate)
             if obj is None:
-                # Balanced but not valid JSON even after repair — false
+                # Balanced but not valid JSON even after repair - false
                 # positive. Skip past the opener's first char and keep
                 # searching.
                 self._released_len = m.start() + 1
@@ -297,7 +297,7 @@ class _CustomToolCallBuffer:
         """Final call after the stream ends. Emit any remaining unreleased
         text as visible. If there's a partial tool call still in flight
         (opener received but no closing brace), it can't have been a real
-        tool call — the stream is over — so emit the held opener region as
+        tool call - the stream is over - so emit the held opener region as
         visible text too.
         """
         if not hasattr(self, "_released_len"):
@@ -356,7 +356,7 @@ def _find_balanced_json_end(text: str, start: int) -> int | None:
 # balancer thinks the body string terminated early; the parser then
 # ships the entire malformed JSON blob as raw visible text to the
 # channel instead of executing the tool. See Z3ki's 2026-08-02
-# "old-cartographers" create_site in #boing — the LLM emitted
+# "old-cartographers" create_site in #boing - the LLM emitted
 # ~14 KB of partially-quoted HTML, the parser walked to EOF looking
 # for a balanced close, the tool call never ran, and the user got a
 # wall of broken text in 4 chunked Discord messages instead of a
@@ -374,7 +374,7 @@ def _repair_unescaped_html_quotes(candidate: str) -> str | None:
     Strategy:
       1. Locate the ``"body": "`` opener.
       2. Walk forward, tracking JSON escape state, until we hit an
-         UNESCAPED ``"`` followed by ``}}`` — that's the body string
+         UNESCAPED ``"`` followed by ``}}`` - that's the body string
          terminator followed by the close of the ``arguments`` object
          and the close of the outer object. (LLMs that emit malformed
          HTML bodies almost always structure the close this way.)
@@ -382,7 +382,7 @@ def _repair_unescaped_html_quotes(candidate: str) -> str | None:
          properly escapes ``"`` and ``\\``), strip the outer quotes,
          and splice it back into the candidate.
 
-    This is intentionally narrow — it only fires when a raw
+    This is intentionally narrow - it only fires when a raw
     ``json.loads(candidate)`` already failed AND a ``"body": "`` field
     exists in the candidate. Clean JSON never reaches this path.
     """
@@ -412,7 +412,7 @@ def _repair_unescaped_html_quotes(candidate: str) -> str | None:
 
 def _body_terminator_candidates(candidate: str, body_value_start: int) -> list[int]:
     """Positions of every unescaped ``"`` in the body that could be the
-    string's closing quote — i.e. one followed (modulo whitespace) by
+    string's closing quote - i.e. one followed (modulo whitespace) by
     ``,`` or ``}``.
 
     The old code hardcoded a single terminator: an unescaped ``"``
@@ -423,7 +423,7 @@ def _body_terminator_candidates(candidate: str, body_value_start: int) -> list[i
     swallowed into the body string and silently lost.
 
     Quotes inside HTML attributes (``href="x"``) are followed by ``>``,
-    ``/``, letters, etc. — never ``,`` or ``}`` — so they are not
+    ``/``, letters, etc. - never ``,`` or ``}`` - so they are not
     candidates. A body containing a literal ``",`` (e.g. ``said "hi",``)
     can still produce a false candidate, which is why the caller
     validates each one by reparsing and moves on if it does not hold.
@@ -463,7 +463,7 @@ def _escape_body_slice(
     which JSON forbids inside string literals. Walk the slice and:
       - preserve only sequences ``\\X`` where X is a real JSON escape
         char (``"``, ``\\``, ``/``, ``b``, ``f``, ``n``, ``r``, ``t``,
-        ``u``) — these are the LLM's correct JSON escape attempts,
+        ``u``) - these are the LLM's correct JSON escape attempts,
       - escape bare ``"``,
       - escape bare ``\\`` that is NOT followed by a JSON escape char
         (the LLM typo'd ``</div>`` as ``</div\\`` etc.),
@@ -533,11 +533,11 @@ def _safe_parse_tool_call_candidate(candidate: str):
     false-positive opener and keeps searching.
 
     Three attempts:
-      1. ``json.loads`` — clean JSON.
-      2. ``json.JSONDecoder().raw_decode`` — tolerates trailing garbage
+      1. ``json.loads`` - clean JSON.
+      2. ``json.JSONDecoder().raw_decode`` - tolerates trailing garbage
          (the LLM sometimes appends a hallucinated ``<parameter>`` tag
          after the JSON close, which we should ignore).
-      3. ``_repair_unescaped_html_quotes`` + ``raw_decode`` — escapes
+      3. ``_repair_unescaped_html_quotes`` + ``raw_decode`` - escapes
          unescaped ``"``, bare newlines, and bare backslashes inside
          a ``"body": "..."`` field, then parses.
     """
@@ -575,7 +575,7 @@ def _append_tool_call_arguments(slot: dict, incoming) -> None:
 
     OpenAI streams ``function.arguments`` as JSON *strings* that must be
     concatenated. Some OpenAI-compatible providers (GLM-5.x on OpenCode
-    Zen Go) send a finished object in one delta instead — concatenating
+    Zen Go) send a finished object in one delta instead - concatenating
     that with ``""`` raises TypeError and kills the turn.
     """
     fn = slot.setdefault("function", {})
@@ -593,10 +593,10 @@ def _append_tool_call_arguments(slot: dict, incoming) -> None:
     )
 
 
-def _extract_partial_reasoning(arguments: str) -> str:
-    """Best-effort pull of the `reasoning` string from a PARTIAL arguments JSON.
+def _extract_partial_explanation(arguments: str) -> str:
+    """Best-effort pull of the `explanation` string from a PARTIAL arguments JSON.
 
-    Returns '' until the reasoning value's closing quote has arrived (i.e. the
+    Returns '' until the explanation value's closing quote has arrived (i.e. the
     model is still emitting it). Once complete, returns the decoded string.
     Used to update the in-channel progress message with the model's real intent
     mid-stream, instead of a static "generating…" for the whole generation.
@@ -604,7 +604,7 @@ def _extract_partial_reasoning(arguments: str) -> str:
     if not arguments:
         return ""
     if isinstance(arguments, dict):
-        r = arguments.get("reasoning")
+        r = arguments.get("explanation")
         return r if isinstance(r, str) else ""
     if not isinstance(arguments, str):
         arguments = str(arguments)
@@ -612,13 +612,13 @@ def _extract_partial_reasoning(arguments: str) -> str:
     try:
         parsed = json.loads(arguments)
         if isinstance(parsed, dict):
-            r = parsed.get("reasoning")
+            r = parsed.get("explanation")
             if isinstance(r, str):
                 return r
     except (json.JSONDecodeError, ValueError, TypeError):
         pass
-    # Partial JSON: grab the reasoning value once its closing quote landed.
-    m = _PARTIAL_REASONING_RE.search(arguments)
+    # Partial JSON: grab the explanation value once its closing quote landed.
+    m = _PARTIAL_EXPLANATION_RE.search(arguments)
     if not m:
         return ""
     raw = m.group(1)
@@ -880,7 +880,7 @@ async def _read_sse_response(
 
     If ``on_tool_call_name`` is provided, it's awaited the first time a
     tool_call delta arrives with a function name. This lets the caller
-    update a live progress message mid-stream — e.g. show
+    update a live progress message mid-stream - e.g. show
     "send_file: …" while the model is still generating the tool arguments
     (the file content), instead of waiting for the entire response to finish.
 
@@ -915,7 +915,7 @@ async def _read_sse_response(
     not need to care which mode produced the response.
 
     Returns the merged dict, plus (via a sentinel) the time the first content
-    delta was received — encoded as ``__first_token_ms__`` in the returned
+    delta was received - encoded as ``__first_token_ms__`` in the returned
     dict and popped by the caller.
 
     Raises RuntimeError if the stream is malformed (no choices ever arrive) so
@@ -948,7 +948,7 @@ async def _read_sse_response(
                 # _on_tool_call_name callback (which sets
                 # _current_tool on the progress and triggers
                 # progress.update() with the tool's reasoning once
-                # run_one() dispatches) was never invoked — and the
+                # run_one() dispatches) was never invoked - and the
                 # progress buffer kept the raw streaming JSON
                 # content instead of the natural-language reasoning
                 # the model wrote. Now both fire on opener, so the
@@ -1094,8 +1094,8 @@ async def _read_sse_response(
                     #
                     # feed() returns the VISIBLE portion of this delta
                     # (JSON already stripped, or "" while a tool-call
-                    # opener is still balancing). That return value — not
-                    # the raw delta — is what the on_token progress
+                    # opener is still balancing). That return value - not
+                    # the raw delta - is what the on_token progress
                     # preview below must use. Using the raw delta here
                     # used to leak the model's literal bare-JSON tool
                     # call (e.g. '{"name": "shell", "arguments": {...')
@@ -1116,14 +1116,14 @@ async def _read_sse_response(
                     reasoning_parts.append(reason)
                 # Per-token progress callback (fire-and-forget, NEVER awaited
                 # inline). A slow Discord edit must not back-pressure the SSE
-                # read — that would stall the upstream provider and add visible
+                # read - that would stall the upstream provider and add visible
                 # latency to the stream. We hand the caller a small dict with
                 # the NEW deltas from this frame plus an empty tool_name that
                 # the tool_call block below may fill in.
                 #
                 # 2026-07-21: in the custom tool-call protocol, the model
                 # often emits the entire reasoning + tool call as a single
-                # huge JSON object — so the visible-content delta is empty
+                # huge JSON object - so the visible-content delta is empty
                 # for most frames and the progress UI just sits on
                 # "working on it…". Pass a short HEAD of the raw content
                 # as a "still streaming" preview so the user sees the
@@ -1150,7 +1150,7 @@ async def _read_sse_response(
                         and custom_buffer is not None
                         and custom_buffer.has_pending_json
                     ):
-                        # Skip the on_token callback only — do NOT continue the
+                        # Skip the on_token callback only - do NOT continue the
                         # choice loop or we drop native tool_calls on this delta.
                         pass
                     elif tok_content or tok_reason:
@@ -1235,7 +1235,7 @@ async def _read_sse_response(
                             if on_tool_call_name is not None and not slot.get(
                                 "_reasoning_sent"
                             ):
-                                reason = _extract_partial_reasoning(
+                                reason = _extract_partial_explanation(
                                     slot["function"]["arguments"]
                                 )
                                 if reason:
@@ -1268,7 +1268,7 @@ async def _read_sse_response(
                 key: obj[key] for key in ("prompt_eval_count", "eval_count") if key in obj
             })
         else:
-            # No inner break — keep iterating. Outer loop continues.
+            # No inner break - keep iterating. Outer loop continues.
             continue
         # Inner break hit [DONE]; stop reading.
         break
@@ -1545,7 +1545,7 @@ class ProviderResult(str):
 
 
 def _is_usage_exhausted_error(status: int, error_text: str) -> bool:
-    """Detect true quota/credit exhaustion — not ordinary rate limits.
+    """Detect true quota/credit exhaustion - not ordinary rate limits.
 
     Transient 429 rate limits must still get normal retry/backoff. Only treat as
     exhausted when the body clearly indicates cooldown, quota, or credits.
@@ -1553,7 +1553,7 @@ def _is_usage_exhausted_error(status: int, error_text: str) -> bool:
     2026-08-30 fix for Google Antigravity pooled false positive:
     - Antigravity-manager pools 5 Google accounts; a single 429 with
       reason=QuotaExhausted for gemini-3-flash on ONE account is NOT global
-      exhaustion — combined quota may still be 70% (observed 2026-08-30).
+      exhaustion - combined quota may still be 70% (observed 2026-08-30).
       The manager still serves other accounts/models, so the provider must
       treat this as transient and fall back, not raise USAGE_EXHAUSTED.
     - Google's error is "QuotaExhausted" (no space) not "quota exceeded",
@@ -1617,12 +1617,12 @@ def _is_usage_exhausted_error(status: int, error_text: str) -> bool:
             )
         )
         if has_model and not has_global and not is_rate_limit:
-            # Single entry like 'QuotaExhausted for gemini-3-flash' — transient, fall back to Grok/other model
+            # Single entry like 'QuotaExhausted for gemini-3-flash' - transient, fall back to Grok/other model
             # unless the payload explicitly says combined/global is exhausted.
             # Check for combined/global hint: if manager said so, it would mention billing or multiple accounts
             return False
         if has_model and is_rate_limit:
-            # "rate limited ... QuotaExhausted ... gemini-3-flash" — also transient pooled case
+            # "rate limited ... QuotaExhausted ... gemini-3-flash" - also transient pooled case
             # Only global if billing/credit is mentioned
             if not has_global:
                 return False
@@ -1633,7 +1633,7 @@ def _is_policy_block_text(text: str) -> bool:
     """True when a 200-OK *reply body* is actually Gemini's prompt-block notice.
 
     .normal.man's gateway (and Google's OpenAI-compat surface) do not return an HTTP error for a
-    blocked prompt — they hand back a normal 200 whose message content is:
+    blocked prompt - they hand back a normal 200 whose message content is:
 
         The prompt could not be submitted. The prompt contains sensitive words
         that violate Google's (...use-policy). Try rephrasing the prompt. ...
@@ -1946,7 +1946,7 @@ class OpenAICompatibleProvider:
 
         If ``on_tool_call_name`` is provided, it's forwarded to the streaming
         layer so the caller gets a callback the moment a tool call name arrives
-        mid-stream — useful for updating a live progress message during long
+        mid-stream - useful for updating a live progress message during long
         generations (e.g. send_file where the model spends 20+ seconds
         generating file contents in the tool arguments).
         """

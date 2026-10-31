@@ -916,8 +916,8 @@ def test_goal_age_uses_last_progress_not_last_acted(tmp_path):
     goal = {
         "id": "g1",
         "active": True,
-        "last_acted_on": fresh_acted,   # fresh — would have masked staleness before
-        "last_progress_at": old_progress,  # old — real progress watermark
+        "last_acted_on": fresh_acted,   # fresh - would have masked staleness before
+        "last_progress_at": old_progress,  # old - real progress watermark
     }
     age = engine._goal_age_days(goal)
     assert age is not None and age >= 14
@@ -1062,7 +1062,7 @@ def test_log_tick_bumps_last_acted_for_all_but_progress_only_for_referenced(tmp_
     # Only the referenced goal's last_progress_at advanced beyond its seed.
     assert goals[ref_id]["last_progress_at"] == "2026-01-01T00:00:00+00:00"
     # The never-referenced goal's last_progress_at is still its creation stamp
-    # (NOT overwritten with the tick time) — so it can still go stale later.
+    # (NOT overwritten with the tick time) - so it can still go stale later.
     assert goals[other_id]["last_progress_at"] != "2026-01-01T00:00:00+00:00"
 
 
@@ -1098,7 +1098,7 @@ def test_log_tick_does_not_mark_progress_when_only_do_nothing(tmp_path):
 #
 # The bug these pin: DMs and group DMs picked up plain integer handles from the
 # event feed, rendered as `channel=3(#1452530107255095459)` or `channel=4(#None)`,
-# and were listed as YOUR TURN in the floor block — while AVAILABLE CHANNELS
+# and were listed as YOUR TURN in the floor block - while AVAILABLE CHANNELS
 # only ever listed guild channels. The planner did what the context told it and
 # posted into people's private rooms.
 # ---------------------------------------------------------------------------
@@ -1228,7 +1228,7 @@ def test_register_conversation_fetches_when_the_guild_cache_is_cold(tmp_path):
 
     get_channel() returns None for perfectly real channels there. The first
     registration fixes a room's kind for the whole tick, so writing them off
-    as unreachable stranded Maxwell with nowhere to post — observed live as
+    as unreachable stranded Maxwell with nowhere to post - observed live as
     `unreachable=X1=COOLDOWN` for #grandpa-general seconds after a restart.
     """
     real = SimpleNamespace(id=17, name="grandpa-general", guild=SimpleNamespace(name="g"))
@@ -1258,7 +1258,7 @@ def test_register_conversation_fetches_when_the_guild_cache_is_cold(tmp_path):
     for _ in range(3):
         handle, label = asyncio.run(engine._register_conversation(idx, "99"))
     assert len(calls) == 1
-    # Genuinely unresolvable stays unreachable — that part was right.
+    # Genuinely unresolvable stays unreachable - that part was right.
     assert label == "unreachable=X1"
 
 
@@ -1356,7 +1356,7 @@ def test_should_call_planner_skips_quiet_rooms(tmp_path):
 # skipped the tick every time. Two unbounded serial phases were responsible:
 # the AVAILABLE CHANNELS map awaited history(limit=1) once per text channel
 # (hundreds of sequential REST calls across 21 guilds), and the DM pass awaited
-# history(limit=1500) — 15 paginated requests — per private channel with no
+# history(limit=1500) - 15 paginated requests - per private channel with no
 # timeout. These lock in the cheap paths.
 # ---------------------------------------------------------------------------
 

@@ -3,7 +3,7 @@ name: implement-sanity
 description: Review agent output before PRs or big changes. Use when validating that recent work is clean, tests pass, no private helpers lack docstrings, no unnecessary try/except blocks, no hidden complexity, and the codebase is ready for review.
 ---
 
-# Implement Sanity — Pre-PR Review
+# Implement Sanity - Pre-PR Review
 
 ## Purpose
 Review the last round of agent work before it becomes a PR. Catch the tricks agents use to pad code and avoid proper implementation.
@@ -49,13 +49,13 @@ For an authorized dead-code audit or pruning diff, use the pinned Vulture **2.16
 - [ ] No defensive `if x is not None` checks where `x` is always set
 - [ ] No redundant validation (e.g., checking `isinstance` after type annotation)
 - [ ] Functions do one thing (Single Responsibility)
-- [ ] No magic numbers — use named constants
+- [ ] No magic numbers - use named constants
 
 ### Nits (fix if you see them)
 - [ ] Consistent naming conventions (snake_case for functions/vars, PascalCase for classes)
 - [ ] No unused imports
 - [ ] Files under 300 lines (split if longer)
-- [ ] No `print()` for logging — use proper logging
+- [ ] No `print()` for logging - use proper logging
 
 ## Anti-patterns to Flag
 
@@ -135,14 +135,14 @@ def fetch(url: str, timeout: int = 30) -> Response:
 ## Sanity Review: [branch/diff name]
 
 ### Blockers
-- src/module.py:45 — `_process` has no docstring
-- src/module.py:89 — bare `except:` clause
+- src/module.py:45 - `_process` has no docstring
+- src/module.py:89 - bare `except:` clause
 
 ### Warnings
-- src/module.py:120 — `_transform` is 35 lines, consider splitting
+- src/module.py:120 - `_transform` is 35 lines, consider splitting
 
 ### Nits
-- src/module.py:3 — unused import `json`
+- src/module.py:3 - unused import `json`
 
 ### Verdict: NEEDS FIXES (2 blockers)
 ```

@@ -340,7 +340,7 @@ def test_send_message_does_not_forward_stray_kwargs_to_discord():
         tool = SendMessageTool(SimpleNamespace())
         msg = Msg()
         result = await tool.execute(
-            msg, content="hi", reasoning="think", tts=True, body="nope"
+            msg, content="hi", explanation="think", tts=True, body="nope"
         )
         assert "__MESSAGE_SENT__" in result
         assert msg.replies == ["hi"]

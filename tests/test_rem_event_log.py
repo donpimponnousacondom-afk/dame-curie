@@ -3,7 +3,7 @@ import asyncio
 from rag_memory import RemEventLog
 
 
-def test_rem_event_log_record_drain_cap_and_strip_reasoning(tmp_path):
+def test_rem_event_log_record_drain_cap_and_keep_content(tmp_path):
     async def run():
         log = RemEventLog(str(tmp_path), max_events=2)
         await log.record(
@@ -44,20 +44,20 @@ def test_rem_event_log_record_drain_cap_and_strip_reasoning(tmp_path):
             }
         )
         events = await log.drain_slice(None)
-        assert [e["content"] for e in events] == ["two ok", "three"]
+        assert [e["content"] for e in events] == ["two <think>secret</think> ok", "three"]
         assert events[1]["message_id"] == "333"
         assert events[1]["mentions"] == [{"id": "bot", "name": "Maxwell"}]
         assert events[1]["reply_to_message_id"] == "222"
         assert events[1]["reply_to_author_id"] == "bot"
         assert events[1]["reply_to_self"] is True
         assert events[1]["reply_to_content"] == "hey there"
-        assert "secret" not in events[0]["content"]
+        assert "secret" in events[0]["content"]
         assert await log.size() == 2
         await log.flush()
         loaded = RemEventLog(str(tmp_path), max_events=2)
         loaded.load_from_disk()
         assert [e["content"] for e in await loaded.drain_slice(None)] == [
-            "two ok",
+            "two <think>secret</think> ok",
             "three",
         ]
 

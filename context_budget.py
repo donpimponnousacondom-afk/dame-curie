@@ -1,14 +1,14 @@
 """Per-tier context budget allocation.
 
-The prompt is assembled from several independent memory tiers — the channel
+The prompt is assembled from several independent memory tiers - the channel
 transcript, semantically-recalled long-term facts, what we know about the
 person talking, cross-context facts, and cached web results. Before this
 module each tier was capped by an *item count* (``long_term_memory_max_items``,
 ``cross_context_max_items``, …) and only the transcript had a character
 budget. Item counts are a terrible proxy for size: fifty one-line facts and
 fifty paragraph-long ones differ by two orders of magnitude, so the real
-prompt size swung wildly and the transcript — trimmed last, in the middle of
-the message list where ``_apply_prompt_budget`` cannot reach it — absorbed
+prompt size swung wildly and the transcript - trimmed last, in the middle of
+the message list where ``_apply_prompt_budget`` cannot reach it - absorbed
 every overshoot.
 
 What this does instead: take the characters actually available for memory,
@@ -21,7 +21,7 @@ Chars, not tokens
 -----------------
 Everything here counts characters. The bot's existing budget plumbing
 (``prompt_context_budget``, ``_prompt_budget_chars``) is char-based, and a
-char budget is provider-independent — no tokenizer to load, no per-model
+char budget is provider-independent - no tokenizer to load, no per-model
 drift. ``CHARS_PER_TOKEN`` is the conversion the rest of the codebase
 assumes; it is exposed for callers that need to report in tokens.
 """
@@ -41,7 +41,7 @@ CHARS_PER_TOKEN = 4
 # thing in the prompt.
 TIER_ORDER = ("recent", "ltm", "entity", "facts", "web")
 
-# Default share of the memory budget per tier, as weights (not percentages —
+# Default share of the memory budget per tier, as weights (not percentages -
 # they are normalized, so they do not have to sum to anything in particular).
 # The transcript dominates deliberately: it is the only tier that carries
 # conversational state, and the others are lookups that stay useful when
@@ -55,7 +55,7 @@ DEFAULT_WEIGHTS: dict[str, int] = {
 }
 
 # Floor per tier, in chars. A tier that gets less than this is better off
-# with nothing — half a fact is noise, and a two-line transcript is worse
+# with nothing - half a fact is noise, and a two-line transcript is worse
 # than no transcript because it reads as if that is all that was said.
 # Floors are only honored while the total budget can pay for them; see
 # `allocate`.
@@ -173,7 +173,7 @@ def allocate(
 
     ``weights``   relative share per tier; missing tiers fall back to the
                   defaults, a weight of 0 switches the tier off.
-    ``minimums``  floor per tier — a tier below its floor is zeroed and its
+    ``minimums``  floor per tier - a tier below its floor is zeroed and its
                   share redistributed, because a starved tier is worse than
                   an absent one.
     ``disabled``  tiers the caller has turned off (control flags), zeroed
@@ -241,7 +241,7 @@ def allocate(
                 settled = (name, pay if pay <= pool else 0)
                 break
         if settled is None:
-            # Nobody is over a cap or under a floor — split what is left and
+            # Nobody is over a cap or under a floor - split what is left and
             # hand the integer-division remainder to the highest-priority
             # tier still in play rather than dropping it.
             for name in unsettled:
@@ -276,7 +276,7 @@ def fit_lines(lines: list[str], budget: int, separator: str = "\n") -> tuple[lis
     """Take lines in order until the next one would blow ``budget``.
 
     Returns ``(kept, dropped)``. Order is preserved and callers are expected
-    to sort by relevance first — this drops from the tail, which is where
+    to sort by relevance first - this drops from the tail, which is where
     the least relevant material already is.
 
     A budget too small even for the first line keeps nothing: a truncated

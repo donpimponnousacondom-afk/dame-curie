@@ -398,7 +398,7 @@ def test_reasoning_log_clamps_long_fields():
 def test_send_file_works_for_non_admin_user():
     """Regression: send_file used to require DAME_CURIE_OWNER_IDS, which blocked
     any non-admin user from receiving a file back. The tool is an output
-    channel, not a privileged action — it must work for everyone."""
+    channel, not a privileged action - it must work for everyone."""
 
     class NonAdminBot:
         def _is_admin(self, user_id):

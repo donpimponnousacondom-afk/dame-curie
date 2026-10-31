@@ -4,21 +4,21 @@ The autonomy loop runs on a timer. Conversation runs on turns. Those two
 clocks have nothing to do with each other, and reconciling them is the whole
 job of this module.
 
-Without it, autonomy wakes up mid-conversation and posts — over a reply the
+Without it, autonomy wakes up mid-conversation and posts - over a reply the
 main bot is still writing, or on top of a line Maxwell just said that nobody
 has answered yet. From the outside that reads as a bot barging into its own
 conversation, because that is exactly what it is.
 
 People don't need a rule for this. They read the room: who spoke last, whether
 anyone is waiting on them, whether two other people are mid-exchange. This
-module does that reading and returns a per-channel verdict — does Maxwell hold
+module does that reading and returns a per-channel verdict - does Maxwell hold
 the floor here right now, and if not, why not.
 
 The verdict is used twice, deliberately:
 
-1. As *context* — rendered into the planner prompt so the model sees which
+1. As *context* - rendered into the planner prompt so the model sees which
    rooms are its to speak in and can choose freely among the rest.
-2. As a *gate* — re-checked against live state immediately before anything
+2. As a *gate* - re-checked against live state immediately before anything
    sends, because the plan was made seconds ago and rooms change.
 
 Nothing here restricts WHAT Maxwell does. It only answers WHERE and WHEN
@@ -71,15 +71,15 @@ FLOOR_PRIORITY = {
 #: Planner-facing explanation per state. Written in second person because it
 #: lands in the prompt verbatim.
 FLOOR_HINTS = {
-    FLOOR_REPLYING: "you are already answering here right now — do not send a second message",
-    FLOOR_HOLDING: "you spoke last and nobody has replied yet — wait for them, don't talk to yourself",
+    FLOOR_REPLYING: "you are already answering here right now - do not send a second message",
+    FLOOR_HOLDING: "you spoke last and nobody has replied yet - wait for them, don't talk to yourself",
     FLOOR_HANDLED: "your live reply already covered the newest message here",
-    FLOOR_COOLDOWN: "you posted here via autonomy recently — wait before starting something new",
-    FLOOR_BUSY: "other people are mid-exchange and not talking to you — let them finish",
-    FLOOR_TYPING: "someone is typing here — wait for them to send, don't talk over them",
+    FLOOR_COOLDOWN: "you posted here via autonomy recently - wait before starting something new",
+    FLOOR_BUSY: "other people are mid-exchange and not talking to you - let them finish",
+    FLOOR_TYPING: "someone is typing here - wait for them to send, don't talk over them",
     FLOOR_ADDRESSED: "someone is waiting on you here and nothing has answered them yet",
-    FLOOR_OPEN: "the room is active and you have not been in it — fine to join if you actually want to",
-    FLOOR_IDLE: "quiet for a while — fine to start something if you actually want to",
+    FLOOR_OPEN: "the room is active and you have not been in it - fine to join if you actually want to",
+    FLOOR_IDLE: "quiet for a while - fine to start something if you actually want to",
 }
 
 
@@ -226,12 +226,12 @@ def floor_message_from_discord(
 ) -> FloorMessage:
     """Normalize a discord.Message (plus its already-resolved reply, if any).
 
-    `reply` is passed in rather than fetched so this stays synchronous — the
+    `reply` is passed in rather than fetched so this stays synchronous - the
     caller in gather_context already resolves references through a shared
     cache and there's no reason to pay for that twice.
 
     `implicit_address` marks surfaces where every inbound message is aimed at
-    Maxwell regardless of mentions — a 1:1 DM being the obvious one. Nobody
+    Maxwell regardless of mentions - a 1:1 DM being the obvious one. Nobody
     @-mentions you in a DM; the whole channel is the mention.
     """
     author = getattr(message, "author", None)
@@ -282,7 +282,7 @@ def read_floor(
     """Decide whether Maxwell may speak unprompted in this channel.
 
     Pure: no I/O, no bot access. `messages` may be in any order and may
-    include messages with no timestamp (those are ignored — an undated
+    include messages with no timestamp (those are ignored - an undated
     message can't be placed in a turn order).
 
     The checks run in the order a person would apply them, most conclusive
@@ -304,7 +304,7 @@ def read_floor(
             silence_seconds=silence,
         )
 
-    # 1. The main bot is mid-reply here. Nothing else matters — a second
+    # 1. The main bot is mid-reply here. Nothing else matters - a second
     #    message now lands on top of one that's still being written.
     if is_replying:
         return verdict(FLOOR_REPLYING, "main reply path is generating here")
@@ -320,7 +320,7 @@ def read_floor(
         key=lambda m: m.created_at,  # type: ignore[arg-type,return-value]
     )
     if not dated:
-        # Nothing visible — but "I can't see the room" is not the same as "the
+        # Nothing visible - but "I can't see the room" is not the same as "the
         # room is empty". If the main path replied here recently, that's real
         # evidence of a live conversation the history window just missed.
         empty_auto_dt = _epoch_to_dt(last_autonomy_ts)
@@ -330,7 +330,7 @@ def read_floor(
                 return verdict(
                     FLOOR_COOLDOWN, f"autonomy posted here {_ago(since_auto)}"
                 )
-        # Live reply not yet in the history window — a short race, not the
+        # Live reply not yet in the history window - a short race, not the
         # 5-minute autonomy cooldown.
         empty_reply_dt = _epoch_to_dt(last_bot_reply_ts)
         if empty_reply_dt is not None:
@@ -347,7 +347,7 @@ def read_floor(
     # Two clocks, kept apart on purpose:
     # `last_self_msg_dt` is what's visible in the room (live or autonomy)
     # and decides which inbound pings are still unanswered.
-    # `last_autonomy_dt` is the unprompted-post cooldown — live replies
+    # `last_autonomy_dt` is the unprompted-post cooldown - live replies
     # do not start it. `_last_bot_reply` is only for HANDLED / the empty
     # history race, not for "was he active in this channel".
     self_times = [m.created_at for m in dated if m.is_self and m.created_at]
@@ -367,7 +367,7 @@ def read_floor(
         )
 
     # 3. Is anyone actually waiting on him? Only messages that arrived AFTER
-    #    his last appearance count — earlier pings were answered by whatever
+    #    his last appearance count - earlier pings were answered by whatever
     #    he said afterward.
     pending = None
     for m in reversed(dated):
@@ -404,7 +404,7 @@ def read_floor(
         return verdict(FLOOR_ADDRESSED, f"waiting since {_ago(waited)}", silence)
 
     # 4. Nobody is waiting. Stay out only if *autonomy* posted here recently.
-    #    A live ping-reply does not count — he can still join an active room
+    #    A live ping-reply does not count - he can still join an active room
     #    he has not autonomy-posted into.
     if last_autonomy_dt is not None:
         since_auto = max(0.0, (now - last_autonomy_dt).total_seconds())
@@ -445,7 +445,7 @@ def read_floor(
 
 
 def _duration(seconds: float) -> str:
-    """Compact human duration. Rendering only — never parsed back."""
+    """Compact human duration. Rendering only - never parsed back."""
     seconds = max(0.0, float(seconds))
     if seconds < 60:
         return f"{int(seconds)}s"
@@ -474,7 +474,7 @@ def render_floor_section(verdicts: Sequence[FloorVerdict]) -> str:
     if not verdicts:
         return (
             "=== CONVERSATION FLOOR ===\n"
-            "(no rooms read this tick — no channel is confirmed open, so don't "
+            "(no rooms read this tick - no channel is confirmed open, so don't "
             "post; non-speaking actions are unaffected)"
         )
 
@@ -490,22 +490,22 @@ def render_floor_section(verdicts: Sequence[FloorVerdict]) -> str:
     lines = [
         "=== CONVERSATION FLOOR (whose turn it is in each room) ===",
         "Timing is the one thing that isn't your free choice. This is the room "
-        "read, not a suggestion — messages aimed at a closed room are dropped "
+        "read, not a suggestion - messages aimed at a closed room are dropped "
         "before they send.",
     ]
     if open_v:
-        lines.append("YOUR TURN — you may speak in these:")
+        lines.append("YOUR TURN - you may speak in these:")
         lines.extend(
             f"- {v.label or v.channel_id} [{v.state}] {v.hint} ({v.reason})"
             for v in open_v
         )
     else:
         lines.append(
-            "YOUR TURN — none right now. Say nothing anywhere this tick; "
+            "YOUR TURN - none right now. Say nothing anywhere this tick; "
             "spend it on something that isn't talking."
         )
     if closed_v:
-        lines.append("NOT YOUR TURN — no messages here:")
+        lines.append("NOT YOUR TURN - no messages here:")
         lines.extend(
             f"- {v.label or v.channel_id} [{v.state}] {v.hint}" for v in closed_v[:12]
         )

@@ -3,16 +3,16 @@
 Vector search is good at conversational vibe and terrible at multi-hop
 structure ("who owns this site, which routes does it expose, what does the
 frontend call"). This module stores that structure as SQLite nodes+edges in
-the same ``dame-curie-rag.db`` — no Neo4j, no extra embed calls.
+the same ``dame-curie-rag.db`` - no Neo4j, no extra embed calls.
 
 Two writers, both cheap:
 
-* **Site/code graph** — Python ``ast`` + a frontend path scan whenever a
+* **Site/code graph** - Python ``ast`` + a frontend path scan whenever a
   site is created or edited. Deterministic, zero tokens.
-* **Chat triples** — optional ``triples`` on the *existing* context-extractor
+* **Chat triples** - optional ``triples`` on the *existing* context-extractor
   JSON. No extra LLM pass.
 
-Prompt lookup is 1–2 hop expansion from the speaker and any named nodes in
+Prompt lookup is 1-2 hop expansion from the speaker and any named nodes in
 the query.
 """
 
@@ -191,7 +191,7 @@ def extract_python_routes(source: str) -> list[tuple[str, str]]:
 
 
 def extract_frontend_api_paths(source: str) -> list[str]:
-    """Paths the page actually calls — fetch/axios plus quoted ``/api/...``."""
+    """Paths the page actually calls - fetch/axios plus quoted ``/api/...``."""
     text = source or ""
     found: list[str] = []
     seen: set[str] = set()
@@ -606,7 +606,7 @@ class KnowledgeGraph:
         if not edges:
             return ""
         lines = [
-            "Known structure (graph — verified links, not vibe recall; don't recite unless useful):"
+            "Known structure (graph - verified links, not vibe recall; don't recite unless useful):"
         ]
         for _src, src_name, rel, _dst, dst_name in edges:
             lines.append(f"- {src_name} --{rel}--> {dst_name}")

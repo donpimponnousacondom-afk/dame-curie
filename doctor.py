@@ -4,7 +4,7 @@
     .venv/bin/python doctor.py            # report
     .venv/bin/python doctor.py --probe    # also call the model + embedding endpoints
 
-Exits non-zero only when something actually stops the bot from starting —
+Exits non-zero only when something actually stops the bot from starting -
 missing optional features are reported, not treated as failures.
 """
 
@@ -183,7 +183,7 @@ def probe(cfg) -> None:
     state, detail = asyncio.run(_probe_chat(cfg))
     line(state, "chat endpoint", detail)
     if state == "bad":
-        problems.append("the model endpoint is unreachable — check OPENAI_BASE_URL/API key")
+        problems.append("the model endpoint is unreachable - check OPENAI_BASE_URL/API key")
     if cfg.ENABLE_RAG:
         state, detail = asyncio.run(_probe_embeddings(cfg))
         line(state, "embedding endpoint", detail)
@@ -214,7 +214,7 @@ def main() -> int:
         from config import Config
 
         cfg = Config
-    except Exception as e:  # config itself failed to load — that's fatal
+    except Exception as e:  # config itself failed to load - that's fatal
         line("bad", "config.py failed to load", str(e))
         problems.append(f"fix config loading: {e}")
 

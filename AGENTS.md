@@ -1,4 +1,4 @@
-# dame-curie — agent contract
+# dame-curie - agent contract
 
 Root's current instructions override repository guidance. This is the Discord-only V2 workstream; protected V1 is functional, not an assumed incident to repair.
 
@@ -6,7 +6,7 @@ Root's current instructions override repository guidance. This is the Discord-on
 
 Read `docs/STATUS.md` for source/artifact/runtime facts, `TODO.md` for remaining work, `docs/OPERATIONS.md` for account/engine and recovery boundaries, and `docs/DEVELOPMENT.md` / `docs/ARCHITECTURE.md` for validation and source contracts. README is the small current documentation index. Never inspect another checkout or upstream project to fill gaps.
 
-## Current assignment — final production transition, 2026-10-02
+## Current assignment - final production transition, 2026-10-02
 
 Root delegated completion of the Queen's V1-to-V2 transition, isolated automated testing and bounded real inference, necessary source/worktree integration, production cutover and reviewed repository PRs. This is the final release, not another Phase-II scout. The coordinator makes ordinary engineering decisions and resolves defects; ask root only for genuinely necessary human intervention or a reserved policy decision. This current grant supersedes the earlier temporary-only hold, not the security-policy boundary below.
 
@@ -18,7 +18,7 @@ Root delegated completion of the Queen's V1-to-V2 transition, isolated automated
 - Root authorized preparing/publishing task-branch PRs to the verified Dame Curie repository. Never force-push, push to main or merge without a separate explicit grant. Preserve unrelated `reports/` and `root-review-reports` work.
 - Standing PR protocol: use [.agents/skills/council-pr-babysitter/SKILL.md](.agents/skills/council-pr-babysitter/SKILL.md). The coordinator owns fixes/publication; independent **Luna/max and Sol/high** review each pinned PR head and monitor complete current-head CI. Both review final deltas; neither races edits or treats CI alone as correctness. This project-local skill was imported from root's explicitly authorized Codex skill folder; its Council observations are historical, not runtime authority here.
 
-## Closed assignment and authority — 2026-09-25
+## Closed assignment and authority - 2026-09-25
 
 Root authorized complete local audit remediation, independent review, coherent local commits, credential-free isolated QA and bounded automated acceptance in the prepared **temporary Dirac** channel. The later assignment narrowed corrections to `audit/20260924T210402Z-audit/08-ROUND2-REPORT.md` section5 and requires actual documentation consolidation/retirement this round. Root renamed the audit directory; preserve original report contents rather than rewriting them to match the new path.
 
@@ -57,7 +57,7 @@ Do not read production/backup files, real environment files, databases, raw logs
 
 Work locally: no automatic fetch/push/PR or remote research. Do not amend others' history, prune refs/worktrees/caches, overwrite unrelated work, or stage root's `reports/` and `.agents/skills/root-review-reports/` material. Accepted history mapping does not prove physical cleanliness or ownership.
 
-## AI request parameters — configuration is sacred
+## AI request parameters - configuration is sacred
 
 Root's standing rule, 2026-10-03: **configuration and explicit operator commands are the only authority for AI request parameters.** Transport is not a second configuration system. This overrides inherited provider behavior and the rejected Mimo-specific workaround; it is a required contract, not a claim that the current implementation already complies.
 
@@ -67,6 +67,31 @@ Root's standing rule, 2026-10-03: **configuration and explicit operator commands
 - Test the actual outgoing JSON/form/query at the HTTP boundary, not only stored configuration. Preserve explicit values and the original configuration object. Surface conflicts with budgets or other constraints instead of silently rewriting parameters or increasing spending.
 - Root further clarified: commenting out a provider parameter must remove it upstream; there are not two provider configurations. Do not relocate forbidden overrides into job-owned constructors or `bot_control.json`. The unconfigured legacy aggregate output-token cap must be removed, not used to invent or shrink `max_tokens`. Local deadline/attempt guards are separate workflow limits and must never synthesize request fields.
 - New operational exceptions require root's explicit request. Do not silently rewrite the real configuration to disguise a transport fix, expose credentials/prompts for observability, or change existing security/redaction policy under this rule.
+
+## Failures stay visible - root's absolute rule, 2026-10-04
+
+This rule is final. It applies to every agent and every future change.
+
+- Do not hide a defect. Do not strip, filter, rewrite or drop model output to make a symptom go away. A leak in Discord is a signal. Root uses it to find the cause.
+- Do not add a regex that removes `<think>`, `<reasoning>` or similar blocks from visible text, stored memory or context. Root removed these filters. Do not add them again.
+- Fix the cause: the prompt, the tool schema, the request or the provider configuration.
+- An error must stop the operation and state one exact cause. Do not continue in a degraded mode. Do not replace an error with a warning.
+- An error message names what failed and why. "An error occurred" is not acceptable. "The schema or the provider is wrong" is not acceptable.
+- Code can handle an error and continue only when the handling is correct and visible. Handling is not hiding.
+- Code that hides a failure is rejected and removed. Add a regression test that fails if the hiding comes back.
+
+## Writing - ASD-STE100, 2026-10-04
+
+Write comments, documentation, commit messages and reports in the style of ASD-STE100 Simplified Technical English. Target: 80% conformance.
+
+- One statement in one sentence. Maximum 20 words for an instruction, 25 words for a description.
+- State one fact. Do not write "A or B" or "A and/or B" for a result. Find which one is true, then write it.
+- A check passed or it failed. A feature works or it does not. Do not write "almost", "mostly" or "should".
+- Report what you measured. If you did not measure it, write "not measured".
+- Use the active voice and the same word for the same thing.
+- Delete text that gives no fact and no instruction.
+- Do not use em dashes or en dashes. Use `-` or `;`. `scripts/check_dashes.sh` refuses them in the commit hook, in the GitHub workflow and in the image build. `audit/` is excluded because it holds preserved originals.
+- Enable the commit hook in each clone: `git config core.hooksPath .githooks`.
 
 ## Naming and configuration
 

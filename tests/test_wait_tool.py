@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot_tools import WaitTool  # noqa: E402
+from tool_schemas import trim_tool_tail  # noqa: E402
 
 # Module-level stash used by _build_test_bot to record the original
 # MaxwellBot._execute_tool_by_name so the autouse fixture below can
@@ -110,7 +111,7 @@ def test_wait_tool_caps_at_10_seconds():
 
 
 def test_wait_tool_negative_clamped_to_zero():
-    """Negative values are nonsense — clamp to 0, don't crash."""
+    """Negative values are nonsense - clamp to 0, don't crash."""
     tool = WaitTool(bot=None)
 
     async def run():
@@ -128,7 +129,7 @@ def test_wait_tool_garbage_string_defaults_to_2():
         return await tool.execute(_msg(), seconds="not a number")
 
     result = asyncio.run(run())
-    # Default path — should sleep ~2s.
+    # Default path - should sleep ~2s.
     assert result == "Waited 2.0s"
 
 
@@ -150,12 +151,12 @@ def _build_test_bot(tools_dict):
     """Build a SimpleNamespace fake bot with the attributes
     _process_native_tool_calls / _execute_tool_by_name touch. We also
     monkey-patch MaxwellBot._execute_tool_by_name to invoke the fake
-    tool's execute directly — we don't want the real send_message's
+    tool's execute directly - we don't want the real send_message's
     emoji-rendering / Discord-posting code path in a unit test of
     dispatch ordering.
 
     The patch is restored at the end of the test via a pytest fixture
-    pattern — see `_restore_execute_tool_by_name` autouse fixture
+    pattern - see `_restore_execute_tool_by_name` autouse fixture
     below. Without the restore, tests that run AFTER our patch see the
     fake and break (test order pollution).
     """
@@ -202,8 +203,8 @@ def _build_test_bot(tools_dict):
     bot._tool_system_prompt = lambda platform="discord", **kwargs: ""
     bot.config = SimpleNamespace(DATA_DIR="/tmp", log_level="info")
     bot._extract_reasoning = lambda params: (
-        str(params.get("reasoning", "") or ""),
-        {k: v for k, v in params.items() if k != "reasoning"},
+        str(params.get("explanation", "") or ""),
+        {k: v for k, v in params.items() if k != "explanation"},
     )
     bot._tool_breaker = SimpleNamespace(
         is_open=lambda name: False,
@@ -259,7 +260,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "first", "content": "first msg"}',
+                "arguments": '{"explanation": "first", "content": "first msg"}',
             },
         },
         {
@@ -267,7 +268,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
             "type": "function",
             "function": {
                 "name": "wait",
-                "arguments": '{"reasoning": "pause", "seconds": 1.0}',
+                "arguments": '{"explanation": "pause", "seconds": 1.0}',
             },
         },
         {
@@ -275,7 +276,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "second", "content": "second msg"}',
+                "arguments": '{"explanation": "second", "content": "second msg"}',
             },
         },
     ]
@@ -303,7 +304,7 @@ def test_send_message_then_wait_then_send_message_runs_in_order():
 
 
 def test_no_response_blocks_later_send_message():
-    """no_response must be exclusive — a later send_message in the same
+    """no_response must be exclusive - a later send_message in the same
     batch gets rejected with an error the model can see."""
     from bot import MaxwellBot, _tool_results_need_followup
 
@@ -341,7 +342,7 @@ def test_no_response_blocks_later_send_message():
             "type": "function",
             "function": {
                 "name": "no_response",
-                "arguments": '{"reasoning": "stay silent"}',
+                "arguments": '{"explanation": "stay silent"}',
             },
         },
         {
@@ -349,7 +350,7 @@ def test_no_response_blocks_later_send_message():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "send", "content": "hi"}',
+                "arguments": '{"explanation": "send", "content": "hi"}',
             },
         },
     ]
@@ -378,7 +379,7 @@ def test_no_response_blocks_later_send_message():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning":"' + "x" * 16_000 + '","content":"hi"}',
+                "arguments": '{"explanation":"' + "x" * 16_000 + '","content":"hi"}',
             },
         },
     ]
@@ -407,9 +408,57 @@ def test_no_response_blocks_later_send_message():
     assert [result["content"] for result in replay[1:]] == refused
     assert "x" * 16_000 not in str(replay)
 
+    aggregate_calls = [
+        {
+            "id": f"call_wide_{index}",
+            "type": "function",
+            "function": {
+                "name": "send_message",
+                "arguments": '{"explanation":"' + "x" * 12_000 + '","content":"hi"}',
+            },
+        }
+        for index in range(3)
+    ]
+    _, aggregate_refused, _ = asyncio.run(
+        MaxwellBot._process_native_tool_calls(
+            bot, message, "", aggregate_calls, include_images=True
+        )
+    )
+    assert sent == ["NO_RESPONSE"]
+    assert aggregate_refused == [
+        "Tool send_message: Error - batch refused because the batch carries "
+        "36,099 bytes of arguments; the limit is 32,000; no calls in this batch "
+        "were executed."
+    ] * 3
+    assert _tool_results_need_followup(aggregate_refused) is True
+
+    many_calls = [
+        {
+            "id": f"call_many_{index}",
+            "type": "function",
+            "function": {"name": "no_response", "arguments": "{}"},
+        }
+        for index in range(12)
+    ]
+    _, many_refused, _ = asyncio.run(
+        MaxwellBot._process_native_tool_calls(
+            bot, message, "", many_calls, include_images=True
+        )
+    )
+    assert sent == ["NO_RESPONSE"]
+    assert many_refused == [
+        "Tool no_response: Error - batch refused because the response has 12 calls; "
+        "the limit is 10; no calls in this batch were executed."
+    ] * 10
+    many_replay = bot._last_native_followup_messages
+    assert [call["id"] for call in many_replay[0]["tool_calls"]] == [
+        f"call_many_{index}" for index in range(10)
+    ]
+    assert len(trim_tool_tail(many_replay)) == 11
+
 
 def test_two_send_messages_in_a_row_both_fire_in_order():
-    """Two send_messages back-to-back (no wait) — both must fire, in order."""
+    """Two send_messages back-to-back (no wait) - both must fire, in order."""
     from bot import MaxwellBot
 
     sent = []
@@ -441,7 +490,7 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "first", "content": "alpha"}',
+                "arguments": '{"explanation": "first", "content": "alpha"}',
             },
         },
         {
@@ -449,7 +498,7 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"reasoning": "second", "content": "beta"}',
+                "arguments": '{"explanation": "second", "content": "beta"}',
             },
         },
     ]

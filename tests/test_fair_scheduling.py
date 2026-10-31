@@ -135,7 +135,7 @@ def test_locks_are_reclaimed_but_never_stolen_while_held():
         for n in range(200):
             locks.get(f"cold-{n}")
         assert len(locks) <= 32
-        # The held lock is still the same object — pruning it would let two
+        # The held lock is still the same object - pruning it would let two
         # turns into that room at once.
         assert locks.get("busy") is held
         held.release()

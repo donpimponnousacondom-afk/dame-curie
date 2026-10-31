@@ -13,7 +13,7 @@ def test_rem_system_prompt_shape():
     # 2026-07-21: REM now ends with a JSON actions block (ltm_add / shared_add
     # / etc) and the runner parses it. The prompt must instruct the model
     # to emit that JSON and to provide an audit field, but must NOT
-    # advertise "DONE" as the response — that was the old bypass-tools
+    # advertise "DONE" as the response - that was the old bypass-tools
     # contract.
     assert "JSON" in prompt
     assert "actions" in prompt
@@ -45,7 +45,7 @@ def test_short_term_slice_prompt_bounds_a_huge_slice():
 
     assert len(prompt) < 200_000
     payload = json.loads(prompt.split("\n", 1)[1])
-    # Every event survives (shortened) — the watermark moves past this slice,
+    # Every event survives (shortened) - the watermark moves past this slice,
     # so a dropped event would never be assimilated at all.
     assert len(payload) == len(events)
     assert all("chars)" in e["content"] for e in payload)

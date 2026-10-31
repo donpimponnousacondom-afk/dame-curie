@@ -1,5 +1,7 @@
 import ctypes
+import errno
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -19,7 +21,7 @@ class Refused(Exception):
 
 
 @contextmanager
-def root_directory(path):
+def root_directory(path, create=False):
     parts = PurePosixPath(path).parts
     if not parts or parts[0] != "/" or ".." in parts:
         raise Refused()
@@ -27,6 +29,11 @@ def root_directory(path):
     fd = os.open("/", FLAGS if len(parts) == 1 else traversal_flags)
     try:
         for index, part in enumerate(parts[1:], start=1):
+            if create:
+                try:
+                    os.mkdir(part, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass
             child = os.open(part, FLAGS if index == len(parts) - 1 else traversal_flags, dir_fd=fd)
             os.close(fd)
             fd = child
@@ -57,7 +64,7 @@ def owner_file(fd, namespace, create=False):
         value = os.fstat(marker_fd)
         if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
                 or value.st_mode & 0o077 or value.st_uid != os.getuid()):
-            raise Refused()
+            raise Refused("owner marker must be a private regular file owned by the SSH user")
         yield marker_fd
     finally:
         os.close(marker_fd)
@@ -66,7 +73,7 @@ def owner_file(fd, namespace, create=False):
 def marker(fd, token, namespace):
     with owner_file(fd, namespace) as marker_fd:
         if os.read(marker_fd, 512) != owner_bytes(fd, token):
-            raise Refused()
+            raise Refused("owner marker token or directory identity does not match")
 
 
 def child_directory(root, name, expected):
@@ -74,7 +81,7 @@ def child_directory(root, name, expected):
     fd = os.open(name, FLAGS, dir_fd=root)
     if expected and identity(fd) != expected:
         os.close(fd)
-        raise Refused()
+        raise Refused("site directory identity does not match saved identity")
     return fd
 
 
@@ -102,10 +109,10 @@ def preparation(root, token, namespace, create):
         os.close(fd)
 
 
-def prepare_marker(fd, token, namespace):
+def prepare_marker(fd, token, namespace, replace=False):
     payload = owner_bytes(fd, token)
     with owner_file(fd, namespace, create=True) as marker_fd:
-        if not payload.startswith(os.read(marker_fd, 512)):
+        if not replace and not payload.startswith(os.read(marker_fd, 512)):
             raise Refused()
         os.ftruncate(marker_fd, 0)
         os.lseek(marker_fd, 0, os.SEEK_SET)
@@ -151,7 +158,7 @@ def claim(root, request):
     valid_name(name)
     with ExitStack() as stack:
         try:
-            fd = child_directory(root, name, request["site_identity"])
+            fd = child_directory(root, name, [])
         except FileNotFoundError:
             hidden, prepared = stack.enter_context(preparation(root, token, namespace, create=True))
             prepare_marker(prepared, token, namespace)
@@ -164,7 +171,7 @@ def claim(root, request):
                 pass
             fd = child_directory(root, name, [])
         stack.callback(os.close, fd)
-        marker(fd, token, namespace)
+        prepare_marker(fd, token, namespace, replace=True)
         os.fchmod(fd, 0o755)
         os.fsync(fd)
         os.fsync(root)
@@ -178,7 +185,7 @@ def remove(root, request):
     valid_name(name)
     cleanup_claim(root, request["token"], namespace)
     try:
-        fd = child_directory(root, name, request["site_identity"])
+        fd = child_directory(root, name, [])
     except (FileNotFoundError, NotADirectoryError) as error:
         if isinstance(error, NotADirectoryError) and request["site_identity"]:
             raise
@@ -188,12 +195,7 @@ def remove(root, request):
         if names == [] and request["site_identity"]:
             pass
         else:
-            try:
-                marker(fd, request["token"], namespace)
-            except (FileNotFoundError, Refused):
-                if request["site_identity"]:
-                    raise
-                return {}
+            prepare_marker(fd, request["token"], namespace, replace=True)
             for child in names:
                 if child == marker_name:
                     continue
@@ -214,22 +216,111 @@ def remove(root, request):
     return {}
 
 
+def inventory_stat(value):
+    return [value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns]
+
+
+def inventory_file(parent, name, expected):
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+    try:
+        if inventory_stat(os.fstat(fd)) != inventory_stat(expected):
+            raise Refused("remote file changed during inventory")
+        digest = hashlib.sha256()
+        while block := os.read(fd, 1024 * 1024):
+            digest.update(block)
+        if inventory_stat(os.fstat(fd)) != inventory_stat(expected):
+            raise Refused("remote file changed during hashing")
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def inventory_tree(fd, prefix, metadata, rows, content, marker_name, selected=None):
+    before = inventory_stat(os.fstat(fd))
+    metadata.append([prefix, *before])
+    rows.append([prefix, "d", stat.S_IMODE(before[2])])
+    names = sorted(os.listdir(fd)) if selected is None else sorted(selected)
+    for name in names:
+        if prefix == "." and name == marker_name:
+            continue
+        path = name if prefix == "." else prefix + "/" + name
+        value = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(value.st_mode):
+            child = os.open(name, FLAGS, dir_fd=fd)
+            try:
+                if inventory_stat(os.fstat(child)) != inventory_stat(value):
+                    raise Refused("remote directory changed during inventory")
+                inventory_tree(child, path, metadata, rows, content, marker_name)
+            finally:
+                os.close(child)
+        else:
+            metadata.append([path, *inventory_stat(value)])
+            kind = "f" if stat.S_ISREG(value.st_mode) else "other"
+            row = [path, kind, stat.S_IMODE(value.st_mode)]
+            if kind == "f":
+                row.append(inventory_file(fd, name, value) if content else "")
+            rows.append(row)
+    if inventory_stat(os.fstat(fd)) != before or selected is None and sorted(os.listdir(fd)) != names:
+        raise Refused("remote directory changed during inventory")
+
+
+def inventory_digest(rows):
+    return hashlib.sha256(json.dumps(sorted(rows), separators=(",", ":")).encode()).hexdigest()
+
+
+def inventory(sites, images, roots, request):
+    result = {"roots": roots, "different": [], "verified": {}, "hashed": 0}
+    marker_name = f".{request['marker_namespace']}-publisher-owner"
+    for name, expected in request["sites"].items():
+        try:
+            with ExitStack() as stack:
+                fd, selected = images, expected.get("files")
+                if name != "_images":
+                    fd = child_directory(sites, name, expected["identity"])
+                    stack.callback(os.close, fd)
+                    marker(fd, expected["token"], request["marker_namespace"])
+                metadata, rows = [], []
+                inventory_tree(fd, ".", metadata, rows, False, marker_name, selected)
+                signature = hashlib.sha256(json.dumps([roots, sorted(metadata)], separators=(",", ":")).encode()).hexdigest()
+                if signature == expected["signature"]:
+                    continue
+                if inventory_digest([row[:2] for row in rows]) != expected["shape"]:
+                    result["different"].append(name)
+                    continue
+                hashed_metadata, content = [], []
+                inventory_tree(fd, ".", hashed_metadata, content, True, marker_name, selected)
+                result["hashed"] += 1
+                if sorted(metadata) != sorted(hashed_metadata):
+                    raise Refused("remote tree changed during hashing")
+                if inventory_digest(content) == expected["tree"]:
+                    result["verified"][name] = signature
+                else:
+                    result["different"].append(name)
+        except (OSError, Refused):
+            result["different"].append(name)
+    return result
+
+
 def run(request, rsync_args=()):
     namespace = request["marker_namespace"]
     if namespace not in ("dame-curie", "curie"):
         raise Refused()
     with ExitStack() as stack:
-        sites = stack.enter_context(root_directory(request["site_root"]))
-        images = stack.enter_context(root_directory(request["image_root"]))
+        create = request["action"] in {"probe", "inventory"}
+        sites = stack.enter_context(root_directory(request["site_root"], create=create))
+        images = stack.enter_context(root_directory(request["image_root"], create=create))
         roots = [identity(sites), identity(images)]
         if request["roots"] and request["roots"] != roots:
-            raise Refused()
+            raise Refused("remote root identities do not match saved identities")
         action = request["action"]
         if action in {"claim", "remove"}:
             fcntl.flock(sites, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = {}
         if action == "probe":
             result = {"roots": roots}
+        elif action == "inventory":
+            result = inventory(sites, images, roots, request)
         elif action == "claim":
             result = claim(sites, request)
         elif action == "remove":
@@ -249,9 +340,21 @@ def run(request, rsync_args=()):
 
 def main():
     try:
-        result = run(json.loads(sys.argv[1]), sys.argv[2:])
+        request = json.load(sys.stdin) if sys.argv[1] == "-" else json.loads(sys.argv[1])
+        result = run(request, sys.argv[2:])
         print(json.dumps(result, separators=(",", ":")))
-    except (OSError, ValueError, KeyError, Refused):
+    except (OSError, ValueError, KeyError, Refused) as error:
+        location = error.__traceback__
+        while location.tb_next is not None:
+            location = location.tb_next
+        detail = f"{type(error).__name__} in {location.tb_frame.f_code.co_name} (guard.py:{location.tb_lineno})"
+        if isinstance(error, Refused) and str(error):
+            detail += f": {error}"
+        if isinstance(error, OSError):
+            detail += f": {errno.errorcode.get(error.errno, 'UNKNOWN')}"
+            if error.errno is not None:
+                detail += f" ({os.strerror(error.errno)})"
+        print(f"publisher-guard: {detail}", file=sys.stderr)
         sys.exit(73)
 
 

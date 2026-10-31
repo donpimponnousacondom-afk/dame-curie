@@ -5,7 +5,7 @@ No Discord, no bot process, no provider and no network: the fake client's
 the fake channel routes its sends through that method, the fake bot's
 ``_generate_response`` stands in for the provider the runtime observes, and the
 reply queue and ``MaxwellBot._run_queued_reply`` are the real ones. What is faked
-is the transport, not the path — the notice, its injection, the correlation
+is the transport, not the path - the notice, its injection, the correlation
 ContextVar and the single record all run the code that runs against the live bot.
 
 Not covered here: real Discord behaviour, the bot's real gates (allowlist,

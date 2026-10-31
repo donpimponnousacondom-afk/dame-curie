@@ -4,7 +4,7 @@ Maxwell only ever advertises native ``tools=``, but models keep answering in
 their own text dialect anyway. Before recovery both outcomes were wrong: a
 dialect the scrubber recognized was deleted (the reply vanished and the turn
 went silent) and one it did not recognize was posted to the channel as a raw
-parameter dump — the "reasoning … content … reply true" the user kept seeing
+parameter dump - the "explanation … content … reply true" the user kept seeing
 in chat.
 
 These tests pin every dialect we have actually observed, plus the negative
@@ -30,7 +30,7 @@ def _recover(text):
 def test_recovers_glm_arg_key_block():
     calls, leftover = _recover(
         "<tool_call>send_message\n"
-        "<arg_key>reasoning</arg_key><arg_value>answering directly</arg_value>\n"
+        "<arg_key>explanation</arg_key><arg_value>answering directly</arg_value>\n"
         "<arg_key>content</arg_key><arg_value>nadie dijo eso</arg_value>\n"
         "<arg_key>reply</arg_key><arg_value>true</arg_value>\n"
         "</tool_call>"
@@ -39,7 +39,7 @@ def test_recovers_glm_arg_key_block():
         (
             "send_message",
             {
-                "reasoning": "answering directly",
+                "explanation": "answering directly",
                 "content": "nadie dijo eso",
                 "reply": True,
             },
@@ -51,13 +51,13 @@ def test_recovers_glm_arg_key_block():
 def test_recovers_qwen_function_equals_block():
     calls, leftover = _recover(
         "<function=send_message>\n"
-        "<parameter=reasoning>\nanswering\n</parameter>\n"
+        "<parameter=explanation>\nanswering\n</parameter>\n"
         "<parameter=content>\nhola\n</parameter>\n"
         "<parameter=reply>\nfalse\n</parameter>\n"
         "</function>"
     )
     assert calls == [
-        ("send_message", {"reasoning": "answering", "content": "hola", "reply": False})
+        ("send_message", {"explanation": "answering", "content": "hola", "reply": False})
     ]
     assert leftover == ""
 
@@ -65,37 +65,37 @@ def test_recovers_qwen_function_equals_block():
 def test_recovers_dsml_invoke_block():
     calls, _ = _recover(
         '<｜｜DSML｜｜invoke name="send_message">'
-        '<｜｜DSML｜｜parameter name="reasoning" string="true">why</｜｜DSML｜｜parameter>'
+        '<｜｜DSML｜｜parameter name="explanation" string="true">why</｜｜DSML｜｜parameter>'
         '<｜｜DSML｜｜parameter name="content" string="true">hola</｜｜DSML｜｜parameter>'
         "</｜｜DSML｜｜invoke>"
     )
-    assert calls == [("send_message", {"reasoning": "why", "content": "hola"})]
+    assert calls == [("send_message", {"explanation": "why", "content": "hola"})]
 
 
 def test_recovers_bare_arg_pair_dump():
     calls, leftover = _recover(
-        "send_message<arg>reasoning</arg>why</arg><arg>content</arg>ну ладно</arg>"
+        "send_message<arg>explanation</arg>why</arg><arg>content</arg>ну ладно</arg>"
     )
-    assert calls == [("send_message", {"reasoning": "why", "content": "ну ладно"})]
+    assert calls == [("send_message", {"explanation": "why", "content": "ну ладно"})]
     assert leftover == ""
 
 
 def test_recovers_bare_json_call_and_keeps_surrounding_prose():
     calls, leftover = _recover(
-        'sure thing\n{"name":"react","arguments":{"reasoning":"funny","emoji":"😂"}}'
+        'sure thing\n{"name":"react","arguments":{"explanation":"funny","emoji":"😂"}}'
     )
-    assert calls == [("react", {"reasoning": "funny", "emoji": "😂"})]
+    assert calls == [("react", {"explanation": "funny", "emoji": "😂"})]
     assert leftover == "sure thing"
 
 
 def test_recovers_harmony_channel_call_without_leaving_markers():
     calls, leftover = _recover(
         "<|start|>assistant<|channel|>commentary to=functions.web_search "
-        '<|constrain|>json<|message|>{"reasoning":"current info","query":"maxwell",'
+        '<|constrain|>json<|message|>{"explanation":"current info","query":"maxwell",'
         '"max_results":"5"}'
     )
     assert calls == [
-        ("web_search", {"reasoning": "current info", "query": "maxwell", "max_results": 5})
+        ("web_search", {"explanation": "current info", "query": "maxwell", "max_results": 5})
     ]
     assert leftover == ""
 
@@ -103,7 +103,7 @@ def test_recovers_harmony_channel_call_without_leaving_markers():
 def test_recovers_tagless_key_value_ladder():
     """The exact shape users saw in chat once a renderer ate the tags."""
     calls, leftover = _recover(
-        "reasoning\n"
+        "explanation\n"
         "She is clarifying she didn't send the image.\n"
         "content\n"
         "nadie dijo que mandaste la foto\n"
@@ -114,7 +114,7 @@ def test_recovers_tagless_key_value_ladder():
         (
             "send_message",
             {
-                "reasoning": "She is clarifying she didn't send the image.",
+                "explanation": "She is clarifying she didn't send the image.",
                 "content": "nadie dijo que mandaste la foto",
                 "reply": True,
             },
@@ -145,17 +145,17 @@ def test_recovers_several_calls_in_declared_order():
 def test_recovers_python_call_form():
     """Verbatim from a channel: the whole dump was posted as the reply."""
     calls, leftover = _recover(
-        "send_message(reasoning=shaiev is repeating my name suggestion so "
+        "send_message(explanation=shaiev is repeating my name suggestion so "
         "i'll riff on it briefly in the same banter, content=quedó santo de "
         "entrada pa, ya tenés el aura de profeta y de troll al mismo tiempo "
-        "jajajaj, reasoning=shaiev is repeating my name suggestion so i'll "
+        "jajajaj, explanation=shaiev is repeating my name suggestion so i'll "
         "riff on it briefly in the same banter)"
     )
     assert calls == [
         (
             "send_message",
             {
-                "reasoning": (
+                "explanation": (
                     "shaiev is repeating my name suggestion so i'll riff on "
                     "it briefly in the same banter"
                 ),
@@ -183,7 +183,7 @@ def test_quoted_values_lose_their_quotes():
 
 def test_a_smiley_does_not_close_the_call():
     """Every one of his rooms is full of these."""
-    calls, leftover = _recover("send_message(reasoning=x, content=mira esto :) jaja)")
+    calls, leftover = _recover("send_message(explanation=x, content=mira esto :) jaja)")
     assert calls[0][1]["content"] == "mira esto :) jaja"
     assert leftover == ""
 
@@ -199,8 +199,8 @@ def test_an_unclosed_call_still_beats_posting_the_dump():
 
 
 def test_a_paren_call_with_no_args_is_recovered():
-    calls, _ = _recover("no_response(reasoning=nothing here is for me)")
-    assert calls == [("no_response", {"reasoning": "nothing here is for me"})]
+    calls, _ = _recover("no_response(explanation=nothing here is for me)")
+    assert calls == [("no_response", {"explanation": "nothing here is for me"})]
 
 
 def test_prose_around_a_paren_call_is_kept():
@@ -306,7 +306,7 @@ def test_message_starting_with_a_param_word_is_not_a_ladder():
 
 
 def test_tagless_ladder_needs_content():
-    text = "reasoning\nbecause I felt like it"
+    text = "explanation\nbecause I felt like it"
     assert _recover(text) == ([], text)
 
 

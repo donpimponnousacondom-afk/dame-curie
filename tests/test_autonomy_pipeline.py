@@ -4,8 +4,8 @@ The stages always existed; only two of them had names. The gate was a block
 of `continue` statements in the middle of `execute`, which meant a denied
 action and a failed action produced the same shape of result and nothing
 could report "the plan was fine, policy stopped it". These tests pin the gate
-as its own stage — decisions without side effects, denials that carry a
-reason — and pin that pulling it out did not change what actually runs.
+as its own stage - decisions without side effects, denials that carry a
+reason - and pin that pulling it out did not change what actually runs.
 """
 
 import asyncio
@@ -166,7 +166,7 @@ def test_dedup_survives_the_floor_being_off(tmp_path):
 
 def test_a_denied_room_is_not_claimed(tmp_path):
     # Claiming before the gate would make a blocked action consume the slot,
-    # and the next action aimed at the room would come back "already sent" —
+    # and the next action aimed at the room would come back "already sent" -
     # which is false, and that string reaches the planner as feedback.
     channel = _Channel(history=[_hist(60, author_id=42, bot=True)])
     engine = _engine(tmp_path, channel)
@@ -195,7 +195,7 @@ def test_run_allowed_executes_only_what_the_gate_passed(tmp_path):
         {"kind": "post_channel", "target_channel_id": "100", "content": "no"},
         False,
         "floor",
-        "not your turn in this conversation [holding] — spoke last",
+        "not your turn in this conversation [holding] - spoke last",
     )
 
     results = asyncio.run(engine.run_allowed([allowed, denied]))
@@ -262,7 +262,7 @@ def test_a_hung_observation_fails_the_tick_rather_than_freezing_it(tmp_path):
 
 
 def test_a_sleeping_bot_does_not_post_unprompted(tmp_path):
-    """He tells people he is asleep, then posts anyway — he did, until now.
+    """He tells people he is asleep, then posts anyway - he did, until now.
 
     The live reply path refuses to answer while a sleep window is open and
     says "the dame is sleeping, back in Xm". Nothing checked that here, so the tick

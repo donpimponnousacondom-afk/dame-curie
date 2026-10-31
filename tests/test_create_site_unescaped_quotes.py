@@ -1,6 +1,6 @@
 r"""Regression tests for the create_site unescaped-quote parser bug.
 
-2026-08-02: Z3ki's "Mat Dickie" cartographer page in #boing — the
+2026-08-02: Z3ki's "Mat Dickie" cartographer page in #boing - the
 model emitted a 14 KB ``create_site`` tool call with the HTML body
 containing unescaped ``"`` (from ``target="_blank"``,
 ``href="..."``) and a typo'd literal backslash (``</div\`` instead of
@@ -28,7 +28,7 @@ def _wrap(arguments_obj: dict) -> str:
 def test_repair_returns_none_for_clean_json():
     # Clean JSON should never hit the repair path; the caller tries
     # json.loads first and only calls _repair_* on failure.
-    args = {"reasoning": "r", "name": "old", "title": "T", "body": "<p>hi</p>"}
+    args = {"explanation": "r", "name": "old", "title": "T", "body": "<p>hi</p>"}
     candidate = _wrap(args)
     # clean parse succeeds, repair is a no-op (returns None since nothing
     # needed repairing)
@@ -42,10 +42,10 @@ def test_repair_fixes_unescaped_html_attribute_quotes():
         '<a href="https://x.example/" target="_blank" rel="noopener">link</a>'
     )
     # The LLM emitted this candidate WITHOUT escaping the inner quotes
-    # in the body — the body string closes early at the first inner `"`.
+    # in the body - the body string closes early at the first inner `"`.
     candidate = (
         '{"name": "create_site", "arguments": '
-        '{"reasoning": "r", "name": "old", "title": "T", "body": "'
+        '{"explanation": "r", "name": "old", "title": "T", "body": "'
         + original_body
         + '"}}'
     )
@@ -62,10 +62,10 @@ def test_repair_escapes_bare_quotes_in_body():
     """
     original_body = '<a href="https://x.example/" target="_blank">link</a>'
     # Construct a candidate where the LLM forgot to escape the inner
-    # quotes — the body string closes early at the first inner `"`.
+    # quotes - the body string closes early at the first inner `"`.
     candidate = (
         '{"name": "create_site", "arguments": '
-        '{"reasoning": "r", "name": "old", "title": "T", "body": "'
+        '{"explanation": "r", "name": "old", "title": "T", "body": "'
         + '<a href="https://x.example/" target="_blank">link</a>'
         + '"}}'
     )
@@ -83,7 +83,7 @@ def test_repair_escapes_literal_newlines_in_body():
     body_with_real_newline = "<p>line one\nline two</p>"
     candidate = (
         '{"name": "create_site", "arguments": '
-        '{"reasoning": "r", "name": "old", "title": "T", "body": "'
+        '{"explanation": "r", "name": "old", "title": "T", "body": "'
         + body_with_real_newline
         + '"}}'
     )
@@ -94,14 +94,14 @@ def test_repair_escapes_literal_newlines_in_body():
 
 def test_repair_escapes_bare_backslash_typo():
     """The LLM typo'd ``</div>`` as ``</div\\`` in the actual
-    Old Cartographers body — a literal backslash not followed by a
+    Old Cartographers body - a literal backslash not followed by a
     JSON escape char. Repair must escape the bare backslash so the
     reparsed JSON keeps it as a single ``\\`` character.
     """
     body_with_typo = "<div>oops</div\\>"
     candidate = (
         '{"name": "create_site", "arguments": '
-        '{"reasoning": "r", "name": "old", "title": "T", "body": "'
+        '{"explanation": "r", "name": "old", "title": "T", "body": "'
         + body_with_typo
         + '"}}'
     )
@@ -115,9 +115,9 @@ def test_repair_returns_none_when_no_body_field():
     expect ``None`` so the caller falls back to skip-and-continue.
     """
     candidate = (
-        '{"name": "web_search", "arguments": {"reasoning": "r", "query": "Mat Dickie"}}'
+        '{"name": "web_search", "arguments": {"explanation": "r", "query": "Mat Dickie"}}'
     )
-    # Clean web_search parses fine — repair returns None (no-op).
+    # Clean web_search parses fine - repair returns None (no-op).
     obj = _safe_parse_tool_call_candidate(candidate)
     assert obj is not None
     assert obj["name"] == "web_search"
@@ -130,7 +130,7 @@ def test_repair_trailing_garbage_tolerated():
     """
     candidate = (
         '{"name": "create_site", "arguments": '
-        '{"reasoning": "r", "name": "old", "title": "T", "body": "<p>hi</p>"}}'
+        '{"explanation": "r", "name": "old", "title": "T", "body": "<p>hi</p>"}}'
         '\n<parameter name="encoding">text</parameter>'
     )
     obj = _safe_parse_tool_call_candidate(candidate)
@@ -143,7 +143,7 @@ def test_repair_preserves_keys_after_body():
     """``body`` is not always the last key in ``arguments``.
 
     The terminator scan used to look only for an unescaped ``"``
-    followed by ``}}`` — true only when ``body`` is last. With a key
+    followed by ``}}`` - true only when ``body`` is last. With a key
     after it, the scan ran past the real terminator to the end of the
     object and swallowed every trailing key into the body string, so
     ``title`` silently vanished and the body was corrupted.
@@ -181,8 +181,8 @@ def test_streaming_feed_applies_unescaped_quote_repair():
     """The live path regression.
 
     ``_CustomToolCallBuffer.feed`` used bare ``json.loads`` to validate a
-    balanced candidate, so the repair pass above — reachable only from a
-    dead method — never ran on real streamed output. A ``create_site``
+    balanced candidate, so the repair pass above - reachable only from a
+    dead method - never ran on real streamed output. A ``create_site``
     with ``href="..."`` in the body was treated as a false-positive
     opener and shipped to the channel as raw visible text while the tool
     never ran. Parsing the candidate in isolation passed, which is why
@@ -252,7 +252,7 @@ def test_streaming_feed_leaves_plain_text_alone():
 
 def test_repair_full_z3ki_cartographer_repro():
     """The actual 14 KB LLM output from the 2026-08-02 #boing
-    cartographer page. This is the canonical regression — if this
+    cartographer page. This is the canonical regression - if this
     fails, the user is back to seeing broken JSON in chat instead of
     a working site.
     """

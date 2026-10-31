@@ -1,7 +1,7 @@
 """Stopping the bot from repeating itself.
 
 Two different problems that look like one. Inside a single reply,
-"jajajajajaja" is a run that can be collapsed after generation —
+"jajajajajaja" is a run that can be collapsed after generation -
 `response_guard` has done that since it was written, but nothing called it, so
 every run reached the channel intact. Across replies, the same phrase opening
 six messages running is a pattern no single message is wrong for, so nothing
@@ -42,7 +42,7 @@ def test_a_repetitive_code_block_survives_the_echo_breaker():
     """Repetition is also what a table or a block of asserts looks like.
 
     scrub_repetitions skipped fences; break_echo_loop then ran over the whole
-    reply and truncated inside one — the message went out as two lines of
+    reply and truncated inside one - the message went out as two lines of
     code and an unterminated ``` fence.
     """
     code = "```py\n" + "print(1)\n" * 40 + "```"
@@ -92,7 +92,7 @@ def test_a_repeated_opener_is_named_back_at_him():
             "ok cool",
         ),
     )
-    # Naming the phrase is the point — "vary your language" changes nothing.
+    # Naming the phrase is the point - "vary your language" changes nothing.
     assert "jaja" in note
     assert "3 of your last 5" in note
 

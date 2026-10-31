@@ -80,7 +80,7 @@ def test_join_server_refuses_a_non_admin():
 
 
 def test_join_server_refuses_before_touching_the_invite():
-    """A refusal must not fetch the invite — that is an observable side effect."""
+    """A refusal must not fetch the invite - that is an observable side effect."""
     fetched = []
 
     async def fetch_invite(code, **_kwargs):
@@ -98,7 +98,7 @@ def test_join_server_lets_an_admin_through_to_the_invite_lookup():
 
     async def fetch_invite(code, **_kwargs):
         seen.append(code)
-        raise RuntimeError("stop here — the gate already passed")
+        raise RuntimeError("stop here - the gate already passed")
 
     bot = SimpleNamespace(
         _is_admin=lambda uid: str(uid) == "42", fetch_invite=fetch_invite

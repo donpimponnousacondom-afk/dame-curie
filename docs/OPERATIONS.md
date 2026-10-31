@@ -109,7 +109,7 @@ Background jobs persist metadata, but unfinished workers are cancelled on bot re
 
 Separate account/engine identity is only one boundary. It does not prove isolation of same-UID state, host resources, remote credentials, or shared embedding resource residency. Smoke delivery/readback, readiness, focused QA, and dated identity receipts each establish only their stated scope. Do not infer full feature, sustained-load, voice, media, replica, or whole-repository acceptance. See [STATUS.md](STATUS.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for current status and boundaries.
 
-## Dated runtime and rollback reference — historical, not current
+## Dated runtime and rollback reference - historical, not current
 
 Last specified old-runtime observation: container `495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, image `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`, source label `6859025`, started `2026-09-25T12:30:41Z`. Account `dame-curie` UID 1005, socket `/run/user/1005/docker.sock`, engine `12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`. Temporary Discord identity `1504398705539944560`; canonical Dame identity `1545541390392369165`; root identity `1482143139828596916`; smoke channel `1550960386939817984`; temporary command prefix `?`. This is a dated recorded observation, not a fresh inventory, current release assertion, or activation instruction. Current source checkpoint, QA and completed temporary-only release decision are linked in [STATUS.md](STATUS.md).
 

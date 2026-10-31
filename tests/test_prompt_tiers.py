@@ -3,7 +3,7 @@
 Two things are pinned here. First, that what the bot knows about a person
 reaches the prompt at all, phrased so the model treats it as background about
 *them* rather than as something they just said. Second, that every lookup tier
-is bounded in characters — the reason for the budget is that the transcript is
+is bounded in characters - the reason for the budget is that the transcript is
 assembled last, in the middle of the message list where the whole-prompt trim
 cannot reach it, so an unbounded lookup tier is paid for by the running
 conversation.
@@ -147,7 +147,7 @@ def test_the_tier_is_asked_about_the_current_message():
     call = memory.profile_calls[0]
     assert call["user_id"] == "456"
     assert call["query"] == "do I still have that deploy tomorrow"
-    # A character budget, not just an item count — that is the whole point.
+    # A character budget, not just an item count - that is the whole point.
     assert call["budget"] > 0
 
 
@@ -173,7 +173,7 @@ def test_switching_the_tier_off_skips_it_entirely():
 
     assert "About this person" not in prompt
     assert "works nights" not in prompt
-    # Not merely hidden — never asked for.
+    # Not merely hidden - never asked for.
     assert memory.profile_calls == []
 
 
@@ -181,7 +181,7 @@ def test_the_entity_tier_follows_the_person_across_channels():
     # The global person facts are keyed on the Discord user id only, so the
     # same facts must render whether the person talks in channel A or channel B
     # (or, by the same id, DMs). This is the "remember across servers/channels"
-    # guarantee — the entity tier must never be channel-scoped.
+    # guarantee - the entity tier must never be channel-scoped.
     memory = _Memory(
         entity={"user_id": "456", "display_names": ["alice"]},
         facts=[{"content": "works night shifts", "importance": 8}],
@@ -272,7 +272,7 @@ def test_operator_weights_move_the_split():
 
 
 def test_an_ambient_turn_gives_the_lookup_tiers_budget_to_the_transcript():
-    # A short line that does not address the bot skips RAG on purpose — a
+    # A short line that does not address the bot skips RAG on purpose - a
     # watch/ambient turn needs the running thread, not a research pass. The
     # budget has to follow, or the transcript pays for tiers that never render.
     bot = _bot(_Memory(), {"long_term_memory_enabled": True, "cross_context_enabled": True})

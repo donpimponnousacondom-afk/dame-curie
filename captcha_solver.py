@@ -9,7 +9,7 @@ the solved token in ``X-Captcha-Key`` (plus ``X-Captcha-Rqtoken`` for
 enterprise hCaptcha).
 
 This module implements that handler using an external solving service
-(CapSolver or 2captcha — the two that reliably support Discord's
+(CapSolver or 2captcha - the two that reliably support Discord's
 enterprise hCaptcha with rqdata). When no solver is configured it falls
 back to surfacing the challenge details so the caller (join_server /
 leave_server) can report them instead of failing silently.

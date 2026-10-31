@@ -18,7 +18,7 @@ or arbitrary test/finding quotas. This is one observed review miss; recurring
 limitations and a justified model change have not been established.
 
 Detailed evidence remains in the project's ignored audit folder:
-`audit/2026-09-26/02-context-compaction-review/REPORT.md` (F1–F4, F12–F13).
+`audit/2026-09-26/02-context-compaction-review/REPORT.md` (F1-F4, F12-F13).
 
 ## 2026-10-01 · PR #75 check coverage
 

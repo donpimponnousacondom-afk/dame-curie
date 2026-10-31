@@ -1,6 +1,59 @@
-# dame-curie status — 2026-10-03
+# dame-curie status - 2026-10-03
 
-## Current production state
+## Publisher inventory update - 2026-10-03, 19:44Z
+
+The initial repair below restored publication but continuously ran rsync across all
+sites. The follow-up replaces that loop with one short-lived remote inventory command.
+It compares cached metadata first, verifies changed content only when needed, and queues
+only differences. Local edits still use inotify. Unchanged checks no longer emit per-site
+success messages. See [Publishing](PUBLISHING.md) for the algorithm and scale limits.
+
+Installed at **19:44:53Z**, service PID **676081**. Its first normal background inventory
+reported **31 targets, 31 cold content checks, zero repairs**. A subsequent **65-second
+read-only process observation** saw **two SSH commands, 30.6 seconds apart, and zero
+rsync processes**. No synthetic source edits or remote deletions were used.
+
+Independent `gpt-6-astra` reviewed the implementation and the final correction. Its two
+liveness findings (one unstable site blocking every audit; dirty work starving remote
+repairs) were fixed before deployment. Council source inspection supplied the short-lived
+receiver/stdin protocol precedent; its full-file hashing and incompatible publication
+policies were not copied. Remote Python is 3.12.3; local operator Python remains 3.14.4.
+Syntax/diff checks passed. No tests ran. This is not measured 50,000-site acceptance;
+request size, full metadata traversal and whole-audit timeout limits remain explicit.
+
+Private previous-source/state backup:
+`/var/backups/dame-curie-v2-recovery/publisher-inventory-20261003T194453Z`.
+This update is deployed locally, not yet integrated into PR3.
+
+## Publisher repair - 2026-10-03, 19:14Z
+
+The publisher was in a restart loop. Read-only remote inspection found
+`hammered-wallet` missing; both remote roots and the other 29 saved site markers/identities
+matched. Service-mode synchronization skipped claim when a saved site identity existed.
+The resulting transfer failure stopped the whole publisher.
+
+The focused repair is installed in `/opt/dame-curie/scripts/publisher/{guard,mirror,service,transport}.py`.
+Root explicitly confirmed local-to-remote authority, including empty recreated remote
+roots and stale remote replacements. The service now refreshes destination identities,
+reclaims each transferred site, reconciles remote state on periodic scans, and retains
+failed transfer/deletion work without stopping other sites. Errors identify the operation,
+site, exit code and available guard/transport cause. Filesystem and SSH checks remain.
+
+At deployment, **19:14:11Z**, service PID **643148** started. Subsequent read-only comparison
+confirmed **18 local files and 18 remote files in `hammered-wallet`, all SHA-256 hashes equal,
+with no missing or extra files**. Recovery was performed by the background service, not
+`--once`. The service remained active with **zero restarts**; later sites also completed.
+
+Independent `gpt-6-astra` source review found a missed-deletion retry bug in the first
+patch; it was fixed before deployment. Final source review found no remaining blocker.
+Syntax/diff checks passed. No tests, synthetic file edits, remote deletion drills, V1
+startup or bot deployment ran. Full remote-root destruction recovery is source-reviewed,
+not exercised. This repair is local and deployed; it is not yet included in PR3.
+
+Private pre-repair source/state backup:
+`/var/backups/dame-curie-v2-recovery/publisher-repair-20261003T191411Z`.
+
+## Earlier production state
 
 At **17:55:02Z**, the coordinator confirmed canonical Dame login **1545541390392369165** on the image below. Temporary Dirac is not the current production target. These are coordinator-supplied facts; the publication worker did not access private state.
 
@@ -32,7 +85,7 @@ Two issues remain open:
 
 The P3 image-guidance wording issue is deferred. Generated-image URLs remain valid. No new image behavior was added.
 
-## Historical record — 2026-09-25
+## Historical record - 2026-09-25
 
 **Everything below records the earlier temporary Dirac release. It is preserved as history, not current runtime state or current authority.**
 
@@ -62,7 +115,7 @@ Image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc
 
 QA77 built an explicit offline source overlay onto previously verified `be28b85` image`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`, because the local Python-base tag was absent. No pull/install; normal recipe and dependency lock unchanged, dependency layers inherited, **not freshly rebuilt**. QA78 matched all56copied inputs to the committed archive and checked baked commit/branch/dirty plus OCI revision. The existing guarded constructor passed in the actual image without network/private state/login. Later documentation commits do not change its application inputs.
 
-## Current temporary runtime — checked16:47:48Z
+## Current temporary runtime - checked16:47:48Z
 
 - Account`dame-curie`, UID1005; rootless engine`12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`, socket`/run/user/1005/docker.sock`.
 - Container **`ef618129341ed4b2b83dceebd2a92e3e0e3437585e53f96c488381a3ca23e2d5`**, running the immutable image above; started**16:46:31.285765518Z**. Durable image selector matches.
