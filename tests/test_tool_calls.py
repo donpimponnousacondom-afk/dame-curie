@@ -396,13 +396,21 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     oversized_calls = [
         {"function": {"name": "é" * 65, "arguments": "{}"}},
         {"id": "é" * 65, "function": {"name": "create_site", "arguments": "{}"}},
-        {"id": "meta", "function": {"name": "x", "arguments": "{}"}, "meta": "é" * 20_000},
     ]
     for call in oversized_calls:
         with pytest.raises(ValueError):
             normalize_native_tool_calls([call])
         with pytest.raises(ValueError):
             normalize_native_tool_calls([call], allow_oversized_arguments=True)
+    wide_envelope = {"id": "meta", "function": {"name": "x", "arguments": "{}"}, "meta": "é" * 20_000}
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls([wide_envelope])
+    (envelope_refused,) = normalize_native_tool_calls(
+        [wide_envelope], allow_oversized_arguments=True
+    )
+    assert envelope_refused["oversized_arguments"] is False
+    assert envelope_refused["batch_limit_error"].startswith("the batch envelope is 40,0")
+    assert envelope_refused["batch_limit_error"].endswith("bytes; the limit is 40,000")
     with pytest.raises(ValueError):
         normalize_native_tool_calls([{"function": {"name": "create_site", "arguments": wide}}])
     oversized = normalize_native_tool_calls(
@@ -414,6 +422,7 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     assert oversized["arguments"] == {}
     assert oversized["oversized_arguments"] is True
     assert oversized["raw"] is None
+    assert oversized["batch_limit_error"] == ""
     with pytest.raises(ValueError):
         normalize_native_tool_calls(
             [{"function": {"name": "create_site", "arguments": wide + "!"}}],
@@ -439,8 +448,20 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     ]
     with pytest.raises(ValueError):
         normalize_native_tool_calls(oversized_batch)
+    many_calls = [{"id": str(index), "function": {"name": "x", "arguments": "{}"}} for index in range(11)]
     with pytest.raises(ValueError):
-        normalize_native_tool_calls(oversized_batch, allow_oversized_arguments=True)
+        normalize_native_tool_calls(many_calls)
+    many_refused = normalize_native_tool_calls(many_calls, allow_oversized_arguments=True)
+    assert [call["id"] for call in many_refused] == [str(index) for index in range(11)]
+    assert {call["batch_limit_error"] for call in many_refused} == {
+        "the response has 11 calls; the limit is 10"
+    }
+    batch_refused = normalize_native_tool_calls(oversized_batch, allow_oversized_arguments=True)
+    assert [call["oversized_arguments"] for call in batch_refused] == [False, False, False]
+    assert {call["batch_limit_error"] for call in batch_refused} == {
+        f"the batch carries {3 * len(batch_argument.encode('utf-8')):,} bytes of "
+        "arguments; the limit is 32,000"
+    }
     with pytest.raises(ValueError):
         normalize_native_tool_calls([{"function": {"name": "x", "arguments": {"nested": {1: "bad"}}}}])
 

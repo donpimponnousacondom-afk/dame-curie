@@ -386,6 +386,7 @@ from tool_schemas import (  # noqa: E402
     contract_groups,
     elide_tool_calls_for_history,
     message_chars,
+    _NATIVE_MAX_CALLS as NATIVE_MAX_CALLS,
     normalize_native_tool_calls,
     recover_text_tool_calls,
     returns_result as tool_schemas_returns_result,
@@ -13714,17 +13715,28 @@ class MaxwellBot(commands.Bot):
         )
         if not calls:
             return (cleaned, [], []) if include_images else (cleaned, [])
-        if any(call["oversized_arguments"] for call in calls):
+        if any(call["oversized_arguments"] or call["batch_limit_error"] for call in calls):
+            call_count = len(calls)
+            # An over-count response replays its first NATIVE_MAX_CALLS calls only:
+            # trim_tool_tail refuses a newest group over TOOL_TAIL_MAX_MESSAGES.
+            calls = calls[:NATIVE_MAX_CALLS]
             refusal_lines = [
                 f"Tool {call['raw_name']}: Error - "
                 + (
                     "arguments exceed the 16,000-byte limit"
                     if call["oversized_arguments"]
+                    else f"batch refused because {call['batch_limit_error']}"
+                    if call["batch_limit_error"]
                     else "batch refused because another call exceeded the 16,000-byte argument limit"
                 )
                 + "; no calls in this batch were executed."
                 for call in calls
             ]
+            logger.warning(
+                "Refused native tool-call batch of %d call(s): %s",
+                call_count,
+                " | ".join(refusal_lines),
+            )
             self._last_native_followup_messages = [
                 {
                     "role": "assistant",

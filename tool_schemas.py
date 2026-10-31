@@ -1071,7 +1071,9 @@ def normalize_native_tool_calls(
     """Validate and normalize a complete provider tool-call batch."""
     if raw_calls is None:
         return []
-    if not isinstance(raw_calls, list) or len(raw_calls) > _NATIVE_MAX_CALLS:
+    if not isinstance(raw_calls, list):
+        raise ValueError("Malformed native tool-call batch")
+    if len(raw_calls) > _NATIVE_MAX_CALLS and not allow_oversized_arguments:
         raise ValueError("Malformed or oversized native tool-call batch")
     normalized: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -1098,7 +1100,10 @@ def normalize_native_tool_calls(
             raw_args, allow_oversized=allow_oversized_arguments
         )
         batch_argument_bytes += argument_bytes
-        if batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
+        if (
+            batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES
+            and not allow_oversized_arguments
+        ):
             raise ValueError("Oversized native tool-call batch")
         raw_id = call.get("id")
         if raw_id in (None, ""):
@@ -1117,7 +1122,10 @@ def normalize_native_tool_calls(
         batch_envelope_bytes += len(
             json.dumps(call, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         )
-        if batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES:
+        if (
+            batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES
+            and not allow_oversized_arguments
+        ):
             raise ValueError("Oversized native tool-call batch")
         normalized.append(
             {
@@ -1129,6 +1137,23 @@ def normalize_native_tool_calls(
                 "raw": call if not oversized_arguments else None,
             }
         )
+    batch_limit_error = ""
+    if len(raw_calls) > _NATIVE_MAX_CALLS:
+        batch_limit_error = (
+            f"the response has {len(raw_calls)} calls; the limit is {_NATIVE_MAX_CALLS}"
+        )
+    elif batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
+        batch_limit_error = (
+            f"the batch carries {batch_argument_bytes:,} bytes of arguments; "
+            f"the limit is {_NATIVE_MAX_BATCH_ARGUMENT_BYTES:,}"
+        )
+    elif batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES:
+        batch_limit_error = (
+            f"the batch envelope is {batch_envelope_bytes:,} bytes; "
+            f"the limit is {_NATIVE_MAX_BATCH_ENVELOPE_BYTES:,}"
+        )
+    for entry in normalized:
+        entry["batch_limit_error"] = batch_limit_error
     return normalized
 
 
