@@ -68,10 +68,12 @@ def test_see_image_rejects_bad_input():
     ).lower()
 
 
-def test_see_image_attaches_b64_from_download():
+def test_see_image_attaches_b64_from_download(tmp_path):
     cached = []
+    downloads = []
 
     async def _download(url, filename, max_size, message_id, **kwargs):
+        downloads.append(url)
         return {
             "b64": base64.b64encode(_PNG_1X1).decode("ascii"),
             "mime_type": "image/png",
@@ -80,11 +82,18 @@ def test_see_image_attaches_b64_from_download():
             "url": url,
         }
 
+    images = tmp_path / "_images"
+    images.mkdir()
+    (images / "own.png").write_bytes(_PNG_1X1)
     bot = SimpleNamespace(
         _control={"process_images": True},
         _max_media_bytes=lambda: 1024 * 1024,
         _download_embed_media=_download,
         _cache_media_context=lambda channel_id, media: cached.append((channel_id, media)),
+        config=SimpleNamespace(
+            DAME_CURIE_SITE_DIR=str(tmp_path),
+            DAME_CURIE_IMAGE_PUBLIC_BASE_URL="https://images.example.invalid",
+        ),
     )
     tool = SeeImageTool(bot)
     msg = SimpleNamespace(id=7, channel=SimpleNamespace(id=99))
@@ -93,6 +102,17 @@ def test_see_image_attaches_b64_from_download():
     assert "__END_IMAGE_B64__" in result
     assert "visual inspection" in result
     assert cached and cached[0][0] == "99"
+    assert downloads == ["https://e.com/x.png"]
+    # The bot's own images load from disk: the public URL is 404 until the
+    # publisher mirrors the file.
+    encoded = base64.b64encode(_PNG_1X1).decode("ascii")
+    for own in ("https://images.example.invalid/own.png", str(images / "own.png")):
+        own_result = asyncio.run(tool.execute(msg, url=own))
+        assert f"__IMAGE_B64__{encoded}__END_IMAGE_B64__" in own_result
+    assert downloads == ["https://e.com/x.png"]
+    asyncio.run(tool.execute(msg, url="https://images.example.invalid/../own.png"))
+    assert downloads == ["https://e.com/x.png", "https://images.example.invalid/../own.png"]
+    assert asyncio.run(tool.execute(msg, url=str(tmp_path / "other.png"))).startswith("Error:")
 
 
 def test_result_from_blob_skips_non_images():

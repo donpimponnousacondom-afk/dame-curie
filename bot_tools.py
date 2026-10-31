@@ -962,6 +962,29 @@ def _public_image_target(bot) -> tuple[str, str]:
     return os.path.join(site_dir, "_images"), pub
 
 
+def _own_image_path(bot, ref: str) -> str | None:
+    """Return the local file for one of the bot's own images, or None.
+
+    The publisher mirrors a new image in 5 to 7 seconds, so its public URL
+    returns 404 until then. A public URL under the image base or a path in
+    the image directory therefore resolves to the local file.
+    """
+    img_dir, pub_base = _public_image_target(bot)
+    ref = str(ref or "").strip()
+    if pub_base and ref.startswith(pub_base + "/"):
+        name = ref[len(pub_base) + 1 :].split("?", 1)[0].split("#", 1)[0]
+        if not name or "/" in name or name in {".", ".."}:
+            return None
+        ref = os.path.join(img_dir, name)
+    elif ref.startswith(("http://", "https://")):
+        return None
+    root = os.path.realpath(img_dir)
+    path = os.path.realpath(ref)
+    if not path.startswith(root + os.sep) or not os.path.isfile(path):
+        return None
+    return path
+
+
 def _persist_public_image(
     bot, image_bytes: bytes, ext: str = ".png", prefix: str = "img", *, submitted_prompt: str,
 ) -> tuple[str | None, str | None]:
@@ -1218,7 +1241,10 @@ class ImageGeneratorTool(Tool):
             except Exception:
                 return None, "malformed data: URI"
 
-        if ref.startswith(("http://", "https://")):
+        own = _own_image_path(self.bot, ref)
+        if own is not None:
+            ref = own
+        elif ref.startswith(("http://", "https://")):
             if not _is_safe_url(ref):
                 return None, f"refusing to fetch invalid HTTP(S) image URL {ref[:80]}"
             try:
@@ -1453,7 +1479,9 @@ class ImageGeneratorTool(Tool):
         if perm_url:
             result += (
                 f"\nPermanent URL: {perm_url} "
-                "(never expires - use this directly in HTML <img> tags or curl)"
+                "(never expires - use this directly in HTML <img> tags. The publisher "
+                "mirrors it in about 10 seconds; until then it returns 404. "
+                "see_image and image_generator read it from disk at once.)"
             )
         if local_path:
             result += (
@@ -5770,7 +5798,8 @@ class SeeImageTool(Tool):
             "you can actually see it. Use for Tenor/Giphy/imgur GIF pages, "
             "Discord CDN links, or any direct jpg/png/gif/webp/svg that was not "
             "already attached to the message. Prefer this over fetch_url for "
-            "pictures. Params: url (required)."
+            "pictures. Your own generated images load from disk by their "
+            "Permanent URL or Local path. Params: url (required)."
         )
 
     @classmethod
@@ -5859,7 +5888,8 @@ class SeeImageTool(Tool):
     async def execute(self, message: Message, url: str | None = None, **kwargs) -> str:
         if not url:
             return "Error: url is required"
-        if not _is_safe_url(url):
+        own = _own_image_path(self.bot, url)
+        if own is None and not _is_safe_url(url):
             return "Error: URL must use HTTP(S) and include a hostname"
         control = getattr(self.bot, "_control", None) or {}
         if not parse_bool(control.get("process_images"), True):
@@ -5870,9 +5900,20 @@ class SeeImageTool(Tool):
         if hasattr(self.bot, "_max_media_bytes"):
             with contextlib.suppress(Exception):
                 max_size = self.bot._max_media_bytes()
-        item = await self.bot._download_embed_media(
-            url, "see-image", max_size, getattr(message, "id", None)
-        )
+        if own is not None:
+            if os.path.getsize(own) > max_size:
+                return f"Error: {url} is larger than {max_size} bytes"
+            local = await asyncio.to_thread(Path(own).read_bytes)
+            item = {
+                "b64": base64.b64encode(local).decode("ascii"),
+                "mime_type": image_mime(local, ""),
+                "filename": os.path.basename(own),
+                "url": url,
+            }
+        else:
+            item = await self.bot._download_embed_media(
+                url, "see-image", max_size, getattr(message, "id", None)
+            )
         if not item or not item.get("b64"):
             return f"Error: could not load an image from {url}"
         blob = base64.b64decode(item["b64"])
