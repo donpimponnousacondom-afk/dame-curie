@@ -99,7 +99,7 @@ A request is immutable and exclusively created; its terminal receipt belongs wit
 
 Root approved automated tests on canonical Dame Curie on 2026-10-31, in development mode, with her own V2 credentials. Dirac is not used. The test channel is `1566164090039304285` in server `1545673830960340992`. The permission actor is root, `1482143139828596916`.
 
-`compose.yaml` mounts `${INSTANCE_DIR}/smoke` read-only at `/smoke` and `${INSTANCE_DIR}/smoke-status` writable at `/smoke-status`. It sets `DAME_CURIE_DIRAC_SMOKE_CONFIG=/smoke/config.json`. Both host directories must exist before `up`. Set `"enabled": false` in `config.json` to stop the worker.
+`compose.yaml` mounts `${INSTANCE_DIR}/smoke` read-only at `/smoke` and `${INSTANCE_DIR}/smoke-status` writable at `/smoke-status`. It sets `DAME_CURIE_DIRAC_SMOKE_CONFIG=/smoke/config.json`. Both host directories must exist before `up`, owned by `dame-curie`, mode 0700. `instance.py` refuses to start without them. `config.json` must state `enabled`, `channel_id`, `operator_id`, `requests_dir` and `status_dir`. Set `"enabled": false` to stop the worker.
 
 ```sh
 S="sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/smoke/config.json"

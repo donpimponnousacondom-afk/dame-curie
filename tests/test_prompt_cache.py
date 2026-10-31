@@ -180,6 +180,42 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
     later = trim_tool_tail(trimmed + round_msgs(30))
     assert later[1]["content"].startswith("[Earlier in this turn 10 tool round(s) were dropped")
     assert later[1]["content"].endswith("visible.]\nx")
+    # Model-chosen names are sanitized and capped, so the marker stays parseable.
+    odd = [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": f"odd_{i}", "function": {"name": f"bad]name\n{i}", "arguments": "{}"}}
+        ]}
+        for i in range(12)
+    ]
+    odd_tail = [m for i in range(12) for m in (odd[i], {"role": "tool", "tool_call_id": f"odd_{i}", "content": "y"})]
+    odd_trimmed = trim_tool_tail(odd_tail + [m for i in range(40, 61) for m in round_msgs(i)])
+    assert odd_trimmed[1]["content"].startswith(
+        "[Earlier in this turn 12 tool round(s) were dropped from context: bad_name_0, "
+    )
+    assert ", and 4 more. Their results are no longer visible.]\nx" in odd_trimmed[1]["content"]
+    assert trim_tool_tail(odd_trimmed) == odd_trimmed
+
+    # Text tool protocol: the marker goes after the results header, so the
+    # message still opens a tool group.
+    from tool_schemas import tool_tail_groups
+
+    def text_round(i):
+        return [
+            {"role": "assistant", "content": f"call {i}"},
+            {"role": "user", "content": f"=== TOOL RESULTS ===\nresult {i}"},
+        ]
+
+    text_trimmed = trim_tool_tail([m for i in range(30) for m in text_round(i)])
+    assert len(tool_tail_groups(text_trimmed)) == TOOL_TAIL_MAX_MESSAGES // 2
+    assert text_trimmed[1]["content"] == (
+        "=== TOOL RESULTS ===\n[Earlier in this turn 9 tool round(s) were dropped from "
+        "context: text tool round. Their results are no longer visible.]\nresult 9"
+    )
+    assert trim_tool_tail(text_trimmed) == text_trimmed
+    text_later = trim_tool_tail(text_trimmed + text_round(30))
+    assert text_later[1]["content"].startswith(
+        "=== TOOL RESULTS ===\n[Earlier in this turn 10 tool round(s) were dropped"
+    )
 
 
 def test_trim_conversation_tail_enforces_char_budget():

@@ -1913,7 +1913,7 @@ def _fit_tool_group(group: list[dict], limit: int) -> None:
 
 
 _DROPPED_ROUNDS_RE = re.compile(
-    r"^\[Earlier in this turn (\d+) tool round\(s\) were dropped from context: ([^\]]*)\. "
+    r"\[Earlier in this turn (\d+) tool round\(s\) were dropped from context: ([^\]]*)\. "
     r"Their results are no longer visible\.\]\n"
 )
 
@@ -1923,20 +1923,34 @@ def _round_marker_message(group: list[dict]) -> dict | None:
     return next((msg for msg in group if msg.get("role") in {"tool", "user"}), None)
 
 
+_TEXT_RESULTS_HEADER = "=== TOOL RESULTS ===\n"
+
+
+def _results_header(content: str) -> str:
+    """The text-protocol header that must stay first so the group is recognised."""
+    return _TEXT_RESULTS_HEADER if content.startswith(_TEXT_RESULTS_HEADER) else ""
+
+
 def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str]]:
     """Remove the dropped-rounds marker from a group; return its count and names."""
     msg = _round_marker_message(group)
     content = msg.get("content") if msg else None
-    match = _DROPPED_ROUNDS_RE.match(content) if isinstance(content, str) else None
+    if not isinstance(content, str):
+        return 0, []
+    header = _results_header(content)
+    match = _DROPPED_ROUNDS_RE.match(content, len(header))
     if not match:
         return 0, []
-    msg["content"] = content[match.end():]
+    msg["content"] = header + content[match.end():]
     return int(match.group(1)), [name for name in match.group(2).split(", ") if name]
 
 
 def _round_tool_names(group: list[dict]) -> list[str]:
     calls = group[0].get("tool_calls") or [] if group else []
-    names = [str((call.get("function") or {}).get("name") or "tool") for call in calls]
+    names = [
+        re.sub(r"[^A-Za-z0-9_.-]", "_", str((call.get("function") or {}).get("name") or "tool"))[:40]
+        for call in calls
+    ]
     return names or ["text tool round"]
 
 
@@ -1992,12 +2006,21 @@ def trim_tool_tail(
         )
     marker_rounds += dropped_groups
     target = _round_marker_message(groups[0]) if marker_rounds else None
-    if target is not None and isinstance(target.get("content"), str):
+    if marker_rounds and (target is None or not isinstance(target.get("content"), str)):
+        logger.warning(
+            "Tool history dropped %d round(s) but the oldest kept group has no text "
+            "tool result for the marker", marker_rounds,
+        )
+    elif target is not None:
         names = list(dict.fromkeys(marker_names))
+        if len(names) > 8:
+            names = [*names[:8], f"and {len(names) - 8} more"]
+        header = _results_header(target["content"])
         target["content"] = (
-            f"[Earlier in this turn {marker_rounds} tool round(s) were dropped from context: "
+            header
+            + f"[Earlier in this turn {marker_rounds} tool round(s) were dropped from context: "
             f"{', '.join(names)}. Their results are no longer visible.]\n"
-            + target["content"]
+            + target["content"][len(header):]
         )
     return [msg for group in groups for msg in group]
 

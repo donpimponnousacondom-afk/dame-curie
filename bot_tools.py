@@ -1293,6 +1293,8 @@ class ImageGeneratorTool(Tool):
                 path == root or path.startswith(root + os.sep) for root in allowed
             ):
                 return None, f"local path outside the allowed image dirs: {ref[:80]}"
+            if Path(path).suffix.lower() not in _OWN_IMAGE_SUFFIXES:
+                return None, f"not an image file (.png, .jpg, .jpeg, .gif, .webp): {ref[:80]}"
             if not os.path.isfile(path):
                 return None, f"no such file: {ref[:80]}"
             if os.path.getsize(path) > self.MAX_INPUT_BYTES:

@@ -16,6 +16,9 @@ from pathlib import Path
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
+# compose.yaml also binds these for the opt-in smoke harness. They are not
+# backup roots, so an archive made before the harness existed still restores.
+SMOKE_ROOTS = ("smoke", "smoke-status")
 SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE"}
 OPTIONAL_SETTINGS = {"DAME_CURIE_STAGING", "DAME_CURIE_EMBED_MODE"}
 RETIRED_SETTINGS = {"WEB_IMAGE", "WEB_PORT"}
@@ -181,6 +184,13 @@ class Instance:
             directory = self.path / root
             if directory.is_symlink() or not directory.is_dir():
                 raise ValueError(f"missing or redirected state directory: {root}")
+        for root in SMOKE_ROOTS:
+            directory = self.path / root
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError(
+                    f"missing or redirected smoke directory: {root}; compose.yaml binds it "
+                    "(see docs/OPERATIONS.md, smoke harness on canonical Dame Curie)"
+                )
 
     def docker(self, *args: str) -> str:
         result = subprocess.run(["docker", *args], env=self.env, capture_output=True, text=True)

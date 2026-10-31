@@ -122,8 +122,9 @@ services:
       # clears the URL.
       DAME_CURIE_EMBED_MODE: local
       DAME_CURIE_EMBED_BASE_URL: http://ollama:11434
-      # Opt-in smoke harness (smoke_protocol.py). The coordinator submits
-      # labelled test tasks on the host; config.json "enabled" turns it on.
+      # Smoke harness (smoke_protocol.py). The smoke and smoke-status host
+      # directories and config.json are required; instance.py refuses to start
+      # without the directories. config.json "enabled": false keeps the worker off.
       DAME_CURIE_DIRAC_SMOKE_CONFIG: /smoke/config.json
     volumes:
       - *host-timezone
