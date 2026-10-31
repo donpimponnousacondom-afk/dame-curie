@@ -95,6 +95,20 @@ A request is immutable and exclusively created; its terminal receipt belongs wit
 
 `health`, `pending`, and a missing `result` receipt are advisory only. The snapshot can be stale/unavailable; `worker_liveness` is always `unknown`; `no_record` does not prove a request never ran or that a worker is healthy. A terminal `completed` record requires returned turn, usable output from its own model call, and a non-notice delivery to the target channel. It does not certify that the task goal was met; `reply_verified` remains false. Do not clear status storage to recover service or replay requests.
 
+### Smoke harness on canonical Dame Curie
+
+Root approved automated tests on canonical Dame Curie on 2026-10-31, in development mode, with her own V2 credentials. Dirac is not used. The test channel is `1566164090039304285` in server `1545673830960340992`. The permission actor is root, `1482143139828596916`.
+
+`compose.yaml` mounts `${INSTANCE_DIR}/smoke` read-only at `/smoke` and `${INSTANCE_DIR}/smoke-status` writable at `/smoke-status`. It sets `DAME_CURIE_DIRAC_SMOKE_CONFIG=/smoke/config.json`. Both host directories must exist before `up`. Set `"enabled": false` in `config.json` to stop the worker.
+
+```sh
+S="sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/smoke/config.json"
+$S submit --task 'LABELLED TEST TASK'
+$S result REQUEST_ID
+```
+
+A smoke turn writes to her memory like any other turn in that channel.
+
 ## Logs and viewer recovery
 
 Dirac's `dirac.py logs` uses append-only `screen` mode; it has no `--format` option. The separate canonical `instance.py logs` interface selects `screen`/`console`/`auto`/`plain`/`jsonl` with `--format`; canonical operation remains held. Append mode preserves Screen scrollback without repainting or alternate-screen entry; `--no-keys` disables its keyboard controls. Do not apply append-mode keys to the interactive console. In append mode, `q`/Ctrl-C exits the viewer/follower, not the bot; unmarked pasted ASCII can trigger keys, so choose `--no-keys` where paste safety matters.
