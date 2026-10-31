@@ -62,6 +62,23 @@ BG_TIMEOUT_DEFAULT = 7200
 BG_TIMEOUT_HARD_CAP = 14400
 BG_ITERS_DEFAULT = 100
 BG_ITERS_HARD_CAP = 200
+# Context compaction: when the job's next prompt would reach this many input
+# tokens, older steps are summarized by the configured main model and replaced
+# by the summary. 180,000 is about 70% of a 256k-token window.
+BG_COMPACT_DEFAULT = 180_000
+BG_COMPACT_HARD_CAP = 900_000
+BG_COMPACT_KEEP_ROUNDS = 4
+JOB_SUMMARY_HEADER = "=== JOB PROGRESS SUMMARY ==="
+JOB_COMPACT_PROMPT = (
+    "You compact the working history of a background job so the job can "
+    "continue without its older steps. Write a progress summary in plain "
+    "text. Include: the goal; what is done; every file created or changed, "
+    "with its full path; commands that matter and their key results; URLs; "
+    "facts learned; errors and how they were resolved; what remains, and the "
+    "next step. Keep exact paths, names, values and identifiers. Do not "
+    "invent anything that the steps do not show. A previous summary, if "
+    "present, is part of the history: carry its facts forward."
+)
 
 # How many jobs may run at once, and per user. Queued extras are refused
 # with a "busy" message rather than piling up behind each other.
@@ -111,7 +128,82 @@ def resolve_job_budgets(control: Any, config: Any) -> dict[str, int]:
         "max_iters": _pick(
             "bg_max_iters", "BG_MAX_ITERS", BG_ITERS_DEFAULT, BG_ITERS_HARD_CAP
         ),
+        "compact_at_tokens": _pick(
+            "bg_compact_at_tokens", "BG_COMPACT_AT_TOKENS", BG_COMPACT_DEFAULT, BG_COMPACT_HARD_CAP
+        ),
     }
+
+
+def _render_job_rounds(groups: list[list[dict]]) -> str:
+    """Plain-text transcript of job rounds for the compaction request."""
+    lines: list[str] = []
+    for group in groups:
+        for msg in group:
+            content = msg.get("content")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            if msg.get("role") == "assistant":
+                if text:
+                    lines.append(f"ASSISTANT: {text}")
+                for call in msg.get("tool_calls") or []:
+                    function = call.get("function") or {}
+                    lines.append(f"CALL {function.get('name')}: {function.get('arguments')}")
+            elif msg.get("role") == "tool":
+                lines.append(f"RESULT {msg.get('tool_call_id')}: {text}")
+            else:
+                lines.append(text or "")
+        lines.append("")
+    return "\n".join(lines)
+
+
+async def compact_job_messages(
+    bot: Any, job: Any, messages: list[dict], *, timeout: float, compaction: int,
+) -> tuple[list[dict], int]:
+    """Replace older job rounds with a model-written summary.
+
+    Keeps the system prompt, the goal and the newest BG_COMPACT_KEEP_ROUNDS
+    rounds. Returns the new message list and the number of rounds summarized,
+    0 when there are not enough rounds to compact.
+    """
+    from tool_schemas import tool_tail_groups
+
+    start = 2
+    previous = ""
+    if len(messages) > 2 and str(messages[2].get("content") or "").startswith(JOB_SUMMARY_HEADER):
+        previous = str(messages[2]["content"])
+        start = 3
+    groups = tool_tail_groups(messages[start:])
+    older, kept = groups[:-BG_COMPACT_KEEP_ROUNDS], groups[-BG_COMPACT_KEEP_ROUNDS:]
+    if not older:
+        return messages, 0
+    request = [
+        {"role": "system", "content": JOB_COMPACT_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Job goal:\n{messages[1].get('content')}\n\n"
+                + (f"Previous summary:\n{previous}\n\n" if previous else "")
+                + "Steps to summarize:\n"
+                + _render_job_rounds(older)
+            ),
+        },
+    ]
+    await bot._acquire_ai_slot(timeout=float(min(timeout, 600)), priority="background", key=job.channel_id)
+    try:
+        response = await bot._generate_response(request, timeout=timeout)
+    finally:
+        await bot._release_ai_slot()
+    summary = str(response or "").strip()
+    if not summary:
+        raise RuntimeError("the compaction call returned no summary text")
+    note = {
+        "role": "user",
+        "content": (
+            f"{JOB_SUMMARY_HEADER}\nCompaction {compaction}. Older steps of this job are "
+            "summarized below. Their raw calls and results are no longer in your context.\n\n"
+            f"{summary}\n=== END SUMMARY ==="
+        ),
+    }
+    return [messages[0], messages[1], note, *[msg for group in kept for msg in group]], len(older)
 
 
 def _short(text: Any, limit: int = 50) -> str:
@@ -563,6 +655,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
     budgets = resolve_job_budgets(getattr(bot, "_control", {}) or {}, getattr(bot, "config", None))
     timeout = int(budgets["timeout_seconds"])
     max_iters = int(budgets["max_iters"])
+    compact_at = int(budgets["compact_at_tokens"])
+    compactions = 0
 
     manager.mark(job.id, status="running", progress="starting")
 
@@ -797,6 +891,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     final_text = resp_text.strip()
                     final_metrics = response_metrics if final_text else None
                     break
+                history_len = len(messages)
                 if followups:
                     messages.extend(followups)
                 else:
@@ -810,6 +905,47 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     break
                 final_text = resp_text.strip()
                 final_metrics = response_metrics if final_text else None
+                # Size of the next prompt: the provider's input tokens for this
+                # step plus this step's new messages. Without provider usage,
+                # the whole prompt is estimated at 3 characters per token.
+                input_tokens = getattr(response_metrics, "input_tokens", None)
+                added = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages[history_len:]) // 3
+                if not isinstance(input_tokens, int):
+                    input_tokens = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages[:history_len]) // 3
+                estimate = input_tokens + added
+                if estimate >= compact_at:
+                    try:
+                        messages, summarized = await compact_job_messages(
+                            bot, job, messages,
+                            timeout=float(min(600.0, max(10.0, deadline - time.monotonic()))),
+                            compaction=compactions + 1,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        terminal_failure = exc
+                        failure_text = f"context compaction failed at step {step + 1}: {exc}"
+                        capture_incident("jobs", "Background context compaction failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                        break
+                    if summarized:
+                        compactions += 1
+                        logger.info(
+                            "background job %s compaction %d at step %d: about %d input tokens, threshold %d, %d step(s) summarized",
+                            job.id, compactions, step + 1, estimate, compact_at, summarized,
+                        )
+                        await _post_thread(
+                            thread,
+                            f"Context compacted at step {step + 1}: about {estimate} input tokens "
+                            f"(threshold {compact_at}). {summarized} older steps are summarized; "
+                            f"the last {BG_COMPACT_KEEP_ROUNDS} are kept.",
+                            context=job_context,
+                        )
+                    else:
+                        logger.warning(
+                            "background job %s is at about %d input tokens (threshold %d), but it has "
+                            "no more than %d steps, so nothing was compacted",
+                            job.id, estimate, compact_at, BG_COMPACT_KEEP_ROUNDS,
+                        )
     except TimeoutError as exc:
         if not timeout_scope.expired():
             raise

@@ -151,6 +151,8 @@ DEFAULT_CONTROL = {
     # ─── background sub-agent jobs (jobs.py) ────────────────────────────
     "bg_timeout_seconds": 0,
     "bg_max_iters": 0,
+    # Input tokens at which a job summarizes its older steps; 0 = 180,000.
+    "bg_compact_at_tokens": 0,
     # Prefer OpenAI-style native tool_calls when the provider supports them.
     # XML text tags remain as a fallback when the model emits tags without
     # native tool_calls (or the endpoint rejects tools=).
