@@ -448,6 +448,14 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     ]
     with pytest.raises(ValueError):
         normalize_native_tool_calls(oversized_batch)
+    many_calls = [{"id": str(index), "function": {"name": "x", "arguments": "{}"}} for index in range(11)]
+    with pytest.raises(ValueError):
+        normalize_native_tool_calls(many_calls)
+    many_refused = normalize_native_tool_calls(many_calls, allow_oversized_arguments=True)
+    assert [call["id"] for call in many_refused] == [str(index) for index in range(11)]
+    assert {call["batch_limit_error"] for call in many_refused} == {
+        "the response has 11 calls; the limit is 10"
+    }
     batch_refused = normalize_native_tool_calls(oversized_batch, allow_oversized_arguments=True)
     assert [call["oversized_arguments"] for call in batch_refused] == [False, False, False]
     assert {call["batch_limit_error"] for call in batch_refused} == {

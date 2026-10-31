@@ -788,7 +788,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 # An ending-only batch (e.g. the model wrapped up via send_message)
                 # is the finished answer - do not loop for more.
                 named = {n for n in names if n}
-                if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip():
+                refused = any(re.match(r"Tool [^:\n]+: Error", result) for result in tool_results)
+                if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip() and not refused:
                     final_text = resp_text.strip()
                     final_metrics = response_metrics if final_text else None
                     break

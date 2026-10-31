@@ -367,6 +367,7 @@ class RunnerStubBot(StubBot):
         self.generated_turns = []
         self.catalog_groups = []
         self.discover = False
+        self.refuse_ending = False
         self.dispatch_delay = 0.0
         self.dispatch_events = []
 
@@ -397,9 +398,17 @@ class RunnerStubBot(StubBot):
         self.generated_messages = messages
         self.generated_prompts.append(messages[0]["content"])
         self.generated_turns.append(current_foreground_turn())
-        return "discover" if self.discover and len(self.generated_prompts) == 1 else "built it: http://example.local/site"
+        if self.discover and len(self.generated_prompts) == 1:
+            return "discover"
+        if self.refuse_ending and len(self.generated_prompts) == 1 + self.discover:
+            return "refused"
+        return "built it: http://example.local/site"
 
     def _native_calls_from(self, response):
+        if response == "refused":
+            return [{"id": "send_1", "type": "function", "function": {
+                "name": "send_message", "arguments": '{"content":"page"}',
+            }}]
         return [{"id": "discover_1", "type": "function", "function": {
             "name": "more_tools", "arguments": '{"group":"identity"}',
         }}] if response == "discover" else []
@@ -424,14 +433,26 @@ class RunnerStubBot(StubBot):
                 {"role": "tool", "tool_call_id": call["id"], "content": "Expanded identity tools."},
             ]
             return "", ["Expanded identity tools."]
+        if response == "refused":
+            refusal = (
+                "Tool send_message: Error - batch refused because the batch carries "
+                "40,000 bytes of arguments; the limit is 32,000; no calls in this batch were executed."
+            )
+            call = kwargs["native_tool_calls"][0]
+            self._last_native_followup_messages = [
+                {"role": "assistant", "content": "refused", "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": refusal},
+            ]
+            return "refused", [refusal]
         return str(response), []
 
 
+@pytest.mark.parametrize("refuse_ending", [False, True])
 @pytest.mark.parametrize("discover", [False, True])
 @pytest.mark.parametrize("descendant", [False, True])
 @pytest.mark.parametrize("dispatch_delay", [0.0, 0.2])
 def test_runner_delivers_final_reply_with_mention(
-    tmp_path, discover, descendant, dispatch_delay,
+    tmp_path, discover, descendant, dispatch_delay, refuse_ending,
 ):
     oversized_prompt = "x" * (SERVER_PROMPT_MAX_BYTES + 1)
 
@@ -439,6 +460,7 @@ def test_runner_delivers_final_reply_with_mention(
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
         bot = RunnerStubBot(manager)
         bot.discover = discover
+        bot.refuse_ending = refuse_ending
         bot.dispatch_delay = dispatch_delay
         bot.command_prefix = "?"
         bot.memory.get_server_prompt = lambda server_id: oversized_prompt
@@ -467,7 +489,7 @@ def test_runner_delivers_final_reply_with_mention(
     assert job.status == "done"
     assert bot.slot_priority == "background"  # user turns outrank it
     assert not {"disable_reasoning", "max_tokens", "temperature", "model", "prefer_fallback"} & bot.generated_with.keys()
-    assert bot.dispatch_events == ["started", "settled", "completed"] * (2 if discover else 1)
+    assert bot.dispatch_events == ["started", "settled", "completed"] * (1 + discover + refuse_ending)
     if not descendant:
         assert 600 < bot.generated_with["timeout"] <= 7200
     system_prompt = bot.generated_messages[0]["content"]
@@ -475,12 +497,13 @@ def test_runner_delivers_final_reply_with_mention(
     assert "?longprompt" in system_prompt
     assert oversized_prompt not in system_prompt
     assert bot.memory.get_server_prompt("333") == oversized_prompt
-    assert bot.catalog_groups == ([set(), {"identity"}] if discover else [set()])
-    assert channel.thread.foreign_overwrites == int(discover)
+    expected_groups = [set(), {"identity"}] if discover else [set()]
+    assert bot.catalog_groups == expected_groups + expected_groups[-1:] * refuse_ending
+    assert channel.thread.foreign_overwrites == int(discover) + refuse_ending
     assert "catalog: core" in bot.generated_prompts[0]
     if discover:
         assert "catalog: identity" in bot.generated_prompts[1]
-        assert len(bot.generated_messages) == 4
+        assert len(bot.generated_messages) == 4 + 2 * refuse_ending
         assert bot.generated_messages[2]["tool_calls"][0]["id"] == "discover_1"
         assert bot.generated_messages[3]["tool_call_id"] == "discover_1"
         assert "FOREIGN_" not in json.dumps(bot.generated_messages)

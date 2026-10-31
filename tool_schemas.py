@@ -1071,7 +1071,9 @@ def normalize_native_tool_calls(
     """Validate and normalize a complete provider tool-call batch."""
     if raw_calls is None:
         return []
-    if not isinstance(raw_calls, list) or len(raw_calls) > _NATIVE_MAX_CALLS:
+    if not isinstance(raw_calls, list):
+        raise ValueError("Malformed native tool-call batch")
+    if len(raw_calls) > _NATIVE_MAX_CALLS and not allow_oversized_arguments:
         raise ValueError("Malformed or oversized native tool-call batch")
     normalized: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -1136,7 +1138,11 @@ def normalize_native_tool_calls(
             }
         )
     batch_limit_error = ""
-    if batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
+    if len(raw_calls) > _NATIVE_MAX_CALLS:
+        batch_limit_error = (
+            f"the response has {len(raw_calls)} calls; the limit is {_NATIVE_MAX_CALLS}"
+        )
+    elif batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES:
         batch_limit_error = (
             f"the batch carries {batch_argument_bytes:,} bytes of arguments; "
             f"the limit is {_NATIVE_MAX_BATCH_ARGUMENT_BYTES:,}"
