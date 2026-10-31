@@ -161,7 +161,9 @@ def test_untrusted_or_non_openrouter_primary_sends_nothing(usage_tool, base):
     session.get.assert_not_called()
 
 
-@pytest.mark.parametrize("key", ["", "   "])
+# Commit bfe460d removed key stripping: a whitespace-only key is a literal configured
+# key, and test_uses_fixed_origin_loaded_key_and_no_redirects pins that literal value.
+@pytest.mark.parametrize("key", [""])
 def test_missing_loaded_key_never_borrows_environment_or_config(usage_tool, key):
     tool, session, _, get_session, _ = usage_tool
     tool.bot.ai_provider.api_key = key

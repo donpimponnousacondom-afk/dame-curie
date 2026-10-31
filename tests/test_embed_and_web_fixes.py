@@ -92,6 +92,10 @@ def test_unknown_vector_cannot_produce_a_cache_hit(tmp_path, monkeypatch):
     """A legacy vector needs re-embedding, not adoption under today's model name."""
     content = "the quick brown fox jumps over the lazy dog"
     vec = _unit_vec(7)
+    # The isolated QA image has no embedding endpoint or model configured; _embed
+    # refuses to call out without both, so give the manager synthetic ones.
+    monkeypatch.setattr(rag_memory, "EMBED_URL", "http://embed.invalid/api/embed")
+    monkeypatch.setattr(rag_memory, "EMBED_MODEL", "synthetic-embed-model")
     mgr = RAGMemoryManager(str(tmp_path))
     mgr._db.execute(
         "INSERT INTO vectors (id, kind, content, embedding, created_at, "

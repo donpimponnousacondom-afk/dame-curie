@@ -1,6 +1,6 @@
+import contextlib
 import errno
-import json
-import shlex
+import io
 import shutil
 import tempfile
 import time
@@ -16,17 +16,21 @@ from scripts.publisher.mirror import Mirror
 from scripts.publisher.service import Pending, Publisher
 from scripts.publisher.state import State
 from scripts.publisher.watch import Watcher
-from test_publisher_remote import LocalSSH
+from test_publisher_remote import LocalSSH, request_of
 
 
 class PendingTests(unittest.TestCase):
-    def test_dirty_site_preempts_background_after_its_own_debounce(self):
+    def test_dirty_site_preempts_background_after_its_own_debounce_and_turns_are_shared(self):
         pending = Pending(0.3, 30)
         pending.rescan({'a-background', 'b-background'})
         pending.changed({'z-dirty'}, 10)
-        self.assertIsNone(pending.take(10.2))
+        self.assertEqual(pending.take(10.2), 'a-background')
         self.assertEqual(pending.take(10.31), 'z-dirty')
-        self.assertEqual(pending.take(10.31), 'a-background')
+        self.assertEqual(pending.take(10.31), 'b-background')
+        pending.changed({'z-dirty'}, 11)
+        pending.rescan({'c-background'})
+        self.assertEqual(pending.take(11.31, prefer_background=True), 'c-background')
+        self.assertEqual(pending.take(11.31, prefer_background=True), 'z-dirty')
 
     def test_events_during_active_job_remain_queued_for_another_pass(self):
         pending = Pending(0.3, 30)
@@ -64,14 +68,13 @@ class ControlledSSH(LocalSSH):
         self.synced = []
         self.block_name = ''
 
-    def execute(self, argv, capture):
-        command = argv[-1] if capture else argv[argv.index('--rsync-path') + 1]
-        request = json.loads(shlex.split(command)[-1])
+    def execute(self, argv, capture, operation='remote', input_data=None):
+        request = request_of(argv, capture, input_data)
         if not capture and request['name'] == self.block_name and not self.blocked.is_set():
             self.blocked.set()
             if not self.release.wait(5):
                 raise RuntimeError('test did not release blocked transfer')
-        result = super().execute(argv, capture)
+        result = super().execute(argv, capture, operation, input_data)
         if not capture:
             name = request['name']
             self.synced.append(name)
@@ -144,8 +147,9 @@ class PublisherServiceTests(unittest.TestCase):
             self.publisher.stopped.set()
             task.result(timeout=2)
         self.assertEqual((self.root / 'remote/b-new/index.html').read_bytes(), b'new before registration')
-        if 'z-background' in self.transport.synced:
-            self.assertLess(self.transport.synced.index('b-new'), self.transport.synced.index('z-background'))
+        # Local and repair jobs share turns, so z-background may run before b-new.
+        self.assertIn('b-new', self.transport.synced)
+        self.assertGreaterEqual(self.transport.synced.count('a-blocked'), 2)
 
     def test_overflow_inventory_removes_site_created_between_periodic_inventories(self):
         self.watcher.rebuild()
@@ -158,10 +162,15 @@ class PublisherServiceTests(unittest.TestCase):
         self.watcher.wait(0)
         self.watcher.take_changes()
         self.publisher.inventory()
+        self.assertTrue(self.publisher.audit_pending)
+        repairs = self.mirror.inventory()
+        self.assertEqual(repairs, {'event-only'})
+        self.publisher.pending.rescan(repairs)
         name = self.publisher.pending.take(time.monotonic() + 1)
         self.assertEqual(name, 'event-only')
-        self.mirror.reconcile_site(name)
+        self.mirror.reconcile_site(name, force=True)
         self.assertFalse((self.root / 'remote/event-only').exists())
+        self.assertNotIn('event-only', self.state.sites)
 
     def test_watch_retry_catches_edits_made_before_new_directory_registration(self):
         self.put('initial/index.html')
@@ -195,12 +204,29 @@ class PublisherServiceTests(unittest.TestCase):
             task.result(timeout=2)
         self.assertEqual((self.root / 'remote/b-new/index.html').read_bytes(), b'edited while directory was unwatched')
 
-    def test_worker_error_reaches_service_owner_instead_of_silently_dying(self):
-        self.put('site/index.html')
+    def test_remote_failure_is_reported_and_retried_while_other_sites_continue(self):
+        page = self.put('site/index.html')
         self.transport.fail_action = 'site'
-        task = self.executor.submit(self.publisher.run)
-        with self.assertRaises(RemoteFailure):
-            task.result(timeout=2)
+        reported = io.StringIO()
+        with contextlib.redirect_stderr(reported):
+            task = self.executor.submit(self.publisher.run)
+            deadline = time.monotonic() + 2
+            while "site='site'" not in reported.getvalue() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIn("publisher: site='site': synthetic remote interruption; retry on next scan", reported.getvalue())
+            self.assertFalse(task.done())
+            self.transport.fail_action = ''
+            self.put('other/index.html', b'other site continues')
+            deadline = time.monotonic() + 2
+            while not (self.root / 'remote/other/index.html').exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual((self.root / 'remote/other/index.html').read_bytes(), b'other site continues')
+            self.assertFalse(task.done())
+            self.assertIn('site', self.publisher.retry)
+            with patch.object(self.mirror, 'reconcile_site', side_effect=RuntimeError('synthetic worker defect')):
+                page.write_bytes(b'edit that reaches the defective worker')
+                with self.assertRaisesRegex(RuntimeError, 'synthetic worker defect'):
+                    task.result(timeout=2)
 
     def test_root_replacement_fails_closed_with_worker_active(self):
         self.put('a-blocked/index.html')

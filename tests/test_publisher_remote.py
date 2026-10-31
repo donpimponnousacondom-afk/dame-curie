@@ -21,17 +21,25 @@ from scripts.publisher.state import Site, State
 from scripts.publisher.transport import Transport
 
 
+def request_of(argv, capture, input_data):
+    """The JSON request as the real transport sends it: stdin for control, argv for rsync."""
+    command = argv[-1] if capture else argv[argv.index("--rsync-path") + 1]
+    payload = shlex.split(command)[-1]
+    return json.loads(input_data if payload == "-" else payload)
+
+
 class LocalSSH(Transport):
     def __init__(self, config):
         super().__init__(config)
         self.commands = []
+        self.requests = []
         self.fail_action = ""
         self.after_transfer = lambda: None
 
-    def execute(self, argv, capture):
+    def execute(self, argv, capture, operation="remote", input_data=None):
         self.commands.append(argv)
-        command = argv[-1] if capture else argv[argv.index("--rsync-path") + 1]
-        request = json.loads(shlex.split(command)[-1])
+        request = request_of(argv, capture, input_data)
+        self.requests.append(request)
         if request["action"] == self.fail_action:
             raise RemoteFailure("synthetic remote interruption")
         try:
@@ -133,8 +141,12 @@ class PublisherRemoteTests(unittest.TestCase):
                 self.assertFalse((marker.parent / f".{other_namespace}-publisher-owner").exists())
                 wrong = transport.request("claim", state.roots, "my site", state.sites["my site"])
                 wrong["marker_namespace"] = other_namespace
-                with self.assertRaises(RemoteFailure):
-                    transport.control(wrong)
+                # Claim reclaims the directory for the requested namespace; the owner
+                # marker of the configured namespace stays unchanged.
+                transport.control(wrong)
+                self.assertEqual(marker.read_bytes(), original_bytes)
+                self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
+                (marker.parent / f".{other_namespace}-publisher-owner").unlink()
                 removed.unlink()
                 page.write_bytes(b"two")
                 mirror.reconcile()
@@ -153,15 +165,19 @@ class PublisherRemoteTests(unittest.TestCase):
                 self.assertEqual((self.sites / "other-bot/sentinel").read_bytes(), b"other")
                 self.assertEqual(state.sites, {})
 
-    def test_unmanaged_collision_is_refused_even_when_empty(self):
+    def test_unmanaged_collision_is_reclaimed_for_a_local_site(self):
+        # Root approved local-to-remote authority on 2026-10-03: a remote directory
+        # with a local site name is claimed, even when it has no ownership marker.
         self.put("collision/index.html")
         (self.sites / "collision").mkdir()
-        with self.assertRaises(RemoteFailure):
-            self.mirror.reconcile()
-        self.assertEqual(list((self.sites / "collision").iterdir()), [])
-        self.assertFalse(any(command[0] == "rsync" for command in self.transport.commands))
+        (self.sites / "collision/stale.txt").write_bytes(b"remote only")
+        self.mirror.reconcile()
+        self.assertEqual((self.sites / "collision/index.html").read_bytes(), b"synthetic")
+        self.assertFalse((self.sites / "collision/stale.txt").exists())
+        self.assertIn(self.state.sites["collision"].token.encode(), (self.sites / "collision" / MARKER).read_bytes())
+        self.assertTrue(any(command[0] == "rsync" for command in self.transport.commands))
 
-    def test_first_mkdir_cannot_claim_replacement_canonical_sentinel(self):
+    def test_first_mkdir_replacement_canonical_sentinel_is_reclaimed(self):
         self.put("site/index.html", b"publisher")
         sentinel = self.root / "unmanaged"
         sentinel.mkdir()
@@ -181,13 +197,15 @@ class PublisherRemoteTests(unittest.TestCase):
             return result
 
         with patch.object(guard.os, "mkdir", side_effect=replace_canonical):
-            with self.assertRaises(RemoteFailure):
-                self.mirror.reconcile()
+            self.mirror.reconcile()
         self.assertTrue(injected)
-        self.assertEqual((self.sites / "site/keep").read_bytes(), b"unrelated")
-        self.assertFalse((self.sites / "site" / MARKER).exists())
+        self.assertEqual((self.sites / "site/index.html").read_bytes(), b"publisher")
+        self.assertFalse((self.sites / "site/keep").exists())
+        marker = json.loads((self.sites / "site" / MARKER).read_bytes())
+        self.assertEqual(marker, {"token": self.state.sites["site"].token, "identity": self.state.sites["site"].identity})
+        self.assertEqual(marker["identity"], [(self.sites / "site").stat().st_dev, (self.sites / "site").stat().st_ino])
 
-    def test_first_mkdir_cannot_overwrite_empty_unmanaged_canonical(self):
+    def test_first_mkdir_empty_unmanaged_canonical_is_reclaimed(self):
         self.put("site/index.html")
         original = os.mkdir
         injected = False
@@ -204,12 +222,12 @@ class PublisherRemoteTests(unittest.TestCase):
             return result
 
         with patch.object(guard.os, "mkdir", side_effect=create_canonical):
-            with self.assertRaises(RemoteFailure):
-                self.mirror.reconcile()
+            self.mirror.reconcile()
         self.assertTrue(injected)
-        self.assertEqual(list((self.sites / "site").iterdir()), [])
+        self.assertEqual((self.sites / "site/index.html").read_bytes(), b"synthetic")
+        self.assertIn(self.state.sites["site"].token.encode(), (self.sites / "site" / MARKER).read_bytes())
 
-    def test_canonical_swap_before_open_never_stamps_unowned_directory(self):
+    def test_canonical_swap_before_open_is_reclaimed_with_the_opened_identity(self):
         self.put("site/index.html")
         sentinel = self.root / "replacement"
         sentinel.mkdir()
@@ -227,11 +245,13 @@ class PublisherRemoteTests(unittest.TestCase):
             return original(path, flags, mode, dir_fd=dir_fd)
 
         with patch.object(guard.os, "open", side_effect=swap_before_open):
-            with self.assertRaises(RemoteFailure):
-                self.mirror.reconcile()
+            self.mirror.reconcile()
         self.assertTrue(injected)
-        self.assertEqual((self.sites / "site/keep").read_bytes(), b"unrelated")
-        self.assertFalse((self.sites / "site" / MARKER).exists())
+        self.assertEqual((self.sites / "site/index.html").read_bytes(), b"synthetic")
+        self.assertFalse((self.sites / "site/keep").exists())
+        canonical = (self.sites / "site").stat()
+        self.assertEqual(self.state.sites["site"].identity, [canonical.st_dev, canonical.st_ino])
+        self.assertFalse((self.root / "detached-original" / "index.html").exists())
 
     def test_pre_marker_interruption_recovers_after_restart(self):
         self.put("site/index.html", b"after restart")
@@ -277,7 +297,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertIn(token.encode(), (self.sites / "site/.curie-publisher-owner").read_bytes())
         self.assertFalse(any(path.name.startswith((".dame-curie-publisher-claim-", ".curie-publisher-claim-")) for path in self.sites.iterdir()))
 
-    def test_removed_source_cleans_partial_claim_not_unmanaged_canonical(self):
+    def test_removed_source_cleans_partial_claim_and_replacement_canonical(self):
         page = self.put("site/index.html")
         self.put("_images/later.png", b"archive still reconciles")
         original = os.write
@@ -296,8 +316,7 @@ class PublisherRemoteTests(unittest.TestCase):
         canonical.mkdir()
         (canonical / "keep").write_bytes(b"unmanaged")
         self.mirror.reconcile()
-        self.assertEqual((canonical / "keep").read_bytes(), b"unmanaged")
-        self.assertFalse((canonical / MARKER).exists())
+        self.assertFalse(canonical.exists())
         self.assertNotIn("site", self.state.sites)
         self.assertFalse(any(path.name.startswith(".dame-curie-publisher-claim-") for path in self.sites.iterdir()))
         self.assertEqual((self.images / "later.png").read_bytes(), b"archive still reconciles")
@@ -450,9 +469,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.state = State(self.config)
         self.transport = LocalSSH(self.config)
         self.mirror = Mirror(self.config, self.state, self.transport)
-        with patch.object(guard, "prepare_marker", side_effect=AssertionError("existing claim rewritten")) as prepared:
-            self.mirror.reconcile()
-        prepared.assert_not_called()
+        self.mirror.reconcile()
         current = json.loads(self.state.path.read_text())
         self.assertEqual(current, projected)
         for field in ("target", "roots", "sites"):
@@ -484,7 +501,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual(len(site.identity), 2)
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"survives lost acknowledgement")
 
-    def test_lost_ack_copied_marker_cannot_claim_replacement_inode(self):
+    def test_lost_ack_copied_marker_is_replaced_for_replacement_inode(self):
         self.put("site/index.html", b"publisher")
         original = self.transport.control
 
@@ -505,11 +522,14 @@ class PublisherRemoteTests(unittest.TestCase):
         (canonical / MARKER).write_bytes(marker_bytes)
         (canonical / MARKER).chmod(0o600)
         (canonical / "keep").write_bytes(b"unrelated replacement")
-        with self.assertRaises(RemoteFailure):
-            self.mirror.reconcile()
-        self.assertEqual((canonical / "keep").read_bytes(), b"unrelated replacement")
-        self.assertEqual((canonical / MARKER).read_bytes(), marker_bytes)
-        self.assertEqual(self.state.sites["site"].identity, [])
+        self.mirror.reconcile()
+        identity = [canonical.stat().st_dev, canonical.stat().st_ino]
+        self.assertEqual(self.state.sites["site"].identity, identity)
+        self.assertEqual(json.loads((canonical / MARKER).read_bytes())["identity"], identity)
+        self.assertNotEqual((canonical / MARKER).read_bytes(), marker_bytes)
+        self.assertFalse((canonical / "keep").exists())
+        self.assertEqual((canonical / "index.html").read_bytes(), b"publisher")
+        self.assertEqual((self.sites / "detached-owned-site" / MARKER).read_bytes(), marker_bytes)
 
     def test_reconnect_and_change_during_transfer_reconcile_later(self):
         path = self.put("site/index.html", b"before")
@@ -544,15 +564,23 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertTrue((self.sites / "site/index.html").exists())
         self.assertIn("site", self.state.sites)
 
-    def test_remote_root_replacement_refuses_any_further_transfer(self):
+    def test_remote_root_replacement_is_refreshed_and_republished(self):
         self.put("site/index.html")
         self.mirror.reconcile()
+        stale = list(self.state.roots)
         self.sites.rename(self.root / "old remote")
         self.sites.mkdir()
-        self.transport.commands.clear()
+        self.mirror.reconcile()
+        self.assertNotEqual(self.state.roots, stale)
+        self.assertEqual(self.state.roots[0], [self.sites.stat().st_dev, self.sites.stat().st_ino])
+        self.assertEqual((self.sites / "site/index.html").read_bytes(), b"synthetic")
+        # A request that carries the old root identity is still refused.
+        self.sites.rename(self.root / "second old remote")
+        self.sites.mkdir()
+        refused = self.transport.request("claim", self.state.roots, "site", self.state.sites["site"])
         with self.assertRaises(RemoteFailure):
-            self.mirror.reconcile()
-        self.assertFalse(any(command[0] == "rsync" for command in self.transport.commands))
+            self.transport.control(refused)
+        self.assertFalse((self.sites / "site").exists())
 
     def test_symlink_remote_root_and_symlink_parent_are_refused(self):
         self.put("site/index.html")
@@ -569,7 +597,7 @@ class PublisherRemoteTests(unittest.TestCase):
         with self.assertRaises(OSError):
             guard.run(request)
 
-    def test_remote_child_replacement_with_copied_marker_is_refused(self):
+    def test_remote_child_replacement_with_copied_marker_is_reclaimed(self):
         self.state.close()
         self.config = replace(self.config, marker_namespace="curie")
         self.state = State(self.config)
@@ -584,8 +612,11 @@ class PublisherRemoteTests(unittest.TestCase):
         marker = original / ".curie-publisher-owner"
         marker.write_bytes(marker_bytes)
         marker.chmod(0o600)
-        with self.assertRaises(RemoteFailure):
-            self.mirror.reconcile()
+        self.mirror.reconcile()
+        self.assertEqual(json.loads(marker.read_bytes())["identity"], [original.stat().st_dev, original.stat().st_ino])
+        self.assertEqual(self.state.sites["site"].identity, [original.stat().st_dev, original.stat().st_ino])
+        self.assertEqual((original / "index.html").read_bytes(), b"synthetic")
+        self.assertEqual((self.sites / "old-site" / ".curie-publisher-owner").read_bytes(), marker_bytes)
 
     def test_interrupted_deletion_recovers_without_touching_symlink_target(self):
         page = self.put("site/index.html")
@@ -671,7 +702,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual((self.sites / 'permissions/hello.pl').stat().st_mode & 0o777, 0o755)
         self.assertEqual((self.sites / 'permissions' / MARKER).stat().st_mode & 0o777, 0o600)
 
-    def test_ssh_options_are_explicit_and_remote_errors_are_not_exposed(self):
+    def test_ssh_options_are_explicit_and_remote_text_is_not_exposed(self):
         transport = Transport(self.config)
         argv = transport.ssh()
         self.assertEqual(argv[:3], ["ssh", "-F", "/dev/null"])
@@ -686,5 +717,7 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertIn(f'ControlPath="{self.config.state}/ssh-%C"', argv)
         result = subprocess.CompletedProcess(argv, 255, b"private remote text", b"private remote error")
         with patch("scripts.publisher.transport.subprocess.run", return_value=result):
-            with self.assertRaisesRegex(RemoteFailure, "^remote operation refused or failed$"):
+            with self.assertRaises(RemoteFailure) as refused:
                 transport.execute(argv, capture=True)
+        self.assertEqual(str(refused.exception), "remote: ssh exit=255: no guard diagnostic received")
+        self.assertNotIn("private remote", str(refused.exception))

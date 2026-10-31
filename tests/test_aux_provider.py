@@ -104,6 +104,11 @@ def test_get_aux_provider_without_aux_config_defers_to_autonomy(monkeypatch):
     assert bot._aux_provider_sig == ""
     with pytest.raises(ValueError, match="complete provider configuration"):
         asyncio.run(bot._get_autonomy_provider())
+    # Commit 306b413: a role whose only setting is a blank key resolves to the main endpoint.
+    blank = _make_bot(monkeypatch, aux_env={"api_key": ""}, auto_env={"api_key": ""})
+    for built in (asyncio.run(blank._get_aux_provider()), asyncio.run(blank._get_autonomy_provider())):
+        assert (built.kwargs["base_url"], built.kwargs["api_key"], built.kwargs["model"]) == (
+            "https://main.example/v1", "synthetic-main-key", "main-model")
 
 
 @pytest.mark.parametrize("profile", ["aux", "autonomy"])
@@ -112,7 +117,6 @@ def test_get_aux_provider_without_aux_config_defers_to_autonomy(monkeypatch):
     {"api_key": "synthetic-other-key", "model": "aux-m"},
     {"api_key": "", "model": "aux-m"},
     {"api_key": "synthetic-other-key"},
-    {"api_key": ""},
 ])
 def test_get_aux_provider_builds_dedicated_when_aux_base_url_set(monkeypatch, profile, settings):
     bot = _make_bot(
