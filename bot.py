@@ -13158,7 +13158,8 @@ class DameCurieBot(commands.Bot):
                 and not (response or "").strip()
             ):
                 return
-            if posted_updates and str(response or "").strip() == posted_updates[-1]:
+            repeated_update = bool(posted_updates) and str(response or "").strip() == posted_updates[-1]
+            if repeated_update:
                 # The loop ended on the text that is already posted as the
                 # newest progress update; it is not posted twice.
                 response = ""
@@ -13166,7 +13167,9 @@ class DameCurieBot(commands.Bot):
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
             )
-            delivered = any(
+            # A final answer equal to the newest update was delivered by that
+            # update; an empty final answer after an update was not.
+            delivered = (repeated_update and bool(last_model_text.strip())) or any(
                 marker in result
                 for result in all_tool_results
                 for marker in _DELIVERY_MARKERS
@@ -15106,7 +15109,7 @@ class DameCurieBot(commands.Bot):
             try:
                 sent = await message.channel.send(chunk)
             except discord.HTTPException as exc:
-                logger.warning(
+                logger.error(
                     "Progress update could not be sent (%s chunk(s) sent before the failure): %s",
                     "some" if sent_any else "no", exc,
                 )

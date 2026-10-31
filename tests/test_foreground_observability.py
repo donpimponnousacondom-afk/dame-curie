@@ -379,7 +379,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "beside_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "beside_update", "repeat_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -530,6 +530,12 @@ def test_real_foreground_handler_preserves_producing_call(
                 ProviderResult("Here is the answer.", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "repeat_update":
+            responses = [
+                ProviderResult("Here it is.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("Here it is.", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "ack_then_empty":
             responses = [
                 ProviderResult("", tool_calls=[tool_call("send_message", content="on it")], metrics=first),
@@ -639,6 +645,11 @@ def test_real_foreground_handler_preserves_producing_call(
         if mode == "beside_no_response":
             # A chosen silence stays silent: no progress update, no notice.
             assert message.channel.sent == []
+            return
+        if mode == "repeat_update":
+            # A final answer equal to the update is not posted twice and is
+            # not reported as missing.
+            assert [sent.content for sent in message.channel.sent] == ["Here it is."]
             return
         if mode == "beside_update":
             # Text next to tool calls is posted at once, then the final reply.

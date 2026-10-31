@@ -5911,7 +5911,7 @@ class SeeImageTool(Tool):
                 max_size = self.bot._max_media_bytes()
         if own is not None:
             if os.path.getsize(own) > max_size:
-                return f"Error: {url} is larger than {max_size} bytes"
+                return f"Error: {str(url)[:200]} is larger than {max_size} bytes"
             local = await asyncio.to_thread(Path(own).read_bytes)
             if not image_mime(local, "application/octet-stream").startswith("image/"):
                 return f"Error: not an image file: {url[:200]}"

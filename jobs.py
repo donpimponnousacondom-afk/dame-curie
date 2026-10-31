@@ -994,7 +994,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                         context=job_context,
                     )
                     for start_at in range(0, len(summary), 1900):
-                        await _post_thread(thread, summary[start_at:start_at + 1900], context=job_context)
+                        if not await _post_thread(thread, summary[start_at:start_at + 1900], context=job_context):
+                            break
     except TimeoutError as exc:
         if not timeout_scope.expired():
             raise
