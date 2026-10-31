@@ -389,9 +389,7 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 
     DAME_CURIE_SITE_DIR = os.getenv("DAME_CURIE_SITE_DIR", "public/bot")
-    DAME_CURIE_PUBLIC_BASE_URL = os.getenv(
-        "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid"
-    )
+    DAME_CURIE_IMAGE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_IMAGE_PUBLIC_BASE_URL", "").strip()
     DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
 
     # Owner allowlist. Re-exported here so Config is the single

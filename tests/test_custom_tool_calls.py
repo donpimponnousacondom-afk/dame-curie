@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import providers  # noqa: E402
-from tool_schemas import message_chars, trim_tool_tail  # noqa: E402
+from tool_schemas import TOOL_TAIL_MAX_CHARS, TOOL_TAIL_MAX_MESSAGES, message_chars, trim_tool_tail  # noqa: E402
 
 
 def test_find_balanced_json_end_basic():
@@ -97,8 +97,8 @@ def test_buffer_multiple_tool_calls():
             )
         tail.extend([{"role": "assistant", "content": None, "tool_calls": batch}, *results])
     trimmed = trim_tool_tail(tail)
-    assert len(trimmed) <= 12
-    assert sum(message_chars(msg) for msg in trimmed) <= 36_000
+    assert len(trimmed) <= TOOL_TAIL_MAX_MESSAGES
+    assert sum(message_chars(msg) for msg in trimmed) <= TOOL_TAIL_MAX_CHARS
     latest = [msg for msg in trimmed if msg.get("tool_call_id", "").startswith("call_3_")]
     assert len(latest) == 3
     assert all("truncated from tool result" in msg["content"] for msg in latest)

@@ -157,9 +157,11 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
             {"role": "tool", "tool_call_id": f"call_{i}", "content": "x" * size},
         ]
 
+    from tool_schemas import TOOL_TAIL_MAX_MESSAGES
+
     tail = [m for i in range(30) for m in round_msgs(i)]
     trimmed = trim_tool_tail(tail)
-    assert len(trimmed) <= 24
+    assert len(trimmed) == TOOL_TAIL_MAX_MESSAGES
     # Every tool message still has its assistant message ahead of it.
     open_ids = set()
     for msg in trimmed:
@@ -210,12 +212,12 @@ def test_trim_tool_tail_compacts_older_tool_results():
                     }
                 ],
             },
-            {"role": "tool", "tool_call_id": f"c{i}", "content": "y" * 8_000},
+            {"role": "tool", "tool_call_id": f"c{i}", "content": "y" * 12_000},
         ]
     trimmed = trim_tool_tail(tail)
     old = next(m for m in trimmed if m.get("tool_call_id") == "c0")
     newest = next(m for m in trimmed if m.get("tool_call_id") == "c2")
-    assert len(newest["content"]) == 8_000
+    assert len(newest["content"]) == 12_000
     assert "truncated from earlier tool result" in old["content"]
     assert len(old["content"]) <= TOOL_RESULT_COMPACT_CHARS + 80
 

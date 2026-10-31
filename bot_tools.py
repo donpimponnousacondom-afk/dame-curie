@@ -950,18 +950,16 @@ def _parse_overwrite_pairs(raw) -> dict:
 
 
 def _public_image_target(bot) -> tuple[str, str]:
-    """Return the existing local image directory and stable mirrored URL base.
+    """Return the local image directory and the public URL of its mirror.
 
-    Files land in <DAME_CURIE_SITE_DIR>/_images/; the independent publisher
-    mirrors them at <DAME_CURIE_PUBLIC_BASE_URL>/bot/_images/<file>.
+    Files land in <DAME_CURIE_SITE_DIR>/_images/. The independent publisher
+    mirrors them flat to its image_root, which is public at
+    <DAME_CURIE_IMAGE_PUBLIC_BASE_URL>/<file>. An unset base gives "".
     """
     cfg = getattr(bot, "config", None)
     site_dir = str(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
-    pub = str(
-        getattr(cfg, "DAME_CURIE_PUBLIC_BASE_URL", "https://dame-curie.example.invalid")
-        or "https://dame-curie.example.invalid"
-    ).rstrip("/")
-    return os.path.join(site_dir, "_images"), f"{pub}/bot/_images"
+    pub = str(getattr(cfg, "DAME_CURIE_IMAGE_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    return os.path.join(site_dir, "_images"), pub
 
 
 def _persist_public_image(
@@ -1001,7 +999,7 @@ def _persist_public_image(
                 temporary_path.unlink(missing_ok=True)
             except OSError as error:
                 logger.warning("Image prompt sidecar cleanup failed (%s)", type(error).__name__)
-    return path, f"{pub_base}/{name}"
+    return path, (f"{pub_base}/{name}" if pub_base else None)
 
 
 class ImageRequestLog:

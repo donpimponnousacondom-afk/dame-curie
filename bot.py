@@ -390,6 +390,7 @@ from tool_schemas import (  # noqa: E402
     normalize_native_tool_calls,
     recover_text_tool_calls,
     returns_result as tool_schemas_returns_result,
+    TOOL_TAIL_MAX_CHARS,
     trim_tool_tail,
     tool_tail_groups,
 )
@@ -1041,36 +1042,6 @@ def _is_unknown_reference_error(exc: Exception) -> bool:
     return False
 
 
-def extract_json_object(text: str, start: int = 0) -> tuple[str, int] | None:
-    i = start
-    while i < len(text) and text[i].isspace():
-        i += 1
-    if i >= len(text) or text[i] != "{":
-        return None
-    depth = 0
-    in_str = False
-    j = i
-    while j < len(text):
-        c = text[j]
-        if in_str:
-            if c == "\\":
-                j += 2
-                continue
-            if c == '"':
-                in_str = False
-        else:
-            if c == '"':
-                in_str = True
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[i : j + 1], j + 1
-        j += 1
-    return None
-
-
 # Names the defensive sanitizer (strip_tool_payload_leaks) recognizes as tool
 # tags, so it can scrub any <tool:name>...</tool:name> or pipe-form leaks a
 # misbehaving model drops into visible text even though we're native-only now.
@@ -1332,22 +1303,6 @@ def _unwrap_openai_text_part(text: str) -> str:
     return text
 
 
-def _strip_leading_reasoning_json(text: str) -> str:
-    extracted = extract_json_object(text)
-    if not extracted:
-        return text
-    raw_json, end = extracted
-    try:
-        payload = json.loads(raw_json)
-    except json.JSONDecodeError as _exc:
-        return text
-    if not isinstance(payload, dict) or not (
-        {"thoughts", "intent", "decision", "tool_plan"} & set(payload)
-    ):
-        return text
-    return text[end:].lstrip()
-
-
 _DSML_INVOKE_NAME_RE = re.compile(
     r"""\bname\s*=\s*['"]([^'"]+)['"]""",
     re.IGNORECASE,
@@ -1400,7 +1355,7 @@ def _strip_dsml_tool_leaks(text: str) -> str:
 
 
 def strip_model_artifact_leaks(text: str, strip_pipe_markers: bool = True) -> str:
-    cleaned = _strip_leading_reasoning_json(str(text or ""))
+    cleaned = str(text or "")
     cleaned = ARTIFACT_BLOCK_RE.sub("", cleaned)
     if strip_pipe_markers:
         cleaned = PIPE_MARKER_RE.sub("", cleaned)
@@ -1579,16 +1534,8 @@ def strip_tool_payload_leaks(text: str) -> str:
         re.IGNORECASE | re.DOTALL,
     )
     cleaned = tool_call_obj_re.sub("", cleaned)
-    # Also catch decision objects that have just a "reasoning" / "intent" / etc key
-    # but no proper arguments block - the model is leaking its scratchpad.
-    decision_obj_re = re.compile(
-        r"^\s*\{[\s\S]*?"
-        r"(?:\"thoughts\"|\"intent\"|\"decision\"|\"tool_plan\"|\"reasoning\"|"
-        r"\"internal_monologue\"|\"plan\"|\"action_plan\")"
-        r"[\s\S]*?\}\s*",
-        re.IGNORECASE,
-    )
-    cleaned = decision_obj_re.sub("", cleaned)
+    # Root, 2026-10-31: JSON with reasoning, plan or thoughts keys stays
+    # visible. It is a prompt or tool-schema defect, not text to hide.
     # Final catch-all: if a reply is *just* a JSON object (possibly with surrounding
     # whitespace / quotes), treat it as a leak. Real replies don't start with `{`.
     cleaned = _unwrap_openai_text_part(cleaned)
@@ -1605,12 +1552,6 @@ def strip_tool_payload_leaks(text: str) -> str:
                     "parameters",
                     "input",
                     "emoji",
-                    "reasoning",
-                    "thoughts",
-                    "intent",
-                    "decision",
-                    "tool_plan",
-                    "internal_monologue",
                 }
                 # Response-envelope keys: the model sometimes emits a fake
                 # response object {"content": "...", "reply": true} as its
@@ -15033,16 +14974,26 @@ class MaxwellBot(commands.Bot):
         )
         out = [dict(message) for message in messages]
         total = schema_chars + sum(MaxwellBot._message_content_chars(m) for m in out)
+        live_input = next(
+            (index for index in range(len(out) - 1, -1, -1) if out[index].get("role") == "user"),
+            None,
+        )
+        # The tool tail of the current turn has its own allowance, so the model
+        # keeps its own work without growing plain chat prompts.
+        base_budget = budget
+        tail_chars = (
+            sum(MaxwellBot._message_content_chars(m) for m in out[live_input + 1 :])
+            if live_input is not None
+            else 0
+        )
+        budget = base_budget + min(tail_chars, TOOL_TAIL_MAX_CHARS)
         if total <= budget:
             return out
 
         protected_messages = {id(out[0])} if out else set()
-        live_input = None
         for index in range(len(out) - 1, -1, -1):
             item = out[index]
             text = str(item.get("content") or "")
-            if item.get("role") == "user" and live_input is None:
-                live_input = index
             if item.get("role") == "system" and (
                 text.startswith("## Tool contract")
                 or text.startswith("## Tools")
@@ -15056,12 +15007,24 @@ class MaxwellBot(commands.Bot):
             protected_messages.add(id(out[live_input]))
             tail_start = live_input + 1
             groups = tool_tail_groups(out[tail_start:])
+            dropped_groups = 0
+            dropped_chars = 0
             for group in groups[:-1]:
-                if total <= budget:
+                if total <= budget or tail_chars <= TOOL_TAIL_MAX_CHARS:
                     break
                 removed = out[tail_start : tail_start + len(group)]
-                total -= sum(MaxwellBot._message_content_chars(m) for m in removed)
+                removed_chars = sum(MaxwellBot._message_content_chars(m) for m in removed)
+                total -= removed_chars
+                tail_chars -= removed_chars
+                budget = base_budget + min(tail_chars, TOOL_TAIL_MAX_CHARS)
+                dropped_groups += 1
+                dropped_chars += removed_chars
                 del out[tail_start : tail_start + len(group)]
+            if dropped_groups:
+                logger.info(
+                    "Prompt budget dropped %d older tool round(s), %d chars",
+                    dropped_groups, dropped_chars,
+                )
             for item in out:
                 content = item.get("content")
                 if (

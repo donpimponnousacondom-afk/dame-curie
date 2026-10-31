@@ -21,7 +21,7 @@ def image_delivery(request, monkeypatch, tmp_path):
     editing = request.param
     config = SimpleNamespace(
         DAME_CURIE_SITE_DIR=str(tmp_path / "site"),
-        DAME_CURIE_PUBLIC_BASE_URL="https://images.example.invalid",
+        DAME_CURIE_IMAGE_PUBLIC_BASE_URL="https://images.example.invalid",
         IMAGE_GEN_PROTOCOL="images",
         IMAGE_GEN_BASE_URL="https://images.example.invalid/v1",
         IMAGE_GEN_MODELS={"synthetic-image-a": "Illustrations"},
@@ -71,7 +71,7 @@ def test_default_image_generation_persists_without_delivery(image_delivery, argu
     assert set(case.site.glob("_images/*")) == {paths[0], paths[0].with_suffix(".txt")}
     assert ("edited, NOT sent" if case.editing else "generated, NOT sent") in result
     assert f"Local path: {paths[0]}" in result
-    assert f"Permanent URL: https://images.example.invalid/bot/_images/{paths[0].name}" in result
+    assert f"Permanent URL: https://images.example.invalid/{paths[0].name}" in result
     assert f'send_file(path="{paths[0]}", caption="...")' in result
     assert "normal image-preview link" in result
     assert "__IMAGE_SENT__" not in result

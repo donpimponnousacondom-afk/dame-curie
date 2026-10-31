@@ -274,6 +274,7 @@ It never starts a local server, never installs a language runtime, never rewrite
 web-server configuration, never follows symlinks and never copies devices or specials.
 It replaces remote content only at configured local or previously tracked site names.
 It does not read
-`DAME_CURIE_PUBLIC_BASE_URL` or `DAME_CURIE_SITE_PUBLIC_BASE_URL`; the latter has no
-reader in production code at all, so configuring it does nothing. Destination selection is
-the TOML only - there are no environment keys for it.
+`DAME_CURIE_IMAGE_PUBLIC_BASE_URL` or `DAME_CURIE_SITE_PUBLIC_BASE_URL`. The bot uses
+them only to tell the model the public URL of an image (`<image base>/<file>`) and of a
+site (`<site base>/<slug>/`). They must match the public URLs of `image_root` and
+`site_root`. Destination selection is the TOML only - there are no environment keys for it.

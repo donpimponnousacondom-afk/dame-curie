@@ -402,7 +402,7 @@ def test_real_foreground_handler_preserves_producing_call(
                 for name in descriptions
             }
             bare_chars = len(json.dumps(build_openai_tools(bot.tools), ensure_ascii=False, separators=(",", ":")))
-            padding = max(0, (56000 - bare_chars + len(bot.tools) - 1) // len(bot.tools))
+            padding = max(0, (74000 - bare_chars + len(bot.tools) - 1) // len(bot.tools))
             for name in descriptions:
                 descriptions[name] += " " + "synthetic".ljust(padding, "x")
             bot._control["prompt_context_budget"] = 96000
@@ -759,11 +759,10 @@ def test_real_foreground_handler_preserves_producing_call(
             expanded_tools = max((call.args[2] for call in budget_calls), key=len)
             core_tools = budget_calls[-1].args[2]
             expanded_schema_chars = len(json.dumps(expanded_tools, ensure_ascii=False, separators=(",", ":")))
-            assert 55000 <= expanded_schema_chars < 60000
-            assert any(
-                call.args[2] == expanded_tools and any(item.get("role") == "tool" for item in call.args[1])
-                for call in budget_calls
-            )
+            assert 73000 <= expanded_schema_chars < 78000
+            # The tool tail has its own allowance, so the expanded catalog is
+            # shed because it alone exceeds the base budget.
+            assert any(call.args[2] == expanded_tools for call in budget_calls)
             assert {
                 tool["function"]["name"] for tool in core_tools
             } == CORE_TOOL_NAMES.intersection(bot.tools)

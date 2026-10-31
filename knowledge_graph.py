@@ -654,8 +654,8 @@ def refresh_site(bot: Any, slug: str) -> str:
     cfg = getattr(bot, "config", None)
     site_root = Path(getattr(cfg, "DAME_CURIE_SITE_DIR", "public/bot") or "public/bot")
     data_dir = getattr(cfg, "DATA_DIR", "data")
-    public_base = str(getattr(cfg, "DAME_CURIE_PUBLIC_BASE_URL", "") or "").rstrip("/")
-    url = f"{public_base}/bot/{slug}/" if public_base else f"/bot/{slug}/"
+    site_base = str(getattr(cfg, "DAME_CURIE_SITE_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    url = f"{site_base}/{slug}/" if site_base else ""
     code_dir = None
     try:
         import docker_runtime as runtime

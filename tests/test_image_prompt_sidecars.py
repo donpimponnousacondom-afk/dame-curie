@@ -46,7 +46,7 @@ def image_case(request, monkeypatch, tmp_path, caplog):
     profile = request.param
     root = tmp_path / "site"
     config = SimpleNamespace(
-        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_PUBLIC_BASE_URL=LOCAL,
+        DAME_CURIE_SITE_DIR=str(root), DAME_CURIE_IMAGE_PUBLIC_BASE_URL=LOCAL,
         DAME_CURIE_SITE_PUBLIC_BASE_URL="https://redroom.zombiedawn.net/dame",
         IMAGE_GEN_PROTOCOL="images",
         IMAGE_GEN_BASE_URL="https://images.example.invalid/v1", IMAGE_GEN_API_KEY=KEY,
@@ -108,7 +108,7 @@ def test_real_requests_save_exact_submitted_text_without_changing_delivery(image
     assert sent_prompt(case) == expected
     assert REVISION not in sidecar.read_text(encoding="utf-8")
     assert case.session.get.call_count + case.session.post.call_count == 1
-    assert f"Permanent URL: {LOCAL}/bot/_images/{image.name} " in result
+    assert f"Permanent URL: {LOCAL}/{image.name} " in result
     assert f"Local path: {image} " in result
     assert sidecar.name not in result and "https://redroom.zombiedawn.net" not in result
     assert PROMPT[:100] in result
@@ -165,7 +165,7 @@ def test_sidecar_preserves_original_non_png_bytes_and_filename_extension(image_c
     assert images[0].read_bytes() == raw
     expected = PROMPT
     assert images[0].with_suffix(".txt").read_bytes() == expected.encode("utf-8")
-    assert f"Permanent URL: {LOCAL}/bot/_images/{images[0].name} " in result
+    assert f"Permanent URL: {LOCAL}/{images[0].name} " in result
     assert case.session.get.call_count + case.session.post.call_count == 1
 
 
@@ -270,7 +270,7 @@ def test_encoding_failure_retains_original_persistence_success_tuple(image_case,
     case = image_case
     path, url = bot_tools._persist_public_image(case.bot, PNG, submitted_prompt="private \ud800 prompt")
     image = next(case.root.glob("_images/*.png"))
-    assert (path, url) == (str(image), f"{LOCAL}/bot/_images/{image.name}")
+    assert (path, url) == (str(image), f"{LOCAL}/{image.name}")
     assert image.read_bytes() == PNG and set(image.parent.iterdir()) == {image}
     warnings = [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
     assert warnings == ["Image prompt sidecar write failed (UnicodeEncodeError)"]

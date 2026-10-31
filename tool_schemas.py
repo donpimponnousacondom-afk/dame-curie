@@ -8,9 +8,12 @@ come from the live tool instances at request time so they stay in sync with
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _obj(
@@ -1785,10 +1788,12 @@ def recover_text_tool_calls(
 # turn walks off the end of the context window mid-loop. Per-result truncation
 # is not enough on its own: 24 rounds of a 32k-capped result is still ~768k
 # chars riding on top of an already-full prompt.
-TOOL_TAIL_MAX_MESSAGES = 12
-TOOL_TAIL_MAX_CHARS = 36_000
+# The tail has its own allowance in the prompt budget (bot._apply_prompt_budget),
+# so a tool turn keeps about 20 single-call rounds without growing chat prompts.
+TOOL_TAIL_MAX_MESSAGES = 42
+TOOL_TAIL_MAX_CHARS = 96_000
 TOOL_TAIL_NEWEST_GROUP_CHARS = 24_000
-TOOL_RESULT_COMPACT_CHARS = 4_000
+TOOL_RESULT_COMPACT_CHARS = 8_000
 _HISTORY_MARKER_RE = re.compile(
     r"\n… \[(\d+) chars truncated from (?:earlier tool result|tool result|tool history)\]$"
 )
@@ -1920,8 +1925,11 @@ def trim_tool_tail(
     the char cap must be rejected by the caller before executing their tools.
     """
     groups = tool_tail_groups(tail)
+    dropped_groups = 0
+    dropped_chars = 0
     while len(groups) > 1 and sum(map(len, groups)) > max_messages:
-        groups.pop(0)
+        dropped_chars += sum(message_chars(msg) for msg in groups.pop(0))
+        dropped_groups += 1
     if not groups:
         return []
     if len(groups[-1]) > max_messages:
@@ -1942,7 +1950,14 @@ def trim_tool_tail(
             if used <= max_chars:
                 break
         dropped = groups.pop(0)
+        dropped_groups += 1
+        dropped_chars += sum(message_chars(msg) for msg in dropped)
         used -= sum(message_chars(msg) for msg in dropped)
+    if dropped_groups:
+        logger.info(
+            "Tool history dropped %d older round(s), %d chars, to fit %d messages and %d chars",
+            dropped_groups, dropped_chars, max_messages, max_chars,
+        )
     return [msg for group in groups for msg in group]
 
 

@@ -755,9 +755,10 @@ def test_prompt_budget_trims_large_background_blocks():
         if str(item.get("content") or "").startswith("<previous_conversation>\n")
     )
 
+    tail_allowance = MaxwellBot._message_content_chars(paired_call) + MaxwellBot._message_content_chars(paired_result)
     assert sum(MaxwellBot._message_content_chars(m) for m in trimmed) + len(
         json.dumps(schemas, ensure_ascii=False, separators=(",", ":"))
-    ) <= 72000
+    ) <= 72000 + tail_allowance
     assert "history 0" not in transcript
     assert "history 349" in transcript
     assert "</previous_conversation>" in transcript
