@@ -266,32 +266,42 @@ def test_current_cache_survives_restart_and_endpoint_outage(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize(
-    "payload,status",
+    "payload,status,reason",
     [
-        ({"embeddings": [[float("nan")] * 8]}, 200),
-        ({"embeddings": [[1.0] * 7]}, 200),
-        ({"data": []}, 200),
-        (ValueError("private malformed payload"), 200),
-        ({"error": "private server detail"}, 503),
+        ({"embeddings": [[float("nan")] * 8]}, 200, "invalid embedding response"),
+        ({"embeddings": [[1.0] * 7]}, 200, "invalid embedding response"),
+        ({"data": []}, 200, "invalid embedding response"),
+        (ValueError("private malformed payload"), 200, "invalid embedding response"),
+        ({"error": "private server detail"}, 503, "HTTP 503"),
+        (None, None, "DAME_CURIE_EMBED_MODEL not configured"),
     ],
 )
 def test_failure_breaker_recovers_and_clears_query_cooldown(
-    memory, monkeypatch, caplog, payload, status
+    memory, monkeypatch, caplog, payload, status, reason
 ):
     clock = [100.0]
     monkeypatch.setattr(rag.time, "monotonic", lambda: clock[0])
-    transport = install_transport(
-        monkeypatch, Reply(payload, status), Reply({"embeddings": [vector()]})
-    )
+    model = memory.embed_model
+    if payload is None:
+        # A missing setting is named as the cause, not as an invalid response.
+        memory.embed_model = ""
+        transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    else:
+        transport = install_transport(
+            monkeypatch, Reply(payload, status), Reply({"embeddings": [vector()]})
+        )
+    failed_calls = 0 if payload is None else 1
     assert asyncio.run(memory._embed("failed text")) is None
     assert asyncio.run(memory._embed("suppressed text")) is None
-    assert len(transport.calls) == 1
+    assert len(transport.calls) == failed_calls
+    assert f"Embedding failed ({reason}" in caplog.text
+    memory.embed_model = model
     memory._query_embed_disabled_until = 1000
     clock[0] += rag.EMBED_ENDPOINT_COOLDOWN_SECONDS + 1
     assert asyncio.run(memory._embed("recovery text")) is not None
     assert memory._embed_endpoint_down_until == 0
     assert memory._query_embed_disabled_until == 0
-    assert len(transport.calls) == 2
+    assert len(transport.calls) == failed_calls + 1
     assert "private" not in caplog.text
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 1
 

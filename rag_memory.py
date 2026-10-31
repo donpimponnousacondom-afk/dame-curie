@@ -1264,8 +1264,17 @@ class RAGMemoryManager:
             async with self._embed_semaphore:
                 if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
                     return None
-                if not self.embed_url or not self.embed_model:
-                    raise ValueError("Embeddings require configured DAME_CURIE_EMBED_BASE_URL and DAME_CURIE_EMBED_MODEL")
+                missing = [
+                    name
+                    for name, value in (
+                        ("DAME_CURIE_EMBED_BASE_URL", self.embed_url),
+                        ("DAME_CURIE_EMBED_MODEL", self.embed_model),
+                    )
+                    if not value
+                ]
+                if missing:
+                    self._trip_embed_breaker(" and ".join(missing) + " not configured")
+                    return None
                 async with aiohttp.ClientSession() as session:
                     for chunk_text in chunks_to_embed:
                         if not EMBEDDINGS_ENABLED:
@@ -1349,7 +1358,7 @@ class RAGMemoryManager:
         )
         if first:
             logger.warning(
-                "Embedding endpoint unreachable (%s); pausing embeds for %.0fs",
+                "Embedding failed (%s); pausing embeds for %.0fs",
                 str(reason)[:200],
                 EMBED_ENDPOINT_COOLDOWN_SECONDS,
             )
