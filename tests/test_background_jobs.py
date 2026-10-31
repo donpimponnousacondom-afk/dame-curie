@@ -202,7 +202,10 @@ def test_budgets_default_to_extended_headroom():
     assert budgets["max_iters"] == 100
     assert budgets["compact_at_tokens"] == 180_000
     turn = ForegroundTurn.from_controls({"turn_output_token_budget": 1})
-    assert turn.attempt_limit == 12
+    # The unconfigured attempt ceiling was removed on 2026-10-03; only an
+    # explicit control sets one.
+    assert turn.attempt_limit is None
+    assert ForegroundTurn.from_controls({"turn_generation_attempt_budget": 12}).attempt_limit == 12
     assert 590 < turn.remaining_seconds <= 600
     assert turn.reserve_attempt(45) == 45
     assert turn.attempts == 1

@@ -1,6 +1,4 @@
-import json
 import os
-import shlex
 import shutil
 import tempfile
 import unittest
@@ -40,8 +38,7 @@ class PublisherTargetedTests(unittest.TestCase):
         return path
 
     def actions(self):
-        commands = self.transport.commands
-        return [json.loads(shlex.split(argv[-1] if argv[0] == "ssh" else argv[argv.index("--rsync-path") + 1])[-1])["action"] for argv in commands]
+        return [request["action"] for request in self.transport.requests]
 
     def test_selected_scope_does_not_read_other_sites(self):
         self.put("site/index.html", b"publishable")
@@ -72,13 +69,13 @@ class PublisherTargetedTests(unittest.TestCase):
         with patch.object(self.mirror.staging.blobs, "capture", side_effect=AssertionError("unneeded read")):
             self.mirror.reconcile_site("site")
 
-    def test_known_site_reuses_binding_without_probe_or_claim(self):
+    def test_known_site_probes_and_reclaims_before_each_transfer(self):
         page = self.put("site/index.html", b"before")
         self.mirror.reconcile_site("site")
         page.write_bytes(b"after")
-        self.transport.commands.clear()
+        self.transport.requests.clear()
         self.mirror.reconcile_site("site")
-        self.assertEqual(self.actions(), ["site"])
+        self.assertEqual(self.actions(), ["probe", "claim", "site"])
         self.assertEqual((self.remote / "site/index.html").read_bytes(), b"after")
 
     def test_restored_mtime_does_not_hide_changed_bytes(self):
@@ -137,9 +134,9 @@ class PublisherTargetedTests(unittest.TestCase):
         self.mirror.reconcile_site("site")
         shutil.rmtree(page.parent)
         page.parent.symlink_to(self.root, target_is_directory=True)
-        self.transport.commands.clear()
+        self.transport.requests.clear()
         self.mirror.reconcile_site("site")
-        self.assertEqual(self.transport.commands, [])
+        self.assertEqual(self.actions(), ["probe"])
         self.assertTrue((self.remote / "site/index.html").exists())
         self.assertIn("site", self.state.sites)
 
@@ -148,11 +145,11 @@ class PublisherTargetedTests(unittest.TestCase):
         self.mirror.reconcile_site("site")
         shutil.rmtree(page.parent)
         page.parent.write_bytes(b"top-level file is not a site")
-        self.transport.commands.clear()
+        self.transport.requests.clear()
         with patch("scripts.publisher.scan.os.read", side_effect=AssertionError("replacement read")) as read:
             self.mirror.reconcile_site("site")
         read.assert_not_called()
-        self.assertEqual(self.transport.commands, [])
+        self.assertEqual(self.actions(), ["probe"])
         self.assertTrue((self.remote / "site/index.html").exists())
 
     def test_failed_partial_transfer_cannot_leave_previous_success_cache(self):
@@ -246,23 +243,24 @@ class PublisherTargetedTests(unittest.TestCase):
             with self.assertRaises(ScanIncomplete):
                 self.mirror.reconcile_site("site")
 
-    def test_changed_site_still_refuses_replaced_remote_root(self):
+    def test_changed_site_republishes_into_replaced_remote_root(self):
         page = self.put("site/index.html", b"before")
         self.mirror.reconcile_site("site")
         self.remote.rename(self.root / "old-remote")
         self.remote.mkdir()
         page.write_bytes(b"after")
-        with self.assertRaises(RemoteFailure):
-            self.mirror.reconcile_site("site")
-        self.assertEqual(list(self.remote.iterdir()), [])
+        self.mirror.reconcile_site("site")
+        self.assertEqual(self.state.roots[0], [self.remote.stat().st_dev, self.remote.stat().st_ino])
+        self.assertEqual((self.remote / "site/index.html").read_bytes(), b"after")
+        self.assertEqual((self.root / "old-remote/site/index.html").read_bytes(), b"before")
 
     def test_new_mirror_does_not_trust_previous_success_cache(self):
         self.put("site/index.html")
         self.mirror.reconcile_site("site")
-        self.transport.commands.clear()
+        self.transport.requests.clear()
         replacement = Mirror(self.config, self.state, self.transport)
         replacement.reconcile_site("site")
-        self.assertEqual(self.actions(), ["site"])
+        self.assertEqual(self.actions(), ["probe", "claim", "site"])
 
     def test_full_reconcile_invalidates_targeted_cache(self):
         page = self.put("site/index.html", b"old")

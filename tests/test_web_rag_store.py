@@ -327,6 +327,10 @@ def test_embed_chunks_long_content(tmp_path, monkeypatch):
     fake = _FakeSession()
     monkeypatch.setattr("aiohttp.ClientSession", lambda: fake)
     monkeypatch.setattr("rag_memory.EMBEDDINGS_ENABLED", True)
+    # The isolated QA image has no embedding endpoint or model configured; _embed
+    # refuses to call out without both, so give the manager synthetic ones.
+    monkeypatch.setattr("rag_memory.EMBED_URL", "http://embed.invalid/api/embed")
+    monkeypatch.setattr("rag_memory.EMBED_MODEL", "synthetic-embed-model")
 
     async def run():
         mgr = RAGMemoryManager(str(tmp_path))
