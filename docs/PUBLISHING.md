@@ -63,9 +63,11 @@ SSH and remote-ownership protections remain in force.
    source tree. Files the publisher does not own - other site directories, and anything
    in `site_root` itself - are left alone.
    **Exception: top-level hidden folders.** A hidden folder is a folder whose name starts
-   with a dot (for example `.data`). Root decided on 1 November 2026 that a hidden folder
-   at the top of a site belongs to the remote. A server script (PHP, Perl) can keep its
-   data there. A sync never deletes that folder or its files (`--filter "P /.*/***"`).
+   with a dot (for example `.data`). Root decided on 1 November 2026 that folders a
+   server script (PHP, Perl) creates on the remote to keep data persist. The publisher
+   implements this by name for every hidden folder at the top of a site. Root has not
+   confirmed this wider scope. A sync never deletes that folder or its files
+   (`--filter "P /.*/***"`).
    The remote inventory does not audit it. A local file in that folder is uploaded and
    replaces the remote file with the same name. Deleting the local file or folder does
    not delete the remote copy. The rule uses only the name, so it also keeps a hidden

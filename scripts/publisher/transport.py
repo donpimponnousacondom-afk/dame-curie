@@ -67,9 +67,10 @@ class Transport:
             if request["action"] != "site" or not request["name"] or not request["token"]:
                 raise RemoteFailure("non-site deletion refused")
             marker_name = f".{request['marker_namespace']}-publisher-owner"
-            # Root, 1 November 2026: top-level hidden folders of a site belong to
-            # the remote (for example .data written by a server script); a sync
-            # never deletes them or their files. Everything else follows the local tree.
+            # Root, 1 November 2026: folders that a server script creates on the
+            # remote to keep data (for example .data) persist. This filter keeps
+            # every top-level hidden folder of a site and its files, by name only.
+            # Everything else follows the local tree. See docs/PUBLISHING.md.
             argv.extend([
                 "--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}",
                 "--filter", "P /.*/***",

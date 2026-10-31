@@ -172,6 +172,12 @@ class PublisherRemoteTests(unittest.TestCase):
                 # remote inventory reports no drift.
                 self.assertNotIn("my site", mirror.inventory())
                 self.assertFalse((self.sites / "my site/.stray").exists())
+                # Deleting the local hidden folder does not delete the remote copy.
+                shutil.rmtree(self.config.source / "my site/.data")
+                mirror.reconcile()
+                self.assertEqual((remote_data / "state.json").read_bytes(), b"server data")
+                self.assertEqual((remote_data / "keep").read_bytes(), b"local data")
+                self.assertNotIn("my site", mirror.inventory())
                 self.assertEqual(marker.read_bytes(), original_bytes)
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
                 self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
