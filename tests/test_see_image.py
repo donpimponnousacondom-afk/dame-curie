@@ -93,6 +93,7 @@ def test_see_image_attaches_b64_from_download(tmp_path):
         config=SimpleNamespace(
             DAME_CURIE_SITE_DIR=str(tmp_path),
             DAME_CURIE_IMAGE_PUBLIC_BASE_URL="https://images.example.invalid",
+            DAME_CURIE_SITE_PUBLIC_BASE_URL="https://sites.example.invalid",
         ),
     )
     tool = SeeImageTool(bot)
@@ -112,7 +113,18 @@ def test_see_image_attaches_b64_from_download(tmp_path):
     assert downloads == ["https://e.com/x.png"]
     asyncio.run(tool.execute(msg, url="https://images.example.invalid/../own.png"))
     assert downloads == ["https://e.com/x.png", "https://images.example.invalid/../own.png"]
-    assert asyncio.run(tool.execute(msg, url=str(tmp_path / "other.png"))).startswith("Error:")
+    assert asyncio.run(tool.execute(msg, url=str(tmp_path / "other.png"))) == f"Error: no such file: {tmp_path / 'other.png'}"
+    # Root, 2026-10-31: any file the bot can read loads from disk, and a site
+    # URL maps to its local file before the publisher mirrors it.
+    (tmp_path / "mysite").mkdir()
+    (tmp_path / "mysite" / "pic.png").write_bytes(_PNG_1X1)
+    for ref in (str(tmp_path / "mysite" / "pic.png"), "https://sites.example.invalid/mysite/pic.png"):
+        assert f"__IMAGE_B64__{encoded}__END_IMAGE_B64__" in asyncio.run(tool.execute(msg, url=ref))
+    (tmp_path / "mysite" / "notes.txt").write_text("not an image")
+    assert asyncio.run(tool.execute(msg, url=str(tmp_path / "mysite" / "notes.txt"))) == (
+        f"Error: not an image file: {tmp_path / 'mysite' / 'notes.txt'}"
+    )
+    assert downloads == ["https://e.com/x.png", "https://images.example.invalid/../own.png"]
 
 
 def test_result_from_blob_skips_non_images():

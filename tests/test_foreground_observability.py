@@ -284,6 +284,8 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
                 paired_results.append(
                     {"role": "tool", "tool_call_id": call["id"], "content": result}
                 )
+            elif function["name"] == "no_response":
+                results.append("Tool no_response: __NO_RESPONSE__")
             else:
                 results.append("Tool web_search: synthetic result")
                 if native_continuations:
@@ -377,7 +379,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "beside_update", "repeat_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -387,7 +389,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
     ],
 )
 def test_real_foreground_handler_preserves_producing_call(
-    foreground_bot, measured_call, mode, monkeypatch
+    foreground_bot, measured_call, mode, monkeypatch, caplog
 ):
     async def scenario():
         bot, message = foreground_bot, Message()
@@ -522,6 +524,34 @@ def test_real_foreground_handler_preserves_producing_call(
         elif mode == "plain":
             responses = [ProviderResult("plain answer", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "beside_update":
+            responses = [
+                ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("Here is the answer.", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "repeat_update":
+            responses = [
+                ProviderResult("Here it is.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("Here it is.", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "ack_then_empty":
+            responses = [
+                ProviderResult("", tool_calls=[tool_call("send_message", content="on it")], metrics=first),
+                ProviderResult("", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "beside_no_response":
+            responses = [
+                ProviderResult(
+                    "I will stay quiet.",
+                    tool_calls=[tool_call("web_search", query="news"), tool_call("no_response")],
+                    metrics=first,
+                ),
+                ProviderResult("", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "blank_followup":
             responses = [
                 ProviderResult("", tool_calls=[tool_call("web_search", query="news")], metrics=first),
@@ -606,6 +636,27 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        flag = "empty final response after an earlier delivery"
+        if mode == "ack_then_empty":
+            # An acknowledgement followed by an empty final answer is flagged.
+            assert flag in caplog.text
+            return
+        assert flag not in caplog.text
+        if mode == "beside_no_response":
+            # A chosen silence stays silent: no progress update, no notice.
+            assert message.channel.sent == []
+            return
+        if mode == "repeat_update":
+            # A final answer equal to the update is not posted twice and is
+            # not reported as missing.
+            assert [sent.content for sent in message.channel.sent] == ["Here it is."]
+            return
+        if mode == "beside_update":
+            # Text next to tool calls is posted at once, then the final reply.
+            assert message.channel.sent[0].content == "Looking it up now."
+            assert message.channel.sent[1].content.startswith("Here is the answer.")
+            assert len(message.channel.sent) == 2
+            return
         if mode == "blank_followup":
             # A tool round followed by a blank answer is stated, not silent.
             assert [sent.content for sent in message.channel.sent] == [
@@ -839,12 +890,23 @@ def test_real_foreground_handler_preserves_producing_call(
             assert max(len(item["content"]) for item in paired_results) >= 20000
             assert sum(DameCurieBot._message_content_chars(item) for item in [assistant_calls, *paired_results]) <= 24000
             assert bot._generate_response.call_args.kwargs["tools"] == followup_tools
-            assert len(message.channel.sent) == 1
+            # The text next to the first tool call is posted at once as a
+            # progress update; the final reply follows with its footer.
+            assert len(message.channel.sent) == 2
+            assert message.channel.sent[0].content == "expand the catalog"
             assert bot._delivery_measurements.lookup(
-                "100", str(message.channel.sent[0].id)
+                "100", str(message.channel.sent[1].id)
             )[1] is second
             return
         assert bot._generate_response.await_count == len(responses)
+        if mode == "empty_followup":
+            # The text next to the tool call is posted as a progress update
+            # without a footer; the empty follow-up is stated, not silent.
+            assert [sent.content for sent in message.channel.sent] == [
+                "partial answer",
+                "No reply: my final response was empty.",
+            ]
+            return
         if mode in {"configured_output_64000", "configured_output_omitted"}:
             call = bot._generate_response.call_args
             assert not {"max_tokens", "temperature", "model", "disable_reasoning", "prefer_fallback"} & call.kwargs.keys()
@@ -869,9 +931,6 @@ def test_real_foreground_handler_preserves_producing_call(
         assert dispatches[0].kwargs["response_metrics"] is first
         if mode == "followup":
             assert dispatches[1].kwargs["response_metrics"] is second
-        if mode == "empty_followup":
-            assert message.channel.sent[0].content.startswith("partial answer")
-            assert "model-B" not in message.channel.sent[0].content
         for call in bot.add_message_to_memory.call_args_list:
             assert FOOTER_MARKER not in call.args[1]["content"]
         for call in bot._record_rem_event.call_args_list:
