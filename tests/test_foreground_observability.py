@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import discord
 import pytest
 
-from bot import DameCurieBot, TokenBudgetTracker
+from bot import DameCurieBot, TokenBudgetTracker, strip_tool_payload_leaks
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from control_defaults import DEFAULT_CONTROL
 from dirac_runtime import _NoticeInput
@@ -294,7 +294,8 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
                 {"role": "assistant", "content": str(response), "tool_calls": paired_calls},
                 *paired_results,
             ]
-        return str(response), results, []
+        # Like the real dispatch, return the text after leak cleanup.
+        return strip_tool_payload_leaks(str(response)), results, []
 
     bot._dispatch_tool_calls = AsyncMock(side_effect=dispatch)
 
@@ -376,11 +377,11 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
-        "native_continuations_unlimited", "native_continuations_limited",
+        "native_continuations_unlimited", "native_continuations_limited", "native_round_limit",
         "attempts_exhausted",
         "deadline", "upstream_timeout", "cancelled",
     ],
@@ -424,7 +425,7 @@ def test_real_foreground_handler_preserves_producing_call(
             monkeypatch.setattr(DameCurieBot, "_apply_prompt_budget", budget_spy)
         configure_dispatch(
             bot, expand_catalog=mode == "expanded_catalog_fallback",
-            native_continuations=mode in {"native_continuations_unlimited", "native_continuations_limited"},
+            native_continuations=mode in {"native_continuations_unlimited", "native_continuations_limited", "native_round_limit"},
         )
         flushed_turns = []
         bot._flush_deferred_context_extraction.side_effect = (
@@ -445,9 +446,9 @@ def test_real_foreground_handler_preserves_producing_call(
             )
             responses = [ProviderResult("configured output unchanged", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
-        elif mode in {"native_continuations_unlimited", "native_continuations_limited"}:
+        elif mode in {"native_continuations_unlimited", "native_continuations_limited", "native_round_limit"}:
             assert "turn_generation_attempt_budget" not in DEFAULT_CONTROL
-            bot._control["max_tool_iterations"] = 20
+            bot._control["max_tool_iterations"] = 4 if mode == "native_round_limit" else 20
             if mode == "native_continuations_limited":
                 bot._control["turn_generation_attempt_budget"] = 12
             bot._observed_turns = []
@@ -521,6 +522,22 @@ def test_real_foreground_handler_preserves_producing_call(
         elif mode == "plain":
             responses = [ProviderResult("plain answer", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "blank_followup":
+            responses = [
+                ProviderResult("", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult(" ", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "limit_cleanup_empty":
+            bot._control["max_tool_iterations"] = 1
+            responses = [
+                ProviderResult("", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("<system-reminder>internal</system-reminder>", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "cleanup_empty":
+            responses = [ProviderResult("<system-reminder>internal</system-reminder>", metrics=first)]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "terminal":
             responses = [
                 ProviderResult(
@@ -589,6 +606,33 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        if mode == "blank_followup":
+            # A tool round followed by a blank answer is stated, not silent.
+            assert [sent.content for sent in message.channel.sent] == [
+                "No reply: my final response was empty.",
+            ]
+            return
+        if mode == "limit_cleanup_empty":
+            # The round limit ends the loop right after a text answer that
+            # cleanup empties; the cause is still stated.
+            assert [sent.content for sent in message.channel.sent] == [
+                "No reply: my final response had no text left after reply cleanup.",
+            ]
+            return
+        if mode == "cleanup_empty":
+            # A final response that reply cleanup empties is stated, not silent.
+            assert [sent.content for sent in message.channel.sent] == [
+                "No reply: my final response had no text left after reply cleanup.",
+            ]
+            return
+        if mode == "native_round_limit":
+            # Four rounds run, the fifth response still asks for a tool: the
+            # stop and the empty reply are both stated, not silent.
+            assert session.post.call_count == 5
+            assert [sent.content for sent in message.channel.sent] == [
+                "Stopped: the tool round limit (4) was reached with 1 tool call(s) not run.",
+            ]
+            return
         if mode in {"native_continuations_unlimited", "native_continuations_limited"}:
             expected_posts = 14 if mode == "native_continuations_unlimited" else 12
             assert session.post.call_count == expected_posts

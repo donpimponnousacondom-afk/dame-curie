@@ -1974,6 +1974,12 @@ def _plugin_result_needs_followup(result: str) -> bool:
     return bool(head) and tool_schemas_returns_result(head)
 
 
+_DELIVERY_MARKERS = (
+    "__MESSAGE_SENT__", "__IMAGE_SENT__", "__FILE_SENT__", "__MEDIA_SENT__",
+    "__CAPTION_SENT__", "__MEME_SENT__", "__TTS_SENT__", "__SHELL_SENT__",
+)
+
+
 def image_or_caption_delivered(result: str) -> bool:
     return result.startswith("Tool image_generator: __IMAGE_SENT__") or (
         result.startswith(("Tool send_file: __FILE_SENT__", "Tool send_media: __MEDIA_SENT__"))
@@ -12710,10 +12716,30 @@ class DameCurieBot(commands.Bot):
             followup_turn_ran = False
             promise_followups = 0
             tool_results: list[str] = []
+            loop_end = ""
+            # The provider text of the newest model response, before any
+            # cleanup, so a no-reply notice can name its exact cause.
+            last_model_text = str(response or "")
+            final_without_calls = False
+            # Media from tools stays attached for the rest of the turn, in a
+            # message after the tool results. The turn media cap (12 items,
+            # 20 MiB) bounds tool media; the user's media has its own cap of
+            # the same size, so one request can carry about 40 MiB.
+            turn_tool_media: list[dict] = []
+            turn_tool_keys: set[str] = set()
             for _iteration in range(max_iters):
                 if time.monotonic() > tool_deadline:
-                    logger.info("Tool iteration time budget exceeded, breaking")
+                    if pending_native:
+                        loop_end = (
+                            f"the tool time budget was used up with {len(pending_native)} "
+                            "tool call(s) not run"
+                        )
+                        logger.warning("Tool loop stopped: %s", loop_end)
+                    else:
+                        last_model_text = str(response or "")
+                        final_without_calls = True
                     break
+                last_model_text = str(response or "")
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
                     response,
@@ -12725,6 +12751,14 @@ class DameCurieBot(commands.Bot):
                 first_dispatch_progress = None
                 pending_native = None
                 iter_media = list(getattr(self, "_last_native_tool_media", None) or [])
+                for item in [
+                    {"b64": raw, "mime_type": "image/png", "source": "tool", "is_image": True}
+                    for raw in iter_images or []
+                ] + iter_media:
+                    key = hashlib.sha256(str(item.get("b64") or "").encode("ascii")).hexdigest()
+                    if key not in turn_tool_keys:
+                        turn_tool_keys.add(key)
+                        turn_tool_media.append({**item, "source": "tool"})
                 native_followup = list(
                     getattr(self, "_last_native_followup_messages", None) or []
                 )
@@ -12898,8 +12932,9 @@ class DameCurieBot(commands.Bot):
                     timeout=ai_timeout, priority="user", key=channel_id
                 )
                 try:
-                    # Attach images from tools so the model can SEE them
-                    followup_images = iter_images
+                    # The user's own media and every tool media item of this
+                    # turn are attached to each follow-up request.
+                    followup_media = [*active_media, *turn_tool_media]
                     # Post a progress message during the followup LLM generation
                     # too - without this, the user sees the progress message
                     # get deleted (by the previous tool dispatch) and then nothing
@@ -12950,8 +12985,7 @@ class DameCurieBot(commands.Bot):
                     try:
                         followup = await self._generate_response(
                             result_messages,
-                            images=followup_images,
-                            media=iter_media,
+                            media=followup_media,
                             timeout=ai_timeout,
                             tools=provider_tools,
                             on_tool_call_name=_on_followup_tool_call_name,
@@ -12999,9 +13033,21 @@ class DameCurieBot(commands.Bot):
                         response = followup or ""
                         followup_turn_ran = True
                     else:
+                        last_model_text = str(followup or "")
+                        final_without_calls = True
                         break
                 finally:
                     await self._release_ai_slot()
+            else:
+                if pending_native:
+                    loop_end = (
+                        f"the tool round limit ({max_iters}) was reached with "
+                        f"{len(pending_native)} tool call(s) not run"
+                    )
+                    logger.warning("Tool loop stopped: %s", loop_end)
+                else:
+                    last_model_text = str(response or "")
+                    final_without_calls = True
             # Terminal silence only for explicit no_response (not TTS).
             if any(
                 tr.startswith("Tool no_response:") and "__NO_RESPONSE__" in tr
@@ -13015,6 +13061,15 @@ class DameCurieBot(commands.Bot):
                     message, all_tool_results, response, "no_response"
                 )
                 return
+            if loop_end and self._control.get("error_replies", True):
+                try:
+                    with notice_send():
+                        await message.channel.send(
+                            f"Stopped: {loop_end}.",
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                except discord.HTTPException as exc:
+                    logger.warning("Stop notice could not be sent: %s", exc)
             # If this generation already called send_message, leftover
             # assistant text is not a second reply. A later follow-up
             # with real text and no new send_message still posts (the
@@ -13085,6 +13140,30 @@ class DameCurieBot(commands.Bot):
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
             )
+            delivered = any(
+                marker in result
+                for result in all_tool_results
+                for marker in _DELIVERY_MARKERS
+            )
+            # A final batch of silent tools (react, wait) is a chosen silent
+            # ending; only a final response without tool calls must carry text.
+            if not response and (not tool_results or final_without_calls) and not delivered:
+                cause = (
+                    "my final response was empty"
+                    if not last_model_text.strip()
+                    else "my final response had no text left after reply cleanup"
+                )
+                logger.warning("Turn ended with no reply in channel %s: %s", channel_id, cause)
+                if self._control.get("error_replies", True):
+                    try:
+                        with notice_send():
+                            await message.channel.send(
+                                f"No reply: {cause}.",
+                                allowed_mentions=discord.AllowedMentions.none(),
+                            )
+                        normal_reply_sent = True
+                    except discord.HTTPException as exc:
+                        logger.warning("No-reply notice could not be sent: %s", exc)
             if response:
                 await self._ensure_reasoning_trace(
                     message, all_tool_results, response, "reply"
@@ -14126,39 +14205,51 @@ class DameCurieBot(commands.Bot):
         turn = current_foreground_turn()
         local_media_keys: set[str] = set()
         local_media_bytes = 0
+        # A payload that is not admitted is named in its tool result, so the
+        # result never claims an attachment the model does not get.
+        dropped_media: dict[str, str] = {}
         for tr in list(result_by_id.values()) + list(tool_results):
             for match in _IMG_RE.finditer(tr):
                 raw = re.sub(r"\s+", "", match.group(1))
+                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                if key in local_media_keys:
+                    continue
                 if len(raw) >= 5_000_000:
+                    dropped_media[key] = "the image is larger than 5,000,000 base64 characters"
                     continue
                 decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
-                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
                 admitted = (
-                    key not in local_media_keys
-                    and (turn.admit_media(key, decoded_bytes) or key in turn.media_keys)
+                    (turn.admit_media(key, decoded_bytes) or key in turn.media_keys)
                     if turn is not None
-                    else key not in local_media_keys
-                    and len(local_media_keys) < 12
+                    else len(local_media_keys) < 12
                     and local_media_bytes + decoded_bytes <= 20 * 1024 * 1024
                 )
                 if admitted:
                     local_media_keys.add(key)
                     local_media_bytes += decoded_bytes
                     tool_images.append(raw)
+                else:
+                    dropped_media[key] = "the turn media limit (12 items, 20 MiB) is reached"
             for match in _AUDIO_RE.finditer(tr):
                 raw = re.sub(r"\s+", "", match.group(1))
+                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
+                if key in local_media_keys:
+                    continue
+                if not getattr(getattr(self, "ai_provider", None), "enable_audio_input", False):
+                    dropped_media[key] = "audio input is off for the configured provider"
+                    continue
                 if len(raw) >= 5_000_000:
+                    dropped_media[key] = "the audio is larger than 5,000,000 base64 characters"
                     continue
                 decoded_bytes = max(0, (len(raw) * 3) // 4 - raw.count("="))
-                key = hashlib.sha256(raw.encode("ascii")).hexdigest()
                 admitted = (
-                    key not in local_media_keys
-                    and (turn.admit_media(key, decoded_bytes) or key in turn.media_keys)
+                    (turn.admit_media(key, decoded_bytes) or key in turn.media_keys)
                     if turn is not None
-                    else key not in local_media_keys
-                    and len(local_media_keys) < 12
+                    else len(local_media_keys) < 12
                     and local_media_bytes + decoded_bytes <= 20 * 1024 * 1024
                 )
+                if not admitted:
+                    dropped_media[key] = "the turn media limit (12 items, 20 MiB) is reached"
                 if admitted:
                     local_media_keys.add(key)
                     local_media_bytes += decoded_bytes
@@ -14177,7 +14268,16 @@ class DameCurieBot(commands.Bot):
 
         truncated_by_id = {}
         for call_id, tool_result in result_by_id.items():
+            not_attached = sorted({
+                dropped_media[key]
+                for pattern in (_IMG_RE, _AUDIO_RE)
+                for match in pattern.finditer(tool_result)
+                if (key := hashlib.sha256(re.sub(r"\s+", "", match.group(1)).encode("ascii")).hexdigest())
+                in dropped_media
+            })
             tool_result = _IMG_RE.sub("", _AUDIO_RE.sub("", tool_result)).strip()
+            if not_attached:
+                tool_result += "\nError: media not attached: " + "; ".join(not_attached)
             if len(tool_result) > _MAX_TOOL_RESULT_CHARS:
                 original_chars = len(tool_result)
                 half = _MAX_TOOL_RESULT_CHARS // 2

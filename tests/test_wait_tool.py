@@ -6,6 +6,7 @@ declared order. Previously the dispatch loop dropped any send_message
 after the first as a 'duplicate terminal tool call'.
 """
 import asyncio
+import base64
 import sys
 import time
 from pathlib import Path
@@ -333,6 +334,13 @@ def test_no_response_blocks_later_send_message():
                 execute=lambda *a, **k: asyncio.sleep(0, result="Waited 0s"),
                 streams_output=False, name="wait",
             ),
+            "see_image": SimpleNamespace(
+                execute=lambda *a, **k: asyncio.sleep(0, result="Attached 13 images for visual inspection.\n" + "".join(
+                    f"__IMAGE_B64__{base64.b64encode(f'img{index}'.encode()).decode()}__END_IMAGE_B64__"
+                    for index in range(13)
+                )),
+                streams_output=False, name="see_image",
+            ),
         }
     )
 
@@ -455,6 +463,21 @@ def test_no_response_blocks_later_send_message():
         f"call_many_{index}" for index in range(10)
     ]
     assert len(trim_tool_tail(many_replay)) == 11
+
+    # A media payload the turn cannot admit is named in the tool result; the
+    # result never claims an attachment the model does not get.
+    see_calls = [{
+        "id": "call_see", "type": "function",
+        "function": {"name": "see_image", "arguments": '{"explanation":"look","url":"https://e.test/a.png"}'},
+    }]
+    _, see_results, see_images = asyncio.run(
+        DameCurieBot._process_native_tool_calls(bot, message, "", see_calls, include_images=True)
+    )
+    assert len(see_images) == 12
+    assert see_results[0].endswith(
+        "Error: media not attached: the turn media limit (12 items, 20 MiB) is reached"
+    )
+    assert "__IMAGE_B64__" not in see_results[0]
 
 
 def test_two_send_messages_in_a_row_both_fire_in_order():
