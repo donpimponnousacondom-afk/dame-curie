@@ -25,6 +25,8 @@ def request_of(argv, capture, input_data):
     """The JSON request as the real transport sends it: stdin for control, argv for rsync."""
     command = argv[-1] if capture else argv[argv.index("--rsync-path") + 1]
     payload = shlex.split(command)[-1]
+    # Control requests travel on stdin only; rsync requests in the command.
+    assert (payload == "-") == capture and (input_data is not None) == capture
     return json.loads(input_data if payload == "-" else payload)
 
 
@@ -612,6 +614,13 @@ class PublisherRemoteTests(unittest.TestCase):
         marker = original / ".curie-publisher-owner"
         marker.write_bytes(marker_bytes)
         marker.chmod(0o600)
+        # A transfer that still names the old directory identity is refused;
+        # only the probe and claim path may bind the replacement.
+        stale = self.transport.request("site", self.state.roots, "site", self.state.sites["site"])
+        with self.assertRaises(RemoteFailure):
+            self.transport.sync(self.mirror.staging.tree, stale, delete=True)
+        self.assertEqual((self.sites / "old-site" / "index.html").read_bytes(), b"synthetic")
+        self.assertFalse((original / "index.html").exists())
         self.mirror.reconcile()
         self.assertEqual(json.loads(marker.read_bytes())["identity"], [original.stat().st_dev, original.stat().st_ino])
         self.assertEqual(self.state.sites["site"].identity, [original.stat().st_dev, original.stat().st_ino])

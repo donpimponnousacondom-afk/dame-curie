@@ -104,7 +104,8 @@ def test_get_aux_provider_without_aux_config_defers_to_autonomy(monkeypatch):
     assert bot._aux_provider_sig == ""
     with pytest.raises(ValueError, match="complete provider configuration"):
         asyncio.run(bot._get_autonomy_provider())
-    # Commit 306b413: a role whose only setting is a blank key resolves to the main endpoint.
+    # A role whose only setting is a blank key resolves to the main endpoint
+    # ("Treat empty auxiliary role selectors as the main profile", 2026-10-03).
     blank = _make_bot(monkeypatch, aux_env={"api_key": ""}, auto_env={"api_key": ""})
     for built in (asyncio.run(blank._get_aux_provider()), asyncio.run(blank._get_autonomy_provider())):
         assert (built.kwargs["base_url"], built.kwargs["api_key"], built.kwargs["model"]) == (
