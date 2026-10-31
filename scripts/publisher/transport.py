@@ -69,10 +69,10 @@ class Transport:
             marker_name = f".{request['marker_namespace']}-publisher-owner"
             # Root, 1 November 2026: top-level hidden folders of a site belong to
             # the remote (for example .data written by a server script); a sync
-            # never deletes them. Everything else follows the local tree.
+            # never deletes them or their files. Everything else follows the local tree.
             argv.extend([
                 "--delete-delay", "--filter", f"P /{marker_name}", "--filter", f"H /{marker_name}",
-                "--filter", "P /.*/",
+                "--filter", "P /.*/***",
             ])
         argv.extend(["--", str(source) + "/", f"{self.config.user}@{self.config.host}:./"])
         self.execute(argv, capture=False, operation=f"{request['action']} {request['name']!r}")

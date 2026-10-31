@@ -65,8 +65,9 @@ SSH and remote-ownership protections remain in force.
    **Exception: top-level hidden folders.** Root decided on 1 November 2026 that a folder
    at the top of a site whose name starts with a dot (for example `.data`) belongs to
    the remote. A server script (PHP, Perl) can keep its data there. A sync never deletes
-   it (`--filter "P /.*/"`), and the remote inventory does not audit it. A local folder
-   of that kind is still uploaded, but deleting it locally does not delete it remotely.
+   it or the files in it (`--filter "P /.*/***"`), and the remote inventory does not
+   audit it. A local file in that folder is still uploaded and replaces a remote file
+   with the same name. Deleting the local file does not delete the remote copy.
    Hidden files (for example `.htaccess`) and deeper hidden folders still follow the
    local tree. Deleting the whole site locally deletes the remote site folder,
    hidden folders included.
