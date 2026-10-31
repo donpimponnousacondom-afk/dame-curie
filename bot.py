@@ -13093,7 +13093,7 @@ class DameCurieBot(commands.Bot):
             if incomplete_error is None and _should_skip_plaintext_after_send(
                 tool_results, all_tool_results, followup_turn_ran, response
             ):
-                if (followup_turn_ran or final_without_calls) and not last_model_text.strip():
+                if final_without_calls and not last_model_text.strip():
                     # Root, 2026-10-31: flag it so its rate can be measured.
                     logger.warning(
                         "Turn ended with an empty final response after an earlier delivery "

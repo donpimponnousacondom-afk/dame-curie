@@ -379,7 +379,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "beside_update", "beside_no_response", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "beside_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -389,7 +389,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
     ],
 )
 def test_real_foreground_handler_preserves_producing_call(
-    foreground_bot, measured_call, mode, monkeypatch
+    foreground_bot, measured_call, mode, monkeypatch, caplog
 ):
     async def scenario():
         bot, message = foreground_bot, Message()
@@ -530,6 +530,12 @@ def test_real_foreground_handler_preserves_producing_call(
                 ProviderResult("Here is the answer.", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "ack_then_empty":
+            responses = [
+                ProviderResult("", tool_calls=[tool_call("send_message", content="on it")], metrics=first),
+                ProviderResult("", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "beside_no_response":
             responses = [
                 ProviderResult(
@@ -624,6 +630,12 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        flag = "empty final response after an earlier delivery"
+        if mode == "ack_then_empty":
+            # An acknowledgement followed by an empty final answer is flagged.
+            assert flag in caplog.text
+            return
+        assert flag not in caplog.text
         if mode == "beside_no_response":
             # A chosen silence stays silent: no progress update, no notice.
             assert message.channel.sent == []
