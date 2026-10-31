@@ -825,7 +825,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
         manager.cleanup_runtime(job.id)
 
     if terminal_failure is None and unresolved_error:
-        failure_text = f"the job ended with an unresolved tool error: {unresolved_error}"
+        limit = "time budget" if time.monotonic() > deadline else "step limit"
+        failure_text = f"the job reached its {limit} with an unresolved tool error: {unresolved_error}"
         terminal_failure = RuntimeError(failure_text)
     if terminal_failure is not None or not succeeded:
         await _fail(failure_text or final_text or "the model never returned anything.", terminal_failure, partial=final_text)

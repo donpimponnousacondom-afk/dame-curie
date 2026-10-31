@@ -13716,6 +13716,7 @@ class MaxwellBot(commands.Bot):
         if not calls:
             return (cleaned, [], []) if include_images else (cleaned, [])
         if any(call["oversized_arguments"] or call["batch_limit_error"] for call in calls):
+            call_count = len(calls)
             # An over-count response replays its first NATIVE_MAX_CALLS calls only:
             # trim_tool_tail refuses a newest group over TOOL_TAIL_MAX_MESSAGES.
             calls = calls[:NATIVE_MAX_CALLS]
@@ -13733,7 +13734,7 @@ class MaxwellBot(commands.Bot):
             ]
             logger.warning(
                 "Refused native tool-call batch of %d call(s): %s",
-                len(calls),
+                call_count,
                 " | ".join(refusal_lines),
             )
             self._last_native_followup_messages = [

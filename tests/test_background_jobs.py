@@ -585,7 +585,8 @@ def test_runner_marks_error_and_notifies(tmp_path, monkeypatch, failure, discove
         assert bot.slot_priority is None and bot.catalog_groups == []
     if failure == "unresolved":
         assert job.progress.startswith(
-            "the job ended with an unresolved tool error: Tool send_message: Error - batch refused"
+            "the job reached its step limit with an unresolved tool error: "
+            "Tool send_message: Error - batch refused"
         )
         assert job.result == "refused"
 
