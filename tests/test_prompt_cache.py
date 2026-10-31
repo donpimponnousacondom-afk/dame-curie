@@ -176,7 +176,10 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
         "[Earlier in this turn 9 tool round(s) were dropped from context: shell. "
         "Their results are no longer visible.]\nx"
     )
-    assert trim_tool_tail(trimmed) == trimmed
+    import copy
+
+    snapshot = copy.deepcopy(trimmed)
+    assert trim_tool_tail(trimmed) == snapshot
     later = trim_tool_tail(trimmed + round_msgs(30))
     assert later[1]["content"].startswith("[Earlier in this turn 10 tool round(s) were dropped")
     assert later[1]["content"].endswith("visible.]\nx")
@@ -193,7 +196,11 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
         "[Earlier in this turn 12 tool round(s) were dropped from context: bad_name_0, "
     )
     assert ", and 4 more. Their results are no longer visible.]\nx" in odd_trimmed[1]["content"]
-    assert trim_tool_tail(odd_trimmed) == odd_trimmed
+    odd_snapshot = copy.deepcopy(odd_trimmed)
+    assert trim_tool_tail(odd_trimmed) == odd_snapshot
+    odd_later = trim_tool_tail(odd_trimmed + round_msgs(61))
+    assert odd_later[1]["content"].startswith("[Earlier in this turn 13 tool round(s) were dropped")
+    assert ", and 5 more. Their results" in odd_later[1]["content"]
 
     # Text tool protocol: the marker goes after the results header, so the
     # message still opens a tool group.
@@ -211,7 +218,8 @@ def test_trim_conversation_tail_keeps_tool_calls_paired():
         "=== TOOL RESULTS ===\n[Earlier in this turn 9 tool round(s) were dropped from "
         "context: text tool round. Their results are no longer visible.]\nresult 9"
     )
-    assert trim_tool_tail(text_trimmed) == text_trimmed
+    text_snapshot = copy.deepcopy(text_trimmed)
+    assert trim_tool_tail(text_trimmed) == text_snapshot
     text_later = trim_tool_tail(text_trimmed + text_round(30))
     assert text_later[1]["content"].startswith(
         "=== TOOL RESULTS ===\n[Earlier in this turn 10 tool round(s) were dropped"

@@ -174,6 +174,7 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
     app = SimpleNamespace(path=Path("/synthetic/dame-curie"), inventory=events.inventory, compose=events.compose,
                           env={"DAME_CURIE_STAGING": "false"})
     app.staging_enabled = ops.Instance.staging_enabled.__get__(app)
+    app.require_smoke_roots = events.require_smoke_roots
     account = object()
     service_account = Mock(return_value=account)
     constructor = Mock(return_value=app)
@@ -200,7 +201,7 @@ def test_start_alias_cli_uses_same_operation_lock_and_health_wait(monkeypatch, a
         app.path / ".operations.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
     )
     file_open.assert_called_once_with(123, "w")
-    expected = [call.flock(123, ops.fcntl.LOCK_EX | ops.fcntl.LOCK_NB)]
+    expected = [call.require_smoke_roots(), call.flock(123, ops.fcntl.LOCK_EX | ops.fcntl.LOCK_NB)]
     if not lock_busy:
         expected += [call.inventory(), call.compose("up", "-d", "--wait", "--wait-timeout", "300", "bot")]
     assert events.mock_calls == expected

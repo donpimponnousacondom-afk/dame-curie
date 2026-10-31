@@ -1931,18 +1931,26 @@ def _results_header(content: str) -> str:
     return _TEXT_RESULTS_HEADER if content.startswith(_TEXT_RESULTS_HEADER) else ""
 
 
-def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str]]:
-    """Remove the dropped-rounds marker from a group; return its count and names."""
+def _take_dropped_marker(group: list[dict]) -> tuple[int, list[str], int]:
+    """Remove the dropped-rounds marker; return its round count, names and unnamed extras."""
     msg = _round_marker_message(group)
     content = msg.get("content") if msg else None
     if not isinstance(content, str):
-        return 0, []
+        return 0, [], 0
     header = _results_header(content)
     match = _DROPPED_ROUNDS_RE.match(content, len(header))
     if not match:
-        return 0, []
+        return 0, [], 0
     msg["content"] = header + content[match.end():]
-    return int(match.group(1)), [name for name in match.group(2).split(", ") if name]
+    names: list[str] = []
+    extra = 0
+    for name in match.group(2).split(", "):
+        more = re.fullmatch(r"and (\d+) more", name)
+        if more:
+            extra += int(more.group(1))
+        elif name:
+            names.append(name)
+    return int(match.group(1)), names, extra
 
 
 def _round_tool_names(group: list[dict]) -> list[str]:
@@ -1969,7 +1977,7 @@ def trim_tool_tail(
     groups = tool_tail_groups(tail)
     dropped_groups = 0
     dropped_chars = 0
-    marker_rounds, marker_names = _take_dropped_marker(groups[0]) if groups else (0, [])
+    marker_rounds, marker_names, marker_extra = _take_dropped_marker(groups[0]) if groups else (0, [], 0)
     while len(groups) > 1 and sum(map(len, groups)) > max_messages:
         dropped = groups.pop(0)
         dropped_chars += sum(message_chars(msg) for msg in dropped)
@@ -2007,14 +2015,14 @@ def trim_tool_tail(
     marker_rounds += dropped_groups
     target = _round_marker_message(groups[0]) if marker_rounds else None
     if marker_rounds and (target is None or not isinstance(target.get("content"), str)):
-        logger.warning(
-            "Tool history dropped %d round(s) but the oldest kept group has no text "
-            "tool result for the marker", marker_rounds,
+        raise ValueError(
+            f"Tool history dropped {marker_rounds} round(s), but the oldest kept group "
+            "has no text tool result to carry the dropped-rounds marker"
         )
-    elif target is not None:
+    if target is not None:
         names = list(dict.fromkeys(marker_names))
-        if len(names) > 8:
-            names = [*names[:8], f"and {len(names) - 8} more"]
+        extra = marker_extra + max(0, len(names) - 8)
+        names = names[:8] + ([f"and {extra} more"] if extra else [])
         header = _results_header(target["content"])
         target["content"] = (
             header
