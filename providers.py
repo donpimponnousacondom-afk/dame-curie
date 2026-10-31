@@ -2036,6 +2036,22 @@ class OpenAICompatibleProvider:
             )
         ]
 
+        tool_media = [m for m in payload_media if m.get("source") == "tool"]
+        payload_media = [m for m in payload_media if m.get("source") != "tool"]
+
+        def _media_part(m: dict) -> dict | None:
+            mime = m["mime_type"]
+            b64 = m["b64"]
+            uri = f"data:{mime};base64,{b64}"
+            if mime.startswith("image/"):
+                return {"type": "image_url", "image_url": {"url": uri}}
+            if mime.startswith("audio/") and getattr(self, "enable_audio_input", False):
+                audio_format = AUDIO_FORMATS.get(mime.split(";", 1)[0].lower(), "wav")
+                return {"type": "input_audio", "input_audio": {"data": b64, "format": audio_format}}
+            if mime.startswith("video/"):
+                return {"type": "video_url", "video_url": {"url": uri}}
+            return None
+
         if payload_media:
             target = None
             for msg in chat_messages:
@@ -2060,27 +2076,10 @@ class OpenAICompatibleProvider:
                 parts = list(content) if isinstance(content, list) else [{"type": "text", "text": content}]
                 attached = 0
                 for m in payload_media:
-                    mime = m["mime_type"]
-                    b64 = m["b64"]
-                    uri = f"data:{mime};base64,{b64}"
-                    if mime.startswith("image/"):
-                        parts.append({"type": "image_url", "image_url": {"url": uri}})
-                    elif mime.startswith("audio/") and getattr(
-                        self, "enable_audio_input", False
-                    ):
-                        audio_format = AUDIO_FORMATS.get(
-                            mime.split(";", 1)[0].lower(), "wav"
-                        )
-                        parts.append(
-                            {
-                                "type": "input_audio",
-                                "input_audio": {"data": b64, "format": audio_format},
-                            }
-                        )
-                    elif mime.startswith("video/"):
-                        parts.append({"type": "video_url", "video_url": {"url": uri}})
-                    else:
+                    part = _media_part(m)
+                    if part is None:
                         continue
+                    parts.append(part)
                     attached += 1
                 target["content"] = parts
                 logger.info(f"Attached {attached} multimodal item(s) to message")
@@ -2088,6 +2087,24 @@ class OpenAICompatibleProvider:
                 logger.warning(
                     f"No user message found to attach {len(payload_media)} multimodal item(s)"
                 )
+        tool_parts = [part for m in tool_media if (part := _media_part(m)) is not None]
+        if tool_parts:
+            chat_messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Media returned by your tool calls in this turn, oldest first. "
+                                "It stays attached until the turn ends."
+                            ),
+                        },
+                        *tool_parts,
+                    ],
+                }
+            )
+            logger.info("Attached %d tool media item(s) after the tool results", len(tool_parts))
 
         for message in chat_messages:
             content = message.get("content")

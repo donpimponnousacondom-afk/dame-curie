@@ -380,7 +380,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
-        "native_continuations_unlimited", "native_continuations_limited",
+        "native_continuations_unlimited", "native_continuations_limited", "native_round_limit",
         "attempts_exhausted",
         "deadline", "upstream_timeout", "cancelled",
     ],
@@ -424,7 +424,7 @@ def test_real_foreground_handler_preserves_producing_call(
             monkeypatch.setattr(DameCurieBot, "_apply_prompt_budget", budget_spy)
         configure_dispatch(
             bot, expand_catalog=mode == "expanded_catalog_fallback",
-            native_continuations=mode in {"native_continuations_unlimited", "native_continuations_limited"},
+            native_continuations=mode in {"native_continuations_unlimited", "native_continuations_limited", "native_round_limit"},
         )
         flushed_turns = []
         bot._flush_deferred_context_extraction.side_effect = (
@@ -445,9 +445,9 @@ def test_real_foreground_handler_preserves_producing_call(
             )
             responses = [ProviderResult("configured output unchanged", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
-        elif mode in {"native_continuations_unlimited", "native_continuations_limited"}:
+        elif mode in {"native_continuations_unlimited", "native_continuations_limited", "native_round_limit"}:
             assert "turn_generation_attempt_budget" not in DEFAULT_CONTROL
-            bot._control["max_tool_iterations"] = 20
+            bot._control["max_tool_iterations"] = 4 if mode == "native_round_limit" else 20
             if mode == "native_continuations_limited":
                 bot._control["turn_generation_attempt_budget"] = 12
             bot._observed_turns = []
@@ -589,6 +589,16 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        if mode == "native_round_limit":
+            # Four rounds run, the fifth response still asks for a tool: the
+            # stop and the empty reply are both stated, not silent.
+            assert session.post.call_count == 5
+            assert [sent.content for sent in message.channel.sent] == [
+                "Stopped: the tool round limit (4) was reached with 1 tool call(s) not run. "
+                "The reply below can be incomplete.",
+                "No reply: my final response was empty.",
+            ]
+            return
         if mode in {"native_continuations_unlimited", "native_continuations_limited"}:
             expected_posts = 14 if mode == "native_continuations_unlimited" else 12
             assert session.post.call_count == expected_posts

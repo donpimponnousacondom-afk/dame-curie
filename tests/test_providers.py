@@ -781,8 +781,9 @@ def test_openrouter_image_unsupported_routes_to_another_endpoint():
     assert len(session.responses) == 1
 
 
+@pytest.mark.parametrize("source", ["user", "tool"])
 @pytest.mark.parametrize("mime,part", [("image/png", "image_url"), ("video/mp4", "video_url"), ("audio/mpeg", "input_audio")])
-def test_media_unsupported_everywhere_falls_back_to_text_only(mime, part):
+def test_media_unsupported_everywhere_falls_back_to_text_only(mime, part, source):
     provider = OpenAICompatibleProvider("http://primary.test/v1", "text-only-model", enable_audio_input=True)
     provider.available = True
     provider._session = session = FakeSequenceSession([
@@ -791,14 +792,31 @@ def test_media_unsupported_everywhere_falls_back_to_text_only(mime, part):
     ])
     messages = [{"role": "user", "content": "what is this"}]
     media = [{"b64": "img", "mime_type": mime}]
+    if source == "tool":
+        messages += [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "see_image", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "c1", "content": "Tool see_image: Attached image"},
+        ]
+        media = [{"b64": "img", "mime_type": mime, "source": "tool"}]
     original = copy.deepcopy((messages, media))
 
     with pytest.raises(ProviderRequestError, match="No endpoints found that support this media"):
         asyncio.run(provider.generate_chat_completion(messages, media=media))
 
     assert len(session.payloads) == 1
-    assert session.payloads[0]["messages"][0]["content"][0] == {"type": "text", "text": "what is this"}
-    assert session.payloads[0]["messages"][0]["content"][1]["type"] == part
+    sent = session.payloads[0]["messages"]
+    if source == "tool":
+        # Tool media follows the tool results in its own user message.
+        assert sent[0]["content"] == "what is this"
+        assert sent[-1]["role"] == "user"
+        assert sent[-1]["content"][0]["text"].startswith("Media returned by your tool calls in this turn")
+        assert sent[-1]["content"][1]["type"] == part
+        assert len(sent) == len(messages) + 1
+    else:
+        assert sent[0]["content"][0] == {"type": "text", "text": "what is this"}
+        assert sent[0]["content"][1]["type"] == part
     assert (messages, media) == original
     assert len(session.responses) == 1
 
