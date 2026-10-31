@@ -783,7 +783,7 @@ def test_openrouter_image_unsupported_routes_to_another_endpoint():
 
 @pytest.mark.parametrize("source", ["user", "tool"])
 @pytest.mark.parametrize("mime,part", [("image/png", "image_url"), ("video/mp4", "video_url"), ("audio/mpeg", "input_audio")])
-def test_media_unsupported_everywhere_falls_back_to_text_only(mime, part, source):
+def test_media_unsupported_everywhere_raises_visible_error(mime, part, source):
     provider = OpenAICompatibleProvider("http://primary.test/v1", "text-only-model", enable_audio_input=True)
     provider.available = True
     provider._session = session = FakeSequenceSession([

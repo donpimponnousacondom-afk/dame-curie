@@ -376,7 +376,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -521,6 +521,9 @@ def test_real_foreground_handler_preserves_producing_call(
         elif mode == "plain":
             responses = [ProviderResult("plain answer", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "cleanup_empty":
+            responses = [ProviderResult("<system-reminder>internal</system-reminder>", metrics=first)]
+            bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "terminal":
             responses = [
                 ProviderResult(
@@ -589,14 +592,18 @@ def test_real_foreground_handler_preserves_producing_call(
         else:
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
+        if mode == "cleanup_empty":
+            # A final response that reply cleanup empties is stated, not silent.
+            assert [sent.content for sent in message.channel.sent] == [
+                "No reply: my final response had no text left after reply cleanup.",
+            ]
+            return
         if mode == "native_round_limit":
             # Four rounds run, the fifth response still asks for a tool: the
             # stop and the empty reply are both stated, not silent.
             assert session.post.call_count == 5
             assert [sent.content for sent in message.channel.sent] == [
-                "Stopped: the tool round limit (4) was reached with 1 tool call(s) not run. "
-                "The reply below can be incomplete.",
-                "No reply: my final response was empty.",
+                "Stopped: the tool round limit (4) was reached with 1 tool call(s) not run.",
             ]
             return
         if mode in {"native_continuations_unlimited", "native_continuations_limited"}:

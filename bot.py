@@ -1974,6 +1974,12 @@ def _plugin_result_needs_followup(result: str) -> bool:
     return bool(head) and tool_schemas_returns_result(head)
 
 
+_DELIVERY_MARKERS = (
+    "__MESSAGE_SENT__", "__IMAGE_SENT__", "__FILE_SENT__", "__MEDIA_SENT__",
+    "__CAPTION_SENT__", "__MEME_SENT__", "__TTS_SENT__", "__SHELL_SENT__",
+)
+
+
 def image_or_caption_delivered(result: str) -> bool:
     return result.startswith("Tool image_generator: __IMAGE_SENT__") or (
         result.startswith(("Tool send_file: __FILE_SENT__", "Tool send_media: __MEDIA_SENT__"))
@@ -12712,13 +12718,19 @@ class DameCurieBot(commands.Bot):
             tool_results: list[str] = []
             loop_end = ""
             # Media from tools stays attached for the rest of the turn, in a
-            # message after the tool results. The turn media cap bounds it.
+            # message after the tool results. The turn media cap (12 items,
+            # 20 MiB) bounds tool media; the user's media has its own cap of
+            # the same size, so one request can carry about 40 MiB.
             turn_tool_media: list[dict] = []
             turn_tool_keys: set[str] = set()
             for _iteration in range(max_iters):
                 if time.monotonic() > tool_deadline:
-                    loop_end = "the tool time budget was used up"
-                    logger.warning("Tool loop stopped: %s", loop_end)
+                    if pending_native:
+                        loop_end = (
+                            f"the tool time budget was used up with {len(pending_native)} "
+                            "tool call(s) not run"
+                        )
+                        logger.warning("Tool loop stopped: %s", loop_end)
                     break
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
@@ -13023,12 +13035,6 @@ class DameCurieBot(commands.Bot):
                         f"{len(pending_native)} tool call(s) not run"
                     )
                     logger.warning("Tool loop stopped: %s", loop_end)
-            if loop_end and self._control.get("error_replies", True):
-                with notice_send():
-                    await message.channel.send(
-                        f"Stopped: {loop_end}. The reply below can be incomplete.",
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
             # Terminal silence only for explicit no_response (not TTS).
             if any(
                 tr.startswith("Tool no_response:") and "__NO_RESPONSE__" in tr
@@ -13042,6 +13048,15 @@ class DameCurieBot(commands.Bot):
                     message, all_tool_results, response, "no_response"
                 )
                 return
+            if loop_end and self._control.get("error_replies", True):
+                try:
+                    with notice_send():
+                        await message.channel.send(
+                            f"Stopped: {loop_end}.",
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                except discord.HTTPException as exc:
+                    logger.warning("Stop notice could not be sent: %s", exc)
             # If this generation already called send_message, leftover
             # assistant text is not a second reply. A later follow-up
             # with real text and no new send_message still posts (the
@@ -13108,22 +13123,35 @@ class DameCurieBot(commands.Bot):
                 and not (response or "").strip()
             ):
                 return
+            raw_final = str(response or "")
             response = _sanitize_visible_reply(
                 response,
                 scrub_repeats=bool(self._control.get("scrub_repetitions", True)),
             )
-            if not response:
-                logger.warning(
-                    "Turn ended with no reply in channel %s: the final model response was "
-                    "empty after %d tool result(s)", channel_id, len(all_tool_results),
+            delivered = any(
+                marker in result
+                for result in all_tool_results
+                for marker in _DELIVERY_MARKERS
+            )
+            # A final batch of silent tools (react, wait) is a chosen silent
+            # ending; only a final response without tool calls must carry text.
+            if not response and not tool_results and not delivered:
+                cause = (
+                    "my final response was empty"
+                    if not raw_final.strip()
+                    else "my final response had no text left after reply cleanup"
                 )
+                logger.warning("Turn ended with no reply in channel %s: %s", channel_id, cause)
                 if self._control.get("error_replies", True):
-                    with notice_send():
-                        await message.channel.send(
-                            "No reply: my final response was empty.",
-                            allowed_mentions=discord.AllowedMentions.none(),
-                        )
-                    normal_reply_sent = True
+                    try:
+                        with notice_send():
+                            await message.channel.send(
+                                f"No reply: {cause}.",
+                                allowed_mentions=discord.AllowedMentions.none(),
+                            )
+                        normal_reply_sent = True
+                    except discord.HTTPException as exc:
+                        logger.warning("No-reply notice could not be sent: %s", exc)
             if response:
                 await self._ensure_reasoning_trace(
                     message, all_tool_results, response, "reply"
@@ -14194,6 +14222,9 @@ class DameCurieBot(commands.Bot):
                 raw = re.sub(r"\s+", "", match.group(1))
                 key = hashlib.sha256(raw.encode("ascii")).hexdigest()
                 if key in local_media_keys:
+                    continue
+                if not getattr(getattr(self, "ai_provider", None), "enable_audio_input", False):
+                    dropped_media[key] = "audio input is off for the configured provider"
                     continue
                 if len(raw) >= 5_000_000:
                     dropped_media[key] = "the audio is larger than 5,000,000 base64 characters"
