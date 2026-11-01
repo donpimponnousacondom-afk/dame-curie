@@ -571,7 +571,9 @@ def test_gather_context_uses_numbered_channels_and_messages(tmp_path):
     assert "msg=1" in context
     assert "  1: #general" in context
     assert "100" not in context.split("=== AVAILABLE CHANNELS")[1].split("===")[0]
-    own_line = next(line for line in context.splitlines() if 'content="own words"' in line)
+    own_line = next(
+        line for line in context.splitlines() if 'content="own words"' in line
+    )
     assert "replying_to" not in own_line and "mentions=" not in own_line
     assert 'replying_to=you/Dame Curie(42) "own words"' in context
 
