@@ -13,7 +13,6 @@ Features tested:
   6. Autonomy Engine & Turn-Taking (4 stages, 8 room states, floor verdicts, blacklists, solo)
   7. Chess Engine & Board Mechanics (SAN/UCI, alpha-beta negamax, FEN, image rendering)
  10. Inbox System (Notices, requests)
- 11. Security Guardrails & Response Guard (repetition scrubbing, echo loops, code safety)
  12. Default Controls
  13. Concurrency Safety & Bot Commands (!stop, !prompt, !solo, !drug, !jailbreak, !context, !rem, !vc)
 """
@@ -48,7 +47,6 @@ import tool_registry  # noqa: E402
 import bot_tools  # noqa: E402
 import chess_game  # noqa: E402
 import inbox  # noqa: E402
-import response_guard  # noqa: E402
 import autonomy_social  # noqa: E402
 import watch_policy  # noqa: E402
 import concurrency_safety  # noqa: E402
@@ -573,36 +571,6 @@ class DeepTestHarness:
         await self.run_async_test("InboxStore notices vs requests lifecycle", test_inbox_store_lifecycle)
 
     # =========================================================================
-    # SUITE 11: Security Guardrails & Repetition Scrubbing
-    # =========================================================================
-    def test_suite_security_guards(self):
-        self.current_suite = "Security & Response Guards"
-        print(f"\n\033[1;34m=== SUITE 11: {self.current_suite} ===\033[0m")
-
-        def test_repetition_scrubbing():
-            # Laugh runs
-            assert response_guard.scrub_repetitions("jajajajajajajaja") == "ja"
-            assert response_guard.scrub_repetitions("hahahahahahahaha") == "ha"
-
-            # Repeated sentences
-            sentence_repeat = "Everything is fine. Everything is fine."
-            assert response_guard.scrub_repetitions(sentence_repeat) == "Everything is fine."
-
-            # Echo loop breaking
-            echo_loop = "I think that is great. " * 10
-            broken = response_guard.break_echo_loop(echo_loop)
-            assert len(broken) < len(echo_loop)
-            assert broken.endswith("…")
-
-            # Code fence immunity
-            code_block = "```python\nfor i in range(10):\n    print('ha ha ha ha ha ha ha ha')\n```"
-            preserved = response_guard.scrub_repetitions(code_block)
-            assert "print('ha ha ha ha ha ha ha ha')" in preserved
-            return "Repetition scrubber collapses stutters & preserves code blocks"
-
-        self.run_sync_test("Repetition guard & echo loop breaker", test_repetition_scrubbing)
-
-    # =========================================================================
     # SUITE 12: Default Controls
     # =========================================================================
     def test_suite_controls(self):
@@ -613,7 +581,7 @@ class DeepTestHarness:
             defaults = control_defaults.DEFAULT_CONTROL
             assert "autonomy_enabled" in defaults
             assert "autonomy_interval_seconds" in defaults
-            assert "scrub_repetitions" in defaults
+            assert "scrub_repetitions" not in defaults
             assert "autonomy_blocked_channels" in defaults
             assert "autonomy_blocked_servers" in defaults
             return f"{len(defaults)} canonical default control keys verified"
@@ -676,7 +644,6 @@ class DeepTestHarness:
         self.test_suite_autonomy()
         self.test_suite_chess()
         await self.test_suite_inbox()
-        self.test_suite_security_guards()
         self.test_suite_controls()
         await self.test_suite_bot_commands()
 
