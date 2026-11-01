@@ -48,7 +48,8 @@ def dedupe_self_copies(db_path: Path, apply: bool) -> dict:
     """Remove bot-side copies of messages that a gateway row already holds.
 
     Root, 1 November 2026: one row per Discord message. A copy matches when
-    the gateway row with the same Discord id exists, or when a gateway row
+    it is bot_reply:<id> or bot_update:<id> and the gateway row <id> of the
+    same author exists, or when a gateway row
     (a digit-only Discord id) of the same author in the same channel holds
     exactly the copy's text after its time prefix. The content-hash
     deduplication keeps one row per identical text in a channel. Other
@@ -64,22 +65,31 @@ def dedupe_self_copies(db_path: Path, apply: bool) -> dict:
             f"SELECT id, channel_id, author_id, content FROM vectors WHERE {where}",
             [prefix + "%" for prefix in SELF_COPY_PREFIXES],
         ).fetchall()
-        gateway_ids: set[str] = set()
+        gateway_authors: dict[str, str] = {}
         gateway_texts: dict[tuple[str, str], set[str]] = {}
         for row_id, channel_id, author_id, content in db.execute(
             "SELECT id, channel_id, author_id, content FROM vectors "
             "WHERE id != '' AND id NOT GLOB '*[^0-9]*'"
         ):
-            gateway_ids.add(row_id)
+            gateway_authors[row_id] = author_id
             text = _GATEWAY_PREFIX.sub("", str(content or ""), count=1).strip()
             gateway_texts.setdefault((channel_id, author_id), set()).add(text)
         counts = {prefix.rstrip(":"): {"matched": 0, "kept": 0} for prefix in SELF_COPY_PREFIXES}
         matched_ids = []
         for row_id, channel_id, author_id, content in copies:
             prefix = next(p for p in SELF_COPY_PREFIXES if row_id.startswith(p))
-            discord_id = row_id[len(prefix):].split(":", 1)[0]
+            suffix = row_id[len(prefix):]
             text = str(content or "").strip()
-            found = discord_id in gateway_ids or (
+            # Only bot_reply:<sent id> and bot_update:<sent id> carry the id
+            # of her own sent message. bot_send_message:<id> carries the id of
+            # the message she answered, and a chunk fallback carries that id
+            # too, so those match by text only.
+            same_id = (
+                prefix in ("bot_reply:", "bot_update:")
+                and ":" not in suffix
+                and gateway_authors.get(suffix) == author_id
+            )
+            found = same_id or (
                 bool(text) and text in gateway_texts.get((channel_id, author_id), set())
             )
             counts[prefix.rstrip(":")]["matched" if found else "kept"] += 1
