@@ -5,7 +5,7 @@ are older. Their headings give their dates where they have one.
 
 ## Behaviour changes, 31 October to 1 November 2026
 
-Each row is one merge to `main`, in merge order. Row #4 also holds
+Each row is one merge to `main`, in merge order, except row #4. It also holds
 PR #6, which merged into the #4 branch 33 seconds before #4 merged to
 `main`. Use this list when a behaviour changes in the next days.
 
@@ -32,7 +32,8 @@ How to revert one change:
      script (session record).
    - #7 renamed `DAME_CURIE_PUBLIC_BASE_URL` to
      `DAME_CURIE_IMAGE_PUBLIC_BASE_URL` in `docker/bot.env.example`. The
-     operator's `bot.env` got the same rename at deploy. A revert of #7
+     operator's `bot.env` got the same rename at deploy (session record).
+     A revert of #7
      needs the old name back in `bot.env`.
 
 | PR | Commit | Change | Watch for |
