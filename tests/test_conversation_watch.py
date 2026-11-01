@@ -678,7 +678,7 @@ def test_reply_relation_includes_quote():
             "reply_to_content": "  i already   said that  ",
         }
     )
-    assert bit == 'replying to Alice(99) "i already said that"'
+    assert bit == 'replying to="Alice(99)", quote="i already said that"'
     self_bit = _reply_relation_bit(
         {
             "reply_to_author": "Curie",
@@ -687,7 +687,7 @@ def test_reply_relation_includes_quote():
             "reply_to_content": "hey",
         }
     )
-    assert self_bit == 'replying to you/Dame Curie(1) "hey"'
+    assert self_bit == 'replying to="you/Dame Curie(1)", quote="hey"'
     # The planner tags and the planner memory lines use the same wording,
     # never the send_message argument name reply_to.
     bot_user = SimpleNamespace(id=1)
@@ -717,7 +717,8 @@ def test_reply_relation_includes_quote():
         bot_user=bot_user,
     )
     assert line.endswith(
-        'Alice(99) [replying to you/Dame Curie(1) "hey"; mentions @Bob(2)]: ok'
+        'Alice(99) {replying to="you/Dame Curie(1)", quote="hey", '
+        'mentions="@Bob(2)"}: ok'
     )
     own = _format_memory_context_line(
         {
