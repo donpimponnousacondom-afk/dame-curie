@@ -1,4 +1,69 @@
-# dame-curie status - 2026-10-03
+# dame-curie status - 1 November 2026
+
+## Behaviour changes, 31 October to 1 November 2026
+
+Root made the coordinator director of dame-curie on 31 October 2026. The
+changes below went live on throne-v2 in this order. Each line is one
+squash-merged PR. Sonnet and Haiku reviewed each one. Use this list when
+a behaviour changes in the next days.
+
+How to revert one change: create a branch from `main`, run
+`git revert <commit>`, open a PR, review it, merge it, then deploy. For
+#13 also reinstall `scripts/publisher/*.py` to
+`/opt/dame-curie/scripts/publisher/` and restart
+`dame-curie-publisher.service`.
+
+| PR | Commit | Change | Watch for |
+| --- | --- | --- | --- |
+| #4, #6 | `afc9383` | Over-limit tool batches return a refusal with the exact cause to the model. Jobs report an unresolved tool error. | "Error - " tool results in long tool rounds. |
+| #7 | `57083ed` | Tool history has its own prompt allowance. Image and site URLs fixed. Reasoning-shaped JSON stays visible. Maxwell renamed. Smoke harness mounted. | Forgetting earlier tool results; wrong image links. |
+| #8 | `8d72c97` | Background jobs compact their history with a model summary at about 180,000 tokens. | "compacted" notes in job threads; jobs that fail with a compaction cause. |
+| #9 | `338534a` | Tool images stay attached for the whole turn. A turn that stops posts "Stopped: <cause>." or "No reply: <cause>.". | These notices in channels. |
+| #11 | `2972a05` | Attachment URLs stay in history. | Later turns that fetch an old attachment. |
+| #10 | `12aa2c6` | Text written beside tool calls is posted as a progress update. Job summaries are assistant messages. `see_image` reads any local file. | Extra short messages during tool work. |
+| #12 | `c5694fc` | Tests only. | Nothing at runtime. |
+| #13 | `ed5cb2f` | Publisher: top-level hidden folders of a site (for example `.data`) stay on the remote. The prompt states the sync rules. | Data in `.data` folders after a sync. |
+| #14 | `51bb813` | A missing embedding setting is named in the log. | "Embedding failed (...)" log lines. |
+| #15 | `6e6e3a0` | Her own history lines no longer carry reply, mention or autonomy notes. User lines say "replying to". The chat rules say history metadata never goes in a reply. | "reply_to=" or notes copied into replies. |
+| #16 | `618a2f6` | History notes use braces: `{replying to="Name(id)", quote="..."}`. Her own lines keep the reply note. | A copied `{replying to=...}` in a reply. |
+| #17 | `d1a80c2` | No cosmetic rewrite of replies: brackets, repetition, `\n`, sent markers, `Name(id)` pings and `<url>` stay as written. `scrub_repetitions` is retired. | Repeated words, `__MESSAGE_SENT__` or `[Dame Curie]` in replies. |
+| #18 | `b686228` | No tool-markup stripping: XML, pipe, DSML and `<arg>` tool markup, tool JSON and injected context tags reach Discord as written. | Raw tool markup or `<system-reminder>` text in replies. |
+| #21 | `d181ccd` | The self-repetition note skips the stored time prefix and counts only her own rows. | The note "You have opened N of your last M messages with ...". |
+| #20 | `9f71490` | Tool calls written as text are not executed. A failure to read tool calls fails a background job with its cause. | Tool-call text posted in a channel instead of an action. |
+| #22 | `d648323` | A malformed native tool call names the call and the exact cause. A valid call with three decode or unwrap steps is accepted. | "Malformed native tool-call batch: call ..." in the log. |
+| #23 | `153caa9` | The provider log line states `input=`, `input_source=` and `cached=` tokens. First measurement, 1 November 2026: 9,232 of 17,470 input tokens cached. | Read `cached=` to measure prompt-cache hits. |
+| #24 | `9bbf2dd` | The startup REM backfill is removed. It re-inserted up to 500 old replies on each start with the current time, so they moved to the newest end of her history. | History in time order after a restart. |
+
+### Known open items
+
+- **Her messages are stored twice.** The gateway stores her message under
+  its Discord id with a `[YYYY-MM-DD HH:MM:SS TZ]` prefix. The harness
+  stores a second copy under `bot_reply:<id>` without it. The history
+  shows both. The prefix keeps distinct messages apart in the
+  content-hash deduplication, so removing it alone is not safe (closed
+  PR #19). Fix: one row per Discord message keyed by its real id, with a
+  metadata merge, after a measured check of the write order.
+- **Two time formats.** History lines show `[Sat ... local]` and the
+  stored `[... CET]` prefix. The volatile block shows a third time with a
+  fixed UTC-4 "AST" label (`bot.py`, user line). Root decides whether AST
+  is intended.
+- **Internal markers in tool results.** `__MESSAGE_SENT__` and similar
+  markers reach the model in tool results and history. The
+  plaintext-after-send filter reads them, and root reserves that filter.
+- **Four filters reserved for root:** `_should_skip_plaintext_after_send`,
+  `_prepare_tool_params`, `_TOOL_ALIASES` and
+  `_extract_stickers_from_text`.
+- **The `tool_` prefix repair.** `normalize_native_tool_calls` removes a
+  leading `tool_` from a tool name. This is a name repair like
+  `_TOOL_ALIASES`.
+- **Partial batch results.** Dame Curie asked on 1 November 2026: when
+  a native call in a batch fails, mark which calls in the batch
+  succeeded, so she does not run a live call twice.
+- **Rows the REM backfill moved before #24** keep their last
+  `created_at`. New messages are stored after them; no restart moves
+  them again.
+- **The custom JSON tool protocol** (`CUSTOM_TOOL_CALLS`) parses calls
+  only from streamed responses. It is off while native calls are on.
 
 ## Publisher inventory update - 2026-10-03, 19:44Z
 
