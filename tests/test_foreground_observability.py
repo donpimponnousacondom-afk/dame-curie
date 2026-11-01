@@ -285,6 +285,8 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
                 )
             elif function["name"] == "no_response":
                 results.append("Tool no_response: __NO_RESPONSE__")
+            elif function["name"] == "react":
+                results.append("Tool react: Reacted")
             else:
                 results.append("Tool web_search: synthetic result")
                 if native_continuations:
@@ -385,8 +387,8 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "beside_update", "repeat_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
-        "beside_final_send",
+        "plain", "beside_update", "repeat_update", "beside_no_response", "ack_alone", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "beside_final_send", "beside_silent", "early_update_refused",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -546,6 +548,28 @@ def test_real_foreground_handler_preserves_producing_call(
                 return await dispatch_effect(*args, **kwargs)
 
             bot._dispatch_tool_calls.side_effect = recording_dispatch
+        elif mode == "beside_silent":
+            responses = [
+                ProviderResult("nice one", tool_calls=[tool_call("react", emoji="fire")], metrics=first),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "early_update_refused":
+            responses = [
+                ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+            channel_send = message.channel.send
+            refused = []
+
+            async def refusing_send(content=None, **kwargs):
+                if not refused:
+                    refused.append(content)
+                    raise discord.HTTPException(
+                        SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions"
+                    )
+                return await channel_send(content, **kwargs)
+
+            message.channel.send = refusing_send
         elif mode == "beside_final_send":
             responses = [
                 ProviderResult(
@@ -562,7 +586,7 @@ def test_real_foreground_handler_preserves_producing_call(
                 ProviderResult("Here it is.", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
-        elif mode == "ack_then_empty":
+        elif mode == "ack_alone":
             responses = [
                 ProviderResult("", tool_calls=[tool_call("send_message", content="on it")], metrics=first),
                 ProviderResult("", metrics=second),
@@ -600,9 +624,11 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [
                 ProviderResult(
                     "",
+                        tool_calls=[
                         # Root, 1 November 2026: a final reply that contains
-                    # "checking" was taken for a promise and posted twice.
-                    tool_calls=[tool_call("send_message", content=HELLO_REPLY)],
+                        # "checking" was taken for a promise and posted twice.
+                        tool_call("send_message", content=HELLO_REPLY),
+                    ],
                     metrics=first,
                 )
             ]
@@ -670,12 +696,31 @@ def test_real_foreground_handler_preserves_producing_call(
         # The empty answer after the final send of "beside_final_send" is
         # flagged so its rate can be measured.
         assert (flag in caplog.text) is (mode == "beside_final_send")
-        if mode == "ack_then_empty":
+        if mode == "ack_alone":
             # send_message ends the turn whatever its words: no second model
             # call follows an "on it".
             assert bot._generate_response.await_count == 1
             assert len(message.channel.sent) == 1
             assert message.channel.sent[0].content.startswith("on it")
+            return
+        if mode == "beside_silent":
+            # Text next to only silent calls is the reply: a quote-reply with
+            # the footer, from one model call.
+            assert bot._generate_response.await_count == 1
+            assert len(message.channel.sent) == 1
+            assert message.channel.sent[0].content.startswith("nice one")
+            assert message.channel.sent[0].content.endswith(FOOTER_MARKER)
+            assert "reference" in message.channel.sent[0].kwargs
+            return
+        if mode == "early_update_refused":
+            # Discord refused the update: no tool ran, and the stop notice
+            # states the cause.
+            assert refused == ["Looking it up now."]
+            assert not bot._dispatch_tool_calls.await_args_list
+            assert [sent.content for sent in message.channel.sent] == [
+                "Stopped: the progress update could not be posted "
+                "(403 Forbidden (error code: 0): Missing Permissions)."
+            ]
             return
         if mode == "beside_final_send":
             # Text beside a final send_message is no update; the answer posts once.

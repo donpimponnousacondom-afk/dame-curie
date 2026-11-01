@@ -45,7 +45,7 @@ def test_full_protocol_still_rejects_ack_only_turns():
     # Root, 1 November 2026: a progress update is text beside tool calls,
     # posted before they run; the bot reads no intent from reply words.
     for protocol in (TOOL_PROTOCOL.lower(), LEAN_TOOL_PROTOCOL.lower()):
-        assert "before those calls run" in protocol
+        assert "before the calls run" in protocol
         assert "send_message ends the turn" in protocol
         assert "write the text next to the tool calls" in protocol
     assert "acknowledgement" not in text

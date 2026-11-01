@@ -123,30 +123,49 @@ def test_send_message_ends_the_turn_whatever_its_words(text):
     assert _tool_results_need_followup([f"Tool send_message: __MESSAGE_SENT__\n{text}"]) is False
 
 
+KNOWN_TOOLS = {
+    "web_search", "shell", "fetch_url", "react", "send_message", "no_response",
+    "wait", "sleep", "image_generator", "send_file", "send_media",
+}
+
+
 @pytest.mark.parametrize(
-    ("names", "text", "is_update"),
+    ("calls", "text", "is_update"),
     [
-        (["web_search"], "Looking it up.", True),
-        (["shell", "fetch_url"], "Pulling the logs.", True),
-        (["react"], "nice", True),
+        ([_native_call("web_search", {})], "Looking it up.", True),
+        ([_native_call("shell", {}), _native_call("fetch_url", {}, "c2")], "Pulling the logs.", True),
+        # Validated names: the tool_ prefix and the flat form are the same tool.
+        ([_native_call("tool_web_search", {})], "Looking it up.", True),
+        ([{"id": "c1", "name": "web_search", "arguments": "{}"}], "Looking it up.", True),
+        # shell with files= delivers those files: no early update.
+        ([_native_call("shell", {"command": "ls", "files": "out.zip"})], "Here is the archive.", False),
+        ([_native_call("shell", {"command": "ls", "files": ""})], "Listing it.", True),
+        # Only silent tools: the model is not called again, so the text is the
+        # reply and goes through the normal reply path.
+        ([_native_call("react", {})], "nice", False),
         # A final or pausing call in the response: the text is no update.
-        (["web_search", "send_message"], "Looking it up.", False),
-        (["send_message"], "Here you go.", False),
-        (["no_response"], "I will stay quiet.", False),
-        (["wait"], "brb", False),
-        (["sleep"], "night", False),
+        ([_native_call("web_search", {}), _native_call("send_message", {}, "c2")], "Looking it up.", False),
+        ([_native_call("web_search", {}), _native_call("tool_send_message", {}, "c2")], "Looking it up.", False),
+        ([_native_call("web_search", {}), {"id": "c2", "name": "send_message", "arguments": "{}"}], "Looking it up.", False),
+        ([_native_call("send_message", {})], "Here you go.", False),
+        ([_native_call("no_response", {})], "I will stay quiet.", False),
+        ([_native_call("web_search", {}), _native_call("wait", {}, "c2")], "brb", False),
+        ([_native_call("web_search", {}), _native_call("sleep", {}, "c2")], "night", False),
+        # An alias or unknown name keeps the after-call rule.
+        ([_native_call("web_search", {}), _native_call("message", {}, "c2")], "Looking it up.", False),
         # A media delivery is the reply; its text keeps the after-call rule.
-        (["image_generator"], "Here is your image.", False),
-        (["send_file"], "Here is the file.", False),
-        (["web_search", "send_media"], "Here it is.", False),
+        ([_native_call("image_generator", {})], "Here is your image.", False),
+        ([_native_call("web_search", {}), _native_call("send_media", {}, "c2")], "Here it is.", False),
+        # A malformed batch posts nothing; dispatch states its exact cause.
+        (["not a call"], "Looking it up.", False),
+        ([{"id": "c1", "function": "web_search"}], "Looking it up.", False),
         # No text, or no tool calls: nothing to post as an update.
-        (["web_search"], "  ", False),
+        ([_native_call("web_search", {})], "  ", False),
         ([], "plain answer", False),
     ],
 )
-def test_beside_text_posts_early_only_next_to_working_calls(names, text, is_update):
-    calls = [_native_call(name, {}, f"c{index}") for index, name in enumerate(names)]
-    assert _beside_text_is_early_update(calls, text) is is_update
+def test_beside_text_posts_early_only_next_to_working_calls(calls, text, is_update):
+    assert _beside_text_is_early_update(calls, text, KNOWN_TOOLS) is is_update
 
 
 def test_ack_plus_real_tool_still_loops_for_the_result():

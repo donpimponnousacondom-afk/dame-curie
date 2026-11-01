@@ -55,3 +55,11 @@ def test_known_tools_has_no_ghosts():
 def test_no_tool_is_in_both_contract_sets():
     both = RESULT_TOOL_NAMES & TURN_ENDING_TOOL_NAMES
     assert not both, f"a tool cannot both end the turn and return a result: {both}"
+
+
+def test_tools_without_an_early_update_exist():
+    # Root, 1 November 2026: text beside these calls keeps the after-call
+    # rule. A renamed tool must not fall out of the set without notice.
+    from bot import _NO_EARLY_UPDATE_CALL_NAMES
+
+    assert sorted(_NO_EARLY_UPDATE_CALL_NAMES - set(TOOL_PARAMETERS)) == []

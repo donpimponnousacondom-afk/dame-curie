@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import traceback
+from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1296,18 +1297,35 @@ _NO_EARLY_UPDATE_CALL_NAMES = frozenset(
 )
 
 
-def _native_call_names(calls: list | None) -> list[str]:
-    """The function names of raw native tool calls, in call order."""
-    return [str(((call or {}).get("function") or {}).get("name") or "") for call in calls or []]
+def _beside_text_is_early_update(
+    calls: list | None, text: str | None, known_tools: Collection[str]
+) -> bool:
+    """True when text beside tool calls posts as an update before they run.
 
-
-def _beside_text_is_early_update(calls: list | None, text: str | None) -> bool:
-    """True when text beside tool calls posts as an update before they run."""
-    names = _native_call_names(calls)
+    The names come from the validated batch. Each call must be a known tool
+    and outside _NO_EARLY_UPDATE_CALL_NAMES, and one call must return output,
+    so the model is called again after the batch. An alias or an unknown
+    name keeps the after-call rule.
+    """
+    if not str(text or "").strip() or not calls:
+        return False
+    try:
+        normalized = normalize_native_tool_calls(calls, allow_oversized_arguments=True)
+    except ValueError:
+        # Dispatch validates the same batch next and stops the turn with
+        # this exact cause; no update posts for a batch that does not run.
+        return False
+    names = [call["name"] for call in normalized]
+    # shell with files= delivers those files, like a media tool.
+    shell_delivers = any(
+        call["name"] == "shell" and str((call["arguments"] or {}).get("files") or "").strip()
+        for call in normalized
+    )
     return (
-        bool(str(text or "").strip())
-        and bool(names)
+        not shell_delivers
+        and all(name in known_tools or tool_schemas_returns_result(name) for name in names)
         and not set(names) & _NO_EARLY_UPDATE_CALL_NAMES
+        and any(tool_schemas_returns_result(name) for name in names)
     )
 
 
@@ -11907,17 +11925,13 @@ class DameCurieBot(commands.Bot):
             # are not discarded on the next follow-up turn.
             conversation_tail: list[dict] = []
             pending_native = native_calls
-            # Set when the model produced a SECOND-turn response after a
-            # send_message already published a placeholder. We use it
-            # below to skip the "send_message is terminal, no plain-text
-            # reply" early-return when the LLM reconsidered its first
-            # "checking…" placeholder and emitted a real answer on the
-            # followup turn. Without this, the placeholder (e.g. "checking…")
-            # is the only thing the user ever sees - the substantive 300+
-            # char answer is silently dropped. .normal.man observed this in
-            # #maxwell-the-bot 2026-08-02 with "Mat Dickie" / "you a fan"
-            # - see PM2 out.log 01:25:17→28 for the canonical reproduction.
+            # Set when the model produced a follow-up response after a round
+            # that called send_message next to a tool that returns output.
+            # The final path then posts that follow-up answer instead of
+            # treating the earlier send_message as the whole reply.
             followup_turn_ran = False
+            # Set when Discord refused an early progress update.
+            update_refused = False
             tool_results: list[str] = []
             loop_end = ""
             # The provider text of the newest model response. The loop uses
@@ -11947,11 +11961,21 @@ class DameCurieBot(commands.Bot):
                     break
                 last_model_text = str(response or "")
                 round_had_calls = bool(pending_native)
-                early_update = _beside_text_is_early_update(pending_native, response)
-                if early_update and await DameCurieBot._post_progress_update(
-                    self, message, response
-                ):
-                    posted_updates.append(str(response).strip())
+                early_update = _beside_text_is_early_update(
+                    pending_native, response, self.tools
+                )
+                if early_update:
+                    try:
+                        if await DameCurieBot._post_progress_update(self, message, response):
+                            posted_updates.append(str(response).strip())
+                    except discord.HTTPException as exc:
+                        # The calls do not run: a channel that refuses the
+                        # update refuses the reply too. The stop notice
+                        # states the cause.
+                        update_refused = True
+                        loop_end = f"the progress update could not be posted ({exc})"
+                        logger.warning("Tool loop stopped: %s", loop_end)
+                        break
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
                     response,
@@ -12283,6 +12307,10 @@ class DameCurieBot(commands.Bot):
                         )
                 except discord.HTTPException as exc:
                     logger.warning("Stop notice could not be sent: %s", exc)
+            if update_refused:
+                # The refused text announced calls that did not run; it is
+                # not the reply. The stop notice above states the cause.
+                return
             # If this generation already called send_message, leftover
             # assistant text is not a second reply. A later follow-up
             # with real text and no new send_message still posts (for
