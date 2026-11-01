@@ -1417,6 +1417,24 @@ class RAGMemoryManager:
         self._embed_endpoint_down_until = 0.0
         self._query_embed_disabled_until = 0.0
 
+    def query_embedding_gap(self) -> str:
+        """Why _embed_for_query returns no vector now, in one phrase."""
+        now = time.monotonic()
+        if not EMBEDDINGS_ENABLED:
+            return "embeddings are off (ENABLE_RAG)"
+        if now < self._embed_endpoint_down_until:
+            return (
+                "the embedding endpoint is paused for "
+                f"{self._embed_endpoint_down_until - now:.0f}s after a failure"
+            )
+        if now < self._query_embed_disabled_until:
+            return (
+                "query embedding is paused for "
+                f"{self._query_embed_disabled_until - now:.0f}s after a query "
+                "embedding that timed out or returned no vector"
+            )
+        return "the embedder returned no vector; the embedding log line before this one has the cause"
+
     def cached_embedding(self, text: str) -> np.ndarray | None:
         """The cached vector of ``text``, or None. It sends no embedder request."""
         if not EMBEDDINGS_ENABLED:

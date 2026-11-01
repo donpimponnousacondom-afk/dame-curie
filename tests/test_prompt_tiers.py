@@ -281,3 +281,66 @@ def test_an_ambient_turn_gives_the_lookup_tiers_budget_to_the_transcript():
     assert plan.budget_for("facts") == 0
     assert plan.budget_for("web") == 0
     assert plan.budget_for("recent") > 0
+
+
+def test_a_warm_turn_builds_its_prompt_without_waiting_for_the_embedder():
+    # Root, 1 November 2026: follow-up messages must not wait for the
+    # embedder. The fake embedder never answers; a warm build still ends.
+    import time
+    from collections import OrderedDict
+
+    import numpy as np
+
+    import rag_memory
+
+    warm_vector = np.ones(8, dtype=np.float32)
+
+    class _SearchMemory(_Memory):
+        def __init__(self):
+            super().__init__(entity={"user_id": "456"})
+            self.searches = []
+            self.embedder_calls = 0
+
+        def cached_embedding(self, text):
+            return None
+
+        def query_embedding_gap(self):
+            return "test embedder never answers"
+
+        async def _embed_for_query(self, text):
+            override = rag_memory.QUERY_VECTOR_OVERRIDE.get()
+            if override is not None and override[0] == text:
+                return override[1]
+            self.embedder_calls += 1
+            await asyncio.Event().wait()
+
+        async def get_user_profile(self, user_id, query="", top_k=8, budget=None):
+            self.searches.append(("entity", await self._embed_for_query(query)))
+            return {"user_id": user_id, "facts": []}
+
+        async def rag_search(self, query, **kwargs):
+            self.searches.append((tuple(kwargs.get("kinds") or ()), await self._embed_for_query(query)))
+            return []
+
+        async def recall_web_results(self, query, **kwargs):
+            self.searches.append(("web", await self._embed_for_query(query)))
+            return []
+
+    memory = _SearchMemory()
+    bot = _bot(memory, {"long_term_memory_enabled": True})
+    bot.config = SimpleNamespace()
+    bot._warm_query_vectors = OrderedDict({("123", "456"): (warm_vector, time.monotonic())})
+
+    async def run():
+        messages = await asyncio.wait_for(
+            DameCurieBot._build_messages(bot, _message(), LONG_TURN), timeout=5
+        )
+        return "\n".join(str(m.get("content") or "") for m in messages)
+
+    prompt = asyncio.run(run())
+    assert [name for name, _ in memory.searches] == ["entity", ("ltm",), ("message",), "web"]
+    assert all(vector is warm_vector for _, vector in memory.searches)
+    # Only the background refresh asked the embedder.
+    assert memory.embedder_calls <= 1
+    assert "Memory recall in this prompt is ranked for the previous message" in prompt
+    assert rag_memory.QUERY_VECTOR_OVERRIDE.get() is None

@@ -941,8 +941,8 @@ def test_turn_query_vector_is_cold_then_warm_then_refreshed(memory, monkeypatch,
         assert await DameCurieBot._prepare_turn_query_vector(bot, message, "first message") is None
         assert len(transport.calls) == 1
         # Warm: the next message gets the first vector at once.
-        age = await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
-        assert age is not None and age >= 0
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        assert warm is not None and warm[0] >= 0
         assert np.array_equal(
             await memory._embed_for_query("second message"), np.array(first, dtype=np.float32)
         )
@@ -980,6 +980,18 @@ def test_turn_query_vector_waits_when_not_warm(memory, monkeypatch, window):
     assert len(transport.calls) == 2
 
 
+def test_turn_query_vector_names_a_bad_window_value(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory, recall_warm_seconds="soon")
+    install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+
+    async def run():
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+
+    with pytest.raises(ValueError, match="recall_warm_seconds must be a number of seconds, not 'soon'"):
+        asyncio.run(run())
+
+
 def test_turn_query_vector_uses_the_cache_without_a_request(memory, monkeypatch, caplog):
     DameCurieBot, bot, message = _recall_bot(memory)
     caplog.set_level("INFO")
@@ -992,3 +1004,57 @@ def test_turn_query_vector_uses_the_cache_without_a_request(memory, monkeypatch,
     assert asyncio.run(run()) is None
     assert len(transport.calls) == 1
     assert "the query vector of this message is cached" in caplog.text
+
+
+def test_turn_query_vector_failures_are_warnings_with_their_cause(memory, monkeypatch, caplog):
+    # Failures stay visible: a missing vector is a warning that names why.
+    DameCurieBot, bot, message = _recall_bot(memory)
+    caplog.set_level("INFO")
+
+    async def run():
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        # The refresh of a warm turn fails: the old vector stays.
+        install_transport(monkeypatch, Reply({}, 503))
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        assert warm is not None
+        for _ in range(20):
+            await asyncio.sleep(0)
+        # A cold turn without a vector, after the window.
+        key = ("100", "7")
+        stored_vector, _ = bot._warm_query_vectors[key]
+        bot._warm_query_vectors[key] = (stored_vector, rag.time.monotonic() - 901)
+        assert await DameCurieBot._prepare_turn_query_vector(bot, message, "third message") is None
+
+    asyncio.run(run())
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any(
+        "Memory recall: no background query vector for this message "
+        "(the embedding endpoint is paused for" in text
+        for text in warnings
+    ), warnings
+    assert any(
+        "Memory recall: cold, no query vector for this message after" in text
+        and "the embedding endpoint is paused for" in text
+        for text in warnings
+    ), warnings
+
+
+def test_a_second_build_in_one_task_drops_a_stale_override(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+    install_transport(
+        monkeypatch, Reply({"embeddings": [vector(index=1)]}), Reply({"embeddings": [vector(index=2)]})
+    )
+
+    async def run():
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        assert rag.QUERY_VECTOR_OVERRIDE.get() is not None
+        # The same task prepares again, for example after a late edit: the
+        # override of the earlier build is gone before anything else runs.
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        return warm, rag.QUERY_VECTOR_OVERRIDE.get()
+
+    warm, after = asyncio.run(run())
+    assert warm is not None
+    assert after is None

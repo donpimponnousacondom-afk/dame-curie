@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import contextlib
+import contextvars
 import copy
 import hashlib
 import html
@@ -14233,7 +14234,9 @@ class DameCurieBot(commands.Bot):
         while len(store) > 512:
             store.popitem(last=False)
 
-    async def _prepare_turn_query_vector(self, message, user_message: str) -> float | None:
+    async def _prepare_turn_query_vector(
+        self, message, user_message: str
+    ) -> tuple[float, contextvars.Token] | None:
         """Choose the query vector for the memory searches of this turn.
 
         Root, 1 November 2026: a follow-up message must not wait for the
@@ -14241,11 +14244,16 @@ class DameCurieBot(commands.Bot):
         the last ``recall_warm_seconds``, so the turn waits for the vector of
         this message, as before. Warm: the searches use the previous vector
         at once, and the vector of this message is computed in the
-        background for the next message. Returns the age in seconds of the
-        vector a warm turn uses, or None.
+        background for the next message. A warm turn returns the age in
+        seconds of the vector it uses and the token that resets the override;
+        other turns return None.
         """
+        # A stale override from an earlier build in this task must not rank
+        # this one.
+        QUERY_VECTOR_OVERRIDE.set(None)
         memory = getattr(self, "memory", None)
         text = str(user_message or "")
+        # Test doubles of the memory store have no cache; the real store has.
         if memory is None or not text.strip() or not hasattr(memory, "cached_embedding"):
             return None
         key = (
@@ -14257,7 +14265,13 @@ class DameCurieBot(commands.Bot):
             DameCurieBot._store_warm_query_vector(self, key, cached)
             logger.info("Memory recall: the query vector of this message is cached")
             return None
-        window = float(self._control.get("recall_warm_seconds", 900) or 0)
+        raw_window = self._control.get("recall_warm_seconds", 900)
+        try:
+            window = float(raw_window or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"recall_warm_seconds must be a number of seconds, not {raw_window!r}"
+            ) from exc
         warm = (getattr(self, "_warm_query_vectors", None) or {}).get(key)
         if warm is not None and window > 0:
             age = time.monotonic() - warm[1]
@@ -14265,23 +14279,37 @@ class DameCurieBot(commands.Bot):
 
                 async def refresh() -> None:
                     vector = await memory._embed_for_query(text)
-                    if vector is not None:
-                        DameCurieBot._store_warm_query_vector(self, key, vector)
+                    if vector is None:
+                        logger.warning(
+                            "Memory recall: no background query vector for this message "
+                            "(%s); the next message uses the vector from %.0fs ago",
+                            memory.query_embedding_gap(),
+                            time.monotonic() - warm[1],
+                        )
+                        return
+                    DameCurieBot._store_warm_query_vector(self, key, vector)
 
                 # Created before the override is set, so the refresh asks
                 # the embedder for the vector of this message.
                 _spawn_background(refresh())
-                QUERY_VECTOR_OVERRIDE.set((text, warm[0]))
+                token = QUERY_VECTOR_OVERRIDE.set((text, warm[0]))
                 logger.info(
                     "Memory recall: warm, searching with the query vector from %.0fs ago; "
                     "the vector of this message is computed in the background",
                     age,
                 )
-                return age
+                return age, token
         started = time.monotonic()
         vector = await memory._embed_for_query(text)
-        if vector is not None:
-            DameCurieBot._store_warm_query_vector(self, key, vector)
+        if vector is None:
+            logger.warning(
+                "Memory recall: cold, no query vector for this message after %.2fs (%s); "
+                "the semantic memory searches of this turn return no rows",
+                time.monotonic() - started,
+                memory.query_embedding_gap(),
+            )
+            return None
+        DameCurieBot._store_warm_query_vector(self, key, vector)
         logger.info(
             "Memory recall: cold, waited %.2fs for the query vector of this message",
             time.monotonic() - started,
@@ -14670,9 +14698,17 @@ class DameCurieBot(commands.Bot):
         # facts were being trimmed.
         ctx_spare = 0
 
-        warm_age = await DameCurieBot._prepare_turn_query_vector(self, message, user_message)
-        _mark("query_vector")
-        if warm_age is not None:
+        warm_recall = None
+        if self._control.get("entity_memory_enabled", True) or (
+            self._control.get("long_term_memory_enabled", True)
+            and not self._is_short_live_turn(message, user_message)
+        ):
+            # Only when a memory search below will run.
+            warm_recall = await DameCurieBot._prepare_turn_query_vector(
+                self, message, user_message
+            )
+            _mark("query_vector")
+        if warm_recall is not None:
             dynamic_parts.append(
                 "Memory recall in this prompt is ranked for the previous message "
                 "of this person in this channel. It refreshes in the background "
@@ -14954,6 +14990,10 @@ class DameCurieBot(commands.Bot):
             except Exception as e:
                 logger.warning(f"Failed to load long-term memory: {e}")
             ctx_spare = ctx_plan.spare_after("entity", "ltm", "web")
+        if warm_recall is not None:
+            # The warm vector serves only the memory sections above. Later
+            # searches in this turn (tools) embed their own text.
+            QUERY_VECTOR_OVERRIDE.reset(warm_recall[1])
         if self._control.get(
             "cross_context_enabled", True
         ) and not self._is_short_live_turn(message, user_message):
