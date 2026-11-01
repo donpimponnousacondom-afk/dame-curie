@@ -1204,3 +1204,43 @@ def test_a_failed_refresh_is_named_in_the_next_warm_prompt(memory, monkeypatch):
         "(the embedding endpoint is paused for "
     )
     assert "memory recall is ranked for a message " in gaps[0]
+
+
+def test_a_good_vector_clears_an_earlier_refresh_failure(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+
+    async def run():
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        install_transport(monkeypatch, Reply({}, 503))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert bot._warm_refresh_failures
+        # The pause ends; a cold turn after the window gets a good vector.
+        memory._embed_endpoint_down_until = 0.0
+        memory._query_embed_disabled_until = 0.0
+        key = ("100", "7")
+        stored_vector, _ = bot._warm_query_vectors[key]
+        bot._warm_query_vectors[key] = (stored_vector, rag.time.monotonic() - 901)
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=3)]}), Reply({"embeddings": [vector(index=4)]}))
+        assert await DameCurieBot._prepare_turn_query_vector(bot, message, "third message") is None
+        gaps = []
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "fourth message", gaps=gaps)
+        return warm, gaps
+
+    warm, gaps = asyncio.run(run())
+    assert warm is not None
+    assert gaps == []
+
+
+def test_a_repeated_search_error_is_listed_once():
+    errors = []
+
+    async def run():
+        rag.SEARCH_ERRORS.set(errors)
+        rag._report_search_error("a memory row could not be read and is left out (KeyError: 'x')")
+        rag._report_search_error("a memory row could not be read and is left out (KeyError: 'x')")
+
+    asyncio.run(run())
+    assert errors == ["a memory row could not be read and is left out (KeyError: 'x')"]

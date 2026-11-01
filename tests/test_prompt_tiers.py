@@ -430,3 +430,25 @@ def test_prompt_build_failures_reach_the_model_with_their_cause(fail, line):
     prompt = _prompt(bot)
     assert "Harness failures while this prompt was built" in prompt
     assert line in prompt
+
+
+@pytest.mark.parametrize(
+    ("when", "label", "gap"),
+    [
+        ("", "", None),
+        ("2020-01-01T00:00:00+00:00", "d ago]", None),
+        (
+            "yesterday-ish",
+            "",
+            "a cached web result has an unreadable timestamp ('yesterday-ish', "
+            "ValueError: not an ISO timestamp); its age label is missing",
+        ),
+    ],
+)
+def test_recall_age_label_reports_an_unreadable_timestamp(when, label, gap):
+    from bot import _recall_age_label
+
+    gaps = []
+    result = _recall_age_label(when, "a cached web result", gaps)
+    assert result.endswith(label)
+    assert gaps == ([gap] if gap else [])

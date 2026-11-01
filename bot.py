@@ -1291,6 +1291,27 @@ def _live_self_identity_line(user, guild=None, bot_name: str | None = None) -> s
     )
 
 
+def _recall_age_label(when: str, what: str, gaps: list[str]) -> str:
+    """The " [~Nd ago]" or " [today]" label of a recalled row.
+
+    A timestamp that cannot be read adds a failure line for the model
+    (root, 1 November 2026) and a warning; the row keeps no label.
+    """
+    if not when:
+        return ""
+    try:
+        dt = _parse_iso(when)
+        if dt is None:
+            raise ValueError("not an ISO timestamp")
+        age_days = (datetime.now(timezone.utc) - dt).days
+    except Exception as e:
+        cause = f"{type(e).__name__}: {e}"
+        logger.warning("Recall age label failed for %s (%r): %s", what, when, cause)
+        gaps.append(f"{what} has an unreadable timestamp ({when!r}, {cause}); its age label is missing")
+        return ""
+    return f" [~{age_days}d ago]" if age_days >= 1 else " [today]"
+
+
 # Root, 1 November 2026: the bot reads no intent from the words of a reply.
 # The structure of a response decides: send_message is the answer that ends
 # the turn, and text written beside working tool calls is a progress update
@@ -14243,6 +14264,8 @@ class DameCurieBot(commands.Bot):
             store = self._warm_query_vectors = OrderedDict()
         store[key] = (vector, time.monotonic())
         store.move_to_end(key)
+        # A good vector ends an earlier refresh failure of this key.
+        (getattr(self, "_warm_refresh_failures", None) or {}).pop(key, None)
         while len(store) > 512:
             store.popitem(last=False)
 
@@ -14314,7 +14337,6 @@ class DameCurieBot(commands.Bot):
                             failures = self._warm_refresh_failures = {}
                         failures[key] = cause
                         return
-                    (getattr(self, "_warm_refresh_failures", None) or {}).pop(key, None)
                     DameCurieBot._store_warm_query_vector(self, key, vector)
 
                 # Created before the override is set, so the refresh asks
@@ -14920,21 +14942,9 @@ class DameCurieBot(commands.Bot):
                         rec_lines = []
                         for r in rag_recent:
                             when = r.get("timestamp", "")
-                            stamp = ""
-                            if when:
-                                try:
-                                    dt = _parse_iso(when)
-                                    if dt is not None:
-                                        age_days = (
-                                            datetime.now(timezone.utc) - dt
-                                        ).days
-                                        stamp = (
-                                            f" [~{age_days}d ago]"
-                                            if age_days >= 1
-                                            else " [today]"
-                                        )
-                                except Exception:
-                                    stamp = ""
+                            stamp = _recall_age_label(
+                                when, f"a recalled message from {r.get('author', 'anon')}", memory_gaps
+                            )
                             who = r.get("author", "anon")
                             sim_pct = int(r.get("similarity", 0) * 100)
                             rec_lines.append(
@@ -14971,21 +14981,7 @@ class DameCurieBot(commands.Bot):
                             title = r.get("title") or url
                             sim_pct = int(r.get("similarity", 0) * 100)
                             when = r.get("timestamp", "")
-                            stamp = ""
-                            if when:
-                                try:
-                                    dt = _parse_iso(when)
-                                    if dt is not None:
-                                        age_days = (
-                                            datetime.now(timezone.utc) - dt
-                                        ).days
-                                        stamp = (
-                                            f" [~{age_days}d ago]"
-                                            if age_days >= 1
-                                            else " [today]"
-                                        )
-                                except Exception:
-                                    stamp = ""
+                            stamp = _recall_age_label(when, "a cached web result", memory_gaps)
                             q = r.get("query") or ""
                             qpart = f" (was searching: {q})" if q else ""
                             content = _web_result_snippet(

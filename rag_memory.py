@@ -56,7 +56,8 @@ def _report_search_error(line: str) -> None:
     """Log a memory search failure and add it to the prompt-build list."""
     logger.warning("Memory search: %s", line)
     errors = SEARCH_ERRORS.get()
-    if errors is not None:
+    # One bad row can come back from several searches of one build.
+    if errors is not None and line not in errors:
         errors.append(line)
 
 # ─── constants ────────────────────────────────────────────────────────
@@ -1479,6 +1480,14 @@ class RAGMemoryManager:
             (key, self.embed_dim, self.embedding_backend),
         ).fetchone()
         if row and row["embedding"] and embedding_blob_valid(row["embedding"], self.embed_dim):
+            # Count the hit, as _embed does, so the cache keeps used entries.
+            try:
+                self._db.execute(
+                    "UPDATE embed_cache SET last_used_at=?, hits=hits+1 WHERE key=? AND dim=?",
+                    (time.time(), key, self.embed_dim),
+                )
+            except sqlite3.Error as e:
+                logger.warning("embed_cache hit could not be counted: %s: %s", type(e).__name__, e)
             return _blob_to_embedding(row["embedding"])
         return None
 
