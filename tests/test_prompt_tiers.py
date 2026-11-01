@@ -452,3 +452,40 @@ def test_recall_age_label_reports_an_unreadable_timestamp(when, label, gap):
     result = _recall_age_label(when, "a cached web result", gaps)
     assert result.endswith(label)
     assert gaps == ([gap] if gap else [])
+
+
+def test_the_current_time_uses_the_container_time_zone(monkeypatch):
+    # Root, 1 November 2026: the container time zone, never a hardcoded
+    # one. The legacy line used a fixed UTC-4 "AST".
+    import re
+    import time
+
+    monkeypatch.setenv("TZ", "Europe/Madrid")
+    time.tzset()
+    try:
+        prompt = _prompt(_bot(_Memory()))
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    line = next(row for row in prompt.splitlines() if row.startswith("User: alice"))
+    assert re.search(r"\| \w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} (CET|CEST) \| Channel:", line), line
+    assert " AST" not in line
+
+
+def test_no_source_file_hardcodes_a_time_zone():
+    # The container zone is the only clock (root, 1 November 2026).
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    pattern = re.compile(
+        r"timezone\(\s*(?:datetime\.)?timedelta|ZoneInfo\(\s*['\"]|hours=-4\b"
+    )
+    offenders = [
+        f"{path.relative_to(root)}:{number}"
+        for path in root.rglob("*.py")
+        if path.relative_to(root).parts[0] not in {"tests", "audit", ".git", ".venv"}
+        for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(text)
+    ]
+    assert offenders == []
