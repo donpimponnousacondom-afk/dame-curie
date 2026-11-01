@@ -165,9 +165,10 @@ def _render_job_rounds(groups: list[list[dict]]) -> str:
 def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_ROUNDS) -> tuple[int, int]:
     """Replace long tool results of older job rounds with one line, in place.
 
-    Masking runs in batches: it waits until the rounds from the oldest round
-    with an unmasked long result up to the newest round number 2 *
-    ``keep_rounds`` or more. It then masks down to the newest ``keep_rounds``.
+    Masking runs in batches. It waits until at least 2 * ``keep_rounds``
+    rounds lie between the oldest round with an unmasked long result and the
+    newest round, counting both. It then masks down to the newest
+    ``keep_rounds``.
     The prompt prefix therefore changes once every ``keep_rounds`` steps, not
     at every step. A result shorter than BG_MASK_MIN_CHARS stays. The marker
     keeps the first line of the result (for example "Tool shell: Error ..."),
@@ -1049,7 +1050,10 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     # job stops with the exact cause, as a failed compaction
                     # does.
                     terminal_failure = exc
-                    failure_text = f"tool-result masking failed at step {step + 1}: {exc}"
+                    failure_text = (
+                        f"tool-result masking failed at step {step + 1}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
                     capture_incident("jobs", "Background tool-result masking failed", exception=exc, context=job_context | {"step": str(step + 1)})
                     break
                 if masked:

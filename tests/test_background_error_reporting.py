@@ -497,5 +497,7 @@ def test_job_with_a_broken_tool_pairing_fails_with_its_cause(tmp_path, private_s
     ]
     asyncio.run(run_background_job(bot, job.id))
     assert job.status == "error"
-    assert job.progress == "tool-result masking failed at step 1: Orphan tool result in tool history"
+    assert job.progress == (
+        "tool-result masking failed at step 1: ValueError: Orphan tool result in tool history"
+    )
     assert len(bot.model_messages) == 1

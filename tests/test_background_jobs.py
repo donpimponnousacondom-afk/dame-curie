@@ -1152,8 +1152,8 @@ def test_a_masked_error_result_keeps_its_first_line():
 
 
 def test_a_result_is_not_masked_when_its_marker_is_not_shorter():
-    # A long tool name and a 200-character first line make a marker of about
-    # 420 characters. A 410-character result then stays as it is.
+    # A 64-character tool name and a 200-character first line make a marker
+    # of about 413 characters. A 410-character result then stays as it is.
     from jobs import BG_MASK_MIN_CHARS, mask_old_tool_results
 
     messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
