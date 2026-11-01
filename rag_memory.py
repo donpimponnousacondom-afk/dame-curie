@@ -231,7 +231,7 @@ def embedding_eligible(kind: str, source: str, content: str) -> bool:
     if kind == "bot_output":
         return False
     eligible = bool(content.strip())
-    if kind in {"message", "bot_output"}:
+    if kind == "message":
         eligible = source != "system" and len(_strip_for_embedding(content)) >= _MIN_EMBED_LEN
     return eligible
 
@@ -3381,6 +3381,8 @@ class RAGMemoryManager:
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return candidates[:top_k]  # type: ignore[index]  # always len > 0 here
 
+    # No caller (1 November 2026). Since #31, bot_output rows have no
+    # vectors, so the bot_output search below finds nothing.
     async def rag_relevant_context(  # type: ignore[override]
         self,
         query: str,
