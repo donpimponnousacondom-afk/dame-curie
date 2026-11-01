@@ -7,6 +7,7 @@ after the first as a 'duplicate terminal tool call'.
 """
 import asyncio
 import base64
+import json
 import sys
 import time
 from pathlib import Path
@@ -513,7 +514,9 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
             "type": "function",
             "function": {
                 "name": "send_message",
-                "arguments": '{"explanation": "first", "content": "alpha"}',
+                "arguments": json.dumps(
+                    {"explanation": "first", "content": "<tool:react /> alpha"}
+                ),
             },
         },
         {
@@ -534,10 +537,13 @@ def test_two_send_messages_in_a_row_both_fire_in_order():
     )
 
     async def run():
-        await DameCurieBot._process_native_tool_calls(
-            bot, message, "", raw_tool_calls
+        return await DameCurieBot._process_native_tool_calls(
+            bot, message, "<|tool_send_message|> said", raw_tool_calls
         )
 
-    asyncio.run(run())
+    cleaned, _results = asyncio.run(run())
 
-    assert sent == ["alpha", "beta"], f"Out of order: {sent}"
+    # Root, 1 November 2026: tool markup in the model text and in
+    # send_message content is not stripped.
+    assert cleaned == "<|tool_send_message|> said"
+    assert sent == ["<tool:react /> alpha", "beta"], f"Out of order: {sent}"

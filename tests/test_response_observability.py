@@ -956,12 +956,17 @@ def test_dispatch_overwrites_forged_metrics_without_polluting_tool_history(
             bot,
             Message(),
             "send_message",
-            {"content": "answer", "_response_metrics": {"call_id": "forged"}},
+            {
+                "content": "<tool:react /> answer",
+                "_response_metrics": {"call_id": "forged"},
+            },
             disabled=set(),
             compatible={"send_message"},
             response_metrics=measured,
         )
         assert "__MESSAGE_SENT__" in result
+        # Root, 1 November 2026: send_message content is not stripped.
+        assert tool.execute.call_args.kwargs["content"] == "<tool:react /> answer"
         assert tool.execute.call_args.kwargs.get("_response_metrics") is measured
         assert "_response_metrics" not in trace.call_args.kwargs["params"]
 
