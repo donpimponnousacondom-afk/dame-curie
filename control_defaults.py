@@ -87,12 +87,7 @@ DEFAULT_CONTROL = {
     "context_tier_facts_weight": 7,
     "context_tier_web_weight": 3,
     # ─── repetition guards ──────────────────────────────────────────────
-    # Collapse repetition inside a single reply before it is sent: laugh runs
-    # ("jajajajajaja" -> "ja"), doubled words, a sentence said twice, a phrase
-    # repeated. Never touches fenced code. `response_guard` has done this since
-    # it was written; until now nothing called it.
-    "scrub_repetitions": True,
-    # The other half: tell him when he has opened several messages running with
+    # Tell him when he has opened several messages running with
     # the same phrase. No single message is wrong, so nothing downstream can
     # catch it, and the model reads its own last reply as evidence of what it
     # sounds like and does it again.
@@ -297,6 +292,8 @@ DEAD_CONTROL_KEYS = frozenset(
         "enable_night_sleep",
         "night_sleep_start_hour",
         "night_sleep_end_hour",
+        # Root, 1 November 2026: the output repetition scrubber is removed.
+        "scrub_repetitions",
     }
 )
 

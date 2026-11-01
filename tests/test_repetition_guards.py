@@ -1,15 +1,15 @@
-"""Stopping the bot from repeating itself.
+"""Repetition in what the bot says.
 
-Two different problems that look like one. Inside a single reply,
-"jajajajajaja" is a run that can be collapsed after generation -
-`response_guard` has done that since it was written, but nothing called it, so
-every run reached the channel intact. Across replies, the same phrase opening
-six messages running is a pattern no single message is wrong for, so nothing
-downstream can catch it; the model has to be told, because it reads its own
-last reply as evidence of what it sounds like and does it again.
+Inside a single reply, repetition reaches Discord as the model wrote it.
+Root, 1 November 2026: the scrubbers that collapsed laugh runs, doubled
+words and echo loops are removed; a loop in Discord is a signal to fix the
+cause. Across replies, the same phrase opening six messages running is a
+pattern no single message is wrong for, so the model is told about it.
 """
 
 from types import SimpleNamespace
+
+import pytest
 
 from bot import DameCurieBot, _sanitize_visible_reply
 
@@ -17,54 +17,30 @@ from bot import DameCurieBot, _sanitize_visible_reply
 # ─── within one reply ────────────────────────────────────────────────────
 
 
-def test_a_laugh_run_is_collapsed_before_it_is_sent():
-    assert _sanitize_visible_reply("jajajajajaja qué bueno") == "ja qué bueno"
-    assert _sanitize_visible_reply("(ja)(ja)(ja)(ja) listo") == "(ja)(ja) listo"
-
-
-def test_repeated_words_and_sentences_are_collapsed():
-    assert _sanitize_visible_reply("y y de de acuerdo") == "y de acuerdo"
-    assert _sanitize_visible_reply("Esto funciona. Esto funciona.") == "Esto funciona."
-
-
-def test_ordinary_text_is_left_alone():
-    text = "here is the deploy plan, it should take about ten minutes"
-    assert _sanitize_visible_reply(text) == text
-
-
-def test_code_blocks_are_never_scrubbed():
-    # A program that legitimately repeats a line is not repetition.
-    code = "```\nja ja ja ja\nprint(1)\nprint(1)\n```"
-    assert _sanitize_visible_reply(code) == code
-
-
-def test_a_repetitive_code_block_survives_the_echo_breaker():
-    """Repetition is also what a table or a block of asserts looks like.
-
-    scrub_repetitions skipped fences; break_echo_loop then ran over the whole
-    reply and truncated inside one - the message went out as two lines of
-    code and an unterminated ``` fence.
-    """
-    code = "```py\n" + "print(1)\n" * 40 + "```"
-    assert _sanitize_visible_reply(code) == code
-
-
-def test_an_echo_loop_is_truncated_rather_than_posted_whole():
-    looped = "the same thing " * 40
-    out = _sanitize_visible_reply(looped)
-    assert len(out) < len(looped)
-
-
-def test_the_scrub_can_be_switched_off():
-    assert (
-        _sanitize_visible_reply("jajajajajaja hola", scrub_repeats=False)
-        == "jajajajajaja hola"
-    )
-
-
-def test_tool_trace_cleanup_still_happens():
-    # The scrub is bolted onto an existing sanitizer; it must not displace it.
-    assert "__NO_RESPONSE__" not in _sanitize_visible_reply("hi __NO_RESPONSE__")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jajajajajaja qué bueno",
+        "(ja)(ja)(ja)(ja) listo",
+        "y y de de acuerdo",
+        "bye bye, it had had enough",
+        "Esto funciona. Esto funciona.",
+        "the same thing " * 40,
+        "```py\n" + "print(1)\n" * 40 + "```",
+        "here is the deploy plan, it should take about ten minutes",
+        "literal \\n stays",
+        "see [1] and [spoiler] and [laughs]",
+        "[Dame Curie] hi",
+        "Called react with {} -> Tool react: Reacted with 👍",
+        "hi __NO_RESPONSE__ __IMAGE_SENT__",
+        "[RESPOND TO THIS] alice(456): hi",
+        "SirRooT(1482143139828596916) said hi",
+        "no preview: <https://example.com/page>",
+    ],
+)
+def test_a_reply_reaches_discord_as_written(text):
+    # A regression guard: each of these was rewritten or removed before.
+    assert _sanitize_visible_reply(text) == text.strip()
 
 
 # ─── across replies ──────────────────────────────────────────────────────
