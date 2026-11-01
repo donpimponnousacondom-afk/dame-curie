@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -798,7 +798,7 @@ def test_footer_does_not_ping_but_body_mentions_remain(metrics):
     assert "@\u200beveryone" in wire[0]
 
 
-@pytest.mark.parametrize("fail_followup", [False, True])
+@pytest.mark.parametrize("fail_followup", [False, True, "read"])
 def test_background_producing_call_survives_string_recovery_without_error_borrow(
     metrics, fail_followup
 ):
@@ -840,11 +840,21 @@ def test_background_producing_call_survives_string_recovery_without_error_borrow
             _acquire_ai_slot=AsyncMock(),
             _release_ai_slot=AsyncMock(),
             _generate_response=AsyncMock(side_effect=responses),
-            _native_calls_from=lambda response: response.tool_calls,
+            _native_calls_from=(
+                Mock(side_effect=RuntimeError("synthetic read failure"))
+                if fail_followup == "read"
+                else lambda response: response.tool_calls
+            ),
             _dispatch_tool_calls=AsyncMock(side_effect=dispatched),
         )
         await run_background_job(bot, "job")
-        assert bot._dispatch_tool_calls.call_args.kwargs["response_metrics"] is metrics
+        if fail_followup == "read":
+            # A failure to read the tool calls stops the job with its cause.
+            assert not bot._dispatch_tool_calls.await_args_list
+            assert "reading tool calls failed at step 1" in str(job.progress)
+        else:
+            kwargs = bot._dispatch_tool_calls.call_args.kwargs
+            assert kwargs["response_metrics"] is metrics
         assert message.channel.sent
         if fail_followup:
             assert message.channel.sent[-1].content == PUBLIC_ERROR_TEXT
