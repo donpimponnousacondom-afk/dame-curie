@@ -210,8 +210,11 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         "arguments": {"arguments": {"parameters": json.dumps({"command": "x"})}},
     }}])
     assert three_steps["arguments"] == {"command": "x"}
-    with pytest.raises(ValueError, match=r"name of call 1 of 1 has type int, not str$"):
-        normalize_native_tool_calls([{"function": {"name": 5, "arguments": "{}"}}])
+    for bad_name, kind in ((5, "int"), ([], "list"), (False, "bool")):
+        with pytest.raises(ValueError, match=rf"of call 1 of 1 has type {kind}, not str$"):
+            normalize_native_tool_calls([{"function": {"name": bad_name}}])
+    with pytest.raises(ValueError, match=r"call 1 of 1: character 0 \(from 0\) of the name"):
+        normalize_native_tool_calls([{"function": {"name": "\ud800"}}])
     # Each error names the call and its one exact cause.
     place = "Malformed native tool-call batch: call 1 of 1 ('create_site'): "
     non_finite = place + "the arguments hold a non-finite number"
@@ -237,7 +240,7 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         ('{"nested":[{"value":-Infinity}]}', non_finite),
         ('{"arguments":{"value":Infinity}}', non_finite),
         (json.dumps('{"nested":[{"value":1e10000}]}'), non_finite),
-        ('{"a":1', place + "the arguments leave 1 open brackets"),
+        ('{"a":1', place + "the arguments leave 1 open bracket"),
         ('{"a":"x}', place + "the arguments end inside a string"),
         (
             '{"a":1}}',
@@ -245,13 +248,12 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         ),
         (
             json.dumps(json.dumps(json.dumps(json.dumps({"a": 1})))),
-            place + "the arguments are not a JSON object after 3 decode or "
-            "unwrap steps",
+            place + "the arguments need more than 3 decode or unwrap steps",
         ),
         (
             '{"a":"\ud800"}',
-            place + "the arguments hold a character that is not valid UTF-8 at "
-            "character 6 (from 0)",
+            "Malformed native tool-call batch: call 1 of 1 ('create_site'): "
+            "character 6 (from 0) of the arguments is not valid UTF-8",
         ),
     ):
         with pytest.raises(ValueError) as raised:

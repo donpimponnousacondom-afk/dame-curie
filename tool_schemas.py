@@ -915,7 +915,7 @@ def _native_argument_depth_problem(text: str) -> str:
     if quoted:
         return "end inside a string"
     if depth:
-        return f"leave {depth} open brackets"
+        return f"leave {depth} open bracket{'s' if depth > 1 else ''}"
     return ""
 
 
@@ -935,14 +935,14 @@ def _native_argument_value_problem(value: dict) -> str:
     return ""
 
 
-def _utf8_size(text: str, place: str) -> int:
-    """UTF-8 byte size of argument text; a lone surrogate is a malformed call."""
+def _utf8_size(text: str, place: str, part: str = "the arguments") -> int:
+    """UTF-8 byte size of call text; a lone surrogate is a malformed call."""
     try:
         return len(text.encode("utf-8"))
     except UnicodeEncodeError as error:
         raise ValueError(
-            f"{_MALFORMED}: {place}: the arguments hold a character that is not "
-            f"valid UTF-8 at character {error.start} (from 0)"
+            f"{_MALFORMED}: {place}: character {error.start} (from 0) of "
+            f"{part} is not valid UTF-8"
         ) from None
 
 
@@ -1007,7 +1007,7 @@ def _decode_native_tool_arguments(
         return {}, argument_bytes, oversized
 
     decoder = json.JSONDecoder()
-    # Up to N decode or unwrap steps, then one more pass checks the object.
+    # Up to 3 decode or unwrap steps, then one more pass checks the object.
     for _ in range(_NATIVE_MAX_ARGUMENT_DECODES + 1):
         if isinstance(current, str):
             current = _parse_native_argument_json(current, decoder, place)
@@ -1033,7 +1033,7 @@ def _decode_native_tool_arguments(
             raise ValueError(f"{_MALFORMED}: {place}: the arguments {problem}")
         return dict(current), argument_bytes, oversized
     raise ValueError(
-        f"{_MALFORMED}: {place}: the arguments are not a JSON object after "
+        f"{_MALFORMED}: {place}: the arguments need more than "
         f"{_NATIVE_MAX_ARGUMENT_DECODES} decode or unwrap steps"
     )
 
@@ -1066,7 +1066,9 @@ def normalize_native_tool_calls(
         if fn_value is not None and not isinstance(fn_value, dict):
             raise ValueError(f"{_MALFORMED}: the function of {place} is not an object")
         fn = fn_value if isinstance(fn_value, dict) else {}
-        raw_name = fn.get("name") or call.get("name")
+        raw_name = fn.get("name")
+        if raw_name is None or raw_name == "":
+            raw_name = call.get("name")
         if raw_name is not None and not isinstance(raw_name, str):
             raise ValueError(
                 f"{_MALFORMED}: the name of {place} has type "
@@ -1074,7 +1076,7 @@ def normalize_native_tool_calls(
             )
         if not raw_name or not raw_name.strip():
             raise ValueError(f"{_MALFORMED}: {place} has no function name")
-        if len(raw_name.encode("utf-8")) > _NATIVE_MAX_NAME_BYTES:
+        if _utf8_size(raw_name, place, "the name") > _NATIVE_MAX_NAME_BYTES:
             raise ValueError(
                 f"{_OVERSIZED}: the name of {place} is longer than "
                 f"{_NATIVE_MAX_NAME_BYTES} bytes"
@@ -1112,7 +1114,7 @@ def normalize_native_tool_calls(
             )
         if not call_id.strip():
             raise ValueError(f"{_MALFORMED}: the id of {place} is blank")
-        if len(call_id.encode("utf-8")) > _NATIVE_MAX_ID_BYTES:
+        if _utf8_size(call_id, place, "the id") > _NATIVE_MAX_ID_BYTES:
             raise ValueError(
                 f"{_OVERSIZED}: the id of {place} is longer than "
                 f"{_NATIVE_MAX_ID_BYTES} bytes"
@@ -1120,8 +1122,10 @@ def normalize_native_tool_calls(
         if call_id in seen_ids:
             raise ValueError(f"{_MALFORMED}: {place} repeats the id {call_id!r}")
         seen_ids.add(call_id)
-        batch_envelope_bytes += len(
-            json.dumps(call, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        batch_envelope_bytes += _utf8_size(
+            json.dumps(call, ensure_ascii=False, separators=(",", ":")),
+            place,
+            "the call envelope",
         )
         if (
             batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES
