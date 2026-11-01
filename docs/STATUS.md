@@ -57,7 +57,7 @@ How to revert one change:
 | #23 | `153caa9` | The provider log line states `input=`, `input_source=` and `cached=` tokens. First live log measurement, 1 November 2026 (not in the repository): 9,232 of 17,470 input tokens cached. | Read `cached=` to measure prompt-cache hits. |
 | #24 | `9bbf2dd` | The bot no longer runs the startup REM backfill. It re-inserted up to 500 old replies on each start with the current time, so they moved to the newest end of her history. | History in time order after a restart. |
 | #26 | `170d5b5` | No intent is read from the words of a reply. The `_PROMISE_RE` regex took "checking" in a finished reply for an "on it" promise, called the model again, and the reply posted twice (14:09 CET, 1 November 2026). `send_message` now ends the turn whatever its words. Text written beside working tool calls posts as a progress update before those calls run. Media, final and pausing calls keep the after-call rule. | An update that posts after the tools, or a reply that posts twice. A message "Stopped: the progress update could not be posted (...)". |
-| #27 | `git log --grep '(#27)'` (the squash commit does not exist before the merge) | Prompt query embeddings have their own lane. Ollama runs two slots (`OLLAMA_NUM_PARALLEL` "2" in `compose.yaml`). Before, the query for her prompt waited behind background writes of web pages and tool records: 24.8 s on 1 November 2026 (live log, not in the repository). A query embedding that takes 1 s or more logs "Query embedding took ...", also when it times out or fails. Not measured: the query time under load with two slots, Ollama memory with two slots, and the effect of other Ollama clients (other processes, `scripts/dirac_relay.py`). | "Query embedding took" lines and the `entity_profile` time in "Prompt build" lines. Ollama memory with two slots. |
+| #27 | `git log --grep '(#27)'` (the squash commit does not exist before the merge) | Prompt query embeddings have their own lane. Ollama runs two slots (`OLLAMA_NUM_PARALLEL` "2" in `compose.yaml`). Before, the query for her prompt waited behind background writes of web pages and tool records: 24.8 s on 1 November 2026 (live log, not in the repository). A query embedding that takes 1 s or more logs "Query embedding took ...", also when it times out or fails. Not measured: the query time under load with two slots, Ollama memory with two slots, and the effect of other processes that call the same Ollama service. | "Query embedding took" lines and the `entity_profile` time in "Prompt build" lines. Ollama memory with two slots. |
 
 ### Known open items
 
@@ -107,13 +107,13 @@ How to revert one change:
   memory-write error), the tool calls of that round do not run. Before
   #26 the update posted after the tools.
 - **The embedding error log names only the exception class**
-  ("Embedding failed: <class>", `_embed` in `rag_memory.py`). The
-  AGENTS.md error rule asks for the exact cause.
+  ("Embedding failed: <class>", `_embed` in `rag_memory.py`). AGENTS.md
+  says an error message names what failed and why.
 - **Embedding cost.** One 6,000-character piece takes about 7 s on the
   CPU embedder (measured live on 1 November 2026, not in the
   repository). `_split_embed_chunks` makes pieces of up to 6,000
   characters with a 200-character overlap. A fetched web result of up to
-  12,000 characters is three pieces, about 21 s. A channel memory row,
+  12,000 characters is three pieces, about 21 s (estimated from the one 7 s measurement; not measured as a whole). A channel memory row,
   such as a tool record, embeds up to 8,000 characters
   (`add_to_channel_memory` in `rag_memory.py`): two pieces.
 
