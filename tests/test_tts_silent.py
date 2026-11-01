@@ -260,8 +260,9 @@ def test_dispatch_native_runs_nonterminal_tool():
     ]
     # The error names the call and the exact cause.
     cause = (
-        "Malformed native tool-call batch: call 2 of 2 (web_search): the "
-        "arguments have text after the JSON value at position 2"
+        "Malformed native tool-call batch: call 2 of 2 ('web_search'): the "
+        "arguments have text after the JSON value, from character 2 of the "
+        "decoded text (from 0)"
     )
     with pytest.raises(ValueError) as raised:
         asyncio.run(DameCurieBot._dispatch_tool_calls(bot, message, "", native_tool_calls=malformed))

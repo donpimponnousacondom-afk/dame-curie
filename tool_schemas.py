@@ -960,12 +960,12 @@ def _parse_native_argument_json(
     except json.JSONDecodeError as error:
         raise ValueError(
             f"{_MALFORMED}: {place}: the arguments are not valid JSON: "
-            f"{error.msg} at character {error.pos} (from 0)"
+            f"{error.msg} at character {error.pos} of the decoded text (from 0)"
         ) from None
     if text[end:].strip():
         raise ValueError(
             f"{_MALFORMED}: {place}: the arguments have text after the JSON "
-            f"value, from character {end} (from 0)"
+            f"value, from character {end} of the decoded text (from 0)"
         )
     return parsed
 
@@ -990,7 +990,7 @@ def _decode_native_tool_arguments(
         current = raw_args.strip().lstrip("\ufeff")
     else:
         raise ValueError(
-            f"{_MALFORMED}: {place}: the arguments are a "
+            f"{_MALFORMED}: {place}: the arguments have type "
             f"{type(raw_args).__name__}, not a JSON object or string"
         )
     oversized = argument_bytes > _NATIVE_MAX_ARGUMENT_BYTES
@@ -1007,13 +1007,14 @@ def _decode_native_tool_arguments(
         return {}, argument_bytes, oversized
 
     decoder = json.JSONDecoder()
-    for _ in range(_NATIVE_MAX_ARGUMENT_DECODES):
+    # Up to N decode or unwrap steps, then one more pass checks the object.
+    for _ in range(_NATIVE_MAX_ARGUMENT_DECODES + 1):
         if isinstance(current, str):
             current = _parse_native_argument_json(current, decoder, place)
             continue
         if not isinstance(current, dict):
             raise ValueError(
-                f"{_MALFORMED}: {place}: the arguments decode to a "
+                f"{_MALFORMED}: {place}: the arguments decode to type "
                 f"{type(current).__name__}, not a JSON object"
             )
         wrapper = next(
@@ -1033,7 +1034,7 @@ def _decode_native_tool_arguments(
         return dict(current), argument_bytes, oversized
     raise ValueError(
         f"{_MALFORMED}: {place}: the arguments are not a JSON object after "
-        f"{_NATIVE_MAX_ARGUMENT_DECODES} decode steps"
+        f"{_NATIVE_MAX_ARGUMENT_DECODES} decode or unwrap steps"
     )
 
 
@@ -1045,7 +1046,8 @@ def normalize_native_tool_calls(
         return []
     if not isinstance(raw_calls, list):
         raise ValueError(
-            f"{_MALFORMED}: tool_calls is a {type(raw_calls).__name__}, not a list"
+            f"{_MALFORMED}: tool_calls has type {type(raw_calls).__name__}, "
+            "not list"
         )
     if len(raw_calls) > _NATIVE_MAX_CALLS and not allow_oversized_arguments:
         raise ValueError(
@@ -1065,7 +1067,12 @@ def normalize_native_tool_calls(
             raise ValueError(f"{_MALFORMED}: the function of {place} is not an object")
         fn = fn_value if isinstance(fn_value, dict) else {}
         raw_name = fn.get("name") or call.get("name")
-        if not isinstance(raw_name, str) or not raw_name.strip():
+        if raw_name is not None and not isinstance(raw_name, str):
+            raise ValueError(
+                f"{_MALFORMED}: the name of {place} has type "
+                f"{type(raw_name).__name__}, not str"
+            )
+        if not raw_name or not raw_name.strip():
             raise ValueError(f"{_MALFORMED}: {place} has no function name")
         if len(raw_name.encode("utf-8")) > _NATIVE_MAX_NAME_BYTES:
             raise ValueError(
@@ -1100,8 +1107,8 @@ def normalize_native_tool_calls(
             call_id = raw_id
         else:
             raise ValueError(
-                f"{_MALFORMED}: the id of {place} is a {type(raw_id).__name__}, "
-                "not a string"
+                f"{_MALFORMED}: the id of {place} has type "
+                f"{type(raw_id).__name__}, not str"
             )
         if not call_id.strip():
             raise ValueError(f"{_MALFORMED}: the id of {place} is blank")
