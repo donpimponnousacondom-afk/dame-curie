@@ -3381,8 +3381,9 @@ class RAGMemoryManager:
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return candidates[:top_k]  # type: ignore[index]  # always len > 0 here
 
-    # No caller (1 November 2026). Since #31, bot_output rows have no
-    # vectors, so the bot_output search below finds nothing.
+    # No caller (1 November 2026). Since #31, new bot_output rows have no
+    # vectors. Rows from before #31 keep theirs, so the bot_output search
+    # below can return them if this function is called.
     async def rag_relevant_context(  # type: ignore[override]
         self,
         query: str,
