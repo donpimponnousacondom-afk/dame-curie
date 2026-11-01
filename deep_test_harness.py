@@ -13,7 +13,6 @@ Features tested:
   6. Autonomy Engine & Turn-Taking (4 stages, 8 room states, floor verdicts, blacklists, solo)
   7. Chess Engine & Board Mechanics (SAN/UCI, alpha-beta negamax, FEN, image rendering)
  10. Inbox System (Notices, requests)
- 11. Security Guardrails & Response Guard (repetition scrubbing, echo loops, code safety)
  12. Default Controls
  13. Concurrency Safety & Bot Commands (!stop, !prompt, !solo, !drug, !jailbreak, !context, !rem, !vc)
 """

@@ -16,13 +16,19 @@ CDN = "https://cdn.discordapp.com/attachments/100/200/generated_image.png"
     ("[article](https://example.com/article)", "[article](https://example.com/article)"),
     # Root, 1 November 2026: bracket tokens and sent markers reach Discord
     # as written. A leak there is a signal, not text to remove.
-    ("[TOOL_CALL:web_search]answer[/web_search]", "[TOOL_CALL:web_search]answer[/web_search]"),
+    (
+        "[TOOL_CALL:web_search]answer[/web_search]",
+        "[TOOL_CALL:web_search]answer[/web_search]",
+    ),
     ("[tool]answer[/tool]", "[tool]answer[/tool]"),
     ("[tool foo=bar]answer[/tool]", "[tool foo=bar]answer[/tool]"),
     (f"[tool][shot]({CDN})[/tool]", f"[tool][shot]({CDN})[/tool]"),
     (f"[shot]({CDN})[tool]done[/tool]", f"[shot]({CDN})[tool]done[/tool]"),
     (f"[first]({CDN}) [second](https://example.com/page)", f"[first]({CDN}) [second](https://example.com/page)"),
-    ('[tool]{"payload": "hidden"}[/tool]answer', '[tool]{"payload": "hidden"}[/tool]answer'),
+    (
+        '[tool]{"payload": "hidden"}[/tool]answer',
+        '[tool]{"payload": "hidden"}[/tool]answer',
+    ),
     ("__IMAGE_SENT____CAPTION_SENT__", "__IMAGE_SENT____CAPTION_SENT__"),
 ])
 def test_visible_reply_keeps_image_previews_and_protocol_markers(text, expected):

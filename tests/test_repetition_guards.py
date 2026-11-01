@@ -45,7 +45,7 @@ from bot import DameCurieBot, _sanitize_visible_reply
         "no preview: <https://example.com/page>",
     ],
 )
-def test_a_reply_reaches_discord_as_written(text):
+def test_ordinary_text_is_left_alone(text):
     # A regression guard: each of these was rewritten or removed before.
     assert _sanitize_visible_reply(text) == text.strip()
 

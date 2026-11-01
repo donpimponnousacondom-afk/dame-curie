@@ -8828,11 +8828,10 @@ class DameCurieBot(commands.Bot):
                 content = str(ev.get("content") or "").strip()
                 if not content:
                     continue
-                # Strip the same artifacts the normal-reply path strips
-                # so the model sees clean content in the LLM context.
-                # These come from the bot emitting the token as part of
-                # its output (e.g. when it called send_message as a
-                # tool and the visible reply came back through).
+                # REM event backfill (legacy, root replaces REM): drop the
+                # internal control markers from stored event text before it
+                # enters the REM context. Visible replies keep them since
+                # 1 November 2026.
                 for token in (
                     "__NO_RESPONSE__",
                     "__TTS_SENT__",
