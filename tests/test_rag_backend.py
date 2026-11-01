@@ -1256,10 +1256,17 @@ def test_dedupe_self_copies_removes_only_copies_a_gateway_row_holds(memory, tmp_
         )
 
     row("1001", "c1", "her", "[2026-11-01 17:00:00 CET] hello there")
-    row("bot_reply:1001", "c1", "her", "hello there")
+    row("1002", "c1", "her", "[2026-11-01 17:01:00 CET] that is ok")
+    # Same Discord id as a gateway row: matched even with other text.
+    row("bot_reply:1001", "c1", "her", "hello there\n\n[Delivery incomplete: note]")
+    # Exact text after the gateway prefix: matched.
     row("bot_send_message:9", "c1", "her", "hello there")
-    row("bot_update:5", "c1", "her", "a text no gateway row holds")
+    # Only the end of a gateway row ("ok"): not a match.
+    row("bot_update:5", "c1", "her", "ok")
     row("rem_backfill:x", "c2", "her", "hello there")
+    # A hex id that starts with a digit is no Discord id.
+    row("3f2a9c", "c1", "her", "[2026-11-01 17:02:00 CET] a hex row")
+    row("rem_backfill:y", "c1", "her", "a hex row")
     db_path = memory.db_path
 
     dry = rag_maintenance.dedupe_self_copies(db_path, apply=False)
@@ -1267,13 +1274,17 @@ def test_dedupe_self_copies_removes_only_copies_a_gateway_row_holds(memory, tmp_
     assert dry["copies"]["bot_reply"] == {"matched": 1, "kept": 0}
     assert dry["copies"]["bot_send_message"] == {"matched": 1, "kept": 0}
     assert dry["copies"]["bot_update"] == {"matched": 0, "kept": 1}
-    assert dry["copies"]["rem_backfill"] == {"matched": 0, "kept": 1}
+    assert dry["copies"]["rem_backfill"] == {"matched": 0, "kept": 2}
 
     applied = rag_maintenance.dedupe_self_copies(db_path, apply=True)
     assert applied["deleted"] == 2
     left = {r[0] for r in memory._db.execute("SELECT id FROM vectors")}
-    assert left == {"1001", "bot_update:5", "rem_backfill:x"}
+    assert left == {"1001", "1002", "3f2a9c", "bot_update:5", "rem_backfill:x", "rem_backfill:y"}
     import sqlite3
 
     with sqlite3.connect(applied["backup"]) as backup:
-        assert backup.execute("SELECT COUNT(*) FROM vectors").fetchone()[0] == 5
+        assert backup.execute("SELECT COUNT(*) FROM vectors").fetchone()[0] == 8
+    import os
+    import stat
+
+    assert stat.S_IMODE(os.stat(applied["backup"]).st_mode) == 0o600

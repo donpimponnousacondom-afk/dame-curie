@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -39,12 +40,19 @@ async def backfill(
 SELF_COPY_PREFIXES = ("bot_reply:", "bot_send_message:", "bot_update:", "rem_backfill:")
 
 
+# The time prefix the gateway puts in front of a stored message.
+_GATEWAY_PREFIX = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [^\]]+\] ")
+
+
 def dedupe_self_copies(db_path: Path, apply: bool) -> dict:
-    """Remove bot-side copies whose text a gateway row of the same author holds.
+    """Remove bot-side copies of messages that a gateway row already holds.
 
     Root, 1 November 2026: one row per Discord message. A copy matches when
-    a row with a numeric Discord id, in the same channel and by the same
-    author, ends with the copy's text. Copies without such a row stay.
+    the gateway row with the same Discord id exists, or when a gateway row
+    (a digit-only Discord id) of the same author in the same channel holds
+    exactly the copy's text after its time prefix. The content-hash
+    deduplication keeps one row per identical text in a channel. Other
+    copies stay.
     ``apply`` writes a backup of the database next to it first.
     """
     mode = "rw" if apply else "ro"
@@ -56,30 +64,49 @@ def dedupe_self_copies(db_path: Path, apply: bool) -> dict:
             f"SELECT id, channel_id, author_id, content FROM vectors WHERE {where}",
             [prefix + "%" for prefix in SELF_COPY_PREFIXES],
         ).fetchall()
+        gateway_ids: set[str] = set()
+        gateway_texts: dict[tuple[str, str], set[str]] = {}
+        for row_id, channel_id, author_id, content in db.execute(
+            "SELECT id, channel_id, author_id, content FROM vectors "
+            "WHERE id != '' AND id NOT GLOB '*[^0-9]*'"
+        ):
+            gateway_ids.add(row_id)
+            text = _GATEWAY_PREFIX.sub("", str(content or ""), count=1).strip()
+            gateway_texts.setdefault((channel_id, author_id), set()).add(text)
         counts = {prefix.rstrip(":"): {"matched": 0, "kept": 0} for prefix in SELF_COPY_PREFIXES}
         matched_ids = []
         for row_id, channel_id, author_id, content in copies:
-            prefix = next(p for p in SELF_COPY_PREFIXES if row_id.startswith(p)).rstrip(":")
+            prefix = next(p for p in SELF_COPY_PREFIXES if row_id.startswith(p))
+            discord_id = row_id[len(prefix):].split(":", 1)[0]
             text = str(content or "").strip()
-            found = text and db.execute(
-                "SELECT 1 FROM vectors WHERE channel_id=? AND author_id=? AND id GLOB '[0-9]*' "
-                "AND substr(rtrim(content), -length(?)) = ? LIMIT 1",
-                (channel_id, author_id, text, text),
-            ).fetchone()
+            found = discord_id in gateway_ids or (
+                bool(text) and text in gateway_texts.get((channel_id, author_id), set())
+            )
+            counts[prefix.rstrip(":")]["matched" if found else "kept"] += 1
             if found:
-                counts[prefix]["matched"] += 1
                 matched_ids.append(row_id)
-            else:
-                counts[prefix]["kept"] += 1
         result: dict = {"apply": apply, "copies": counts, "deleted": 0}
         if apply and matched_ids:
             backup = db_path.with_name(
                 f"{db_path.stem}.before-self-dedupe-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.db"
             )
-            with contextlib.closing(sqlite3.connect(backup)) as target:
-                db.backup(target)
-            with db:
-                db.executemany("DELETE FROM vectors WHERE id=?", [(i,) for i in matched_ids])
+            try:
+                # The backup holds private chat data: owner access only.
+                backup.touch(mode=0o600, exist_ok=False)
+                with contextlib.closing(sqlite3.connect(backup)) as target:
+                    db.backup(target)
+            except (OSError, sqlite3.Error) as exc:
+                raise RuntimeError(
+                    f"backup to {backup} failed ({type(exc).__name__}: {exc}); nothing was deleted"
+                ) from exc
+            try:
+                with db:
+                    db.executemany("DELETE FROM vectors WHERE id=?", [(i,) for i in matched_ids])
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    f"delete failed ({type(exc).__name__}: {exc}); the transaction was rolled "
+                    f"back; the backup is {backup}"
+                ) from exc
             result.update(deleted=len(matched_ids), backup=str(backup))
         return result
 
@@ -106,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.action == "dedupe-self-copies":
-            print(json.dumps(dedupe_self_copies(args.db, args.apply), sort_keys=True))
+            try:
+                print(json.dumps(dedupe_self_copies(args.db, args.apply), sort_keys=True))
+            except (OSError, sqlite3.Error, RuntimeError) as exc:
+                print(f"dedupe-self-copies failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+                return 1
             return 0
         counts = read_status(args.db)
         if args.action == "status":

@@ -2484,6 +2484,49 @@ class DameCurieBot(commands.Bot):
         except Exception as e:
             logger.debug(f"entity observe skipped: {e}")
 
+    async def _record_own_message(self, message) -> None:
+        """Store one message of hers under its Discord id and arm the watch."""
+        channel_id = str(message.channel.id)
+        logger.info(
+            "MSG from user_id=%s channel_id=%s guild_id=%s chars=%d",
+            message.author.id,
+            message.channel.id,
+            getattr(message.guild, "id", "DM"),
+            len(message.content or ""),
+        )
+        payloads = iter_message_payloads(message)
+        has_attachment = any(getattr(src, "attachments", None) for src in payloads)
+        has_embed = any(getattr(src, "embeds", None) for src in payloads)
+        has_sticker = any(getattr(src, "stickers", None) for src in payloads)
+        self._update_recent_users(channel_id, message.author)
+        for u in getattr(message, "mentions", []) or []:
+            self._update_recent_users(channel_id, u)
+        record_delivered_footer(self, message.channel, message, replace=True)
+        if (
+            message.content or has_attachment or has_embed or has_sticker
+        ) and self._control.get("store_memory", True):
+            # Dedup contract: memory.add_to_channel_memory dedups by message_id,
+            # so an autonomy-force-recorded post (same message_id) only merges
+            # metadata here - its autonomy tag/reason are preserved.
+            try:
+                await self.add_message_to_memory(
+                    channel_id,
+                    self._message_memory_item(message),
+                    message,
+                )
+                self._update_recent_users(channel_id, self.user)
+            except Exception as e:
+                logger.warning(
+                    "Self-message memory write failed: %s: %s", type(e).__name__, e
+                )
+        try:
+            await self._arm_watch_from_own_message(message)
+        except Exception as e:
+            logger.debug("Conversation watch arm from own message failed: %s", e)
+        # 2026-07-21: never generate a reply to a self-message. Once the bot
+        # starts replying to its own posts the channel turns into a
+        # self-monologue. The caller returns after this record.
+
     def _get_channel_lock(self, channel_id: str) -> asyncio.Lock:
         return self._channel_locks.get(channel_id)
 
@@ -4796,6 +4839,13 @@ class DameCurieBot(commands.Bot):
                 getattr(getattr(message, "channel", None), "id", ""),
                 getattr(getattr(message, "author", None), "id", ""),
             )
+        # Her own messages: one row per Discord message (root, 1 November
+        # 2026). The bot writes no copies of what it sends, so this row is
+        # stored before every gate below (stop, blocked or not-allowed
+        # channels, solo mode, commands, disabled bot).
+        if self.user and message.author.id == self.user.id:
+            await DameCurieBot._record_own_message(self, message)
+            return
         if not message.author.bot:
             channel_name = getattr(message.channel, "name", "DM")
             if channel_name == "crazyshit":
@@ -4881,39 +4931,6 @@ class DameCurieBot(commands.Bot):
             self._update_recent_users(channel_id, message.author)
         for u in getattr(message, "mentions", []) or []:
             self._update_recent_users(channel_id, u)
-
-        if self.user and message.author.id == self.user.id:
-            record_delivered_footer(self, message.channel, message, replace=True)
-            if (
-                message.content or has_attachment or has_embed or has_sticker
-            ) and self._control.get("store_memory", True):
-                # Dedup contract: memory.add_to_channel_memory dedups by message_id,
-                # so an autonomy-force-recorded post (same message_id) only merges
-                # metadata here - its autonomy tag/reason are preserved.
-                try:
-                    await self.add_message_to_memory(
-                        channel_id,
-                        self._message_memory_item(message),
-                        message,
-                    )
-                    self._update_recent_users(channel_id, self.user)
-                except Exception as e:
-                    logger.warning(f"Self-message memory write failed: {e}")
-            try:
-                await self._arm_watch_from_own_message(message)
-            except Exception as e:
-                logger.debug("Conversation watch arm from own message failed: %s", e)
-            # 2026-07-21: even with reply_to_bots on, never generate a
-            # reply to a self-message. Once the bot starts replying to
-            # its own posts the channel turns into a self-monologue
-            # (transcript grows unbounded, every turn sees N-1 assistant
-            # turns, model degrades to single-character outputs like
-            # '.' or '?' because there's no real human content to react
-            # to). The bot's reply is already on the wire; the user
-            # doesn't need a second one. The bot-self branch above
-            # already records the message so the next human message
-            # sees it as context.
-            return
 
         if not message_has_visible_payload(message):
             return
@@ -12522,18 +12539,27 @@ class DameCurieBot(commands.Bot):
                                 (sent_id for _chunk, sent_id in reversed(delivered_chunks) if sent_id is not None),
                                 None,
                             )
-                            await self.add_message_to_memory(
-                                str(message.channel.id),
-                                {
-                                    "author": self.bot_name,
-                                    "author_id": str(self.user.id) if self.user else "",
-                                    "author_is_bot": True,
-                                    "content": delivery_note,
-                                    "message_id": f"bot_delivery_note:{last_sent_id or message.id}",
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
-                                message,
-                            )
+                            try:
+                                await self.add_message_to_memory(
+                                    str(message.channel.id),
+                                    {
+                                        "author": self.bot_name,
+                                        "author_id": str(self.user.id) if self.user else "",
+                                        "author_is_bot": True,
+                                        "content": delivery_note,
+                                        "message_id": f"bot_delivery_note:{last_sent_id or message.id}",
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    },
+                                    message,
+                                )
+                            except Exception as exc:
+                                # The reply is delivered; the rest of this path
+                                # (REM event, inbox) still runs.
+                                logger.warning(
+                                    "Delivery note could not be stored: %s: %s",
+                                    type(exc).__name__,
+                                    exc,
+                                )
                         delivered_text = "\n".join(
                             chunk for chunk, _sent_id in delivered_chunks if chunk
                         )
