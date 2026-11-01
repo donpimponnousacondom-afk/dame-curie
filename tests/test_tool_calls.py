@@ -211,9 +211,11 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     }}])
     assert three_steps["arguments"] == {"command": "x"}
     for bad_name, kind in ((5, "int"), ([], "list"), (False, "bool")):
-        with pytest.raises(ValueError, match=rf"of call 1 of 1 has type {kind}, not str$"):
+        message = rf"of call 1 of 1 has type {kind}, not str$"
+        with pytest.raises(ValueError, match=message):
             normalize_native_tool_calls([{"function": {"name": bad_name}}])
-    with pytest.raises(ValueError, match=r"call 1 of 1: character 0 \(from 0\) of the name"):
+    message = r"call 1 of 1: character 0 \(from 0\) of the name"
+    with pytest.raises(ValueError, match=message):
         normalize_native_tool_calls([{"function": {"name": "\ud800"}}])
     # Each error names the call and its one exact cause.
     place = "Malformed native tool-call batch: call 1 of 1 ('create_site'): "
