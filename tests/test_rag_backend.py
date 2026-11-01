@@ -1088,3 +1088,40 @@ def test_query_pause_names_its_cause(memory, monkeypatch):
     gap = memory.query_embedding_gap()
     assert gap.startswith("query embedding is paused for ")
     assert gap.endswith("s because a query embedding timed out after 0.25s")
+
+
+@pytest.mark.parametrize(
+    ("message", "kind", "embedded"),
+    [
+        ({"author_is_bot": True, "content": "her reply to the channel"}, "bot_output", False),
+        ({"tool_name": "shell", "content": "Called shell with {} -> output text"}, "bot_output", False),
+        ({"author": "alice", "content": "a message from a user"}, "message", True),
+    ],
+)
+def test_bot_output_rows_are_stored_but_not_embedded(memory, monkeypatch, message, kind, embedded):
+    # Root, 1 November 2026: no memory search reads bot_output rows. Their
+    # embeddings only delayed the searches a reply waits for.
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+
+    async def run():
+        await memory.add_to_channel_memory("chan", {"id": "m1", **message})
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+    asyncio.run(run())
+    row = memory._db.execute("SELECT kind, embedding FROM vectors WHERE content=?", (message["content"],)).fetchone()
+    assert row["kind"] == kind
+    assert (row["embedding"] is not None) is embedded
+    assert len(transport.calls) == (1 if embedded else 0)
+    assert rag.embedding_eligible(kind, "bot" if kind == "bot_output" else "user", message["content"]) is embedded
+
+
+def test_backfill_and_status_leave_bot_output_rows_unembedded(memory, monkeypatch):
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    insert(memory, row_id="reply", text="an old reply of hers", kind="bot_output")
+    report = asyncio.run(memory.backfill_embeddings(kind="bot_output"))
+    assert report["skipped"] == 1 and report["attempted"] == 0
+    assert transport.calls == []
+    status = memory.embedding_status()
+    assert status["eligible_pending"] == 0
+    assert status["excluded"] == 1
