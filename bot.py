@@ -1282,16 +1282,33 @@ def _live_self_identity_line(user, guild=None, bot_name: str | None = None) -> s
     )
 
 
-# The bot reads no intent from the words of a reply (root, 1 November 2026).
-# A send_message ends the turn. With continue_turn=true it is an update and
-# the turn continues; the tool returns UPDATE_SENT for that case.
-UPDATE_SENT = "__UPDATE_SENT__"
-_UPDATE_RESULT_PREFIX = "Tool send_message: " + UPDATE_SENT
+# Root, 1 November 2026: the bot reads no intent from the words of a reply.
+# The structure of a response decides: send_message is the answer that ends
+# the turn, and text written beside working tool calls is a progress update
+# that posts before those calls run. A response that also ends or pauses the
+# turn, or delivers media, keeps the rule that reads the tool results after
+# the calls (the media or the message is the reply there).
+_NO_EARLY_UPDATE_CALL_NAMES = frozenset(
+    {
+        "send_message", "no_response", "sleep", "wait",
+        "send_file", "send_media", "send_meme", "image_generator", "tts",
+    }
+)
 
 
-def _is_update_result(result: str) -> bool:
-    """True when the result is a send_message sent with continue_turn=true."""
-    return result.startswith(_UPDATE_RESULT_PREFIX)
+def _native_call_names(calls: list | None) -> list[str]:
+    """The function names of raw native tool calls, in call order."""
+    return [str(((call or {}).get("function") or {}).get("name") or "") for call in calls or []]
+
+
+def _beside_text_is_early_update(calls: list | None, text: str | None) -> bool:
+    """True when text beside tool calls posts as an update before they run."""
+    names = _native_call_names(calls)
+    return (
+        bool(str(text or "").strip())
+        and bool(names)
+        and not set(names) & _NO_EARLY_UPDATE_CALL_NAMES
+    )
 
 
 def _plugin_result_needs_followup(result: str) -> bool:
@@ -1346,20 +1363,15 @@ def _tool_results_need_followup(tool_results: list[str]) -> bool:
     if has_followup_signal:
         return True
 
-    # Second pass: no follow-up tool in the batch. A final send_message or
-    # an explicit no_response ends the turn, also when an update shares the
-    # batch. An update alone (continue_turn=true) continues the turn.
+    # Second pass: no follow-up tool in the batch, so a terminal action
+    # (send_message or explicit no_response) ends the turn.
     for result in tool_results:
         if "__MESSAGE_SENT__" in result:
             return False
         if result.startswith("Tool no_response:") and "__NO_RESPONSE__" in result:
             return False
-    return any(_is_update_result(result) for result in tool_results)
 
-
-def _only_update_results(tool_results: list[str]) -> bool:
-    """True when every result of the batch is an update (continue_turn=true)."""
-    return bool(tool_results) and all(_is_update_result(result) for result in tool_results)
+    return False
 
 
 def _should_skip_plaintext_after_send(
@@ -11906,17 +11918,14 @@ class DameCurieBot(commands.Bot):
             # #maxwell-the-bot 2026-08-02 with "Mat Dickie" / "you a fan"
             # - see PM2 out.log 01:25:17→28 for the canonical reproduction.
             followup_turn_ran = False
-            # Rounds in a row that only posted updates. Two in a row stop
-            # the turn with a stated cause.
-            update_only_rounds = 0
             tool_results: list[str] = []
             loop_end = ""
             # The provider text of the newest model response. The loop uses
             # it to detect an empty final answer and a repeated update.
             last_model_text = str(response or "")
             final_without_calls = False
-            # Text the model writes next to tool calls, posted at once as a
-            # progress update so the chat sees the work as it happens.
+            # Text the model writes next to tool calls, posted as a progress
+            # update before those calls run, so the chat sees the work start.
             posted_updates: list[str] = []
             # Media from tools stays attached for the rest of the turn, in a
             # message after the tool results. The turn media cap (12 items,
@@ -11938,6 +11947,11 @@ class DameCurieBot(commands.Bot):
                     break
                 last_model_text = str(response or "")
                 round_had_calls = bool(pending_native)
+                early_update = _beside_text_is_early_update(pending_native, response)
+                if early_update and await DameCurieBot._post_progress_update(
+                    self, message, response
+                ):
+                    posted_updates.append(str(response).strip())
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
                     response,
@@ -11963,6 +11977,7 @@ class DameCurieBot(commands.Bot):
                 all_tool_results.extend(tool_results)
                 if (
                     round_had_calls
+                    and not early_update
                     and str(response or "").strip()
                     and _tool_results_need_followup(tool_results)
                     and not any(
@@ -12061,20 +12076,6 @@ class DameCurieBot(commands.Bot):
                     break
                 if not _tool_results_need_followup(tool_results):
                     break
-                # An update (continue_turn=true) continues the turn so the
-                # announced work runs. A second update-only round in a row
-                # did no work: stop and state it.
-                if _only_update_results(tool_results):
-                    update_only_rounds += 1
-                    if update_only_rounds >= 2:
-                        loop_end = (
-                            "two update messages in a row (continue_turn=true) "
-                            "with no other tool call between them"
-                        )
-                        logger.warning("Tool loop stopped: %s", loop_end)
-                        break
-                else:
-                    update_only_rounds = 0
                 # Native path: append assistant tool_calls + role=tool messages.
                 # XML path: append freeform assistant text + synthetic user results.
                 if native_followup:
@@ -12284,8 +12285,8 @@ class DameCurieBot(commands.Bot):
                     logger.warning("Stop notice could not be sent: %s", exc)
             # If this generation already called send_message, leftover
             # assistant text is not a second reply. A later follow-up
-            # with real text and no new send_message still posts (the
-            # "checking…" placeholder case).
+            # with real text and no new send_message still posts (for
+            # example after send_message next to a [returns output] tool).
             if incomplete_error is None and _should_skip_plaintext_after_send(
                 tool_results, all_tool_results, followup_turn_ran, response
             ):
@@ -13071,15 +13072,6 @@ class DameCurieBot(commands.Bot):
         terminal = [
             c for c in calls if c["name"] in {"send_message", "no_response", "wait"}
         ]
-        # An update (send_message with continue_turn=true) posts before the
-        # other calls of the batch run, so the chat sees it at once.
-        updates = [
-            c
-            for c in terminal
-            if c["name"] == "send_message"
-            and (c.get("arguments") or {}).get("continue_turn") is True
-        ]
-        terminal = [c for c in terminal if not any(c is u for u in updates)]
         # A batch of several concurrent calls gets one progress line that names
         # all of them. Per-call updates would show only the last call to start.
         batch_label = None
@@ -13249,8 +13241,6 @@ class DameCurieBot(commands.Bot):
 
         async def run_all():
             nonlocal tool_results
-            for call in updates:
-                tool_results.append(await run_one(call))
             if non_terminal:
                 if progress is not None and batch_label is not None:
                     with contextlib.suppress(Exception):
@@ -13308,7 +13298,7 @@ class DameCurieBot(commands.Bot):
             # Likewise a send_message AFTER no_response is contradictory
             # - keep the no_response, drop the later call.
             no_response_seen = False
-            send_message_seen = bool(updates)
+            send_message_seen = False
             for call in terminal:
                 if call["name"] == "no_response":
                     if no_response_seen:

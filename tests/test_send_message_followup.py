@@ -10,7 +10,7 @@ import json
 import pytest
 
 from bot import (
-    _only_update_results,
+    _beside_text_is_early_update,
     _should_skip_plaintext_after_send,
     _tool_results_need_followup,
 )
@@ -96,7 +96,7 @@ def test_no_message_sent_falls_through_normally():
 # Root, 1 November 2026: the bot reads no intent from the words of a reply.
 # A word regex once took "a man checking whether..." in a finished reply for
 # an "on it" promise, called the model again and posted the reply twice.
-# A send_message ends the turn. Only continue_turn=true continues it.
+# send_message ends the turn. A progress update is text beside tool calls.
 # ---------------------------------------------------------------------------
 
 HELLO_REPLY = (
@@ -119,42 +119,47 @@ HELLO_REPLY = (
         "done - live at https://x.dev",
     ],
 )
-def test_final_send_message_ends_the_turn_whatever_its_words(text):
-    results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
-    assert _tool_results_need_followup(results) is False, text
-    assert _only_update_results(results) is False, text
-
-
-@pytest.mark.parametrize("text", [HELLO_REPLY, "on it...", "42"])
-def test_update_send_message_continues_the_turn_whatever_its_words(text):
-    results = [f"Tool send_message: __UPDATE_SENT__\n{text}"]
-    assert _tool_results_need_followup(results) is True, text
-    assert _only_update_results(results) is True, text
+def test_send_message_ends_the_turn_whatever_its_words(text):
+    assert _tool_results_need_followup([f"Tool send_message: __MESSAGE_SENT__\n{text}"]) is False
 
 
 @pytest.mark.parametrize(
-    ("results", "need_followup", "only_updates"),
+    ("names", "text", "is_update"),
     [
-        # An update next to real work: the work result brings the model back.
-        (["Tool send_message: __UPDATE_SENT__\non it", "Tool shell: harness output"], True, False),
-        # A final message in the same batch ends the turn after the update.
-        (["Tool send_message: __UPDATE_SENT__\non it", "Tool send_message: __MESSAGE_SENT__\ndone"], False, False),
-        (["Tool send_message: __UPDATE_SENT__\non it", "Tool no_response: __NO_RESPONSE__"], False, False),
-        # The marker text inside another result is not an update.
-        (["Tool shell: Tool send_message: __UPDATE_SENT__"], True, False),
-        (["Tool react: ok __UPDATE_SENT__"], False, False),
-        ([], False, False),
+        (["web_search"], "Looking it up.", True),
+        (["shell", "fetch_url"], "Pulling the logs.", True),
+        (["react"], "nice", True),
+        # A final or pausing call in the response: the text is no update.
+        (["web_search", "send_message"], "Looking it up.", False),
+        (["send_message"], "Here you go.", False),
+        (["no_response"], "I will stay quiet.", False),
+        (["wait"], "brb", False),
+        (["sleep"], "night", False),
+        # A media delivery is the reply; its text keeps the after-call rule.
+        (["image_generator"], "Here is your image.", False),
+        (["send_file"], "Here is the file.", False),
+        (["web_search", "send_media"], "Here it is.", False),
+        # No text, or no tool calls: nothing to post as an update.
+        (["web_search"], "  ", False),
+        ([], "plain answer", False),
     ],
 )
-def test_update_and_final_send_in_one_batch(results, need_followup, only_updates):
-    assert _tool_results_need_followup(results) is need_followup
-    assert _only_update_results(results) is only_updates
+def test_beside_text_posts_early_only_next_to_working_calls(names, text, is_update):
+    calls = [_native_call(name, {}, f"c{index}") for index, name in enumerate(names)]
+    assert _beside_text_is_early_update(calls, text) is is_update
+
+
+def test_ack_plus_real_tool_still_loops_for_the_result():
+    results = [
+        "Tool send_message: __MESSAGE_SENT__\non it...",
+        "Tool shell: harness output",
+    ]
+    assert _tool_results_need_followup(results) is True
 
 
 def test_no_response_stays_terminal():
     results = ["Tool no_response: __NO_RESPONSE__"]
     assert _tool_results_need_followup(results) is False
-    assert _only_update_results(results) is False
 
 
 def test_error_still_forces_followup():

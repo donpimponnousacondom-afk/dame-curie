@@ -4535,10 +4535,7 @@ class SendMessageTool(Tool):
             "Content supports Discord markdown: **bold**, *italic*, `code`, ```code blocks```, > quotes, bullet lists. "
             "Params: content (required), reply (optional bool, default true - Discord "
             "quote-reply is on; pass false only for a standalone line with no quote), "
-            "reply_to (optional short quote or who said it, like nah or alice - not an id), "
-            "continue_turn (optional bool, default false - the message ends your turn; "
-            "true makes it a short update that posts at once, and you continue the work "
-            "in the next response)."
+            "reply_to (optional short quote or who said it, like nah or alice - not an id)."
         )
 
     @staticmethod
@@ -4566,20 +4563,12 @@ class SendMessageTool(Tool):
         reply_to: str | None = None,
         channel_id: str | None = None,
         user_id: str | None = None,
-        continue_turn: bool = False,
         _response_metrics=None,
         **kwargs,
     ) -> str:
         text = str(content or "").strip()
         if not text:
             return "Error: content is required"
-        if not isinstance(continue_turn, bool):
-            return (
-                "Error: continue_turn must be true or false, not "
-                f"{type(continue_turn).__name__} {continue_turn!r}; nothing was sent"
-            )
-        # The marker tells the dispatch loop whether the turn ends here.
-        sent_marker = "__UPDATE_SENT__\n" if continue_turn else "__MESSAGE_SENT__\n"
         sent_any = False
         sent_chunks: list[str] = []
         try:
@@ -4696,7 +4685,7 @@ class SendMessageTool(Tool):
                     except Exception as exc:
                         capture_incident("tool.send_message", "Message delivery failed", exception=exc, details=str(getattr(exc, "text", "") or ""))
                         if sent_any:
-                            return sent_marker + "\n".join(sent_chunks)
+                            return "__MESSAGE_SENT__\n" + "\n".join(sent_chunks)
                         raise
                     if len(chunks) > 1:
                         await asyncio.sleep(0.2)
@@ -4707,13 +4696,13 @@ class SendMessageTool(Tool):
             # language and the model echoed it into visible replies
             # ("20 chars in 1 chunk(s)" appeared in chat). Downstream detects
             # send_message via " __MESSAGE_SENT__" in the result string.
-            return sent_marker + text
+            return f"__MESSAGE_SENT__\n{text}"
         except discord.Forbidden:
             return "Error: missing permissions to send message"
         except Exception as e:
             failure = tool_failure("tool.send_message", f"Error sending message: {e}", exception=e)
             if sent_any:
-                return sent_marker + text
+                return f"__MESSAGE_SENT__\n{text}"
             return failure
 
 

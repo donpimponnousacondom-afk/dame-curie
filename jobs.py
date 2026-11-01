@@ -927,22 +927,12 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     context=job_context,
                 )
                 # An ending-only batch (e.g. the model wrapped up via send_message)
-                # is the finished answer - do not loop for more. An update
-                # (send_message with continue_turn=true) does not end the job.
+                # is the finished answer - do not loop for more.
                 named = {n for n in names if n}
                 unresolved_error = next(
                     (result for result in tool_results if re.match(r"Tool [^:\n]+: Error", result)), ""
                 )
-                update_sent = any(
-                    result.startswith("Tool send_message: __UPDATE_SENT__") for result in tool_results
-                )
-                if (
-                    named
-                    and named <= set(TURN_ENDING_TOOL_NAMES)
-                    and resp_text.strip()
-                    and not unresolved_error
-                    and not update_sent
-                ):
+                if named and named <= set(TURN_ENDING_TOOL_NAMES) and resp_text.strip() and not unresolved_error:
                     final_text = resp_text.strip()
                     final_metrics = response_metrics if final_text else None
                     break

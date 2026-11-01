@@ -447,12 +447,6 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
             "reply_to": _str(
                 "Optional short quote or who said it, like nah or alice. Not an id."
             ),
-            "continue_turn": _bool(
-                "Default false: this message is your answer and ends the turn. "
-                "true: this message is a short update, not your final answer. It "
-                "posts at once, before the other calls in this response, and you "
-                "get another response to continue the work."
-            ),
         },
         ["content"],
     ),
@@ -770,8 +764,6 @@ def result_contract(name: str) -> str:
             " [returns saved image by default; auto_send=true + __IMAGE_SENT__ means already delivered, no repeat]"
             if name == "image_generator" else _CONTRACT_RESULT
         )
-    if name == "send_message":
-        return " [ends the turn; with continue_turn=true it is an update and the turn continues]"
     if name in TURN_ENDING_TOOL_NAMES:
         return _CONTRACT_ENDING
     return _CONTRACT_SILENT
