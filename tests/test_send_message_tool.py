@@ -58,6 +58,38 @@ def test_send_message_tool_non_reply_sends_all_chunks_to_channel():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    ("continue_turn", "marker"),
+    [(None, "__MESSAGE_SENT__\n"), (False, "__MESSAGE_SENT__\n"), (True, "__UPDATE_SENT__\n")],
+)
+def test_send_message_marks_a_final_answer_or_an_update(continue_turn, marker):
+    async def run():
+        tool = SendMessageTool(SimpleNamespace())
+        message = FakeMessage()
+        extra = {} if continue_turn is None else {"continue_turn": continue_turn}
+        result = await tool.execute(message, content="on it", **extra)
+        assert result == marker + "on it"
+        assert message.replies == ["on it"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("value", ["true", 1, "false", None])
+def test_send_message_refuses_a_continue_turn_that_is_not_a_boolean(value):
+    async def run():
+        tool = SendMessageTool(SimpleNamespace())
+        message = FakeMessage()
+        result = await tool.execute(message, content="on it", continue_turn=value)
+        assert result == (
+            "Error: continue_turn must be true or false, not "
+            f"{type(value).__name__} {value!r}; nothing was sent"
+        )
+        assert message.replies == []
+        assert message.channel.sent == []
+
+    asyncio.run(run())
+
+
 def test_send_message_partial_failure_keeps_sent_marker():
     class FlakyChannel:
         def __init__(self):

@@ -1282,43 +1282,16 @@ def _live_self_identity_line(user, guild=None, bot_name: str | None = None) -> s
     )
 
 
-# An ack-only send_message whose text promises work that has not run yet.
-# Deliberately narrow: it must be SHORT (a real answer is not an ack) and it
-# must read as a promise. A long reply that happens to contain "working on"
-# is a real answer and must stay terminal, or every turn would double-generate.
-_PROMISE_VERB = (
-    r"build|make|create|check|look|get|do|write|set|start|spin|generate|"
-    r"run|fix|add|update|deploy|test|grab|pull|draft|put"
-)
-_PROMISE_RE = re.compile(
-    # Bare acknowledgements.
-    r"\b(?:on it|working on it|checking(?: that)?(?: now)?|let me check|"
-    r"give me a sec|one sec|hold on|two secs|"
-    # "I'll set that up", "gonna spin it up", "let me go build this" - the
-    # intent phrase, then up to two filler words, then a doing-verb.
-    rf"(?:i'?ll|i will|gonna|going to|let me|lemme)\s+(?:\w+\s+){{0,2}}?(?:{_PROMISE_VERB})|"
-    # Present progressive with no result yet.
-    r"(?:building|making|creating|generating|starting|setting|spinning|"
-    r"drafting|putting)\b[^.!?]{0,40}\b(?:it|that|this|now|up)|"
-    r"looking into (?:it|that|this))\b",
-    re.I,
-)
-_PROMISE_MAX_CHARS = 200
+# The bot reads no intent from the words of a reply (root, 1 November 2026).
+# A send_message ends the turn. With continue_turn=true it is an update and
+# the turn continues; the tool returns UPDATE_SENT for that case.
+UPDATE_SENT = "__UPDATE_SENT__"
+_UPDATE_RESULT_PREFIX = "Tool send_message: " + UPDATE_SENT
 
 
-def _promises_followup_work(result: str) -> bool:
-    """True when a send_message result is a bare "on it…" promise.
-
-    The turn must loop back so the announced work actually happens. Anything
-    long enough to be a substantive reply is treated as a real answer.
-    """
-    idx = result.find("__MESSAGE_SENT__")
-    if idx < 0:
-        return False
-    sent = result[idx + len("__MESSAGE_SENT__") :].strip()
-    if not sent or len(sent) > _PROMISE_MAX_CHARS:
-        return False
-    return bool(_PROMISE_RE.search(sent))
+def _is_update_result(result: str) -> bool:
+    """True when the result is a send_message sent with continue_turn=true."""
+    return result.startswith(_UPDATE_RESULT_PREFIX)
 
 
 def _plugin_result_needs_followup(result: str) -> bool:
@@ -1373,45 +1346,20 @@ def _tool_results_need_followup(tool_results: list[str]) -> bool:
     if has_followup_signal:
         return True
 
-    # Second pass: no follow-up tool in the batch, so a terminal action
-    # (send_message or explicit no_response) genuinely ends the turn.
-    # TTS uses __TTS_SENT__ and must NOT be treated as terminal - without
-    # the FOLLOWUP_TOOL_NAMES hit it would only reach this pass via an
-    # explicit no_response anyway.
+    # Second pass: no follow-up tool in the batch. A final send_message or
+    # an explicit no_response ends the turn, also when an update shares the
+    # batch. An update alone (continue_turn=true) continues the turn.
     for result in tool_results:
         if "__MESSAGE_SENT__" in result:
-            # A send_message that only promises future work is NOT terminal.
-            # The protocol tells the model not to ack, but it still emits
-            # "on it…" alone and plans to act "next turn". There is no next
-            # turn: send_message is not in RESULT_TOOL_NAMES, so with no
-            # other tool in the batch this returns False, the dispatch loop
-            # breaks, and the promise is all the user ever gets. Loop back
-            # once so the model actually runs the thing it just announced.
-            if _promises_followup_work(result):
-                return True
             return False
         if result.startswith("Tool no_response:") and "__NO_RESPONSE__" in result:
             return False
+    return any(_is_update_result(result) for result in tool_results)
 
-    return False
 
-
-def _only_promise_results(tool_results: list[str]) -> bool:
-    """True when the batch is nothing but ack-only send_message promises.
-
-    Used to bound the extra loop: a batch that also ran a real tool already
-    loops via FOLLOWUP_TOOL_NAMES and must not consume the promise budget.
-    """
-    saw_promise = False
-    for result in tool_results:
-        if "__MESSAGE_SENT__" in result:
-            if not _promises_followup_work(result):
-                return False
-            saw_promise = True
-            continue
-        if result.strip():
-            return False
-    return saw_promise
+def _only_update_results(tool_results: list[str]) -> bool:
+    """True when every result of the batch is an update (continue_turn=true)."""
+    return bool(tool_results) and all(_is_update_result(result) for result in tool_results)
 
 
 def _should_skip_plaintext_after_send(
@@ -11958,7 +11906,9 @@ class DameCurieBot(commands.Bot):
             # #maxwell-the-bot 2026-08-02 with "Mat Dickie" / "you a fan"
             # - see PM2 out.log 01:25:17→28 for the canonical reproduction.
             followup_turn_ran = False
-            promise_followups = 0
+            # Rounds in a row that only posted updates. Two in a row stop
+            # the turn with a stated cause.
+            update_only_rounds = 0
             tool_results: list[str] = []
             loop_end = ""
             # The provider text of the newest model response. The loop uses
@@ -12111,14 +12061,20 @@ class DameCurieBot(commands.Bot):
                     break
                 if not _tool_results_need_followup(tool_results):
                     break
-                # An ack-only turn ("on it…") loops back exactly once, so the
-                # promised work runs. Without this guard a model that keeps
-                # acknowledging would ping-pong until max_iters.
-                if _only_promise_results(tool_results):
-                    if promise_followups >= 1:
-                        logger.info("ack-only send_message repeated; not looping again")
+                # An update (continue_turn=true) continues the turn so the
+                # announced work runs. A second update-only round in a row
+                # did no work: stop and state it.
+                if _only_update_results(tool_results):
+                    update_only_rounds += 1
+                    if update_only_rounds >= 2:
+                        loop_end = (
+                            "two update messages in a row (continue_turn=true) "
+                            "with no other tool call between them"
+                        )
+                        logger.warning("Tool loop stopped: %s", loop_end)
                         break
-                    promise_followups += 1
+                else:
+                    update_only_rounds = 0
                 # Native path: append assistant tool_calls + role=tool messages.
                 # XML path: append freeform assistant text + synthetic user results.
                 if native_followup:
@@ -13115,6 +13071,15 @@ class DameCurieBot(commands.Bot):
         terminal = [
             c for c in calls if c["name"] in {"send_message", "no_response", "wait"}
         ]
+        # An update (send_message with continue_turn=true) posts before the
+        # other calls of the batch run, so the chat sees it at once.
+        updates = [
+            c
+            for c in terminal
+            if c["name"] == "send_message"
+            and (c.get("arguments") or {}).get("continue_turn") is True
+        ]
+        terminal = [c for c in terminal if not any(c is u for u in updates)]
         # A batch of several concurrent calls gets one progress line that names
         # all of them. Per-call updates would show only the last call to start.
         batch_label = None
@@ -13284,6 +13249,8 @@ class DameCurieBot(commands.Bot):
 
         async def run_all():
             nonlocal tool_results
+            for call in updates:
+                tool_results.append(await run_one(call))
             if non_terminal:
                 if progress is not None and batch_label is not None:
                     with contextlib.suppress(Exception):
@@ -13341,7 +13308,7 @@ class DameCurieBot(commands.Bot):
             # Likewise a send_message AFTER no_response is contradictory
             # - keep the no_response, drop the later call.
             no_response_seen = False
-            send_message_seen = False
+            send_message_seen = bool(updates)
             for call in terminal:
                 if call["name"] == "no_response":
                     if no_response_seen:

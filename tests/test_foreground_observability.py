@@ -302,6 +302,10 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
 
 
 TEXT_TOOL_CALL = '{"name": "send_message", "arguments": {"content": "hola"}}'
+HELLO_REPLY = (
+    'Present, Sir. You called "hello" like a man checking whether the '
+    "machine is still plugged in."
+)
 
 
 def tool_call(name, **arguments):
@@ -382,6 +386,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
     "mode",
     [
         "plain", "beside_update", "repeat_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "update_twice",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -540,8 +545,27 @@ def test_real_foreground_handler_preserves_producing_call(
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "ack_then_empty":
             responses = [
-                ProviderResult("", tool_calls=[tool_call("send_message", content="on it")], metrics=first),
+                ProviderResult(
+                    "",
+                    tool_calls=[tool_call("send_message", content="on it", continue_turn=True)],
+                    metrics=first,
+                ),
                 ProviderResult("", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "update_twice":
+            responses = [
+                ProviderResult(
+                    "",
+                    tool_calls=[tool_call("send_message", content="on it", continue_turn=True)],
+                    metrics=first,
+                ),
+                ProviderResult(
+                    "",
+                    tool_calls=[tool_call("send_message", content="still on it", continue_turn=True)],
+                    metrics=second,
+                ),
+                ProviderResult("never requested", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "beside_no_response":
@@ -576,7 +600,9 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [
                 ProviderResult(
                     "",
-                    tool_calls=[tool_call("send_message", content="done")],
+                    # Root, 1 November 2026: a final reply that contains
+                    # "checking" was taken for a promise and posted twice.
+                    tool_calls=[tool_call("send_message", content=HELLO_REPLY)],
                     metrics=first,
                 )
             ]
@@ -585,7 +611,7 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [
                 ProviderResult(
                     "",
-                    tool_calls=[tool_call("send_message", content="checking")],
+                    tool_calls=[tool_call("send_message", content="checking", continue_turn=True)],
                     metrics=first,
                 ),
                 ProviderResult("finished answer", metrics=second),
@@ -639,11 +665,28 @@ def test_real_foreground_handler_preserves_producing_call(
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
         flag = "empty final response after an earlier delivery"
-        if mode == "ack_then_empty":
-            # An acknowledgement followed by an empty final answer is flagged.
-            assert flag in caplog.text
-            return
         assert flag not in caplog.text
+        if mode == "ack_then_empty":
+            # An update followed by an empty final answer is stated in the
+            # channel, not only logged.
+            assert len(message.channel.sent) == 2
+            assert message.channel.sent[0].content.startswith("on it")
+            assert message.channel.sent[1].content == "No reply: my final response was empty."
+            assert bot._generate_response.await_count == 2
+            return
+        if mode == "update_twice":
+            # Two update-only rounds in a row did no work: the turn stops and
+            # states the cause. No third model call is made.
+            assert bot._generate_response.await_count == 2
+            assert [sent.content.split("\n")[0] for sent in message.channel.sent[:2]] == [
+                "on it", "still on it",
+            ]
+            assert message.channel.sent[2].content == (
+                "Stopped: two update messages in a row (continue_turn=true) "
+                "with no other tool call between them."
+            )
+            assert len(message.channel.sent) == 3
+            return
         if mode == "beside_no_response":
             # A chosen silence stays silent: no progress update, no notice.
             assert message.channel.sent == []

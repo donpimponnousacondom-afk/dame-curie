@@ -7,8 +7,10 @@ generation as send_message posted a second Discord reply ping.
 
 import json
 
+import pytest
+
 from bot import (
-    _only_promise_results,
+    _only_update_results,
     _should_skip_plaintext_after_send,
     _tool_results_need_followup,
 )
@@ -91,86 +93,68 @@ def test_no_message_sent_falls_through_normally():
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-30: "on it" / "working on it" that never actually did the work.
-#
-# FULL_TOOL_PROTOCOL invites a fast acknowledgement alongside a slow tool, but
-# the model routinely emitted the ack as the ONLY tool call and planned to act
-# "next turn". send_message is not in RESULT_TOOL_NAMES, so an ack-only batch
-# made _tool_results_need_followup() return False, the dispatch loop broke, and
-# the promise was the entire response. These lock in the loop-back.
+# Root, 1 November 2026: the bot reads no intent from the words of a reply.
+# A word regex once took "a man checking whether..." in a finished reply for
+# an "on it" promise, called the model again and posted the reply twice.
+# A send_message ends the turn. Only continue_turn=true continues it.
 # ---------------------------------------------------------------------------
 
+HELLO_REPLY = (
+    'Present, Sir. You called "hello" like a man checking whether the '
+    "machine is still plugged in."
+)
 
-def test_ack_only_send_message_loops_back_so_work_actually_runs():
-    for text in (
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        HELLO_REPLY,
         "on it...",
         "working on it…",
         "checking that now",
         "one sec",
         "i'll build that for you",
-        "gonna set that up now",
-        "going to run that",
-        "lemme check real quick",
-        "let me go grab that",
-        "building it now",
-        "generating that image now",
-        "drafting it up now",
         "looking into it",
-        "two secs",
-    ):
-        results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
-        assert _tool_results_need_followup(results) is True, text
-        assert _only_promise_results(results) is True, text
-
-
-def test_real_answer_mentioning_work_stays_terminal():
-    # A substantive reply must NOT re-generate, even though it contains
-    # "working on". Length is the discriminator.
-    answer = (
-        "yeah I've been working on that codebase for a while - the dispatch "
-        "loop lives in bot.py and the tool contract is stamped in tool_schemas, "
-        "so the follow-up turn is what feeds results back to the model. "
-        "the short version is that it loops until a terminal tool lands."
-    )
-    results = [f"Tool send_message: __MESSAGE_SENT__\n{answer}"]
-    assert _tool_results_need_followup(results) is False
-    assert _only_promise_results(results) is False
-
-
-def test_ordinary_short_reply_is_not_treated_as_a_promise():
-    for text in (
         "yeah",
-        "lol",
-        "done",
-        "nope, that's wrong",
-        "42",
-        "that's built already",
-        "the build is done and deployed",
-        "created: https://example.com",
-        "yeah I set that up last week",
         "done - live at https://x.dev",
-    ):
-        results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
-        assert _tool_results_need_followup(results) is False, text
-        assert _only_promise_results(results) is False, text
+    ],
+)
+def test_final_send_message_ends_the_turn_whatever_its_words(text):
+    results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
+    assert _tool_results_need_followup(results) is False, text
+    assert _only_update_results(results) is False, text
 
 
-def test_ack_plus_real_tool_does_not_consume_the_promise_budget():
-    # This batch already loops via FOLLOWUP_TOOL_NAMES (shell), so it
-    # must not be classified as ack-only - otherwise the one-shot promise
-    # budget would be spent on a turn that was already going to loop.
-    results = [
-        "Tool send_message: __MESSAGE_SENT__\non it...",
-        "Tool shell: harness output",
-    ]
-    assert _tool_results_need_followup(results) is True
-    assert _only_promise_results(results) is False
+@pytest.mark.parametrize("text", [HELLO_REPLY, "on it...", "42"])
+def test_update_send_message_continues_the_turn_whatever_its_words(text):
+    results = [f"Tool send_message: __UPDATE_SENT__\n{text}"]
+    assert _tool_results_need_followup(results) is True, text
+    assert _only_update_results(results) is True, text
+
+
+@pytest.mark.parametrize(
+    ("results", "need_followup", "only_updates"),
+    [
+        # An update next to real work: the work result brings the model back.
+        (["Tool send_message: __UPDATE_SENT__\non it", "Tool shell: harness output"], True, False),
+        # A final message in the same batch ends the turn after the update.
+        (["Tool send_message: __UPDATE_SENT__\non it", "Tool send_message: __MESSAGE_SENT__\ndone"], False, False),
+        (["Tool send_message: __UPDATE_SENT__\non it", "Tool no_response: __NO_RESPONSE__"], False, False),
+        # The marker text inside another result is not an update.
+        (["Tool shell: Tool send_message: __UPDATE_SENT__"], True, False),
+        (["Tool react: ok __UPDATE_SENT__"], False, False),
+        ([], False, False),
+    ],
+)
+def test_update_and_final_send_in_one_batch(results, need_followup, only_updates):
+    assert _tool_results_need_followup(results) is need_followup
+    assert _only_update_results(results) is only_updates
 
 
 def test_no_response_stays_terminal():
     results = ["Tool no_response: __NO_RESPONSE__"]
     assert _tool_results_need_followup(results) is False
-    assert _only_promise_results(results) is False
+    assert _only_update_results(results) is False
 
 
 def test_error_still_forces_followup():

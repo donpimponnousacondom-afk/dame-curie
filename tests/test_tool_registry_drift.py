@@ -55,3 +55,15 @@ def test_known_tools_has_no_ghosts():
 def test_no_tool_is_in_both_contract_sets():
     both = RESULT_TOOL_NAMES & TURN_ENDING_TOOL_NAMES
     assert not both, f"a tool cannot both end the turn and return a result: {both}"
+
+
+def test_send_message_declares_its_update_flag_in_schema_and_contract():
+    # Root, 1 November 2026: the model declares an update with a boolean;
+    # the contract line states that the flag keeps the turn going.
+    from tool_schemas import result_contract
+
+    flag = TOOL_PARAMETERS["send_message"]["properties"]["continue_turn"]
+    assert flag["type"] == "boolean"
+    assert "continue_turn" not in TOOL_PARAMETERS["send_message"].get("required", [])
+    assert "continue_turn=true" in result_contract("send_message")
+    assert result_contract("no_response") == " [ends the turn]"
