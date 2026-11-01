@@ -478,10 +478,13 @@ def test_no_source_file_hardcodes_a_time_zone():
     import re
 
     root = pathlib.Path(__file__).resolve().parents[1]
-    pattern = re.compile(r"timezone\(timedelta\(|ZoneInfo\(\s*['\"]|hours=-4\b")
+    pattern = re.compile(
+        r"timezone\(\s*(?:datetime\.)?timedelta|ZoneInfo\(\s*['\"]|hours=-4\b"
+    )
     offenders = [
         f"{path.relative_to(root)}:{number}"
-        for path in root.glob("*.py")
+        for path in root.rglob("*.py")
+        if path.relative_to(root).parts[0] not in {"tests", "audit", ".git", ".venv"}
         for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if pattern.search(text)
     ]
