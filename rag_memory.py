@@ -1211,6 +1211,9 @@ class RAGMemoryManager:
 
         Cold call: ~138ms (ollama warmup).
         Cache hit: ~0.5ms (SQLite SELECT).
+
+        query=True uses the query lane (prompt queries through
+        _embed_for_query). Background writes use the default lane.
         """
         if not EMBEDDINGS_ENABLED:
             # ENABLE_RAG=false: no embedding calls at all. Retrieval falls
@@ -1269,50 +1272,58 @@ class RAGMemoryManager:
             chunk_vecs: list[np.ndarray] = []
             lane = self._embed_query_semaphore if query else self._embed_semaphore
             queued_at = time.monotonic()
-            async with lane:
-                lane_wait = time.monotonic() - queued_at
-                if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
-                    return None
-                missing = [
-                    name
-                    for name, value in (
-                        ("DAME_CURIE_EMBED_BASE_URL", self.embed_url),
-                        ("DAME_CURIE_EMBED_MODEL", self.embed_model),
-                    )
-                    if not value
-                ]
-                if missing:
-                    self._trip_embed_breaker(" and ".join(missing) + " not configured")
-                    return None
-                async with aiohttp.ClientSession() as session:
-                    for chunk_text in chunks_to_embed:
-                        if not EMBEDDINGS_ENABLED:
-                            return None
-                        payload = {"model": self.embed_model, "input": chunk_text}
-                        async with session.post(
-                            self.embed_url,
-                            json=payload,
-                            headers=self.embed_headers,
-                            timeout=aiohttp.ClientTimeout(total=EMBED_HTTP_TIMEOUT_SECONDS),
-                            allow_redirects=False,
-                        ) as resp:
-                            if resp.status != 200:
-                                self._trip_embed_breaker(f"HTTP {resp.status}")
+            # None while the request still waits for its lane.
+            lane_wait: float | None = None
+            outcome = "ended without a vector"
+            try:
+                async with lane:
+                    lane_wait = time.monotonic() - queued_at
+                    if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
+                        return None
+                    missing = [
+                        name
+                        for name, value in (
+                            ("DAME_CURIE_EMBED_BASE_URL", self.embed_url),
+                            ("DAME_CURIE_EMBED_MODEL", self.embed_model),
+                        )
+                        if not value
+                    ]
+                    if missing:
+                        self._trip_embed_breaker(" and ".join(missing) + " not configured")
+                        return None
+                    async with aiohttp.ClientSession() as session:
+                        for chunk_text in chunks_to_embed:
+                            if not EMBEDDINGS_ENABLED:
                                 return None
-                            data = await resp.json()
-                            chunk_vecs.extend(validate_embedding_response(data, self.embed_dim))
-
-            if query and time.monotonic() - queued_at >= 1.0:
-                # Root, 1 November 2026: measure how long a prompt waits for
-                # its query embedding.
-                logger.info(
-                    "Query embedding took %.2fs (%.2fs waiting for the query lane, "
-                    "%d chunk(s), %d chars)",
-                    time.monotonic() - queued_at,
-                    lane_wait,
-                    len(chunks_to_embed),
-                    len(text),
-                )
+                            payload = {"model": self.embed_model, "input": chunk_text}
+                            async with session.post(
+                                self.embed_url,
+                                json=payload,
+                                headers=self.embed_headers,
+                                timeout=aiohttp.ClientTimeout(total=EMBED_HTTP_TIMEOUT_SECONDS),
+                                allow_redirects=False,
+                            ) as resp:
+                                if resp.status != 200:
+                                    self._trip_embed_breaker(f"HTTP {resp.status}")
+                                    return None
+                                data = await resp.json()
+                                chunk_vecs.extend(validate_embedding_response(data, self.embed_dim))
+                if chunk_vecs:
+                    outcome = "returned a vector"
+            finally:
+                elapsed = time.monotonic() - queued_at
+                if query and elapsed >= 1.0:
+                    # Root, 1 November 2026: measure how long a prompt waits
+                    # for its query embedding, also when it times out or fails.
+                    logger.info(
+                        "Query embedding took %.2fs and %s (query lane wait: %s, "
+                        "%d chunk(s), %d chars)",
+                        elapsed,
+                        outcome,
+                        "no lane yet" if lane_wait is None else f"{lane_wait:.2f}s",
+                        len(chunks_to_embed),
+                        len(text),
+                    )
             if not chunk_vecs:
                 return None
             if len(chunk_vecs) == 1:

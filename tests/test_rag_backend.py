@@ -340,22 +340,66 @@ def test_query_embedding_does_not_wait_for_background_writes(memory, monkeypatch
 
 
 def test_slow_query_embedding_is_logged_with_its_lane_wait(memory, monkeypatch, caplog):
+    # A fake clock for rag_memory only: the event loop keeps the real one.
     clock = [100.0]
-    monkeypatch.setattr(rag.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        rag, "time", SimpleNamespace(monotonic=lambda: clock[0], time=rag.time.time)
+    )
 
     class SlowReply(Reply):
         async def json(self):
             clock[0] += 2.5
             return await super().json()
 
-    install_transport(monkeypatch, SlowReply({"embeddings": [vector()]}))
     caplog.set_level("INFO", logger=rag.logger.name)
+    install_transport(monkeypatch, SlowReply({"embeddings": [vector()]}))
     assert asyncio.run(memory._embed("prompt query", query=True)) is not None
-    assert "Query embedding took 2.50s (0.00s waiting for the query lane, 1 chunk(s), 12 chars)" in caplog.text
+    assert (
+        "Query embedding took 2.50s and returned a vector "
+        "(query lane wait: 0.00s, 1 chunk(s), 12 chars)"
+    ) in caplog.text
+
+    # A background embedding is not logged.
     caplog.clear()
     install_transport(monkeypatch, SlowReply({"embeddings": [vector()]}))
     assert asyncio.run(memory._embed("background text")) is not None
     assert "Query embedding took" not in caplog.text
+
+    # A query that waits for its lane logs that wait. A query that is still
+    # waiting when it is cancelled (the 30 s deadline of _embed_for_query) is
+    # logged too. Both run in one event loop: a semaphore binds to the first
+    # loop that waits on it.
+    caplog.clear()
+    install_transport(monkeypatch, SlowReply({"embeddings": [vector()]}))
+
+    async def lane_waits():
+        await memory._embed_query_semaphore.acquire()
+        task = asyncio.create_task(memory._embed("queued query", query=True))
+        await asyncio.sleep(0)
+        clock[0] += 1.5
+        memory._embed_query_semaphore.release()
+        assert await task is not None
+
+        await memory._embed_query_semaphore.acquire()
+        try:
+            task = asyncio.create_task(memory._embed("waiting query", query=True))
+            await asyncio.sleep(0)
+            clock[0] += 3.0
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            memory._embed_query_semaphore.release()
+
+    asyncio.run(lane_waits())
+    assert (
+        "Query embedding took 4.00s and returned a vector "
+        "(query lane wait: 1.50s, 1 chunk(s), 12 chars)"
+    ) in caplog.text
+    assert (
+        "Query embedding took 3.00s and ended without a vector "
+        "(query lane wait: no lane yet, 1 chunk(s), 13 chars)"
+    ) in caplog.text
 
 
 def test_corrupt_vectors_and_cache_cannot_enter_search(memory, monkeypatch):
