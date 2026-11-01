@@ -71,6 +71,12 @@ DEFAULT_CONTROL = {
     # facts are already global-by-user; this makes them retrievable by the
     # entity tier too, with per-person semantic ranking.
     "entity_memory_from_extract": True,
+    # Warm memory recall (root, 1 November 2026). Within this many seconds
+    # of the last query vector of one person in one channel, the next
+    # message searches memory with that vector at once and computes its own
+    # vector in the background. 0 makes every message wait for its own
+    # vector.
+    "recall_warm_seconds": 900,
     # Hybrid graph next to vector RAG: site routes + ownership triples.
     # Deterministic (ast scan) plus optional triples from the existing
     # context-extractor call - no extra LLM. Off leaves vector RAG as-is.

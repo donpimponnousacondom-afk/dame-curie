@@ -26,6 +26,7 @@ import os
 import sqlite3
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -34,6 +35,14 @@ import aiohttp
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# The query vector for one turn: (query text, vector). The bot sets it for a
+# warm turn; _embed_for_query returns the vector for that exact text, so all
+# memory searches of the turn run at once. A contextvar keeps it inside the
+# task of that turn.
+QUERY_VECTOR_OVERRIDE: ContextVar[tuple[str, np.ndarray] | None] = ContextVar(
+    "dame_curie_query_vector_override", default=None
+)
 
 # ─── constants ────────────────────────────────────────────────────────
 
@@ -792,6 +801,8 @@ class RAGMemoryManager:
         # If the local embedder is unavailable or too slow, don't retry it for
         # every RAG search in the same turn (or every concurrent turn).
         self._query_embed_disabled_until = 0.0
+        # Why the query pause above started; set with the pause.
+        self._query_embed_pause_cause = ""
         # Endpoint-level breaker. When Ollama is down entirely, every stored
         # message used to open a fresh TCP connection, fail, and log a
         # WARNING - two per message, forever. Now the first failure opens the
@@ -1408,6 +1419,46 @@ class RAGMemoryManager:
         self._embed_endpoint_down_until = 0.0
         self._query_embed_disabled_until = 0.0
 
+    def query_embedding_gap(self) -> str:
+        """Why _embed_for_query returns no vector now, in one phrase."""
+        now = time.monotonic()
+        if not EMBEDDINGS_ENABLED:
+            return "embeddings are off (ENABLE_RAG)"
+        if now < self._embed_endpoint_down_until:
+            return (
+                "the embedding endpoint is paused for "
+                f"{self._embed_endpoint_down_until - now:.0f}s after a failure"
+            )
+        if now < self._query_embed_disabled_until:
+            return (
+                "query embedding is paused for "
+                f"{self._query_embed_disabled_until - now:.0f}s because "
+                f"{self._query_embed_pause_cause}"
+            )
+        return "the embedder returned no vector"
+
+    def embeddings_enabled(self) -> bool:
+        """False when ENABLE_RAG turns embeddings off on purpose."""
+        return EMBEDDINGS_ENABLED
+
+    def cached_embedding(self, text: str) -> np.ndarray | None:
+        """The cached vector of ``text``, or None. It sends no embedder request."""
+        if not EMBEDDINGS_ENABLED:
+            return None
+        projected = _embedding_projection(text)
+        if not projected:
+            return None
+        key = hashlib.sha256(
+            f"{self.embedding_backend}\0{projected}".encode()
+        ).hexdigest()
+        row = self._db.execute(
+            "SELECT embedding FROM embed_cache WHERE key=? AND dim=? AND backend=?",
+            (key, self.embed_dim, self.embedding_backend),
+        ).fetchone()
+        if row and row["embedding"] and embedding_blob_valid(row["embedding"], self.embed_dim):
+            return _blob_to_embedding(row["embedding"])
+        return None
+
     async def _embed_for_query(self, query: str) -> np.ndarray | None:
         """Best-effort query embedding with a strict interactive deadline.
 
@@ -1419,6 +1470,9 @@ class RAGMemoryManager:
         """
         if not EMBEDDINGS_ENABLED or not str(query or "").strip():
             return None
+        override = QUERY_VECTOR_OVERRIDE.get()
+        if override is not None and override[0] == query:
+            return override[1]
         now = time.monotonic()
         if now < self._query_embed_disabled_until:
             return None
@@ -1428,6 +1482,9 @@ class RAGMemoryManager:
                 timeout=RAG_QUERY_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
+            self._query_embed_pause_cause = (
+                f"a query embedding timed out after {RAG_QUERY_TIMEOUT_SECONDS:.2f}s"
+            )
             self._query_embed_disabled_until = (
                 time.monotonic() + RAG_QUERY_FAILURE_COOLDOWN_SECONDS
             )
@@ -1439,6 +1496,7 @@ class RAGMemoryManager:
             )
             return None
         if vec is None:
+            self._query_embed_pause_cause = "a query embedding returned no vector"
             self._query_embed_disabled_until = (
                 time.monotonic() + RAG_QUERY_FAILURE_COOLDOWN_SECONDS
             )
