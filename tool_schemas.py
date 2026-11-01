@@ -1032,6 +1032,11 @@ def _decode_native_tool_arguments(
         if problem:
             raise ValueError(f"{_MALFORMED}: {place}: the arguments {problem}")
         return dict(current), argument_bytes, oversized
+    if not isinstance(current, (dict, str)):
+        raise ValueError(
+            f"{_MALFORMED}: {place}: the arguments decode to type "
+            f"{type(current).__name__}, not a JSON object"
+        )
     raise ValueError(
         f"{_MALFORMED}: {place}: the arguments need more than "
         f"{_NATIVE_MAX_ARGUMENT_DECODES} decode or unwrap steps"

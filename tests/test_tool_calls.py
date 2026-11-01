@@ -253,6 +253,10 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
             place + "the arguments need more than 3 decode or unwrap steps",
         ),
         (
+            json.dumps(json.dumps(json.dumps(json.dumps([1])))),
+            place + "the arguments decode to type list, not a JSON object",
+        ),
+        (
             '{"a":"\ud800"}',
             "Malformed native tool-call batch: call 1 of 1 ('create_site'): "
             "character 6 (from 0) of the arguments is not valid UTF-8",
