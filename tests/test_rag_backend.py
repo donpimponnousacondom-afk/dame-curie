@@ -1125,3 +1125,29 @@ def test_backfill_and_status_leave_bot_output_rows_unembedded(memory, monkeypatc
     status = memory.embedding_status()
     assert status["eligible_pending"] == 0
     assert status["excluded"] == 1
+
+
+def test_cold_turn_without_a_vector_reports_the_gap_to_the_prompt(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+    install_transport(monkeypatch, Reply({}, 503))
+    gaps = []
+    assert asyncio.run(
+        DameCurieBot._prepare_turn_query_vector(bot, message, "a message", gaps=gaps)
+    ) is None
+    assert len(gaps) == 1
+    assert gaps[0].startswith("memory search did not run for this message (the embedding endpoint is paused for ")
+    assert gaps[0].endswith(
+        "long-term memories, older messages, cached web results and the relevance "
+        "ranking of this person's facts are missing from this prompt"
+    )
+
+
+def test_entity_recall_failure_is_returned_with_the_profile(memory, monkeypatch):
+    async def broken(*args, **kwargs):
+        raise OSError("disk")
+
+    monkeypatch.setattr(memory, "rag_search", broken)
+    profile = asyncio.run(memory.get_user_profile("456", query="hello"))
+    assert profile["recall_errors"] == [
+        "the relevance search for this person's facts failed (OSError: disk)"
+    ]

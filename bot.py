@@ -14235,7 +14235,7 @@ class DameCurieBot(commands.Bot):
             store.popitem(last=False)
 
     async def _prepare_turn_query_vector(
-        self, message, user_message: str
+        self, message, user_message: str, gaps: list[str] | None = None
     ) -> tuple[float, contextvars.Token] | None:
         """Choose the query vector for the memory searches of this turn.
 
@@ -14312,12 +14312,19 @@ class DameCurieBot(commands.Bot):
         started = time.monotonic()
         vector = await memory._embed_for_query(text)
         if vector is None:
+            cause = memory.query_embedding_gap()
             logger.warning(
                 "Memory recall: cold, no query vector for this message after %.2fs (%s); "
                 "the semantic memory searches of this turn return no rows",
                 time.monotonic() - started,
-                memory.query_embedding_gap(),
+                cause,
             )
+            if gaps is not None:
+                gaps.append(
+                    f"memory search did not run for this message ({cause}); long-term "
+                    "memories, older messages, cached web results and the relevance "
+                    "ranking of this person's facts are missing from this prompt"
+                )
             return None
         DameCurieBot._store_warm_query_vector(self, key, vector)
         logger.info(
@@ -14553,6 +14560,11 @@ class DameCurieBot(commands.Bot):
             _sections.append((name, now_cpu - _last[1], now_wall - _last[0]))
             _last[0], _last[1] = now_wall, now_cpu
 
+        # Failures while this prompt is built. Root, 1 November 2026: the
+        # model sees each one with its cause, so it does not guess why
+        # something is missing and can tell root.
+        memory_gaps: list[str] = []
+
         # Collect recent users from conversation for pinging support
         conv_users = {}
         try:
@@ -14580,7 +14592,10 @@ class DameCurieBot(commands.Bot):
                         conv_users[mid] = mn
         except Exception as e:
             # Name hints are a nicety; the prompt still works without them.
-            logger.debug("Could not collect conversation user names: %s", e)
+            # Root, 1 November 2026: the model sees the failure too.
+            cause = f"{type(e).__name__}: {e}"
+            logger.warning("Could not collect conversation user names: %s", cause)
+            memory_gaps.append(f"the names of the people in this conversation could not be collected ({cause})")
 
         base_knowledge = getattr(self, "_base_knowledge", DAME_CURIE_BASE_KNOWLEDGE)
         system_parts = [
@@ -14715,14 +14730,14 @@ class DameCurieBot(commands.Bot):
         ):
             # Only when a memory search below will run.
             warm_recall = await DameCurieBot._prepare_turn_query_vector(
-                self, message, user_message
+                self, message, user_message, gaps=memory_gaps
             )
             _mark("query_vector")
         if warm_recall is not None:
             dynamic_parts.append(
-                "Memory recall in this prompt is ranked for the previous message "
-                "of this person in this channel. It refreshes in the background "
-                "for the next message."
+                "Memory recall in this prompt is ranked for an earlier message of "
+                f"this person in this channel ({warm_recall[0]:.0f}s ago). It "
+                "refreshes in the background for the next message."
             )
 
         entity_facts: list[dict] = []
@@ -14736,8 +14751,11 @@ class DameCurieBot(commands.Bot):
                     budget=ctx_plan.budget_for("entity"),
                 )
                 _mark("entity_profile")
+                memory_gaps.extend((entity_row or {}).get("recall_errors") or [])
             except Exception as e:
-                logger.debug(f"entity profile skipped: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Entity profile failed: %s", cause)
+                memory_gaps.append(f"the facts about this person could not be loaded ({cause})")
             block = DameCurieBot._render_entity_block(
                 self, message, entity_row, entity_facts
             )
@@ -14839,7 +14857,9 @@ class DameCurieBot(commands.Bot):
                             r for r in web_rows if r.get("similarity", 0) >= 0.40
                         ]
                     except Exception as e:
-                        logger.debug(f"recall_web_results skipped: {e}")
+                        cause = f"{type(e).__name__}: {e}"
+                        logger.warning("Web result recall failed: %s", cause)
+                        memory_gaps.append(f"cached web results could not be loaded ({cause})")
                 if rag_context or rag_recent or rag_web:
                     # Build RAG-augmented memory block. Durable facts first
                     # (LTM/shared_context - they don't decay), then recent
@@ -14998,7 +15018,9 @@ class DameCurieBot(commands.Bot):
                             dropped=fb_dropped,
                         )
             except Exception as e:
-                logger.warning(f"Failed to load long-term memory: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Failed to load long-term memory: %s", cause)
+                memory_gaps.append(f"long-term memory could not be loaded ({cause})")
             ctx_spare = ctx_plan.spare_after("entity", "ltm", "web")
         if warm_recall is not None:
             # The warm vector serves only the memory sections above. Later
@@ -15047,7 +15069,14 @@ class DameCurieBot(commands.Bot):
                             "facts", len(body), items=len(lines), dropped=facts_dropped
                         )
             except Exception as e:
-                logger.warning(f"Failed to build shared context: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Failed to build shared context: %s", cause)
+                memory_gaps.append(f"cross-context facts could not be loaded ({cause})")
+        if memory_gaps:
+            dynamic_parts.append(
+                "Harness failures while this prompt was built (tell root if they "
+                "matter for your answer):\n" + "\n".join(f"- {gap}" for gap in memory_gaps)
+            )
         logger.debug("%s", ctx_plan.summary())
 
         if conv_users and not self._is_short_live_turn(message, user_message):

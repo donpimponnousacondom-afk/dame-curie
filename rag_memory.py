@@ -2305,8 +2305,12 @@ class RAGMemoryManager:
         top_k: int = 8,
         budget: int | None = None,
         include_shared_context: bool = True,
+        errors: list[str] | None = None,
     ) -> list[dict]:
         """Facts about one person, from every guild and DM they appear in.
+
+        ``errors`` collects the failure of the semantic recall, so the caller
+        can show it to the model (root, 1 November 2026).
 
         With a ``query`` the entity tier is ranked semantically; without one
         (or before embeddings are warm) it falls back to importance then
@@ -2343,7 +2347,10 @@ class RAGMemoryManager:
                         "origin": "entity",
                     }
             except Exception as e:
-                logger.debug(f"entity semantic recall skipped: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Entity semantic recall failed: %s", cause)
+                if errors is not None:
+                    errors.append(f"the relevance search for this person's facts failed ({cause})")
 
         # Always take the importance-ranked head too. Semantic recall answers
         # "what is relevant to this message"; a profile also needs the things
@@ -2465,9 +2472,11 @@ class RAGMemoryManager:
     ) -> dict:
         """Identity + facts in one call - what the prompt tier renders."""
         entity = self.get_user_entity(user_id) or {"user_id": str(user_id)}
+        errors: list[str] = []
         entity["facts"] = await self.get_entity_facts(
-            user_id, query=query, top_k=top_k, budget=budget
+            user_id, query=query, top_k=top_k, budget=budget, errors=errors
         )
+        entity["recall_errors"] = errors
         return entity
 
     def entity_stats(self) -> dict:
