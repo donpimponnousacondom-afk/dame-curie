@@ -94,6 +94,12 @@ def test_varied_openers_say_nothing():
         _bot(), _mine("hi", "there you go", "what is up", "ok then")
     )
     assert note == ""
+    # The stored time prefix is not an opening word.
+    stamped = [
+        f"[2026-11-01 02:3{i}:00 CET] {text}"
+        for i, text in enumerate(("hi", "there you go", "what is up", "ok then"))
+    ]
+    assert DameCurieBot._self_repetition_note(_bot(), _mine(*stamped)) == ""
 
 
 def test_other_peoples_messages_are_not_his_habit():
@@ -102,6 +108,9 @@ def test_other_peoples_messages_are_not_his_habit():
         for _ in range(6)
     ]
     assert DameCurieBot._self_repetition_note(_bot(), others) == ""
+    # Another bot in the channel is not him either.
+    other_bot = [dict(row, author_is_bot=True) for row in others]
+    assert DameCurieBot._self_repetition_note(_bot(), other_bot) == ""
 
 
 def test_tool_rows_are_not_speech():
