@@ -198,6 +198,7 @@ def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
             "totalTokenCount",
             "thoughtsTokenCount",
             "cached_tokens",
+            "prompt_cache_hit_tokens",
             "audio_tokens",
             "accepted_prediction_tokens",
             "rejected_prediction_tokens",
@@ -231,6 +232,33 @@ def prefer_reported(*counts: int | None) -> int | None:
 
 def reported_count(usage: dict, *keys: str) -> int | None:
     return prefer_reported(*(token_count(usage.get(key)) for key in keys))
+
+
+_CACHED_TOKEN_FIELDS = (
+    ("prompt_tokens_details", "cached_tokens"),
+    ("input_tokens_details", "cached_tokens"),
+    (None, "prompt_cache_hit_tokens"),
+)
+
+
+def reported_cached_tokens(response: dict) -> str:
+    """Cached prompt tokens as the provider reported them, for the call log.
+
+    Root, 1 November 2026: prompt-cache hits must be measurable. The text is
+    the count, "not in usage" when no known field is present, or the invalid
+    value and its field.
+    """
+    usage = response.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    for section, key in _CACHED_TOKEN_FIELDS:
+        holder = usage.get(section) if section else usage
+        if isinstance(holder, dict) and key in holder:
+            count = token_count(holder[key])
+            field = f"{section}.{key}" if section else key
+            if count is None:
+                return f"invalid {str(holder[key])[:40]!r} in {field}"
+            return str(count)
+    return "not in usage"
 
 
 def reported_usage(response: dict) -> tuple[int | None, int | None, int | None]:

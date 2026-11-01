@@ -171,21 +171,38 @@ def test_upstream_error_labels_are_allowlisted_and_bounded():
 
 
 @pytest.mark.parametrize(
+    "usage, logged",
+    [
+        # Root, 1 November 2026: prompt-cache hits are logged on every call.
+        (
+            {"prompt_tokens": 120, "prompt_tokens_details": {"cached_tokens": 96}},
+            "input=120 input_source=provider cached=96",
+        ),
+        (
+            {"prompt_tokens": 120, "prompt_cache_hit_tokens": 96},
+            "input=120 input_source=provider cached=96",
+        ),
+        ({"prompt_tokens": 120}, "input=120 input_source=provider cached=not in usage"),
+        (
+            {"prompt_tokens": 120, "prompt_tokens_details": {"cached_tokens": -1}},
+            "cached=invalid '-1' in prompt_tokens_details.cached_tokens",
+        ),
+        (None, "input_source=cl100k_base cached=not in usage"),
+    ],
+)
+@pytest.mark.parametrize(
     "content_type",
     ["application/json", "Application/JSON; charset=utf-8", "application/problem+json"],
 )
-def test_http200_json_response_overrides_stream_request(content_type, caplog):
+def test_http200_json_response_overrides_stream_request(
+    content_type, usage, logged, caplog
+):
     caplog.set_level(logging.INFO, logger="providers")
     provider = OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6, extra_body={"stream": True})
     provider.available = True
-    body = {
-        "choices": [{"message": {"role": "assistant", "content": "hello"}}],
-        "usage": {"prompt_tokens": 120, "completion_tokens": 5},
-    }
-    # Prompt-cache hits are logged when the provider reports them.
-    cache_reported = content_type == "application/json"
-    if cache_reported:
-        body["usage"]["prompt_tokens_details"] = {"cached_tokens": 96}
+    body = {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+    if usage is not None:
+        body["usage"] = usage
     response = StreamResponse([json.dumps(body).encode()], content_type)
     provider._session = FakeSession(response)
     result = asyncio.run(
@@ -194,8 +211,7 @@ def test_http200_json_response_overrides_stream_request(content_type, caplog):
     assert result == "hello"
     assert response.json_calls == 1
     assert provider._session.payloads[0]["stream"] is True
-    cached = "cached=96" if cache_reported else "cached=not reported"
-    assert f"tokens=125 input=120 {cached}" in caplog.text
+    assert logged in caplog.text
 
 
 @pytest.mark.parametrize("prefix", [[], [CONTENT]])
@@ -331,13 +347,22 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
 
 
 @pytest.mark.parametrize("content_type", ["text/plain", "", "private-header-secret"])
-def test_unrecognized_content_type_preserves_valid_sse(content_type):
+def test_unrecognized_content_type_preserves_valid_sse(content_type, caplog):
+    caplog.set_level(logging.INFO, logger="providers")
     provider = OpenAICompatibleProvider(
         "http://example.test", "model", 8192, 0.6, retry_attempts=1, extra_body={"stream": True}
     )
     provider.available = True
-    provider._session = FakeSession(StreamResponse([CONTENT, DONE], content_type))
+    usage_frame = (
+        b'data: {"usage":{"prompt_tokens":120,"completion_tokens":5,'
+        b'"prompt_tokens_details":{"cached_tokens":96}}}\n\n'
+    )
+    provider._session = FakeSession(
+        StreamResponse([CONTENT, usage_frame, DONE], content_type)
+    )
     assert asyncio.run(provider.generate_response([])) == "hello"
+    # The streamed usage frame reaches the call log.
+    assert "input=120 input_source=provider cached=96" in caplog.text
 
 
 @pytest.mark.parametrize("attempts", [1, 3, 5])
