@@ -1177,6 +1177,9 @@ def test_a_result_is_not_masked_when_its_marker_is_not_shorter():
         ({"command": "ls"}, 'shell {"command":"ls"}'),
         ("", "shell {}"),
         ("not json", "shell not json"),
+        ("not\n  json", "shell not json"),
+        ("null", "shell null"),
+        ("[1, 2]", "shell [1,2]"),
         ('{"command": "' + "x" * 300 + '"}', 'shell {"command":"' + "x" * 105 + "..."),
     ],
 )
@@ -1186,3 +1189,37 @@ def test_call_excerpt_names_the_tool_and_shortens_its_arguments(arguments, excer
     text = _call_excerpt({"id": "c1", "function": {"name": "shell", "arguments": arguments}})
     assert text == excerpt
     assert len(text) <= len("shell ") + BG_MASK_CALL_CHARS
+
+
+def test_a_result_kept_by_the_marker_guard_does_not_hold_the_batch():
+    # A 430-character result in round 0 stays (its marker would not be
+    # shorter). It must not count as open, or masking would run at every step.
+    from jobs import mask_old_tool_results
+
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
+
+    def add_round(index, content):
+        call = {"id": f"c{index}", "type": "function", "function": {"name": "a" * 64, "arguments": '{"command":"' + "y" * 100 + '"}'}}
+        messages.extend([
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": f"c{index}", "content": content},
+        ])
+
+    add_round(0, "f" * 200 + "\n" + "t" * 229)
+    for index in range(1, 6):
+        add_round(index, "short")
+    # 6 rounds, none open: nothing to do.
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+    for index in range(6, 9):
+        add_round(index, "short")
+    # 9 rounds, the only long result is not maskable: still nothing.
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+    add_round(9, "Tool shell: ok\n" + "z" * 3000)
+    for index in range(10, 14):
+        add_round(index, "short")
+    # Round 9 is older than the newest 4, but only 5 rounds lie between it
+    # and the newest round: the batch waits. With round 0 counted as open,
+    # round 9 would be masked at once.
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+    assert messages[3]["content"].startswith("f" * 200)
+    assert messages[2 + 2 * 9 + 1]["content"].startswith("Tool shell: ok")
