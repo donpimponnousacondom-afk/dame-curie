@@ -1009,11 +1009,15 @@ def test_placement_gate_refuses_a_blocked_parent_and_keeps_an_allowed_one(monkey
     )
 
 
-def test_job_masks_old_tool_results_and_keeps_the_newest_rounds(tmp_path):
+@pytest.mark.parametrize("masking", [True, False])
+def test_job_masks_old_tool_results_and_keeps_the_newest_rounds(tmp_path, monkeypatch, masking):
     # Root, 1 November 2026 (Fable's research, arXiv 2508.21433): results of
     # rounds older than the newest BG_MASK_KEEP_ROUNDS become one line, so a
     # long job stays under the compaction limit without a model summary.
     from jobs import BG_MASK_KEEP_ROUNDS, BG_MASK_PREFIX
+
+    if not masking:
+        monkeypatch.setattr(jobs_module, "BG_MASK_KEEP_ROUNDS", 10_000)
 
     async def scenario():
         manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
@@ -1029,26 +1033,32 @@ def test_job_masks_old_tool_results_and_keeps_the_newest_rounds(tmp_path):
             {"role": "assistant", "content": "", "tool_calls": [call]},
             {"role": "tool", "tool_call_id": "call_9", "content": "Tool shell: ok call_9 " + "x" * 3000},
         ])
-        # Without masking this limit forces two compactions (see the test above).
-        bot._control["bg_compact_at_tokens"] = head + int(6.5 * step_tokens)
+        # 10 long steps exceed 9.5 steps of results, so without masking the
+        # job compacts. Batched masking keeps at most 8 steps unmasked.
+        bot._control["bg_compact_at_tokens"] = head + int(9.5 * step_tokens)
         await run_background_job(bot, job.id)
         return manager.get(job.id), message.channel, bot
 
     job, channel, bot = asyncio.run(scenario())
     assert job.status == "done"
+    if not masking:
+        # The same job without masking needs a model summary.
+        assert len(bot.compact_requests) >= 1
+        return
     assert bot.compact_requests == []
     final = bot.generated_messages
     results = [m for m in final if m.get("role") == "tool"]
     masked = [m for m in results if m["content"].startswith(BG_MASK_PREFIX)]
     kept = [m for m in results if not m["content"].startswith(BG_MASK_PREFIX)]
-    assert len(kept) == BG_MASK_KEEP_ROUNDS
-    assert len(masked) == len(results) - BG_MASK_KEEP_ROUNDS > 0
+    # Batches: masking waits for 2 * BG_MASK_KEEP_ROUNDS open rounds, then
+    # keeps the newest BG_MASK_KEEP_ROUNDS.
+    assert BG_MASK_KEEP_ROUNDS <= len(kept) < 2 * BG_MASK_KEEP_ROUNDS
+    assert len(masked) == len(results) - len(kept) > 0
     assert masked[0]["content"].startswith(
         f"{BG_MASK_PREFIX} the shell result of an older step ("
     )
-    assert masked[0]["content"].endswith(
-        "characters) is masked to keep the job prompt small. Call the tool again if you need it."
-    )
+    assert "is masked to keep the job prompt small. It began: Tool shell: ok call_" in masked[0]["content"]
+    assert masked[0]["content"].endswith("Call it again only if repeating it is safe.")
     # A masked row keeps its call pairing.
     pairs = [(a["tool_calls"][0]["id"], t["tool_call_id"]) for a, t in zip(final[2::2], final[3::2]) if a.get("tool_calls")]
     assert all(left == right for left, right in pairs)
@@ -1070,13 +1080,18 @@ def test_mask_old_tool_results_is_deterministic_and_skips_short_results(keep):
         messages += round_(index, 50 if index == 0 else 1000)
     count, removed = mask_old_tool_results(messages, keep_rounds=keep)
     results = [m["content"] for m in messages if m.get("role") == "tool"]
+    if keep == 4:
+        # 5 open rounds are fewer than 2 * 4: the batch waits.
+        assert (count, removed) == (0, 0)
+        assert results == ["r" * 50] + ["r" * 1000] * 5
+        return
     old = results[: max(0, 6 - keep)]
     # The short result of round 0 stays; long old results are masked.
     assert old[0] == "r" * 50
     assert all(text.startswith(BG_MASK_PREFIX) for text in old[1:])
     assert results[max(0, 6 - keep):] == ["r" * 1000] * min(keep, 6)
     assert count == max(0, len(old) - 1)
-    assert removed > 0 if count else removed == 0
+    assert removed > 0
     snapshot = [dict(m) for m in messages]
     # A second pass changes nothing: a masked row is never rewritten.
     assert mask_old_tool_results(messages, keep_rounds=keep) == (0, 0)
@@ -1100,3 +1115,37 @@ def test_masking_keeps_the_synthetic_results_line_and_the_round_count():
     masked = [m["content"] for m in messages[2:] if m["role"] == "user"][:4]
     assert all(text.startswith("=== TOOL RESULTS ===\n" + BG_MASK_PREFIX + " the tool results") for text in masked)
     assert mask_old_tool_results(messages, keep_rounds=2) == (0, 0)
+
+
+@pytest.mark.parametrize("provider_tokens", [10_000, None])
+def test_next_prompt_tokens_subtracts_masked_characters_from_a_provider_count(provider_tokens):
+    from jobs import estimate_job_tokens, next_prompt_tokens
+
+    earlier = [{"role": "user", "content": "e" * 3000}]
+    new = [{"role": "user", "content": "n" * 300}]
+    estimate, estimated = next_prompt_tokens(provider_tokens, earlier, new, 3000)
+    if provider_tokens is None:
+        # Without a provider count the earlier messages, already masked,
+        # are estimated, and nothing is subtracted twice.
+        assert estimated is True
+        assert estimate == estimate_job_tokens(earlier) + estimate_job_tokens(new)
+    else:
+        assert estimated is False
+        assert estimate == 10_000 - 1000 + estimate_job_tokens(new)
+
+
+def test_a_masked_error_result_keeps_its_first_line():
+    # Failures stay visible: the outcome line of an old call survives masking.
+    from jobs import mask_old_tool_results
+
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
+    for index in range(8):
+        call = {"id": f"c{index}", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+        first = "Tool shell: Error - exit 1: permission denied" if index == 0 else "Tool shell: ok"
+        messages += [
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": f"c{index}", "content": first + "\n" + "x" * 1000},
+        ]
+    count, _ = mask_old_tool_results(messages, keep_rounds=4)
+    assert count == 4
+    assert "It began: Tool shell: Error - exit 1: permission denied" in messages[3]["content"]

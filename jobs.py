@@ -165,16 +165,37 @@ def _render_job_rounds(groups: list[list[dict]]) -> str:
 def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_ROUNDS) -> tuple[int, int]:
     """Replace long tool results of older job rounds with one line, in place.
 
-    The newest ``keep_rounds`` rounds stay word for word. A result shorter
-    than BG_MASK_MIN_CHARS stays. A masked result is never changed again, so
-    the masking of a round happens once, when it leaves the newest rounds.
-    Returns the number of results masked by this call and the characters
-    removed.
+    Masking runs in batches: only when 2 * ``keep_rounds`` rounds or more
+    hold unmasked long results, and then down to the newest ``keep_rounds``.
+    The prompt prefix therefore changes once every ``keep_rounds`` steps, not
+    at every step. A result shorter than BG_MASK_MIN_CHARS stays. The marker
+    keeps the first line of the result (for example "Tool shell: Error ..."),
+    so the outcome of a call stays visible. A masked result is never changed
+    again. Returns the number of results masked by this call and the
+    characters removed.
     """
     from tool_schemas import tool_tail_groups
 
     start = 3 if len(messages) > 2 and str(messages[2].get("content") or "").startswith(JOB_SUMMARY_HEADER) else 2
     groups = tool_tail_groups(messages[start:])
+
+    def head_of(msg: dict) -> str:
+        # A synthetic result keeps its first line: tool_tail_groups pairs it
+        # with its assistant message by that line.
+        return "" if msg.get("role") == "tool" else "=== TOOL RESULTS ===\n"
+
+    def maskable(msg: dict) -> bool:
+        content = msg.get("content")
+        if not isinstance(content, str) or len(content) < BG_MASK_MIN_CHARS:
+            return False
+        return not content[len(head_of(msg)):].startswith(BG_MASK_PREFIX)
+
+    first_open = next(
+        (index for index, group in enumerate(groups) if any(maskable(m) for m in group[1:])),
+        len(groups),
+    )
+    if keep_rounds > 0 and len(groups) - first_open < 2 * keep_rounds:
+        return 0, 0
     masked = removed = 0
     for group in groups[: max(0, len(groups) - keep_rounds)]:
         names = {
@@ -182,28 +203,41 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
             for call in group[0].get("tool_calls") or []
         }
         for msg in group[1:]:
-            content = msg.get("content")
-            if not isinstance(content, str) or len(content) < BG_MASK_MIN_CHARS:
+            if not maskable(msg):
                 continue
+            head = head_of(msg)
+            content = msg["content"]
+            body = content[len(head):]
+            first_line = body.split("\n", 1)[0].strip()[:200]
             if msg.get("role") == "tool":
-                head = ""
                 what = f"the {names.get(str(msg.get('tool_call_id')), 'tool')} result"
             else:
-                # A synthetic result keeps its first line: tool_tail_groups
-                # pairs it with its assistant message by that line.
-                head = "=== TOOL RESULTS ===\n"
                 what = "the tool results"
-            if content[len(head):].startswith(BG_MASK_PREFIX):
-                continue
             marker = (
-                f"{head}{BG_MASK_PREFIX} {what} of an older step ({len(content) - len(head):,} "
-                "characters) is masked to keep the job prompt small. Call the tool again if "
-                "you need it."
+                f"{head}{BG_MASK_PREFIX} {what} of an older step ({len(body):,} characters) "
+                f"is masked to keep the job prompt small. It began: {first_line} "
+                "Call it again only if repeating it is safe."
             )
             msg["content"] = marker
             masked += 1
             removed += len(content) - len(marker)
     return masked, removed
+
+
+def next_prompt_tokens(
+    provider_tokens: int | None, earlier: list[dict], new: list[dict], masked_chars: int
+) -> tuple[int, bool]:
+    """Estimate the next job prompt in tokens; True when no provider count existed.
+
+    The provider counted the earlier messages before this step's masking, so
+    the masked characters (3 per token) are subtracted from its count.
+    Without a provider count, the earlier messages, already masked, are
+    estimated. The new messages are always estimated.
+    """
+    added = estimate_job_tokens(new)
+    if isinstance(provider_tokens, int):
+        return max(0, provider_tokens - masked_chars // 3) + added, False
+    return estimate_job_tokens(earlier) + added, True
 
 
 def estimate_job_tokens(messages: list[dict]) -> int:
@@ -989,7 +1023,8 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     break
                 history_len = len(messages)
                 if followups:
-                    messages.extend(followups)
+                    # Copies: masking edits history messages in place.
+                    messages.extend(dict(item) for item in followups)
                 else:
                     messages.append({"role": "assistant", "content": str(response or "")})
                     messages.append(
@@ -1001,7 +1036,17 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     break
                 final_text = resp_text.strip()
                 final_metrics = response_metrics if final_text else None
-                masked, masked_chars = mask_old_tool_results(messages, keep_rounds=BG_MASK_KEEP_ROUNDS)
+                try:
+                    masked, masked_chars = mask_old_tool_results(
+                        messages, keep_rounds=BG_MASK_KEEP_ROUNDS
+                    )
+                except ValueError as exc:
+                    # A broken call/result pairing: the job stops with the
+                    # exact cause, as a failed compaction does.
+                    terminal_failure = exc
+                    failure_text = f"tool-result masking failed at step {step + 1}: {exc}"
+                    capture_incident("jobs", "Background tool-result masking failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                    break
                 if masked:
                     logger.info(
                         "background job %s step %d: masked %d older tool result(s), %d characters",
@@ -1011,21 +1056,19 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                 # step plus this step's new messages, minus what masking
                 # removed. Without provider usage, the whole prompt is
                 # estimated at 3 characters per token.
-                input_tokens = getattr(response_metrics, "input_tokens", None)
-                added = estimate_job_tokens(messages[history_len:])
-                if isinstance(input_tokens, int):
-                    # The provider counted the earlier messages before masking.
-                    input_tokens = max(0, input_tokens - masked_chars // 3)
-                else:
-                    # The earlier messages are already masked here.
-                    input_tokens = estimate_job_tokens(messages[:history_len])
+                estimate, estimated = next_prompt_tokens(
+                    getattr(response_metrics, "input_tokens", None),
+                    messages[:history_len],
+                    messages[history_len:],
+                    masked_chars,
+                )
+                if estimated:
                     logger.info(
-                        "background job %s step %d has no provider token count; estimated %d input tokens",
-                        job.id, step + 1, input_tokens,
+                        "background job %s step %d has no provider token count; estimated %d tokens",
+                        job.id, step + 1, estimate,
                     )
                 # The tool schemas go with every step but are not in messages.
                 overhead = estimate_job_tokens(provider_tools or [])
-                estimate = input_tokens + added
                 if (
                     estimate >= compact_at
                     and step < max(1, max_iters) - 1
