@@ -1,37 +1,52 @@
-# dame-curie status - 1 November 2026
+# dame-curie status
+
+The first section was written on 1 November 2026. The sections after it
+date from 3 October 2026.
 
 ## Behaviour changes, 31 October to 1 November 2026
 
-Root made the coordinator director of dame-curie on 31 October 2026. The
-changes below went live on throne-v2 in this order. Each line is one
-squash-merged PR. Sonnet and Haiku reviewed each one. Use this list when
+Root made the coordinator director of dame-curie on 31 October 2026
+(session record, not in the repository). Each row is one squash-merged
+PR, in merge order. The coordinator deployed each one to throne-v2.
+Sonnet and Haiku reviewed each PR; the review digests are PR comments
+for #4 to #12 and commit or PR text for the others. Use this list when
 a behaviour changes in the next days.
 
-How to revert one change: create a branch from `main`, run
-`git revert <commit>`, open a PR, review it, merge it, then deploy. For
-#13 also reinstall `scripts/publisher/*.py` to
-`/opt/dame-curie/scripts/publisher/` and restart
-`dame-curie-publisher.service`.
+How to revert one change:
+1. Create a branch from `main` and run `git revert <commit>`.
+2. Revert newer rows first. Later PRs touch the same files, so an old
+   revert can conflict. #17, #18 and #20 are three steps of one series;
+   #20 depends on code that #18 leaves.
+3. Open a PR, review it, merge it, then deploy.
+4. Extra steps:
+   - #4 and #13 changed `scripts/publisher/*.py`. Reinstall them to
+     `/opt/dame-curie/scripts/publisher/` and restart
+     `dame-curie-publisher.service`.
+   - #4 and #7 changed `compose.yaml`. Install it to
+     `/opt/dame-curie/compose.yaml`.
+   - #7 renamed `DAME_CURIE_PUBLIC_BASE_URL` to
+     `DAME_CURIE_IMAGE_PUBLIC_BASE_URL` in `bot.env`. A revert needs the
+     old name back.
 
 | PR | Commit | Change | Watch for |
 | --- | --- | --- | --- |
-| #4, #6 | `afc9383` | Over-limit tool batches return a refusal with the exact cause to the model. Jobs report an unresolved tool error. | "Error - " tool results in long tool rounds. |
-| #7 | `57083ed` | Tool history has its own prompt allowance. Image and site URLs fixed. Reasoning-shaped JSON stays visible. Maxwell renamed. Smoke harness mounted. | Forgetting earlier tool results; wrong image links. |
+| #4, #6 | `afc9383` | The throne-v2 commits that ran live since 9 October 2026, about 100 files. The tool argument `reasoning` is renamed to `explanation`. The reasoning and `<think>` filters are removed. The prompt invites batched independent calls, with a cap of 10 calls per response and byte limits. One AI slot is kept free for human replies. `compose.yaml` pins OpenBLAS and OpenMP to one thread. RAG search scores in one matrix pass. Em and en dashes are refused repo-wide. The publisher repair is recorded. #6 (merged into this branch): an over-limit batch returns a refusal with the exact cause; jobs report an unresolved tool error. | "Error - " tool results in long tool rounds; "AI slot wait" log lines. |
+| #7 | `57083ed` | The tool history has its own prompt allowance: 42 messages and 96,000 characters, and a note marks dropped rounds. `DAME_CURIE_PUBLIC_BASE_URL` is renamed to `DAME_CURIE_IMAGE_PUBLIC_BASE_URL`; the old name stops startup with its cause. `see_image` and `image_generator` read her own images from disk. Reasoning-shaped JSON stays visible. The bot class is renamed to `DameCurieBot`. `instance.py` refuses to start without the smoke directories, and `compose.yaml` mounts them. The voice wake word default is `curie`. | Forgetting earlier tool results; wrong image links; startup refusal after a config change. |
 | #8 | `8d72c97` | Background jobs compact their history with a model summary at about 180,000 tokens. | "compacted" notes in job threads; jobs that fail with a compaction cause. |
 | #9 | `338534a` | Tool images stay attached for the whole turn. A turn that stops posts "Stopped: <cause>." or "No reply: <cause>.". | These notices in channels. |
 | #11 | `2972a05` | Attachment URLs stay in history. | Later turns that fetch an old attachment. |
-| #10 | `12aa2c6` | Text written beside tool calls is posted as a progress update. Job summaries are assistant messages. `see_image` reads any local file. | Extra short messages during tool work. |
+| #10 | `12aa2c6` | Text written beside tool calls is posted as a progress update. Job summaries are assistant messages. `see_image` reads any local image file and refuses other files. | Extra short messages during tool work. |
 | #12 | `c5694fc` | Tests only. | Nothing at runtime. |
-| #13 | `ed5cb2f` | Publisher: top-level hidden folders of a site (for example `.data`) stay on the remote. The prompt states the sync rules. | Data in `.data` folders after a sync. |
+| #13 | `ed5cb2f` | Publisher: top-level hidden folders of a site (for example `.data`) and their files stay on the remote. Deleting the whole site locally deletes them too. The prompt states the sync rules. | Data in `.data` folders after a sync. |
 | #14 | `51bb813` | A missing embedding setting is named in the log. | "Embedding failed (...)" log lines. |
 | #15 | `6e6e3a0` | Her own history lines no longer carry reply, mention or autonomy notes. User lines say "replying to". The chat rules say history metadata never goes in a reply. | "reply_to=" or notes copied into replies. |
-| #16 | `618a2f6` | History notes use braces: `{replying to="Name(id)", quote="..."}`. Her own lines keep the reply note. | A copied `{replying to=...}` in a reply. |
+| #16 | `618a2f6` | History notes use braces: `{replying to="Name(id)", quote="..."}`. Her own lines get the reply note back. | A copied `{replying to=...}` in a reply. |
 | #17 | `d1a80c2` | No cosmetic rewrite of replies: brackets, repetition, `\n`, sent markers, `Name(id)` pings and `<url>` stay as written. `scrub_repetitions` is retired. | Repeated words, `__MESSAGE_SENT__` or `[Dame Curie]` in replies. |
 | #18 | `b686228` | No tool-markup stripping: XML, pipe, DSML and `<arg>` tool markup, tool JSON and injected context tags reach Discord as written. | Raw tool markup or `<system-reminder>` text in replies. |
 | #21 | `d181ccd` | The self-repetition note skips the stored time prefix and counts only her own rows. | The note "You have opened N of your last M messages with ...". |
 | #20 | `9f71490` | Tool calls written as text are not executed. A failure to read tool calls fails a background job with its cause. | Tool-call text posted in a channel instead of an action. |
 | #22 | `d648323` | A malformed native tool call names the call and the exact cause. A valid call with three decode or unwrap steps is accepted. | "Malformed native tool-call batch: call ..." in the log. |
-| #23 | `153caa9` | The provider log line states `input=`, `input_source=` and `cached=` tokens. First measurement, 1 November 2026: 9,232 of 17,470 input tokens cached. | Read `cached=` to measure prompt-cache hits. |
+| #23 | `153caa9` | The provider log line states `input=`, `input_source=` and `cached=` tokens. First live log measurement, 1 November 2026 (not in the repository): 9,232 of 17,470 input tokens cached. | Read `cached=` to measure prompt-cache hits. |
 | #24 | `9bbf2dd` | The startup REM backfill is removed. It re-inserted up to 500 old replies on each start with the current time, so they moved to the newest end of her history. | History in time order after a restart. |
 
 ### Known open items
@@ -56,9 +71,10 @@ How to revert one change: create a branch from `main`, run
 - **The `tool_` prefix repair.** `normalize_native_tool_calls` removes a
   leading `tool_` from a tool name. This is a name repair like
   `_TOOL_ALIASES`.
-- **Partial batch results.** Dame Curie asked on 1 November 2026: when
-  a native call in a batch fails, mark which calls in the batch
-  succeeded, so she does not run a live call twice.
+- **Partial batch results.** Dame Curie asked in the test channel on
+  1 November 2026 (session record): when a native call in a batch
+  fails, mark which calls in the batch succeeded, so she does not run a
+  live call twice.
 - **Rows the REM backfill moved before #24** keep their last
   `created_at`. New messages are stored after them; no restart moves
   them again.
