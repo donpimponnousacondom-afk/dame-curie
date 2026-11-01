@@ -188,6 +188,9 @@ _CACHED_TOKEN_FIELDS = (
     (None, "prompt_cache_hit_tokens"),
 )
 _CACHED_TOKEN_KEYS = frozenset(key for _section, key in _CACHED_TOKEN_FIELDS)
+_CACHED_TOKEN_SECTIONS = frozenset(
+    section for section, _key in _CACHED_TOKEN_FIELDS if section
+)
 
 
 def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
@@ -228,7 +231,12 @@ def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
             )
             and isinstance(value, dict)
         ):
-            merge_usage(target.setdefault(key, {}), value, details=True)
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            merge_usage(target[key], value, details=True)
+        elif not details and key in _CACHED_TOKEN_SECTIONS and value is not None:
+            # Keep a malformed cache section so the call log names it.
+            target[key] = value
 
 
 def prefer_reported(*counts: int | None) -> int | None:

@@ -359,7 +359,7 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
 
 
 @pytest.mark.parametrize(
-    "cache_field",
+    "cache_field, logged",
     [
         ('"prompt_tokens_details":{"cached_tokens":96}', "cached=96"),
         ('"prompt_cache_hit_tokens":96', "cached=96"),
@@ -367,11 +367,14 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
             '"prompt_tokens_details":{"cached_tokens":-1}',
             "cached=invalid '-1' in prompt_tokens_details.cached_tokens",
         ),
+        ('"prompt_tokens_details":"x"', "cached=invalid 'x' in prompt_tokens_details"),
+        ('"prompt_tokens_details":null', "cached=not in usage"),
     ],
 )
 @pytest.mark.parametrize("content_type", ["text/plain", "", "private-header-secret"])
-def test_unrecognized_content_type_preserves_valid_sse(content_type, cache_field, caplog):
-    cache_field, logged = cache_field
+def test_unrecognized_content_type_preserves_valid_sse(
+    content_type, cache_field, logged, caplog
+):
     caplog.set_level(logging.INFO, logger="providers")
     provider = OpenAICompatibleProvider(
         "http://example.test", "model", 8192, 0.6, retry_attempts=1, extra_body={"stream": True}
