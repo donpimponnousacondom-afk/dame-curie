@@ -323,6 +323,41 @@ def test_queued_requests_recheck_breaker_after_semaphore(memory, monkeypatch):
     assert len(transport.calls) == 1
 
 
+def test_query_embedding_does_not_wait_for_background_writes(memory, monkeypatch):
+    # Root, 1 November 2026: a prompt query embedding waited 24.8 s behind
+    # background writes. A held background lane must not block a query.
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+
+    async def run():
+        await memory._embed_semaphore.acquire()
+        try:
+            return await asyncio.wait_for(memory._embed_for_query("prompt query"), timeout=1)
+        finally:
+            memory._embed_semaphore.release()
+
+    assert asyncio.run(run()) is not None
+    assert len(transport.calls) == 1
+
+
+def test_slow_query_embedding_is_logged_with_its_lane_wait(memory, monkeypatch, caplog):
+    clock = [100.0]
+    monkeypatch.setattr(rag.time, "monotonic", lambda: clock[0])
+
+    class SlowReply(Reply):
+        async def json(self):
+            clock[0] += 2.5
+            return await super().json()
+
+    install_transport(monkeypatch, SlowReply({"embeddings": [vector()]}))
+    caplog.set_level("INFO", logger=rag.logger.name)
+    assert asyncio.run(memory._embed("prompt query", query=True)) is not None
+    assert "Query embedding took 2.50s (0.00s waiting for the query lane, 1 chunk(s), 12 chars)" in caplog.text
+    caplog.clear()
+    install_transport(monkeypatch, SlowReply({"embeddings": [vector()]}))
+    assert asyncio.run(memory._embed("background text")) is not None
+    assert "Query embedding took" not in caplog.text
+
+
 def test_corrupt_vectors_and_cache_cannot_enter_search(memory, monkeypatch):
     content = "valid synthetic fact"
     corrupt = rag._embedding_to_blob(np.array([float("nan")] * 8, dtype=np.float32))

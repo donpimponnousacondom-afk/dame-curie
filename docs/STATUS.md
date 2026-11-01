@@ -25,7 +25,7 @@ How to revert one change:
    - #4 and #13 changed `scripts/publisher/*.py`. Reinstall them to
      `/opt/dame-curie/scripts/publisher/` and restart
      `dame-curie-publisher.service`.
-   - #4 and #7 changed `compose.yaml`. Install the reverted file as the
+   - #4, #7 and #27 changed `compose.yaml`. Install the reverted file as the
      deployed copy.
    - The deployed copy is `/opt/dame-curie/compose.yaml`, next to the
      deployed `scripts/instance.py`. Source: the coordinator's deploy
@@ -56,6 +56,8 @@ How to revert one change:
 | #22 | `d648323` | A malformed native tool call names the call and the exact cause. Arguments with two wrappers and one JSON string were refused; they are accepted now. | "Malformed native tool-call batch: call ..." in the log. |
 | #23 | `153caa9` | The provider log line states `input=`, `input_source=` and `cached=` tokens. First live log measurement, 1 November 2026 (not in the repository): 9,232 of 17,470 input tokens cached. | Read `cached=` to measure prompt-cache hits. |
 | #24 | `9bbf2dd` | The bot no longer runs the startup REM backfill. It re-inserted up to 500 old replies on each start with the current time, so they moved to the newest end of her history. | History in time order after a restart. |
+| #26 | `170d5b5` | No intent is read from the words of a reply. The `_PROMISE_RE` regex took "checking" in a finished reply for an "on it" promise, called the model again, and the reply posted twice (14:09 CET, 1 November 2026). `send_message` now ends the turn whatever its words. Text written beside working tool calls posts as a progress update before those calls run. Media, final and pausing calls keep the after-call rule. | An update that posts after the tools, or a reply that posts twice. A message "Stopped: the progress update could not be posted (...)". |
+| #27 | `git log --grep '(#27)'` | Prompt query embeddings have their own lane. Ollama runs two slots (`OLLAMA_NUM_PARALLEL` "2" in `compose.yaml`). Before, the query for her prompt waited behind background writes of web pages and tool records: 24.8 s on 1 November 2026. A query that takes 1 s or more logs "Query embedding took ...". | "Query embedding took" lines and the `entity_profile` time in "Prompt build" lines. Ollama memory with two slots. |
 
 ### Known open items
 
@@ -88,6 +90,24 @@ How to revert one change:
   them again.
 - **The custom JSON tool protocol** (`CUSTOM_TOOL_CALLS`) parses calls
   only from streamed responses. It is off while native calls are on.
+- **Word triggers that remain.** An inventory on 1 November 2026 found
+  9 places that act on words in her output and 13 that act on words in
+  user input. Root decides each one. Examples:
+  - `_extract_stickers_from_text` sends a sticker when a sticker name is
+    a word in her reply.
+  - `_needs_up_to_date_info` runs a web search before the model call on
+    words in the user message.
+  - `VISUAL_REFERENCE_RE` attaches earlier images on words such as
+    "image" or "look at".
+  - `_sensitive_context_text` marks a stored fact private on words such
+    as "password". This is security policy.
+- **A memory-write failure inside a progress update** stops the turn, as
+  before #26. Since #26 the update posts before the tools, so the tools
+  of that round do not run.
+- **Embedding cost.** One 6,000-character piece takes about 7 s on the
+  CPU embedder (measured on 1 November 2026). A fetched page of up to
+  12,000 characters is two pieces. A tool record embeds up to 8,000
+  characters.
 
 ## Publisher inventory update - 2026-10-03, 19:44Z
 

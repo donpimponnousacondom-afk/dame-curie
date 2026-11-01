@@ -771,7 +771,13 @@ class RAGMemoryManager:
         self.prompts_file = self.prompt_store.servers_path
         self._db: sqlite3.Connection  # always set by _init_db() in __init__
         self._lock = asyncio.Lock()
-        self._embed_semaphore = asyncio.Semaphore(1)  # ollama NUM_PARALLEL=1; extra in-flight embeds just queue and time out
+        # Two embedding lanes with one request in flight each. Background
+        # writes (messages, tool records, web pages) use _embed_semaphore.
+        # Prompt queries use _embed_query_semaphore, so they do not wait
+        # behind a queue of long background writes. Ollama runs
+        # OLLAMA_NUM_PARALLEL=2 (compose.yaml), one slot for each lane.
+        self._embed_semaphore = asyncio.Semaphore(1)
+        self._embed_query_semaphore = asyncio.Semaphore(1)
         # Self-tuning cache state (kept minimal; SQLite holds the real cache)
         self._embed_cache: dict[
             str, np.ndarray
@@ -1196,7 +1202,7 @@ class RAGMemoryManager:
 
     # ─── embedding ──────────────────────────────────────────────────
 
-    async def _embed(self, text: str) -> np.ndarray | None:
+    async def _embed(self, text: str, *, query: bool = False) -> np.ndarray | None:
         """Generate embedding via ollama, cached on disk to SQLite.
 
         Cache key includes the backend identity and media-free text. It survives bot
@@ -1261,7 +1267,10 @@ class RAGMemoryManager:
         # ─── embed (single-chunk fast path vs multi-chunk mean-pool) ───
         try:
             chunk_vecs: list[np.ndarray] = []
-            async with self._embed_semaphore:
+            lane = self._embed_query_semaphore if query else self._embed_semaphore
+            queued_at = time.monotonic()
+            async with lane:
+                lane_wait = time.monotonic() - queued_at
                 if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
                     return None
                 missing = [
@@ -1293,6 +1302,17 @@ class RAGMemoryManager:
                             data = await resp.json()
                             chunk_vecs.extend(validate_embedding_response(data, self.embed_dim))
 
+            if query and time.monotonic() - queued_at >= 1.0:
+                # Root, 1 November 2026: measure how long a prompt waits for
+                # its query embedding.
+                logger.info(
+                    "Query embedding took %.2fs (%.2fs waiting for the query lane, "
+                    "%d chunk(s), %d chars)",
+                    time.monotonic() - queued_at,
+                    lane_wait,
+                    len(chunks_to_embed),
+                    len(text),
+                )
             if not chunk_vecs:
                 return None
             if len(chunk_vecs) == 1:
@@ -1379,9 +1399,9 @@ class RAGMemoryManager:
 
         Semantic memory improves a reply but is never worth holding the
         channel response lock while a CPU-only Ollama request queues behind
-        background work. Once a request times out/fails, briefly open-circuit
-        query embedding so the other RAG searches in the same turn return
-        immediately too.
+        background work. Query embeddings use their own lane for that reason.
+        Once a request times out/fails, briefly open-circuit query embedding
+        so the other RAG searches in the same turn return immediately too.
         """
         if not EMBEDDINGS_ENABLED or not str(query or "").strip():
             return None
@@ -1390,7 +1410,7 @@ class RAGMemoryManager:
             return None
         try:
             vec = await asyncio.wait_for(
-                self._embed(query),
+                self._embed(query, query=True),
                 timeout=RAG_QUERY_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
