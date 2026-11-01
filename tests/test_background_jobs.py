@@ -1054,8 +1054,10 @@ def test_job_masks_old_tool_results_and_keeps_the_newest_rounds(tmp_path, monkey
     # keeps the newest BG_MASK_KEEP_ROUNDS.
     assert BG_MASK_KEEP_ROUNDS <= len(kept) < 2 * BG_MASK_KEEP_ROUNDS
     assert len(masked) == len(results) - len(kept) > 0
+    # The marker names the producing call (Dame Curie's request, 1 November
+    # 2026) next to the first output line.
     assert masked[0]["content"].startswith(
-        f"{BG_MASK_PREFIX} the shell result of an older step ("
+        f'{BG_MASK_PREFIX} the result of the older call shell {{"command":"true"}} ('
     )
     assert "is masked to keep the job prompt small. It began: Tool shell: ok call_" in masked[0]["content"]
     assert masked[0]["content"].endswith("Call it again only if repeating it is safe.")
@@ -1166,3 +1168,58 @@ def test_a_result_is_not_masked_when_its_marker_is_not_shorter():
             {"role": "tool", "tool_call_id": f"c{index}", "content": content},
         ]
     assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "excerpt"),
+    [
+        ('{"explanation": "why", "command": "cat index.html"}', 'shell {"command":"cat index.html"}'),
+        ({"command": "ls"}, 'shell {"command":"ls"}'),
+        ("", "shell {}"),
+        ("not json", "shell not json"),
+        ("not\n  json", "shell not json"),
+        ("null", "shell null"),
+        ("[1, 2]", "shell [1,2]"),
+        ('{"command": "' + "x" * 300 + '"}', 'shell {"command":"' + "x" * 105 + "..."),
+    ],
+)
+def test_call_excerpt_names_the_tool_and_shortens_its_arguments(arguments, excerpt):
+    from jobs import BG_MASK_CALL_CHARS, _call_excerpt
+
+    text = _call_excerpt({"id": "c1", "function": {"name": "shell", "arguments": arguments}})
+    assert text == excerpt
+    assert len(text) <= len("shell ") + BG_MASK_CALL_CHARS
+
+
+def test_a_result_kept_by_the_marker_guard_does_not_hold_the_batch():
+    # A 430-character result in round 0 stays (its marker would not be
+    # shorter). It must not count as open, or masking would run at every step.
+    from jobs import mask_old_tool_results
+
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
+
+    def add_round(index, content):
+        call = {"id": f"c{index}", "type": "function", "function": {"name": "a" * 64, "arguments": '{"command":"' + "y" * 100 + '"}'}}
+        messages.extend([
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": f"c{index}", "content": content},
+        ])
+
+    add_round(0, "f" * 200 + "\n" + "t" * 229)
+    for index in range(1, 6):
+        add_round(index, "short")
+    # 6 rounds, none open: nothing to do.
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+    for index in range(6, 9):
+        add_round(index, "short")
+    # 9 rounds, the only long result is not maskable: still nothing.
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+    add_round(9, "Tool shell: ok\n" + "z" * 3000)
+    for index in range(10, 14):
+        add_round(index, "short")
+    # Round 9 is older than the newest 4, but only 5 rounds lie between it
+    # and the newest round: the batch waits. With round 0 counted as open,
+    # round 9 would be masked at once.
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)
+    assert messages[3]["content"].startswith("f" * 200)
+    assert messages[2 + 2 * 9 + 1]["content"].startswith("Tool shell: ok")

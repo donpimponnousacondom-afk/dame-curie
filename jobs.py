@@ -76,6 +76,11 @@ JOB_SUMMARY_HEADER = "=== JOB PROGRESS SUMMARY ==="
 BG_MASK_KEEP_ROUNDS = 4
 BG_MASK_MIN_CHARS = 400
 BG_MASK_PREFIX = "[masked]"
+# The call that produced a masked result, shortened to this many characters
+# (root and Dame Curie, 1 November 2026: a bare first line is ambiguous when
+# the output starts with a header).
+BG_MASK_CALL_CHARS = 120
+
 JOB_COMPACT_PROMPT = (
     "You compact the working history of a background job so the job can "
     "continue without its older steps. Write a progress summary in plain "
@@ -141,6 +146,28 @@ def resolve_job_budgets(control: Any, config: Any) -> dict[str, int]:
     }
 
 
+def _call_excerpt(call: dict) -> str:
+    """The tool name and its arguments without ``explanation``, shortened."""
+    function = call.get("function") or {}
+    raw = function.get("arguments")
+    arguments = raw
+    if isinstance(raw, str):
+        try:
+            arguments = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError:
+            arguments = raw
+    if isinstance(arguments, dict):
+        arguments = {key: value for key, value in arguments.items() if key != "explanation"}
+    if isinstance(arguments, str) and arguments is raw:
+        # Arguments that are not JSON are shown on one line.
+        text = " ".join(arguments.split())
+    else:
+        text = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+    if len(text) > BG_MASK_CALL_CHARS:
+        text = text[: BG_MASK_CALL_CHARS - 3] + "..."
+    return f"{function.get('name') or 'tool'} {text}"
+
+
 def _render_job_rounds(groups: list[list[dict]]) -> str:
     """Plain-text transcript of job rounds for the compaction request."""
     lines: list[str] = []
@@ -171,8 +198,9 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
     ``keep_rounds``.
     The prompt prefix therefore changes once every ``keep_rounds`` steps, not
     at every step. A result shorter than BG_MASK_MIN_CHARS stays. The marker
-    keeps the first line of the result (for example "Tool shell: Error ..."),
-    so the outcome of a call stays visible. A masked result is never changed
+    names the call that produced the result (tool and shortened arguments)
+    and keeps the first line of the result, for example
+    "Tool shell: Error ...", so the outcome of a call stays visible. A masked result is never changed
     again. Returns the number of results masked by this call and the
     characters removed.
     """
@@ -186,46 +214,51 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
         # with its assistant message by that line.
         return "" if msg.get("role") == "tool" else "=== TOOL RESULTS ===\n"
 
-    def maskable(msg: dict) -> bool:
+    def marker_for(msg: dict, calls: dict[str, dict]) -> str | None:
+        """The marker for ``msg``, or None when ``msg`` is not to be masked.
+
+        A result stays when it is short, already masked, or when its marker
+        would not be shorter. Such a result is not "open", so it never holds
+        the batch trigger.
+        """
         content = msg.get("content")
         if not isinstance(content, str) or len(content) < BG_MASK_MIN_CHARS:
-            return False
-        return not content[len(head_of(msg)):].startswith(BG_MASK_PREFIX)
+            return None
+        head = head_of(msg)
+        body = content[len(head):]
+        if body.startswith(BG_MASK_PREFIX):
+            return None
+        first_line = body.split("\n", 1)[0].strip()[:200] or "(an empty line)"
+        call = calls.get(str(msg.get("tool_call_id"))) if msg.get("role") == "tool" else None
+        if call is not None:
+            what = f"the result of the older call {_call_excerpt(call)}"
+        else:
+            what = "the tool results of an older step"
+        marker = (
+            f"{head}{BG_MASK_PREFIX} {what} ({len(body):,} characters) "
+            f"is masked to keep the job prompt small. It began: {first_line} "
+            "Call it again only if repeating it is safe."
+        )
+        return marker if len(marker) < len(content) else None
 
+    plans = []
+    for group in groups:
+        calls = {str(call.get("id")): call for call in group[0].get("tool_calls") or []}
+        plans.append([(msg, marker_for(msg, calls)) for msg in group[1:]])
     first_open = next(
-        (index for index, group in enumerate(groups) if any(maskable(m) for m in group[1:])),
-        len(groups),
+        (index for index, plan in enumerate(plans) if any(marker for _msg, marker in plan)),
+        len(plans),
     )
-    if keep_rounds > 0 and len(groups) - first_open < 2 * keep_rounds:
+    if keep_rounds > 0 and len(plans) - first_open < 2 * keep_rounds:
         return 0, 0
     masked = removed = 0
-    for group in groups[: max(0, len(groups) - keep_rounds)]:
-        names = {
-            str(call.get("id")): str((call.get("function") or {}).get("name") or "tool")
-            for call in group[0].get("tool_calls") or []
-        }
-        for msg in group[1:]:
-            if not maskable(msg):
+    for plan in plans[: max(0, len(plans) - keep_rounds)]:
+        for msg, marker in plan:
+            if marker is None:
                 continue
-            head = head_of(msg)
-            content = msg["content"]
-            body = content[len(head):]
-            first_line = body.split("\n", 1)[0].strip()[:200] or "(an empty line)"
-            if msg.get("role") == "tool":
-                what = f"the {names.get(str(msg.get('tool_call_id')), 'tool')} result"
-            else:
-                what = "the tool results"
-            marker = (
-                f"{head}{BG_MASK_PREFIX} {what} of an older step ({len(body):,} characters) "
-                f"is masked to keep the job prompt small. It began: {first_line} "
-                "Call it again only if repeating it is safe."
-            )
-            if len(marker) >= len(content):
-                # The marker would not be shorter: the result stays.
-                continue
+            removed += len(msg["content"]) - len(marker)
             msg["content"] = marker
             masked += 1
-            removed += len(content) - len(marker)
     return masked, removed
 
 
