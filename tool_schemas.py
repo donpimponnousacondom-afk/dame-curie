@@ -888,11 +888,16 @@ _NATIVE_MAX_BATCH_ENVELOPE_BYTES = 40_000
 _NATIVE_MAX_ARGUMENT_DEPTH = 32
 
 
-def _native_argument_depth_is_bounded(text: str) -> bool:
-    """Reject malformed or over-nested JSON before decoding."""
+_NATIVE_MAX_ARGUMENT_DECODES = 3
+_MALFORMED = "Malformed native tool-call batch"
+_OVERSIZED = "Oversized native tool-call batch"
+
+
+def _native_argument_depth_problem(text: str) -> str:
+    """Why JSON text is unbalanced or too deep; "" when it is neither."""
     depth = 0
     quoted = escaped = False
-    for character in text:
+    for position, character in enumerate(text):
         if quoted and escaped:
             escaped = False
         elif quoted and character == "\\":
@@ -902,82 +907,116 @@ def _native_argument_depth_is_bounded(text: str) -> bool:
         elif not quoted and character in "{[":
             depth += 1
             if depth > _NATIVE_MAX_ARGUMENT_DEPTH:
-                return False
+                return f"nest deeper than {_NATIVE_MAX_ARGUMENT_DEPTH} levels"
         elif not quoted and character in "}]":
             depth -= 1
             if depth < 0:
-                return False
-    return depth == 0 and not quoted
+                return f"close an unopened bracket at character {position} (from 0)"
+    if quoted:
+        return "end inside a string"
+    if depth:
+        return f"leave {depth} open bracket{'s' if depth > 1 else ''}"
+    return ""
 
 
-def _native_argument_values_are_json_safe(value: dict) -> bool:
-    """Reject non-string keys and non-finite numbers in argument objects."""
+def _native_argument_value_problem(value: dict) -> str:
+    """Why an argument object is not plain JSON; "" when it is."""
     pending = [value]
     while pending:
         current = pending.pop()
         if isinstance(current, dict):
             if any(not isinstance(key, str) for key in current):
-                return False
+                return "hold a non-string key"
             pending.extend(current.values())
         elif isinstance(current, (list, tuple)):
             pending.extend(current)
         elif isinstance(current, float) and not math.isfinite(current):
-            return False
-    return True
+            return "hold a non-finite number"
+    return ""
+
+
+def _utf8_size(text: str, place: str, part: str = "the arguments") -> int:
+    """UTF-8 byte size of call text; a lone surrogate is a malformed call."""
+    try:
+        return len(text.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise ValueError(
+            f"{_MALFORMED}: {place}: character {error.start} (from 0) of "
+            f"{part} is not valid UTF-8"
+        ) from None
 
 
 def _parse_native_argument_json(
-    text: str, decoder: json.JSONDecoder
+    text: str, decoder: json.JSONDecoder, place: str
 ) -> object:
     """Parse one complete nesting-bounded JSON argument value."""
-    if text[:1] in {"{", "[", '"'} and not _native_argument_depth_is_bounded(
-        text
-    ):
-        raise ValueError("Malformed or oversized native tool-call batch")
+    problem = (
+        _native_argument_depth_problem(text) if text[:1] in {"{", "[", '"'} else ""
+    )
+    if problem:
+        raise ValueError(f"{_MALFORMED}: {place}: the arguments {problem}")
     try:
         parsed, end = decoder.raw_decode(text)
-    except json.JSONDecodeError:
-        raise ValueError("Malformed native tool-call batch") from None
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"{_MALFORMED}: {place}: the arguments are not valid JSON: "
+            f"{error.msg} at character {error.pos} of the decoded text (from 0)"
+        ) from None
     if text[end:].strip():
-        raise ValueError("Malformed native tool-call batch")
+        raise ValueError(
+            f"{_MALFORMED}: {place}: the arguments have text after the JSON "
+            f"value, from character {end} of the decoded text (from 0)"
+        )
     return parsed
 
 
 def _decode_native_tool_arguments(
-    raw_args: object, *, allow_oversized: bool = False
+    raw_args: object, place: str, *, allow_oversized: bool = False
 ) -> tuple[dict[str, object], int, bool]:
     """Strictly decode one JSON-object argument payload within its mode's bound."""
     if raw_args is None:
         return {}, 0, False
     if isinstance(raw_args, dict):
-        if not _native_argument_values_are_json_safe(raw_args):
-            raise ValueError("Malformed native tool-call batch")
+        problem = _native_argument_value_problem(raw_args)
+        if problem:
+            raise ValueError(f"{_MALFORMED}: {place}: the arguments {problem}")
         encoded = json.dumps(
             raw_args, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         )
-        argument_bytes = len(encoded.encode("utf-8"))
+        argument_bytes = _utf8_size(encoded, place)
         current = raw_args
     elif isinstance(raw_args, str):
-        argument_bytes = len(raw_args.encode("utf-8"))
+        argument_bytes = _utf8_size(raw_args, place)
         current = raw_args.strip().lstrip("\ufeff")
     else:
-        raise ValueError("Malformed native tool-call batch")
+        raise ValueError(
+            f"{_MALFORMED}: {place}: the arguments have type "
+            f"{type(raw_args).__name__}, not a JSON object or string"
+        )
     oversized = argument_bytes > _NATIVE_MAX_ARGUMENT_BYTES
-    if (oversized and not allow_oversized) or (
-        isinstance(raw_args, dict)
-        and not _native_argument_depth_is_bounded(encoded)
-    ):
-        raise ValueError("Malformed or oversized native tool-call batch")
+    if oversized and not allow_oversized:
+        raise ValueError(
+            f"{_OVERSIZED}: {place}: the arguments are {argument_bytes:,} bytes; "
+            f"the limit is {_NATIVE_MAX_ARGUMENT_BYTES:,}"
+        )
+    if isinstance(raw_args, dict):
+        problem = _native_argument_depth_problem(encoded)
+        if problem:
+            raise ValueError(f"{_MALFORMED}: {place}: the arguments {problem}")
     if isinstance(current, str) and not current:
         return {}, argument_bytes, oversized
 
     decoder = json.JSONDecoder()
-    for _ in range(3):
+    # Up to 3 decode or unwrap steps, then one more pass checks the object.
+    for _ in range(_NATIVE_MAX_ARGUMENT_DECODES + 1):
         if isinstance(current, str):
-            current = _parse_native_argument_json(current, decoder)
+            current = _parse_native_argument_json(current, decoder, place)
             continue
         if not isinstance(current, dict):
-            raise ValueError("Malformed native tool-call batch")
+            raise ValueError(
+                f"{_MALFORMED}: {place}: the arguments decode to type "
+                f"{type(current).__name__}, not a JSON object"
+            )
         wrapper = next(
             (
                 key
@@ -989,10 +1028,19 @@ def _decode_native_tool_arguments(
         if wrapper is not None:
             current = current[wrapper]
             continue
-        if not _native_argument_values_are_json_safe(current):
-            raise ValueError("Malformed native tool-call batch")
+        problem = _native_argument_value_problem(current)
+        if problem:
+            raise ValueError(f"{_MALFORMED}: {place}: the arguments {problem}")
         return dict(current), argument_bytes, oversized
-    raise ValueError("Malformed or oversized native tool-call batch")
+    if not isinstance(current, (dict, str)):
+        raise ValueError(
+            f"{_MALFORMED}: {place}: the arguments decode to type "
+            f"{type(current).__name__}, not a JSON object"
+        )
+    raise ValueError(
+        f"{_MALFORMED}: {place}: the arguments need more than "
+        f"{_NATIVE_MAX_ARGUMENT_DECODES} decode or unwrap steps"
+    )
 
 
 def normalize_native_tool_calls(
@@ -1002,61 +1050,96 @@ def normalize_native_tool_calls(
     if raw_calls is None:
         return []
     if not isinstance(raw_calls, list):
-        raise ValueError("Malformed native tool-call batch")
+        raise ValueError(
+            f"{_MALFORMED}: tool_calls has type {type(raw_calls).__name__}, "
+            "not list"
+        )
     if len(raw_calls) > _NATIVE_MAX_CALLS and not allow_oversized_arguments:
-        raise ValueError("Malformed or oversized native tool-call batch")
+        raise ValueError(
+            f"{_OVERSIZED}: the response has {len(raw_calls)} calls; the limit is "
+            f"{_NATIVE_MAX_CALLS}"
+        )
     normalized: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     batch_argument_bytes = 0
     batch_envelope_bytes = 0
     for i, call in enumerate(raw_calls):
+        place = f"call {i + 1} of {len(raw_calls)}"
         if not isinstance(call, dict) or call.get("type") not in (None, "function"):
-            raise ValueError("Malformed native tool-call batch")
+            raise ValueError(f"{_MALFORMED}: {place} is not a function call")
         fn_value = call.get("function")
         if fn_value is not None and not isinstance(fn_value, dict):
-            raise ValueError("Malformed native tool-call batch")
+            raise ValueError(f"{_MALFORMED}: the function of {place} is not an object")
         fn = fn_value if isinstance(fn_value, dict) else {}
-        raw_name = fn.get("name") or call.get("name")
-        if not isinstance(raw_name, str) or not raw_name.strip():
-            raise ValueError("Malformed native tool-call batch")
-        if len(raw_name.encode("utf-8")) > _NATIVE_MAX_NAME_BYTES:
-            raise ValueError("Oversized native tool-call batch")
+        raw_name = fn.get("name")
+        if raw_name is None or raw_name == "":
+            raw_name = call.get("name")
+        if raw_name is not None and not isinstance(raw_name, str):
+            raise ValueError(
+                f"{_MALFORMED}: the name of {place} has type "
+                f"{type(raw_name).__name__}, not str"
+            )
+        if not raw_name or not raw_name.strip():
+            raise ValueError(f"{_MALFORMED}: {place} has no function name")
+        if _utf8_size(raw_name, place, "the name") > _NATIVE_MAX_NAME_BYTES:
+            raise ValueError(
+                f"{_OVERSIZED}: the name of {place} is longer than "
+                f"{_NATIVE_MAX_NAME_BYTES} bytes"
+            )
         original_name = raw_name.strip()
         name = original_name[5:] if original_name.lower().startswith("tool_") else original_name
         if not name:
-            raise ValueError("Malformed native tool-call batch")
+            raise ValueError(
+                f"{_MALFORMED}: the name of {place} is only the prefix tool_"
+            )
+        place = f"{place} ({original_name!r})"
         raw_args = fn.get("arguments", call.get("arguments", {}))
         args, argument_bytes, oversized_arguments = _decode_native_tool_arguments(
-            raw_args, allow_oversized=allow_oversized_arguments
+            raw_args, place, allow_oversized=allow_oversized_arguments
         )
         batch_argument_bytes += argument_bytes
         if (
             batch_argument_bytes > _NATIVE_MAX_BATCH_ARGUMENT_BYTES
             and not allow_oversized_arguments
         ):
-            raise ValueError("Oversized native tool-call batch")
+            raise ValueError(
+                f"{_OVERSIZED}: the batch reaches {batch_argument_bytes:,} bytes of "
+                f"arguments at {place}; the limit is "
+                f"{_NATIVE_MAX_BATCH_ARGUMENT_BYTES:,}"
+            )
         raw_id = call.get("id")
         if raw_id in (None, ""):
             call_id = f"call_{i}"
         elif isinstance(raw_id, str):
             call_id = raw_id
         else:
-            raise ValueError("Malformed native tool-call batch")
-        if (
-            not call_id.strip()
-            or len(call_id.encode("utf-8")) > _NATIVE_MAX_ID_BYTES
-            or call_id in seen_ids
-        ):
-            raise ValueError("Malformed or oversized native tool-call batch")
+            raise ValueError(
+                f"{_MALFORMED}: the id of {place} has type "
+                f"{type(raw_id).__name__}, not str"
+            )
+        if not call_id.strip():
+            raise ValueError(f"{_MALFORMED}: the id of {place} is blank")
+        if _utf8_size(call_id, place, "the id") > _NATIVE_MAX_ID_BYTES:
+            raise ValueError(
+                f"{_OVERSIZED}: the id of {place} is longer than "
+                f"{_NATIVE_MAX_ID_BYTES} bytes"
+            )
+        if call_id in seen_ids:
+            raise ValueError(f"{_MALFORMED}: {place} repeats the id {call_id!r}")
         seen_ids.add(call_id)
-        batch_envelope_bytes += len(
-            json.dumps(call, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        batch_envelope_bytes += _utf8_size(
+            json.dumps(call, ensure_ascii=False, separators=(",", ":")),
+            place,
+            "the call envelope",
         )
         if (
             batch_envelope_bytes > _NATIVE_MAX_BATCH_ENVELOPE_BYTES
             and not allow_oversized_arguments
         ):
-            raise ValueError("Oversized native tool-call batch")
+            raise ValueError(
+                f"{_OVERSIZED}: the batch envelope reaches {batch_envelope_bytes:,} "
+                f"bytes at {place}; the limit is {_NATIVE_MAX_BATCH_ENVELOPE_BYTES:,}"
+            )
         normalized.append(
             {
                 "id": call_id,
