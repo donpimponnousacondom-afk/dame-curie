@@ -148,7 +148,6 @@ def foreground_bot():
     for name in (
         "_native_calls_from",
         "_usage_from",
-        "_recover_text_tool_calls",
         "_send_with_slowmode",
     ):
         setattr(bot, name, MethodType(getattr(DameCurieBot, name), bot))
@@ -300,6 +299,9 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
         return str(response), results, []
 
     bot._dispatch_tool_calls = AsyncMock(side_effect=dispatch)
+
+
+TEXT_TOOL_CALL = '{"name": "send_message", "arguments": {"content": "hola"}}'
 
 
 def tool_call(name, **arguments):
@@ -566,7 +568,9 @@ def test_real_foreground_handler_preserves_producing_call(
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "cleanup_empty":
-            responses = [ProviderResult("<system-reminder>internal</system-reminder>", metrics=first)]
+            # A tool call written as text is not executed (root, 1 November
+            # 2026: native tool calls only); it reaches Discord as text.
+            responses = [ProviderResult(TEXT_TOOL_CALL, metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "terminal":
             responses = [
@@ -580,7 +584,8 @@ def test_real_foreground_handler_preserves_producing_call(
         elif mode in {"followup", "followup_incomplete"}:
             responses = [
                 ProviderResult(
-                    '{"name":"send_message","arguments":{"content":"checking"}}',
+                    "",
+                    tool_calls=[tool_call("send_message", content="checking")],
                     metrics=first,
                 ),
                 ProviderResult("finished answer", metrics=second),
@@ -598,9 +603,6 @@ def test_real_foreground_handler_preserves_producing_call(
                     classification="output_token_limit",
                 )
                 responses[1] = incomplete
-                bot._recover_text_tool_calls = Mock(
-                    wraps=bot._recover_text_tool_calls
-                )
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "expanded_catalog_fallback":
             calls = [
@@ -665,10 +667,13 @@ def test_real_foreground_handler_preserves_producing_call(
             return
         if mode in ("limit_cleanup_empty", "cleanup_empty"):
             # Root, 1 November 2026: no cleanup removes injected context tags.
-            # The text reaches Discord as the model wrote it.
+            # No text is turned into a tool call. The text reaches Discord as
+            # the model wrote it.
             assert len(message.channel.sent) == 1
             assert message.channel.sent[0].content.startswith(
-                "<system-reminder>internal</system-reminder>"
+                TEXT_TOOL_CALL
+                if mode == "cleanup_empty"
+                else "<system-reminder>internal</system-reminder>"
             )
             return
         if mode == "native_round_limit":
@@ -720,7 +725,6 @@ def test_real_foreground_handler_preserves_producing_call(
                 assert bot._generate_response.await_count == expected_generations
             if mode == "followup_incomplete":
                 assert bot._dispatch_tool_calls.await_count == 1
-                assert bot._recover_text_tool_calls.call_count == 1
             else:
                 assert not bot._dispatch_tool_calls.await_args_list
             assert current_foreground_turn() is None
