@@ -1718,10 +1718,11 @@ DISCORD_CHAT_PROTOCOL = (
     "didn't ping you.\n"
     "Ping with exactly <@USER_ID> - no backticks, no markdown, no @Name(id).\n"
     "In that history each line starts with its time. On a user line, the speaker's "
-    "name and id follow, then optional reply and mention notes in brackets. Your own "
-    "lines hold only your text, and a run of them starts with [Dame Curie]. "
+    "name and id follow, then optional reply and mention notes in braces. Your own "
+    "lines hold your text, then an optional reply note in braces. A run of your "
+    "lines starts with [Dame Curie]. "
     "Attribute by ID, never by a similar nickname. If unsure who said it, say so.\n"
-    "The times, the Name(id) labels, [Dame Curie] and the bracketed notes are "
+    "The times, the Name(id) labels, [Dame Curie] and the notes in braces are "
     "history metadata. Never copy them into a reply.\n"
     "Your public name in this room is the per-turn 'Your name here' line "
     "(guild nick if set, otherwise your account name).\n"
@@ -15865,22 +15866,28 @@ class DameCurieBot(commands.Bot):
                     msg.get("mentions") if isinstance(msg.get("mentions"), list) else []
                 )
                 mention_bits = [
-                    f"@{item.get('name', 'unknown')}({item.get('id', 'unknown')})"
+                    f"@{str(item.get('name', 'unknown')).replace(chr(34), chr(39))}"
+                    f"({item.get('id', 'unknown')})"
                     for item in mentions[:10]
                     if isinstance(item, dict)
                 ]
                 if mention_bits:
-                    relation_bits.append("mentions " + ",".join(mention_bits))
-                relation = f" [{'; '.join(relation_bits)}]" if relation_bits else ""
+                    relation_bits.append('mentions="' + ", ".join(mention_bits) + '"')
+                relation = (
+                    " {" + ", ".join(relation_bits) + "}" if relation_bits else ""
+                )
                 header = f"[{stamp}] " if stamp else ""
                 content_str = str(msg.get("content", ""))[:2500]
-                # Your own past lines carry only what you wrote. User lines
-                # get a 'Name(id) [relation]:' prefix so the model knows who
-                # is speaking. 1 November 2026: the reply, mention and
-                # autonomy notes on your own lines are removed. The model
-                # copied them into new replies, for example "[reply_to=@SirRooT]".
+                # User lines get a 'Name(id) {notes}:' prefix so the model
+                # knows who is speaking. Your own lines get your text, then
+                # the reply note in braces: in a busy channel it shows which
+                # message each reply answered. Your mentions are already in
+                # your text. Root, 1 November 2026: braces, not square
+                # brackets; the model copied "[reply_to=@SirRooT]" before.
                 if is_self:
                     line = f"{header}{content_str}"
+                    if reply_bit:
+                        line += " {" + reply_bit + "}"
                 else:
                     line = (
                         f"{header}{author_label}{relation}: {content_str}"

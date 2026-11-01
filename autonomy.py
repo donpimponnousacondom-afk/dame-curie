@@ -171,23 +171,26 @@ def _visible_message_content(
 
 
 def _reply_relation_bit(msg: dict) -> str | None:
-    """`replying to Name(id) "short quote"` for transcript and planner lines.
+    """`replying to="Name(id)", quote="short quote"` for history notes.
 
     Not `reply_to=`: that is the name of a send_message argument, and the
-    model copied the history tag into its replies as text."""
+    model copied the history tag into its replies as text. Root, 1 November
+    2026: notes go in braces, not square brackets, so they do not mix with
+    the other bracketed labels in the context."""
     if not msg.get("reply_to_author"):
         return None
-    reply_label = str(msg.get("reply_to_author"))
+    # A double quote inside a value would end the quoted value early.
+    reply_label = str(msg.get("reply_to_author")).replace('"', "'")
     reply_id = str(msg.get("reply_to_author_id") or "")
     if msg.get("reply_to_self"):
         reply_label = "you/Dame Curie"
-    bit = f"replying to {reply_label}"
     if reply_id:
-        bit += f"({reply_id})"
+        reply_label += f"({reply_id})"
+    bit = f'replying to="{reply_label}"'
     quoted = " ".join(str(msg.get("reply_to_content") or "").split())[:80]
     if quoted:
         quoted = quoted.replace('"', "'")
-        bit += f' "{quoted}"'
+        bit += f', quote="{quoted}"'
     return bit
 
 
@@ -264,8 +267,8 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
     if (bot_id and author_id == bot_id) or (
         not author_id and bot_name and author == bot_name
     ):
-        # Own lines carry no reply or mention notes: the model copied them
-        # into new messages. See _build_messages in bot.py.
+        # Planner memory: own lines carry no notes. Root, 1 November 2026:
+        # autonomous mode is almost never used, so this stays minimal.
         label = f"You/Dame Curie({author_id})" if author_id else "You/Dame Curie"
         return f"{prefix}{label}: {str(msg.get('content', ''))[:600]}"
     else:
@@ -279,13 +282,14 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
         relation_bits.append(reply_bit)
     mentions = msg.get("mentions") if isinstance(msg.get("mentions"), list) else []
     mention_bits = [
-        f"@{item.get('name', 'unknown')}({item.get('id', 'unknown')})"
+        f"@{str(item.get('name', 'unknown')).replace(chr(34), chr(39))}"
+        f"({item.get('id', 'unknown')})"
         for item in (mentions or [])[:10]
         if isinstance(item, dict)
     ]
     if mention_bits:
-        relation_bits.append("mentions " + ",".join(mention_bits))
-    relation = f" [{'; '.join(relation_bits)}]" if relation_bits else ""
+        relation_bits.append('mentions="' + ", ".join(mention_bits) + '"')
+    relation = " {" + ", ".join(relation_bits) + "}" if relation_bits else ""
     return f"{prefix}{label}{relation}: {str(msg.get('content', ''))[:600]}"
 
 

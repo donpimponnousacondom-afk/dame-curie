@@ -128,8 +128,8 @@ def test_static_prefix_and_transcript_are_identical_across_turns():
         m for m in second if "<previous_conversation>" in str(m["content"])
     ]
     # 1 November 2026: the model copied "[reply_to=@SirRooT]" from its own
-    # history lines into a reply. Its own lines carry only its text; user
-    # lines keep the relation note without the send_message argument name.
+    # history lines into a reply. Notes now go in braces and never use the
+    # send_message argument name. Own lines keep only the reply note.
     history = next(
         m["content"]
         for m in first
@@ -138,10 +138,12 @@ def test_static_prefix_and_transcript_are_identical_across_turns():
     lines = history.splitlines()
     stamp = _format_context_timestamp(old, relative=False)
     assert lines[1] == (
-        f'[{stamp}] alice(456) [replying to you/Dame Curie(1) "earlier"; '
-        "mentions @Bob(2)]: hi"
+        f'[{stamp}] alice(456) {{replying to="you/Dame Curie(1)", quote="earlier", '
+        'mentions="@Bob(2)"}: hi'
     )
-    assert lines[2] == f"[Dame Curie] [{stamp}] hey"
+    assert lines[2] == (
+        f'[Dame Curie] [{stamp}] hey {{replying to="SirRooT(456)", quote="hi"}}'
+    )
     assert "reply_to" not in history
 
 
