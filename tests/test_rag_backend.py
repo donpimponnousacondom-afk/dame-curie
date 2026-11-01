@@ -986,9 +986,13 @@ def test_turn_query_vector_waits_when_not_warm(memory, monkeypatch, window):
         ("inf", "recall_warm_seconds must be a finite number of seconds, not 'inf'"),
     ],
 )
-def test_turn_query_vector_names_a_bad_window_value(memory, monkeypatch, value, error):
+@pytest.mark.parametrize("cached", [False, True])
+def test_turn_query_vector_names_a_bad_window_value(memory, monkeypatch, value, error, cached):
     DameCurieBot, bot, message = _recall_bot(memory, recall_warm_seconds=value)
     install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+    if cached:
+        # A cached message must not hide the bad value.
+        asyncio.run(memory._embed("first message"))
 
     async def run():
         await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")

@@ -14257,17 +14257,15 @@ class DameCurieBot(commands.Bot):
         if memory is None or not text.strip() or not hasattr(memory, "cached_embedding"):
             return None
         if not memory.embeddings_enabled():
-            # ENABLE_RAG off is a chosen mode, not a failure: no vector, no warning.
+            # ENABLE_RAG off is a chosen mode, not a failure: no vector, no
+            # warning. recall_warm_seconds has no effect then and is not read.
             return None
         key = (
             str(getattr(message.channel, "id", "") or ""),
             str(getattr(message.author, "id", "") or ""),
         )
-        cached = memory.cached_embedding(text)
-        if cached is not None:
-            DameCurieBot._store_warm_query_vector(self, key, cached)
-            logger.info("Memory recall: the query vector of this message is cached")
-            return None
+        # Parse the window before the cache check, so a bad value fails on
+        # every turn and not only on uncached ones.
         raw_window = self._control.get("recall_warm_seconds", 900)
         try:
             window = float(raw_window or 0)
@@ -14279,6 +14277,11 @@ class DameCurieBot(commands.Bot):
             raise ValueError(
                 f"recall_warm_seconds must be a finite number of seconds, not {raw_window!r}"
             )
+        cached = memory.cached_embedding(text)
+        if cached is not None:
+            DameCurieBot._store_warm_query_vector(self, key, cached)
+            logger.info("Memory recall: the query vector of this message is cached")
+            return None
         warm = (getattr(self, "_warm_query_vectors", None) or {}).get(key)
         if warm is not None and window > 0:
             age = time.monotonic() - warm[1]
