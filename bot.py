@@ -1302,18 +1302,21 @@ def _beside_text_is_early_update(
 ) -> bool:
     """True when text beside tool calls posts as an update before they run.
 
-    The names come from the validated batch. Each call must be a known tool
-    and outside _NO_EARLY_UPDATE_CALL_NAMES, and one call must return output,
-    so the model is called again after the batch. An alias or an unknown
-    name keeps the after-call rule.
+    The names come from the strictly validated batch. Each call must be a
+    registered tool outside _NO_EARLY_UPDATE_CALL_NAMES, and one call must
+    return output, so the model is called again after the batch. An alias,
+    a plugin tool, a disabled tool or an unknown name keeps the after-call
+    rule. This check does not test permissions or the breaker: a refused
+    call returns its error to the model in the next response.
     """
     if not str(text or "").strip() or not calls:
         return False
     try:
-        normalized = normalize_native_tool_calls(calls, allow_oversized_arguments=True)
+        # Strict validation: a malformed batch, or one over a call or size
+        # limit, posts no update. Dispatch then handles that batch and
+        # reports its failure as it does without this check.
+        normalized = normalize_native_tool_calls(calls)
     except ValueError:
-        # Dispatch validates the same batch next and stops the turn with
-        # this exact cause; no update posts for a batch that does not run.
         return False
     names = [call["name"] for call in normalized]
     # shell with files= delivers those files, like a media tool.
@@ -1323,7 +1326,7 @@ def _beside_text_is_early_update(
     )
     return (
         not shell_delivers
-        and all(name in known_tools or tool_schemas_returns_result(name) for name in names)
+        and all(name in known_tools for name in names)
         and not set(names) & _NO_EARLY_UPDATE_CALL_NAMES
         and any(tool_schemas_returns_result(name) for name in names)
     )
@@ -11925,10 +11928,11 @@ class DameCurieBot(commands.Bot):
             # are not discarded on the next follow-up turn.
             conversation_tail: list[dict] = []
             pending_native = native_calls
-            # Set when the model produced a follow-up response after a round
-            # that called send_message next to a tool that returns output.
-            # The final path then posts that follow-up answer instead of
-            # treating the earlier send_message as the whole reply.
+            # Set when the model produced a follow-up response with text or
+            # tool calls. After a round that called send_message next to a
+            # tool that returns output, the final path then posts that
+            # follow-up answer instead of treating the send_message as the
+            # whole reply.
             followup_turn_ran = False
             # Set when Discord refused an early progress update.
             update_refused = False
@@ -11962,7 +11966,9 @@ class DameCurieBot(commands.Bot):
                 last_model_text = str(response or "")
                 round_had_calls = bool(pending_native)
                 early_update = _beside_text_is_early_update(
-                    pending_native, response, self.tools
+                    pending_native,
+                    response,
+                    set(self.tools) - set(self._control.get("disabled_tools", []) or []),
                 )
                 if early_update:
                     try:
@@ -11970,8 +11976,8 @@ class DameCurieBot(commands.Bot):
                             posted_updates.append(str(response).strip())
                     except discord.HTTPException as exc:
                         # The calls do not run: a channel that refuses the
-                        # update refuses the reply too. The stop notice
-                        # states the cause.
+                        # update refuses the reply too. The log and, when
+                        # Discord accepts it, the stop notice state the cause.
                         update_refused = True
                         loop_end = f"the progress update could not be posted ({exc})"
                         logger.warning("Tool loop stopped: %s", loop_end)
@@ -12309,7 +12315,8 @@ class DameCurieBot(commands.Bot):
                     logger.warning("Stop notice could not be sent: %s", exc)
             if update_refused:
                 # The refused text announced calls that did not run; it is
-                # not the reply. The stop notice above states the cause.
+                # not the reply. The stop notice above states the cause when
+                # Discord accepts it; the log always has the cause.
                 return
             # If this generation already called send_message, leftover
             # assistant text is not a second reply. A later follow-up

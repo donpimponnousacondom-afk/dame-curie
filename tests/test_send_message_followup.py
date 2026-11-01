@@ -151,12 +151,14 @@ KNOWN_TOOLS = {
         ([_native_call("no_response", {})], "I will stay quiet.", False),
         ([_native_call("web_search", {}), _native_call("wait", {}, "c2")], "brb", False),
         ([_native_call("web_search", {}), _native_call("sleep", {}, "c2")], "night", False),
-        # An alias or unknown name keeps the after-call rule.
+        # An alias, a plugin or an unknown name keeps the after-call rule.
         ([_native_call("web_search", {}), _native_call("message", {}, "c2")], "Looking it up.", False),
         # A media delivery is the reply; its text keeps the after-call rule.
         ([_native_call("image_generator", {})], "Here is your image.", False),
         ([_native_call("web_search", {}), _native_call("send_media", {}, "c2")], "Here it is.", False),
-        # A malformed batch posts nothing; dispatch states its exact cause.
+        # A batch over the call limit posts nothing; dispatch refuses it.
+        ([_native_call("web_search", {}, f"c{index}") for index in range(11)], "Looking it up.", False),
+        # A malformed batch posts nothing; dispatch then reports its failure.
         (["not a call"], "Looking it up.", False),
         ([{"id": "c1", "function": "web_search"}], "Looking it up.", False),
         # No text, or no tool calls: nothing to post as an update.

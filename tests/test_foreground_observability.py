@@ -388,7 +388,7 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
     "mode",
     [
         "plain", "beside_update", "repeat_update", "beside_no_response", "ack_alone", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
-        "beside_final_send", "beside_silent", "early_update_refused",
+        "beside_final_send", "beside_silent", "early_update_refused", "beside_disabled",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -534,6 +534,7 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [ProviderResult("plain answer", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "beside_update":
+            bot.tools = {"web_search": SimpleNamespace()}
             responses = [
                 ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
                 ProviderResult("Here is the answer.", metrics=second),
@@ -548,12 +549,29 @@ def test_real_foreground_handler_preserves_producing_call(
                 return await dispatch_effect(*args, **kwargs)
 
             bot._dispatch_tool_calls.side_effect = recording_dispatch
+        elif mode == "beside_disabled":
+            bot.tools = {"web_search": SimpleNamespace()}
+            bot._control["disabled_tools"] = ["web_search"]
+            responses = [
+                ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("Search is off here.", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+            dispatch_effect = bot._dispatch_tool_calls.side_effect
+            seen_at_dispatch = []
+
+            async def recording_dispatch(*args, **kwargs):
+                seen_at_dispatch.append([sent.content for sent in message.channel.sent])
+                return await dispatch_effect(*args, **kwargs)
+
+            bot._dispatch_tool_calls.side_effect = recording_dispatch
         elif mode == "beside_silent":
             responses = [
                 ProviderResult("nice one", tool_calls=[tool_call("react", emoji="fire")], metrics=first),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "early_update_refused":
+            bot.tools = {"web_search": SimpleNamespace()}
             responses = [
                 ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
             ]
@@ -624,11 +642,9 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [
                 ProviderResult(
                     "",
-                        tool_calls=[
-                        # Root, 1 November 2026: a final reply that contains
-                        # "checking" was taken for a promise and posted twice.
-                        tool_call("send_message", content=HELLO_REPLY),
-                    ],
+                    # Root, 1 November 2026: a final reply that contains
+                    # "checking" was taken for a promise and posted twice.
+                    tool_calls=[tool_call("send_message", content=HELLO_REPLY)],
                     metrics=first,
                 )
             ]
@@ -702,6 +718,12 @@ def test_real_foreground_handler_preserves_producing_call(
             assert bot._generate_response.await_count == 1
             assert len(message.channel.sent) == 1
             assert message.channel.sent[0].content.startswith("on it")
+            return
+        if mode == "beside_disabled":
+            # A disabled tool gives no early update: the channel was empty
+            # when the dispatch started.
+            assert seen_at_dispatch[0] == []
+            assert message.channel.sent[-1].content.startswith("Search is off here.")
             return
         if mode == "beside_silent":
             # Text next to only silent calls is the reply: a quote-reply with

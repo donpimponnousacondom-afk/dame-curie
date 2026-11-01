@@ -57,7 +57,7 @@ def test_no_tool_is_in_both_contract_sets():
     assert not both, f"a tool cannot both end the turn and return a result: {both}"
 
 
-def test_tools_without_an_early_update_exist():
+def test_early_update_exclusions_are_real_tools():
     # Root, 1 November 2026: text beside these calls keeps the after-call
     # rule. A renamed tool must not fall out of the set without notice.
     from bot import _NO_EARLY_UPDATE_CALL_NAMES
