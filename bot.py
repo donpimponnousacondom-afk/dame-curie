@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import traceback
+from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1282,43 +1283,53 @@ def _live_self_identity_line(user, guild=None, bot_name: str | None = None) -> s
     )
 
 
-# An ack-only send_message whose text promises work that has not run yet.
-# Deliberately narrow: it must be SHORT (a real answer is not an ack) and it
-# must read as a promise. A long reply that happens to contain "working on"
-# is a real answer and must stay terminal, or every turn would double-generate.
-_PROMISE_VERB = (
-    r"build|make|create|check|look|get|do|write|set|start|spin|generate|"
-    r"run|fix|add|update|deploy|test|grab|pull|draft|put"
+# Root, 1 November 2026: the bot reads no intent from the words of a reply.
+# The structure of a response decides: send_message is the answer that ends
+# the turn, and text written beside working tool calls is a progress update
+# that posts before those calls run. A response that also ends or pauses the
+# turn, or delivers media, keeps the rule that reads the tool results after
+# the calls (the media or the message is the reply there).
+_NO_EARLY_UPDATE_CALL_NAMES = frozenset(
+    {
+        "send_message", "no_response", "sleep", "wait",
+        "send_file", "send_media", "send_meme", "image_generator", "tts",
+    }
 )
-_PROMISE_RE = re.compile(
-    # Bare acknowledgements.
-    r"\b(?:on it|working on it|checking(?: that)?(?: now)?|let me check|"
-    r"give me a sec|one sec|hold on|two secs|"
-    # "I'll set that up", "gonna spin it up", "let me go build this" - the
-    # intent phrase, then up to two filler words, then a doing-verb.
-    rf"(?:i'?ll|i will|gonna|going to|let me|lemme)\s+(?:\w+\s+){{0,2}}?(?:{_PROMISE_VERB})|"
-    # Present progressive with no result yet.
-    r"(?:building|making|creating|generating|starting|setting|spinning|"
-    r"drafting|putting)\b[^.!?]{0,40}\b(?:it|that|this|now|up)|"
-    r"looking into (?:it|that|this))\b",
-    re.I,
-)
-_PROMISE_MAX_CHARS = 200
 
 
-def _promises_followup_work(result: str) -> bool:
-    """True when a send_message result is a bare "on it…" promise.
+def _beside_text_is_early_update(
+    calls: list | None, text: str | None, known_tools: Collection[str]
+) -> bool:
+    """True when text beside tool calls posts as an update before they run.
 
-    The turn must loop back so the announced work actually happens. Anything
-    long enough to be a substantive reply is treated as a real answer.
+    The names come from the strictly validated batch. Each call must be a
+    registered tool outside _NO_EARLY_UPDATE_CALL_NAMES, and one call must
+    return output, so the model is called again after the batch. An alias,
+    a plugin tool, a disabled tool or an unknown name keeps the after-call
+    rule. This check does not test permissions or the breaker: a refused
+    call returns its error to the model in the next response.
     """
-    idx = result.find("__MESSAGE_SENT__")
-    if idx < 0:
+    if not str(text or "").strip() or not calls:
         return False
-    sent = result[idx + len("__MESSAGE_SENT__") :].strip()
-    if not sent or len(sent) > _PROMISE_MAX_CHARS:
+    try:
+        # Strict validation: a malformed batch, or one over a call or size
+        # limit, posts no update. Dispatch then handles that batch and
+        # reports its failure as it does without this check.
+        normalized = normalize_native_tool_calls(calls)
+    except ValueError:
         return False
-    return bool(_PROMISE_RE.search(sent))
+    names = [call["name"] for call in normalized]
+    # shell with files= delivers those files, like a media tool.
+    shell_delivers = any(
+        call["name"] == "shell" and str((call["arguments"] or {}).get("files") or "").strip()
+        for call in normalized
+    )
+    return (
+        not shell_delivers
+        and all(name in known_tools for name in names)
+        and not set(names) & _NO_EARLY_UPDATE_CALL_NAMES
+        and any(tool_schemas_returns_result(name) for name in names)
+    )
 
 
 def _plugin_result_needs_followup(result: str) -> bool:
@@ -1374,44 +1385,14 @@ def _tool_results_need_followup(tool_results: list[str]) -> bool:
         return True
 
     # Second pass: no follow-up tool in the batch, so a terminal action
-    # (send_message or explicit no_response) genuinely ends the turn.
-    # TTS uses __TTS_SENT__ and must NOT be treated as terminal - without
-    # the FOLLOWUP_TOOL_NAMES hit it would only reach this pass via an
-    # explicit no_response anyway.
+    # (send_message or explicit no_response) ends the turn.
     for result in tool_results:
         if "__MESSAGE_SENT__" in result:
-            # A send_message that only promises future work is NOT terminal.
-            # The protocol tells the model not to ack, but it still emits
-            # "on it…" alone and plans to act "next turn". There is no next
-            # turn: send_message is not in RESULT_TOOL_NAMES, so with no
-            # other tool in the batch this returns False, the dispatch loop
-            # breaks, and the promise is all the user ever gets. Loop back
-            # once so the model actually runs the thing it just announced.
-            if _promises_followup_work(result):
-                return True
             return False
         if result.startswith("Tool no_response:") and "__NO_RESPONSE__" in result:
             return False
 
     return False
-
-
-def _only_promise_results(tool_results: list[str]) -> bool:
-    """True when the batch is nothing but ack-only send_message promises.
-
-    Used to bound the extra loop: a batch that also ran a real tool already
-    loops via FOLLOWUP_TOOL_NAMES and must not consume the promise budget.
-    """
-    saw_promise = False
-    for result in tool_results:
-        if "__MESSAGE_SENT__" in result:
-            if not _promises_followup_work(result):
-                return False
-            saw_promise = True
-            continue
-        if result.strip():
-            return False
-    return saw_promise
 
 
 def _should_skip_plaintext_after_send(
@@ -11947,26 +11928,22 @@ class DameCurieBot(commands.Bot):
             # are not discarded on the next follow-up turn.
             conversation_tail: list[dict] = []
             pending_native = native_calls
-            # Set when the model produced a SECOND-turn response after a
-            # send_message already published a placeholder. We use it
-            # below to skip the "send_message is terminal, no plain-text
-            # reply" early-return when the LLM reconsidered its first
-            # "checking…" placeholder and emitted a real answer on the
-            # followup turn. Without this, the placeholder (e.g. "checking…")
-            # is the only thing the user ever sees - the substantive 300+
-            # char answer is silently dropped. .normal.man observed this in
-            # #maxwell-the-bot 2026-08-02 with "Mat Dickie" / "you a fan"
-            # - see PM2 out.log 01:25:17→28 for the canonical reproduction.
+            # Set when the model produced a follow-up response with text or
+            # tool calls. After a round that called send_message next to a
+            # tool that returns output, the final path then posts that
+            # follow-up answer instead of treating the send_message as the
+            # whole reply.
             followup_turn_ran = False
-            promise_followups = 0
+            # Set when Discord refused an early progress update.
+            update_refused = False
             tool_results: list[str] = []
             loop_end = ""
             # The provider text of the newest model response. The loop uses
             # it to detect an empty final answer and a repeated update.
             last_model_text = str(response or "")
             final_without_calls = False
-            # Text the model writes next to tool calls, posted at once as a
-            # progress update so the chat sees the work as it happens.
+            # Text the model writes next to tool calls, posted as a progress
+            # update before those calls run, so the chat sees the work start.
             posted_updates: list[str] = []
             # Media from tools stays attached for the rest of the turn, in a
             # message after the tool results. The turn media cap (12 items,
@@ -11988,6 +11965,23 @@ class DameCurieBot(commands.Bot):
                     break
                 last_model_text = str(response or "")
                 round_had_calls = bool(pending_native)
+                early_update = _beside_text_is_early_update(
+                    pending_native,
+                    response,
+                    set(self.tools) - set(self._control.get("disabled_tools", []) or []),
+                )
+                if early_update:
+                    try:
+                        if await DameCurieBot._post_progress_update(self, message, response):
+                            posted_updates.append(str(response).strip())
+                    except discord.HTTPException as exc:
+                        # The calls do not run: a channel that refuses the
+                        # update refuses the reply too. The log and, when
+                        # Discord accepts it, the stop notice state the cause.
+                        update_refused = True
+                        loop_end = f"the progress update could not be posted ({exc})"
+                        logger.warning("Tool loop stopped: %s", loop_end)
+                        break
                 response, tool_results, iter_images = await self._dispatch_tool_calls(
                     message,
                     response,
@@ -12013,6 +12007,7 @@ class DameCurieBot(commands.Bot):
                 all_tool_results.extend(tool_results)
                 if (
                     round_had_calls
+                    and not early_update
                     and str(response or "").strip()
                     and _tool_results_need_followup(tool_results)
                     and not any(
@@ -12111,14 +12106,6 @@ class DameCurieBot(commands.Bot):
                     break
                 if not _tool_results_need_followup(tool_results):
                     break
-                # An ack-only turn ("on it…") loops back exactly once, so the
-                # promised work runs. Without this guard a model that keeps
-                # acknowledging would ping-pong until max_iters.
-                if _only_promise_results(tool_results):
-                    if promise_followups >= 1:
-                        logger.info("ack-only send_message repeated; not looping again")
-                        break
-                    promise_followups += 1
                 # Native path: append assistant tool_calls + role=tool messages.
                 # XML path: append freeform assistant text + synthetic user results.
                 if native_followup:
@@ -12326,10 +12313,15 @@ class DameCurieBot(commands.Bot):
                         )
                 except discord.HTTPException as exc:
                     logger.warning("Stop notice could not be sent: %s", exc)
+            if update_refused:
+                # The refused text announced calls that did not run; it is
+                # not the reply. The stop notice above states the cause when
+                # Discord accepts it; the log always has the cause.
+                return
             # If this generation already called send_message, leftover
             # assistant text is not a second reply. A later follow-up
-            # with real text and no new send_message still posts (the
-            # "checking…" placeholder case).
+            # with real text and no new send_message still posts (for
+            # example after send_message next to a [returns output] tool).
             if incomplete_error is None and _should_skip_plaintext_after_send(
                 tool_results, all_tool_results, followup_turn_ran, response
             ):

@@ -7,8 +7,10 @@ generation as send_message posted a second Discord reply ping.
 
 import json
 
+import pytest
+
 from bot import (
-    _only_promise_results,
+    _beside_text_is_early_update,
     _should_skip_plaintext_after_send,
     _tool_results_need_followup,
 )
@@ -91,86 +93,94 @@ def test_no_message_sent_falls_through_normally():
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-30: "on it" / "working on it" that never actually did the work.
-#
-# FULL_TOOL_PROTOCOL invites a fast acknowledgement alongside a slow tool, but
-# the model routinely emitted the ack as the ONLY tool call and planned to act
-# "next turn". send_message is not in RESULT_TOOL_NAMES, so an ack-only batch
-# made _tool_results_need_followup() return False, the dispatch loop broke, and
-# the promise was the entire response. These lock in the loop-back.
+# Root, 1 November 2026: the bot reads no intent from the words of a reply.
+# A word regex once took "a man checking whether..." in a finished reply for
+# an "on it" promise, called the model again and posted the reply twice.
+# send_message ends the turn. A progress update is text beside tool calls.
 # ---------------------------------------------------------------------------
 
+HELLO_REPLY = (
+    'Present, Sir. You called "hello" like a man checking whether the '
+    "machine is still plugged in."
+)
 
-def test_ack_only_send_message_loops_back_so_work_actually_runs():
-    for text in (
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        HELLO_REPLY,
         "on it...",
         "working on it…",
         "checking that now",
         "one sec",
         "i'll build that for you",
-        "gonna set that up now",
-        "going to run that",
-        "lemme check real quick",
-        "let me go grab that",
-        "building it now",
-        "generating that image now",
-        "drafting it up now",
         "looking into it",
-        "two secs",
-    ):
-        results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
-        assert _tool_results_need_followup(results) is True, text
-        assert _only_promise_results(results) is True, text
-
-
-def test_real_answer_mentioning_work_stays_terminal():
-    # A substantive reply must NOT re-generate, even though it contains
-    # "working on". Length is the discriminator.
-    answer = (
-        "yeah I've been working on that codebase for a while - the dispatch "
-        "loop lives in bot.py and the tool contract is stamped in tool_schemas, "
-        "so the follow-up turn is what feeds results back to the model. "
-        "the short version is that it loops until a terminal tool lands."
-    )
-    results = [f"Tool send_message: __MESSAGE_SENT__\n{answer}"]
-    assert _tool_results_need_followup(results) is False
-    assert _only_promise_results(results) is False
-
-
-def test_ordinary_short_reply_is_not_treated_as_a_promise():
-    for text in (
         "yeah",
-        "lol",
-        "done",
-        "nope, that's wrong",
-        "42",
-        "that's built already",
-        "the build is done and deployed",
-        "created: https://example.com",
-        "yeah I set that up last week",
         "done - live at https://x.dev",
-    ):
-        results = [f"Tool send_message: __MESSAGE_SENT__\n{text}"]
-        assert _tool_results_need_followup(results) is False, text
-        assert _only_promise_results(results) is False, text
+    ],
+)
+def test_send_message_ends_the_turn_whatever_its_words(text):
+    assert _tool_results_need_followup([f"Tool send_message: __MESSAGE_SENT__\n{text}"]) is False
 
 
-def test_ack_plus_real_tool_does_not_consume_the_promise_budget():
-    # This batch already loops via FOLLOWUP_TOOL_NAMES (shell), so it
-    # must not be classified as ack-only - otherwise the one-shot promise
-    # budget would be spent on a turn that was already going to loop.
+KNOWN_TOOLS = {
+    "web_search", "shell", "fetch_url", "react", "send_message", "no_response",
+    "wait", "sleep", "image_generator", "send_file", "send_media",
+}
+
+
+@pytest.mark.parametrize(
+    ("calls", "text", "is_update"),
+    [
+        ([_native_call("web_search", {})], "Looking it up.", True),
+        ([_native_call("shell", {}), _native_call("fetch_url", {}, "c2")], "Pulling the logs.", True),
+        # Validated names: the tool_ prefix and the flat form are the same tool.
+        ([_native_call("tool_web_search", {})], "Looking it up.", True),
+        ([{"id": "c1", "name": "web_search", "arguments": "{}"}], "Looking it up.", True),
+        # shell with files= delivers those files: no early update.
+        ([_native_call("shell", {"command": "ls", "files": "out.zip"})], "Here is the archive.", False),
+        ([_native_call("shell", {"command": "ls", "files": ""})], "Listing it.", True),
+        # Only silent tools: the model is not called again, so the text is the
+        # reply and goes through the normal reply path.
+        ([_native_call("react", {})], "nice", False),
+        # A final or pausing call in the response: the text is no update.
+        ([_native_call("web_search", {}), _native_call("send_message", {}, "c2")], "Looking it up.", False),
+        ([_native_call("web_search", {}), _native_call("tool_send_message", {}, "c2")], "Looking it up.", False),
+        ([_native_call("web_search", {}), {"id": "c2", "name": "send_message", "arguments": "{}"}], "Looking it up.", False),
+        ([_native_call("send_message", {})], "Here you go.", False),
+        ([_native_call("no_response", {})], "I will stay quiet.", False),
+        ([_native_call("web_search", {}), _native_call("wait", {}, "c2")], "brb", False),
+        ([_native_call("web_search", {}), _native_call("sleep", {}, "c2")], "night", False),
+        # An alias, a plugin or an unknown name keeps the after-call rule.
+        ([_native_call("web_search", {}), _native_call("message", {}, "c2")], "Looking it up.", False),
+        # A media delivery is the reply; its text keeps the after-call rule.
+        ([_native_call("image_generator", {})], "Here is your image.", False),
+        ([_native_call("web_search", {}), _native_call("send_media", {}, "c2")], "Here it is.", False),
+        # A batch over the call limit posts nothing; dispatch refuses it.
+        ([_native_call("web_search", {}, f"c{index}") for index in range(11)], "Looking it up.", False),
+        # A malformed batch posts nothing; dispatch then reports its failure.
+        (["not a call"], "Looking it up.", False),
+        ([{"id": "c1", "function": "web_search"}], "Looking it up.", False),
+        # No text, or no tool calls: nothing to post as an update.
+        ([_native_call("web_search", {})], "  ", False),
+        ([], "plain answer", False),
+    ],
+)
+def test_beside_text_posts_early_only_next_to_working_calls(calls, text, is_update):
+    assert _beside_text_is_early_update(calls, text, KNOWN_TOOLS) is is_update
+
+
+def test_ack_plus_real_tool_still_loops_for_the_result():
     results = [
         "Tool send_message: __MESSAGE_SENT__\non it...",
         "Tool shell: harness output",
     ]
     assert _tool_results_need_followup(results) is True
-    assert _only_promise_results(results) is False
 
 
 def test_no_response_stays_terminal():
     results = ["Tool no_response: __NO_RESPONSE__"]
     assert _tool_results_need_followup(results) is False
-    assert _only_promise_results(results) is False
 
 
 def test_error_still_forces_followup():

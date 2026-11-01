@@ -285,6 +285,8 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
                 )
             elif function["name"] == "no_response":
                 results.append("Tool no_response: __NO_RESPONSE__")
+            elif function["name"] == "react":
+                results.append("Tool react: Reacted")
             else:
                 results.append("Tool web_search: synthetic result")
                 if native_continuations:
@@ -302,6 +304,10 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
 
 
 TEXT_TOOL_CALL = '{"name": "send_message", "arguments": {"content": "hola"}}'
+HELLO_REPLY = (
+    'Present, Sir. You called "hello" like a man checking whether the '
+    "machine is still plugged in."
+)
 
 
 def tool_call(name, **arguments):
@@ -381,7 +387,8 @@ def test_foreground_raw_update_preserves_file_and_final_reply(
 @pytest.mark.parametrize(
     "mode",
     [
-        "plain", "beside_update", "repeat_update", "beside_no_response", "ack_then_empty", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "plain", "beside_update", "repeat_update", "beside_no_response", "ack_alone", "cleanup_empty", "blank_followup", "limit_cleanup_empty", "terminal", "followup", "followup_incomplete", "empty_followup", "incomplete",
+        "beside_final_send", "beside_silent", "early_update_refused", "beside_disabled",
         "expanded_catalog_fallback",
         "incomplete_partial", "incomplete_truncated", "reasoning_only", "incomplete_empty",
         "configured_output_64000", "configured_output_omitted",
@@ -527,9 +534,68 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [ProviderResult("plain answer", metrics=first)]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "beside_update":
+            bot.tools = {"web_search": SimpleNamespace()}
             responses = [
                 ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
                 ProviderResult("Here is the answer.", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+            # Record what the channel showed when each dispatch started.
+            dispatch_effect = bot._dispatch_tool_calls.side_effect
+            seen_at_dispatch = []
+
+            async def recording_dispatch(*args, **kwargs):
+                seen_at_dispatch.append([sent.content for sent in message.channel.sent])
+                return await dispatch_effect(*args, **kwargs)
+
+            bot._dispatch_tool_calls.side_effect = recording_dispatch
+        elif mode == "beside_disabled":
+            bot.tools = {"web_search": SimpleNamespace()}
+            bot._control["disabled_tools"] = ["web_search"]
+            responses = [
+                ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+                ProviderResult("Search is off here.", metrics=second),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+            dispatch_effect = bot._dispatch_tool_calls.side_effect
+            seen_at_dispatch = []
+
+            async def recording_dispatch(*args, **kwargs):
+                seen_at_dispatch.append([sent.content for sent in message.channel.sent])
+                return await dispatch_effect(*args, **kwargs)
+
+            bot._dispatch_tool_calls.side_effect = recording_dispatch
+        elif mode == "beside_silent":
+            responses = [
+                ProviderResult("nice one", tool_calls=[tool_call("react", emoji="fire")], metrics=first),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+        elif mode == "early_update_refused":
+            bot.tools = {"web_search": SimpleNamespace()}
+            responses = [
+                ProviderResult("Looking it up now.", tool_calls=[tool_call("web_search", query="news")], metrics=first),
+            ]
+            bot._generate_response = AsyncMock(side_effect=responses)
+            channel_send = message.channel.send
+            refused = []
+
+            async def refusing_send(content=None, **kwargs):
+                if not refused:
+                    refused.append(content)
+                    raise discord.HTTPException(
+                        SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions"
+                    )
+                return await channel_send(content, **kwargs)
+
+            message.channel.send = refusing_send
+        elif mode == "beside_final_send":
+            responses = [
+                ProviderResult(
+                    "Here you go.",
+                    tool_calls=[tool_call("web_search", query="news"), tool_call("send_message", content="the answer")],
+                    metrics=first,
+                ),
+                ProviderResult("", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
         elif mode == "repeat_update":
@@ -538,7 +604,7 @@ def test_real_foreground_handler_preserves_producing_call(
                 ProviderResult("Here it is.", metrics=second),
             ]
             bot._generate_response = AsyncMock(side_effect=responses)
-        elif mode == "ack_then_empty":
+        elif mode == "ack_alone":
             responses = [
                 ProviderResult("", tool_calls=[tool_call("send_message", content="on it")], metrics=first),
                 ProviderResult("", metrics=second),
@@ -576,7 +642,9 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [
                 ProviderResult(
                     "",
-                    tool_calls=[tool_call("send_message", content="done")],
+                    # Root, 1 November 2026: a final reply that contains
+                    # "checking" was taken for a promise and posted twice.
+                    tool_calls=[tool_call("send_message", content=HELLO_REPLY)],
                     metrics=first,
                 )
             ]
@@ -585,7 +653,9 @@ def test_real_foreground_handler_preserves_producing_call(
             responses = [
                 ProviderResult(
                     "",
-                    tool_calls=[tool_call("send_message", content="checking")],
+                    # send_message next to a [returns output] tool: the
+                    # result brings the model back for a follow-up answer.
+                    tool_calls=[tool_call("send_message", content="checking"), tool_call("web_search", query="test")],
                     metrics=first,
                 ),
                 ProviderResult("finished answer", metrics=second),
@@ -639,11 +709,47 @@ def test_real_foreground_handler_preserves_producing_call(
             await DameCurieBot._handle_message(bot, message)
         assert flushed_turns == [None]
         flag = "empty final response after an earlier delivery"
-        if mode == "ack_then_empty":
-            # An acknowledgement followed by an empty final answer is flagged.
-            assert flag in caplog.text
+        # The empty answer after the final send of "beside_final_send" is
+        # flagged so its rate can be measured.
+        assert (flag in caplog.text) is (mode == "beside_final_send")
+        if mode == "ack_alone":
+            # send_message ends the turn whatever its words: no second model
+            # call follows an "on it".
+            assert bot._generate_response.await_count == 1
+            assert len(message.channel.sent) == 1
+            assert message.channel.sent[0].content.startswith("on it")
             return
-        assert flag not in caplog.text
+        if mode == "beside_disabled":
+            # A disabled tool gives no early update: the channel was empty
+            # when the dispatch started.
+            assert seen_at_dispatch[0] == []
+            assert message.channel.sent[-1].content.startswith("Search is off here.")
+            return
+        if mode == "beside_silent":
+            # Text next to only silent calls is the reply: a quote-reply with
+            # the footer, from one model call.
+            assert bot._generate_response.await_count == 1
+            assert len(message.channel.sent) == 1
+            assert message.channel.sent[0].content.startswith("nice one")
+            assert message.channel.sent[0].content.endswith(FOOTER_MARKER)
+            assert "reference" in message.channel.sent[0].kwargs
+            return
+        if mode == "early_update_refused":
+            # Discord refused the update: no tool ran, and the stop notice
+            # states the cause.
+            assert refused == ["Looking it up now."]
+            assert not bot._dispatch_tool_calls.await_args_list
+            assert [sent.content for sent in message.channel.sent] == [
+                "Stopped: the progress update could not be posted "
+                "(403 Forbidden (error code: 0): Missing Permissions)."
+            ]
+            return
+        if mode == "beside_final_send":
+            # Text beside a final send_message is no update; the answer posts once.
+            assert bot._generate_response.await_count == 2
+            assert len(message.channel.sent) == 1
+            assert message.channel.sent[0].content.startswith("the answer")
+            return
         if mode == "beside_no_response":
             # A chosen silence stays silent: no progress update, no notice.
             assert message.channel.sent == []
@@ -654,7 +760,9 @@ def test_real_foreground_handler_preserves_producing_call(
             assert [sent.content for sent in message.channel.sent] == ["Here it is."]
             return
         if mode == "beside_update":
-            # Text next to tool calls is posted at once, then the final reply.
+            # Text next to tool calls is posted before the calls run, then the
+            # final reply.
+            assert seen_at_dispatch[0] == ["Looking it up now."]
             assert message.channel.sent[0].content == "Looking it up now."
             assert message.channel.sent[1].content.startswith("Here is the answer.")
             assert len(message.channel.sent) == 2
