@@ -44,6 +44,21 @@ QUERY_VECTOR_OVERRIDE: ContextVar[tuple[str, np.ndarray] | None] = ContextVar(
     "dame_curie_query_vector_override", default=None
 )
 
+# Failures inside memory searches for one prompt build. The bot sets a
+# list; rag_search appends one line per failure, and the bot shows the
+# lines to the model (root, 1 November 2026).
+SEARCH_ERRORS: ContextVar[list[str] | None] = ContextVar(
+    "dame_curie_search_errors", default=None
+)
+
+
+def _report_search_error(line: str) -> None:
+    """Log a memory search failure and add it to the prompt-build list."""
+    logger.warning("Memory search: %s", line)
+    errors = SEARCH_ERRORS.get()
+    if errors is not None:
+        errors.append(line)
+
 # ─── constants ────────────────────────────────────────────────────────
 
 # Embedding backend. The default is a local Ollama serving
@@ -1481,6 +1496,11 @@ class RAGMemoryManager:
         override = QUERY_VECTOR_OVERRIDE.get()
         if override is not None and override[0] == query:
             return override[1]
+        # A cached vector needs no embedder, so the pause below does not
+        # apply to it.
+        cached = self.cached_embedding(query)
+        if cached is not None:
+            return cached
         now = time.monotonic()
         if now < self._query_embed_disabled_until:
             return None
@@ -3327,11 +3347,16 @@ class RAGMemoryManager:
                     meta = json.loads(row["metadata"] or "{}")
                     entry.update(meta)
                 except Exception as e:
-                    logger.debug("Bad metadata JSON on row %s: %s", row["id"], e)
+                    _report_search_error(
+                        f"memory row {row['id']} has unreadable metadata ({type(e).__name__}: {e}); "
+                        "the row is used without it"
+                    )
                 results.append(entry)
             except Exception as e:
                 # One unusable row must not kill the whole search result set.
-                logger.debug("Skipping unreadable search row: %s", e)
+                _report_search_error(
+                    f"a memory row could not be read and is left out ({type(e).__name__}: {e})"
+                )
                 continue
 
         # Sort by decayed score (not raw cosine) so recent-but-slightly-less-
@@ -3384,7 +3409,10 @@ class RAGMemoryManager:
                             filtered.append(c)
                         candidates = filtered
             except Exception as e:
-                logger.debug(f"negative exclusion skipped: {e}")
+                _report_search_error(
+                    f"the filter for downvoted memories failed ({type(e).__name__}: {e}); "
+                    "downvoted memories can appear in this prompt"
+                )
 
         # ─── done ────────────────────────────────────────────────────
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)

@@ -378,6 +378,22 @@ class _FailingMemory(_Memory):
             raise ValueError("bad web row")
         return []
 
+    async def get_relevant_shared_context(self, **kwargs):
+        if "shared" in self.fail:
+            raise RuntimeError("shared store locked")
+        return []
+
+    @property
+    def graph(self):
+        if "graph" not in self.fail:
+            return None
+
+        class _Graph:
+            def prompt_block(self, **kwargs):
+                raise KeyError("node")
+
+        return _Graph()
+
 
 import pytest  # noqa: E402
 
@@ -387,15 +403,30 @@ import pytest  # noqa: E402
     [
         ({"entity"}, "- the facts about this person could not be loaded (RuntimeError: entity store locked)"),
         ({"entity_recall"}, "- the relevance search for this person's facts failed (OSError: disk)"),
-        ({"ltm"}, "- long-term memory could not be loaded (RuntimeError: vector table missing)"),
+        ({"ltm"}, "- the long-term memory and older-message sections could not be built (RuntimeError: vector table missing)"),
+        ({"shared"}, "- cross-context facts could not be loaded (RuntimeError: shared store locked)"),
+        ({"graph"}, "- the knowledge graph block could not be built (KeyError: 'node')"),
+        ({"inbox"}, "- the inbox notices could not be loaded (OSError: inbox file unreadable)"),
         ({"web"}, "- cached web results could not be loaded (ValueError: bad web row)"),
     ],
 )
 def test_prompt_build_failures_reach_the_model_with_their_cause(fail, line):
     # Root, 1 November 2026: the model sees harness failures, so it does
     # not guess why memory is missing and can tell root.
-    bot = _bot(_FailingMemory(fail), {"long_term_memory_enabled": True})
+    bot = _bot(
+        _FailingMemory(fail),
+        {"long_term_memory_enabled": True, "cross_context_enabled": "shared" in fail},
+    )
     bot.config = SimpleNamespace()
+    bot._is_admin = lambda user_id: False
+    if "inbox" in fail:
+
+        class _Inbox:
+            async def load_items(self):
+                raise OSError("inbox file unreadable")
+
+        bot.inbox = _Inbox()
+        bot._append_inbox_dynamic = DameCurieBot._append_inbox_dynamic.__get__(bot)
     prompt = _prompt(bot)
     assert "Harness failures while this prompt was built" in prompt
     assert line in prompt

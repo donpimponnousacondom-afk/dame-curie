@@ -1137,8 +1137,9 @@ def test_cold_turn_without_a_vector_reports_the_gap_to_the_prompt(memory, monkey
     assert len(gaps) == 1
     assert gaps[0].startswith("memory search did not run for this message (the embedding endpoint is paused for ")
     assert gaps[0].endswith(
-        "long-term memories, older messages, cached web results and the relevance "
-        "ranking of this person's facts are missing from this prompt"
+        "older messages, cached web results and the relevance ranking of "
+        "long-term memories and of this person's facts are missing from "
+        "this prompt; the most recent long-term memories still appear"
     )
 
 
@@ -1151,3 +1152,55 @@ def test_entity_recall_failure_is_returned_with_the_profile(memory, monkeypatch)
     assert profile["recall_errors"] == [
         "the relevance search for this person's facts failed (OSError: disk)"
     ]
+
+
+def test_a_cached_vector_is_served_during_the_query_pause(memory, monkeypatch):
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    stored = asyncio.run(memory._embed("cached query"))
+    memory._query_embed_disabled_until = rag.time.monotonic() + 60
+    memory._query_embed_pause_cause = "a query embedding returned no vector"
+    assert np.array_equal(asyncio.run(memory._embed_for_query("cached query")), stored)
+    assert asyncio.run(memory._embed_for_query("uncached query")) is None
+    assert len(transport.calls) == 1
+
+
+def test_search_row_failures_reach_the_prompt_build_list(memory, monkeypatch):
+    blob = rag._embedding_to_blob(np.array(vector(), dtype=np.float32))
+    insert(memory, row_id="bad-meta", text="a durable synthetic fact", blob=blob, backend=memory.embedding_backend)
+    memory._db.execute("UPDATE vectors SET metadata='{broken' WHERE id='bad-meta'")
+    install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    errors = []
+
+    async def run():
+        rag.SEARCH_ERRORS.set(errors)
+        return await memory.rag_search("a durable synthetic fact", kinds=["ltm"], min_similarity=0.0)
+
+    rows = asyncio.run(run())
+    assert [row["id"] for row in rows] == ["bad-meta"]
+    assert len(errors) == 1
+    assert errors[0].startswith("memory row bad-meta has unreadable metadata (JSONDecodeError: ")
+    assert errors[0].endswith("the row is used without it")
+
+
+def test_a_failed_refresh_is_named_in_the_next_warm_prompt(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+
+    async def run():
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        install_transport(monkeypatch, Reply({}, 503))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        for _ in range(20):
+            await asyncio.sleep(0)
+        gaps = []
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "third message", gaps=gaps)
+        return warm, gaps
+
+    warm, gaps = asyncio.run(run())
+    assert warm is not None
+    assert len(gaps) == 1
+    assert gaps[0].startswith(
+        "the query vector of the previous message could not be computed "
+        "(the embedding endpoint is paused for "
+    )
+    assert "memory recall is ranked for a message " in gaps[0]
