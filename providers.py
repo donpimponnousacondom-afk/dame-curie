@@ -2364,8 +2364,18 @@ class OpenAICompatibleProvider:
                         "total_tokens": metrics.input_tokens + metrics.output_tokens,
                     }
                     self._last_usage = dict(usage)
+                    # Root, 1 November 2026: prompt-cache hits must be measurable.
+                    # OpenAI-style providers report them in prompt_tokens_details.
+                    raw_usage = result.get("usage")
+                    raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
+                    cache_details = raw_usage.get("prompt_tokens_details")
+                    cached_tokens = (
+                        reported_count(cache_details, "cached_tokens")
+                        if isinstance(cache_details, dict)
+                        else None
+                    )
                     logger.info(
-                        "Provider timing done endpoint=%s status=%s headers_ms=%.1f total_ms=%.1f content_chars=%s tool_calls=%s tokens=%s",
+                        "Provider timing done endpoint=%s status=%s headers_ms=%.1f total_ms=%.1f content_chars=%s tool_calls=%s tokens=%s input=%s cached=%s",
                         endpoint.name,
                         resp.status,
                         headers_ms,
@@ -2373,6 +2383,8 @@ class OpenAICompatibleProvider:
                         len(content or ""),
                         len(message.get("tool_calls") or []),
                         usage["total_tokens"],
+                        usage["prompt_tokens"],
+                        "not reported" if cached_tokens is None else cached_tokens,
                     )
                     incident.capture("Provider request recovered after upstream failures")
                     return ChatCompletionMessage(message, metrics=metrics, usage=usage)

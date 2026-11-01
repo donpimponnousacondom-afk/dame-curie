@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -173,10 +174,18 @@ def test_upstream_error_labels_are_allowlisted_and_bounded():
     "content_type",
     ["application/json", "Application/JSON; charset=utf-8", "application/problem+json"],
 )
-def test_http200_json_response_overrides_stream_request(content_type):
+def test_http200_json_response_overrides_stream_request(content_type, caplog):
+    caplog.set_level(logging.INFO, logger="providers")
     provider = OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6, extra_body={"stream": True})
     provider.available = True
-    body = {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+    body = {
+        "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+        "usage": {"prompt_tokens": 120, "completion_tokens": 5},
+    }
+    # Prompt-cache hits are logged when the provider reports them.
+    cache_reported = content_type == "application/json"
+    if cache_reported:
+        body["usage"]["prompt_tokens_details"] = {"cached_tokens": 96}
     response = StreamResponse([json.dumps(body).encode()], content_type)
     provider._session = FakeSession(response)
     result = asyncio.run(
@@ -185,6 +194,8 @@ def test_http200_json_response_overrides_stream_request(content_type):
     assert result == "hello"
     assert response.json_calls == 1
     assert provider._session.payloads[0]["stream"] is True
+    cached = "cached=96" if cache_reported else "cached=not reported"
+    assert f"tokens=125 input=120 {cached}" in caplog.text
 
 
 @pytest.mark.parametrize("prefix", [[], [CONTENT]])
