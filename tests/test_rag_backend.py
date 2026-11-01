@@ -905,8 +905,6 @@ def test_query_vector_override_serves_only_its_own_text(memory, monkeypatch):
     assert np.array_equal(same, warm)
     assert other is not None and not np.array_equal(other, warm)
     assert len(transport.calls) == 1
-    # The override stays inside the task context that set it.
-    assert rag.QUERY_VECTOR_OVERRIDE.get() is None
 
 
 def test_cached_embedding_reads_the_cache_without_a_request(memory, monkeypatch):
@@ -980,16 +978,24 @@ def test_turn_query_vector_waits_when_not_warm(memory, monkeypatch, window):
     assert len(transport.calls) == 2
 
 
-def test_turn_query_vector_names_a_bad_window_value(memory, monkeypatch):
-    DameCurieBot, bot, message = _recall_bot(memory, recall_warm_seconds="soon")
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [
+        ("soon", "recall_warm_seconds must be a number of seconds, not 'soon'"),
+        ("nan", "recall_warm_seconds must be a finite number of seconds, not 'nan'"),
+        ("inf", "recall_warm_seconds must be a finite number of seconds, not 'inf'"),
+    ],
+)
+def test_turn_query_vector_names_a_bad_window_value(memory, monkeypatch, value, error):
+    DameCurieBot, bot, message = _recall_bot(memory, recall_warm_seconds=value)
     install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
 
     async def run():
         await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
-        await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
 
-    with pytest.raises(ValueError, match="recall_warm_seconds must be a number of seconds, not 'soon'"):
+    with pytest.raises(ValueError) as raised:
         asyncio.run(run())
+    assert str(raised.value) == error
 
 
 def test_turn_query_vector_uses_the_cache_without_a_request(memory, monkeypatch, caplog):
@@ -1058,3 +1064,23 @@ def test_a_second_build_in_one_task_drops_a_stale_override(memory, monkeypatch):
     warm, after = asyncio.run(run())
     assert warm is not None
     assert after is None
+
+
+def test_turn_query_vector_is_silent_when_embeddings_are_off(memory, monkeypatch, caplog):
+    DameCurieBot, bot, message = _recall_bot(memory)
+    monkeypatch.setattr(rag, "EMBEDDINGS_ENABLED", False)
+    caplog.set_level("INFO")
+    assert asyncio.run(DameCurieBot._prepare_turn_query_vector(bot, message, "a message")) is None
+    assert "Memory recall" not in caplog.text
+
+
+def test_query_pause_names_its_cause(memory, monkeypatch):
+    async def never(_text, *, query=False):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(rag, "RAG_QUERY_TIMEOUT_SECONDS", 0.25)
+    monkeypatch.setattr(memory, "_embed", never)
+    assert asyncio.run(memory._embed_for_query("slow query")) is None
+    gap = memory.query_embedding_gap()
+    assert gap.startswith("query embedding is paused for ")
+    assert gap.endswith("s because a query embedding timed out after 0.25s")

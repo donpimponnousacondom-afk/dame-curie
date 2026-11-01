@@ -14256,6 +14256,9 @@ class DameCurieBot(commands.Bot):
         # Test doubles of the memory store have no cache; the real store has.
         if memory is None or not text.strip() or not hasattr(memory, "cached_embedding"):
             return None
+        if not memory.embeddings_enabled():
+            # ENABLE_RAG off is a chosen mode, not a failure: no vector, no warning.
+            return None
         key = (
             str(getattr(message.channel, "id", "") or ""),
             str(getattr(message.author, "id", "") or ""),
@@ -14272,6 +14275,10 @@ class DameCurieBot(commands.Bot):
             raise ValueError(
                 f"recall_warm_seconds must be a number of seconds, not {raw_window!r}"
             ) from exc
+        if not math.isfinite(window):
+            raise ValueError(
+                f"recall_warm_seconds must be a finite number of seconds, not {raw_window!r}"
+            )
         warm = (getattr(self, "_warm_query_vectors", None) or {}).get(key)
         if warm is not None and window > 0:
             age = time.monotonic() - warm[1]

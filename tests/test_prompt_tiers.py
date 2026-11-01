@@ -304,6 +304,9 @@ def test_a_warm_turn_builds_its_prompt_without_waiting_for_the_embedder():
         def cached_embedding(self, text):
             return None
 
+        def embeddings_enabled(self):
+            return True
+
         def query_embedding_gap(self):
             return "test embedder never answers"
 
@@ -335,12 +338,15 @@ def test_a_warm_turn_builds_its_prompt_without_waiting_for_the_embedder():
         messages = await asyncio.wait_for(
             DameCurieBot._build_messages(bot, _message(), LONG_TURN), timeout=5
         )
+        # The reset ran in this task: the override is gone after the build.
+        assert rag_memory.QUERY_VECTOR_OVERRIDE.get() is None
+        # Let the background refresh start.
+        await asyncio.sleep(0)
         return "\n".join(str(m.get("content") or "") for m in messages)
 
     prompt = asyncio.run(run())
     assert [name for name, _ in memory.searches] == ["entity", ("ltm",), ("message",), "web"]
     assert all(vector is warm_vector for _, vector in memory.searches)
     # Only the background refresh asked the embedder.
-    assert memory.embedder_calls <= 1
+    assert memory.embedder_calls == 1
     assert "Memory recall in this prompt is ranked for the previous message" in prompt
-    assert rag_memory.QUERY_VECTOR_OVERRIDE.get() is None
