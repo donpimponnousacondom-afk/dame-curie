@@ -14806,12 +14806,12 @@ class DameCurieBot(commands.Bot):
     def _self_repetition_note(self, memory: list[dict] | None) -> str:
         """Tell him when he has been opening every message the same way.
 
-        Repetition inside one message is cleaned up after generation
-        (`_sanitize_visible_reply`). This is the other half: the same catchphrase
-        opening six messages running. No single message is wrong, so nothing
-        downstream can catch it, and the model does not notice the pattern in its
-        own transcript - it reads its last reply as evidence of what it sounds
-        like and does it again, harder.
+        Repetition inside one message reaches Discord as written (root,
+        1 November 2026). This note covers repetition across messages: the
+        same catchphrase opening six messages running. No single message is
+        wrong, so nothing downstream can catch it, and the model does not
+        notice the pattern in its own transcript - it reads its last reply as
+        evidence of what it sounds like and does it again, harder.
 
         Only fires on an actual streak, and names the phrase rather than giving
         general advice, because "vary your language" changes nothing and "you
@@ -15966,11 +15966,10 @@ class DameCurieBot(commands.Bot):
                         + "\n</previous_conversation>",
                     }
                 )
-        # Self-repetition across turns. The scrubber in _sanitize_visible_reply
-        # collapses a run inside one message, but it cannot see that the last
-        # six messages all opened with the same "jajaja" - that is a pattern
-        # only visible over the transcript, and the model reliably fails to
-        # notice it in its own history. So it gets told.
+        # Self-repetition across turns: the last six messages can all open
+        # with the same "jajaja". That pattern is only visible over the
+        # transcript, and the model fails to notice it in its own history.
+        # So it gets told.
         echo_note = DameCurieBot._self_repetition_note(self, memory)
         if echo_note:
             dynamic_parts.append(echo_note)
