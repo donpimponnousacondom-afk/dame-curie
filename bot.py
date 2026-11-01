@@ -1028,11 +1028,7 @@ def _is_unknown_reference_error(exc: Exception) -> bool:
     return False
 
 
-# Names the defensive sanitizer (strip_tool_payload_leaks) recognizes as tool
-# tags, so it can scrub any <tool:name>...</tool:name> or pipe-form leaks a
-# misbehaving model drops into visible text even though we're native-only now.
-# XML tool DISPATCH is gone; this set is ONLY for leak scrubbing. If you add a
-# tool, add its name here so a leaked tag for it still gets cleaned.
+# Tool names that text tool-call recovery (_recover_text_tool_calls) accepts.
 # (reasoning_log is intentionally absent - reasoning lives inside every tool's
 # `explanation` param now, not as a standalone tool.)
 KNOWN_TOOL_NAMES: frozenset[str] = frozenset(KNOWN_TOOLS) | frozenset(
@@ -1045,526 +1041,16 @@ KNOWN_TOOL_NAMES: frozenset[str] = frozenset(KNOWN_TOOLS) | frozenset(
 )
 
 
-def _find_xml_tag_end(text: str, start: int) -> int:
-    quote_char = ""
-    escaped = False
-    for i in range(start + 1, len(text)):
-        ch = text[i]
-        if quote_char:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == quote_char:
-                quote_char = ""
-            continue
-        if ch in {'"', "'"} and text[start:i].rstrip().endswith("="):
-            quote_char = ch
-        elif ch == ">":
-            return i
-    return -1
-
-
-def _fenced_code_ranges(text: str) -> list[tuple[int, int]]:
-    return [match.span() for match in re.finditer(r"```.*?```", text or "", re.DOTALL)]
-
-
-def _in_ranges(index: int, ranges: list[tuple[int, int]]) -> bool:
-    return any(start <= index < end for start, end in ranges)
-
-
-def _parse_xml_open_tag(raw_tag: str) -> tuple[str | None, str, bool]:
-    inner = raw_tag[1:-1].strip()
-    if not inner or inner.startswith("/"):
-        return None, "", False
-    self_closing = inner.endswith("/")
-    if self_closing:
-        inner = inner[:-1].rstrip()
-    function_match = re.match(
-        r"function\s*=\s*([A-Za-z_]\w*)(?:\s+(.*))?$", inner, re.DOTALL | re.IGNORECASE
-    )
-    if function_match:
-        return function_match.group(1), function_match.group(2) or "", self_closing
-    tool_alias_match = re.match(
-        r"tool:([A-Za-z_]\w*)(?:['\"]?:[A-Za-z_]\w*)?(?:\s+(.*))?$",
-        inner,
-        re.DOTALL | re.IGNORECASE,
-    )
-    if tool_alias_match:
-        name = tool_alias_match.group(1)
-        if name and name.lower().startswith("tool_"):
-            name = name[5:]
-        return name, tool_alias_match.group(2) or "", self_closing
-    match = re.match(r"(?:tool:)?([A-Za-z_]\w*)(?:\s+(.*))?$", inner, re.DOTALL)
-    if not match:
-        return None, "", False
-    name = match.group(1)
-    attrs = match.group(2) or ""
-    # Normalize common model mistakes like <tool_send_message> or tool_send_foo into send_message
-    if name and name.lower().startswith("tool_"):
-        name = name[5:]
-    return name, attrs, self_closing
-
-
-def _find_tool_close(text: str, name: str, start: int) -> re.Match | None:
-    # Prefer named closes (</tool:name>, </name>, </tool_name>). Only fall back to
-    # bare </tool>/</function> when no named close exists - otherwise a bare tag
-    # inside a body (e.g. file content / HTML) closes early and steals later tools.
-    n = re.escape(name)
-    tn = re.escape("tool_" + name)
-    tcn = re.escape("tool:" + name)
-    named_re = re.compile(
-        rf"</\s*(?:tool[:_])?(?:{n}|{tn}|{tcn})\s*>",
-        re.IGNORECASE,
-    )
-    named = named_re.search(text, start)
-    if named:
-        return named
-    bare_re = re.compile(r"</\s*(?:function|tool|tool_call)\s*>", re.IGNORECASE)
-    return bare_re.search(text, start)
-
-
-UNTERMINATED_TOOL_STOP_RE = re.compile(
-    r"<\|end\|>|<environment_details\b|<system-reminder\b", re.IGNORECASE
-)
-PIPE_TOOL_RE = re.compile(
-    r"<\|tool:([A-Za-z_]\w*)\s*([^>]*)>(.*?)(?:<\|/tool:\1\s*>|<\|end\|>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-PIPE_TOOL_CALL_RE = re.compile(
-    r"<\|tool_call_begin\|>\s*([A-Za-z_]\w*)\|>(.*?)(?:<\|tool_call_end\|>|<\|end\|>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-# Catch common model-specific pipe-delimited tool tokens like <|tool_send_message|>content<|/tool_send_message|>
-GENERIC_PIPE_TOOL_RE = re.compile(
-    r"<\|tool[:_]([A-Za-z_]\w*)\|>(.*?)(?=<\|[^|]*\|>|<\|/tool[:_]\1\s*\|>|<\|end[^|]*\|>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-ARTIFACT_BLOCK_RE = re.compile(
-    r"<(?:system-reminder|environment_details)\b[^>]*>.*?(?:</(?:system-reminder|environment_details)>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-PIPE_MARKER_RE = re.compile(
-    r"<\|/?(?:tool[:_][A-Za-z_]\w*|tool_call_begin|tool_call_end|end|tool_response|begin_of_text|end_of_text|start_header_id|end_header_id)\|?>",
-    re.IGNORECASE,
-)
-LEAKED_TOOL_CALL_RE = re.compile(r"</?\s*(?:tool_call|function)\s*>", re.IGNORECASE)
-# Some models (or fine-tunes) wrap final replies in <message>...</message>
-# that should never be shown to users.
-LEAKED_MESSAGE_TAG_RE = re.compile(r"</?\s*message\s*>", re.IGNORECASE)
-# Aggressive remover for pipe-style special tokens (these are not full XML blocks with bodies).
-# Full XML tool blocks (even malformed <tool_send_xxx>) are handled via _iter range removal in strip_tool_payload_leaks.
-TOKEN_ARTIFACT_RE = re.compile(
-    r"<\|/?[^|]*tool[^|]*\|?>",
-    re.IGNORECASE,
-)
-# DeepSeek V4 DSML tool markup. Logged leak 2026-08-12 in post-your-slop:
-#   <｜｜DSML｜｜invoke name="send_message">
-#   <｜｜DSML｜｜parameter name="reasoning" string="true">...
-# ASCII <|DSML|> and fullwidth ｜ variants both show up.
-_DSML_INVOKE_BLOCK_RE = re.compile(
-    r"<invoke\b[^>]*>.*?(?:</invoke\s*>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-_DSML_PARAMETER_BLOCK_RE = re.compile(
-    r"<parameter\b[^>]*>.*?(?:</parameter\s*>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-_DSML_WRAPPED_INVOKE_RE = re.compile(
-    r"<[^>]*DSML[^>]*invoke[^>]*>.*?(?:</[^>]*DSML[^>]*invoke[^>]*>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-_DSML_WRAPPED_PARAMETER_RE = re.compile(
-    r"<[^>]*DSML[^>]*parameter[^>]*>.*?(?:</[^>]*DSML[^>]*parameter[^>]*>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-_DSML_TAG_RE = re.compile(r"</?[^>]{0,40}DSML[^>]{0,160}>", re.IGNORECASE)
-
-# Bare tool-name + <arg>key</arg>value</arg> dumps. Logged leak 2026-08-14:
-#   send_message<arg>reasoning</arg>…</arg><arg>content</arg>ну ладно…</arg>
-_ARG_PAIR_RE = re.compile(
-    r"<arg>\s*([A-Za-z_]\w*)\s*</arg>(.*?)</arg>",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _strip_arg_protocol_leaks(text: str) -> str:
-    """Strip knownTool<arg>key</arg>value</arg> sequences from visible text.
-
-    send_message keeps the inner content so a leaked blob still delivers the
-    reply. Every other tool is dropped entirely.
-    """
-    cleaned = str(text or "")
-    if "<arg>" not in cleaned.lower():
-        return cleaned
-    names = sorted(KNOWN_TOOL_NAMES, key=len, reverse=True)
-    name_alt = "|".join(re.escape(n) for n in names)
-    opener = re.compile(
-        rf"(?<![A-Za-z0-9_])({name_alt})"
-        r"((?:<arg>\s*[A-Za-z_]\w*\s*</arg>.*?</arg>)+)",
-        re.IGNORECASE | re.DOTALL,
-    )
-
-    def _repl(match: re.Match) -> str:
-        name = match.group(1).lower()
-        body = match.group(2)
-        if name != "send_message":
-            return ""
-        content = ""
-        for key, value in _ARG_PAIR_RE.findall(body):
-            if key.lower() == "content":
-                content = value
-        return content
-
-    cleaned = opener.sub(_repl, cleaned)
-    # Orphan <arg>…</arg> pairs left after a partial tool name strip.
-    cleaned = _ARG_PAIR_RE.sub("", cleaned)
-    return cleaned
-
-
-def _unwrap_openai_text_part(text: str) -> str:
-    """Collapse a leaked OpenAI content-part JSON object/array into its text.
-
-    Models (and some provider adapters) emit the wire format
-    ``{"type":"text","text":""}`` as the visible reply. Empty text is a leak;
-    non-empty text is the actual message.
-    """
-    raw = str(text or "").strip()
-    if not raw or raw[0] not in "{[":
-        return text
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return text
-
-    def _one(part) -> str | None:
-        if not isinstance(part, dict):
-            return None
-        keys = {str(k).lower() for k in part}
-        if keys <= {"type", "text"} and "text" in part:
-            typ = str(part.get("type") or "text").lower()
-            if typ in {"text", ""}:
-                return str(part.get("text") or "")
-        return None
-
-    if isinstance(parsed, dict):
-        inner = _one(parsed)
-        return inner if inner is not None else text
-    if isinstance(parsed, list) and parsed:
-        parts = [_one(p) for p in parsed]
-        if all(p is not None for p in parts):
-            return "".join(parts)
-    return text
-
-
-_DSML_INVOKE_NAME_RE = re.compile(
-    r"""\bname\s*=\s*['"]([^'"]+)['"]""",
-    re.IGNORECASE,
-)
-_DSML_CONTENT_PARAM_RE = re.compile(
-    r"<[^>]*parameter[^>]*\bname\s*=\s*['\"]content['\"][^>]*>(.*?)</[^>]*parameter[^>]*>",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _replace_dsml_invoke(match: re.Match) -> str:
-    """Keep send_message content; drop every other DSML invoke block."""
-    block = match.group(0)
-    name_m = _DSML_INVOKE_NAME_RE.search(block)
-    name = (name_m.group(1) if name_m else "").strip().lower()
-    if name != "send_message":
-        return ""
-    contents = [m.group(1).strip() for m in _DSML_CONTENT_PARAM_RE.finditer(block)]
-    return contents[-1] if contents else ""
-
-
-def _strip_dsml_tool_leaks(text: str) -> str:
-    """Drop DeepSeek DSML dumps; keep leaked send_message content as the reply."""
-    cleaned = str(text or "")
-    before = cleaned
-    cleaned = _DSML_WRAPPED_INVOKE_RE.sub(_replace_dsml_invoke, cleaned)
-    cleaned = _DSML_INVOKE_BLOCK_RE.sub(_replace_dsml_invoke, cleaned)
-    cleaned = _DSML_WRAPPED_PARAMETER_RE.sub("", cleaned)
-    cleaned = _DSML_PARAMETER_BLOCK_RE.sub("", cleaned)
-    cleaned = _DSML_TAG_RE.sub("", cleaned)
-    if cleaned != before:
-        logger.warning(
-            "Stripped DeepSeek DSML tool leak (%d chars)",
-            len(before) - len(cleaned),
-        )
-        leftover = cleaned.strip()
-        names = sorted(KNOWN_TOOL_NAMES, key=len, reverse=True)
-        name_alt = "|".join(re.escape(n) for n in names)
-        if leftover and re.fullmatch(name_alt, leftover, flags=re.IGNORECASE):
-            cleaned = ""
-        else:
-            cleaned = re.sub(
-                rf"^(?:{name_alt})\s*\n+",
-                "",
-                leftover,
-                count=1,
-                flags=re.IGNORECASE,
-            )
-    return cleaned
-
-
-def strip_model_artifact_leaks(text: str, strip_pipe_markers: bool = True) -> str:
-    cleaned = str(text or "")
-    cleaned = ARTIFACT_BLOCK_RE.sub("", cleaned)
-    if strip_pipe_markers:
-        cleaned = PIPE_MARKER_RE.sub("", cleaned)
-        cleaned = TOKEN_ARTIFACT_RE.sub("", cleaned)
-    cleaned = LEAKED_TOOL_CALL_RE.sub("", cleaned)
-    cleaned = LEAKED_MESSAGE_TAG_RE.sub("", cleaned)
-    # Always strip these garbage tokens; they are never valid visible output.
-    cleaned = re.sub(
-        r"<\|?end_of_text\|?>|<\|?tool_response\|?>|<unk>",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
-
-def _iter_top_level_tool_tags(response: str, available_tools: set[str] | None = None):
-    text = str(response or "")
-    available_lower = (
-        {n.lower() for n in available_tools} if available_tools is not None else None
-    )
-    code_ranges = _fenced_code_ranges(text)
-    pipe_matches = []
-    for match in PIPE_TOOL_RE.finditer(text):
-        if _in_ranges(match.start(), code_ranges):
-            continue
-        name = match.group(1)
-        if name and name.lower().startswith("tool_"):
-            name = name[5:]
-        if available_lower is None or name.lower() in available_lower:
-            pipe_matches.append(
-                (
-                    match.start(),
-                    match.end(),
-                    name,
-                    match.group(2),
-                    match.group(3),
-                    False,
-                )
-            )
-    for match in PIPE_TOOL_CALL_RE.finditer(text):
-        if _in_ranges(match.start(), code_ranges):
-            continue
-        name = match.group(1)
-        if name and name.lower().startswith("tool_"):
-            name = name[5:]
-        if available_lower is None or name.lower() in available_lower:
-            pipe_matches.append(
-                (match.start(), match.end(), name, match.group(2), "", True)
-            )
-    for match in GENERIC_PIPE_TOOL_RE.finditer(text):
-        if _in_ranges(match.start(), code_ranges):
-            continue
-        name = match.group(1)
-        if name and name.lower().startswith("tool_"):
-            name = name[5:]
-        if available_lower is None or name.lower() in available_lower:
-            pipe_matches.append(
-                (match.start(), match.end(), name, "", match.group(2), False)
-            )
-    # De-dupe overlapping pipe matches (PIPE_TOOL_RE + GENERIC_PIPE_TOOL_RE can both
-    # match the same <|tool:name|>… span and cause double execution). Prefer the
-    # longer span, then first match order.
-    if pipe_matches:
-        pipe_matches.sort(key=lambda x: (x[0], -(x[1] - x[0])))
-        deduped = []
-        occupied: list[tuple[int, int]] = []
-        for m in pipe_matches:
-            start, end = m[0], m[1]
-            if any(not (end <= os_ or start >= oe) for os_, oe in occupied):
-                continue
-            occupied.append((start, end))
-            deduped.append(m)
-        pipe_matches = sorted(deduped, key=lambda x: (x[0], x[1]))
-        # Continue to XML scan for non-overlapping regions; do not early-return
-        # so mixed pipe+XML batches still work.
-        for m in pipe_matches:
-            yield m
-        # Build occupied ranges so XML parser skips pipe-covered spans.
-        pipe_ranges = [(m[0], m[1]) for m in pipe_matches]
-    else:
-        pipe_ranges = []
-    pos = 0
-    while pos < len(text):
-        start = text.find("<", pos)
-        if start == -1:
-            break
-        if _in_ranges(start, code_ranges) or _in_ranges(start, pipe_ranges):
-            containing = next(
-                (
-                    end
-                    for range_start, end in (code_ranges + pipe_ranges)
-                    if range_start <= start < end
-                ),
-                start + 1,
-            )
-            pos = containing
-            continue
-        # Skip tool-looking tags that sit inside quoted JSON / string literals
-        # (e.g. {"thoughts":"<tool:shell .../>"}). Still allow glued tags after
-        # letters/punctuation: "ship<tool:create_site ...>" - the old
-        # whitespace-only rule dropped those and leaked HTML into Discord.
-        if start > 0 and text[start - 1] in {'"', "'", "`", "\\"}:
-            pos = start + 1
-            continue
-        tag_end = _find_xml_tag_end(text, start)
-        if tag_end == -1:
-            break
-        name, attrs_str, self_closing = _parse_xml_open_tag(text[start : tag_end + 1])
-        if not name or (
-            available_lower is not None and name.lower() not in available_lower
-        ):
-            pos = start + 1
-            continue
-        if self_closing:
-            yield start, tag_end + 1, name, attrs_str, "", True
-            pos = tag_end + 1
-            continue
-        close_match = _find_tool_close(text, name, tag_end + 1)
-        if not close_match:
-            stop_match = UNTERMINATED_TOOL_STOP_RE.search(text, tag_end + 1)
-            body_end = stop_match.start() if stop_match else len(text)
-            # Do not claim the entire rest of the response - only up to body_end -
-            # so later tools are still discoverable.
-            yield start, body_end, name, attrs_str, text[tag_end + 1 : body_end], False
-            pos = body_end
-            continue
-        yield (
-            start,
-            close_match.end(),
-            name,
-            attrs_str,
-            text[tag_end + 1 : close_match.start()],
-            False,
-        )
-        pos = close_match.end()
-
-
-# Params that hold freeform blobs. Nested same-named tags (e.g. HTML <body>
-def strip_tool_payload_leaks(text: str) -> str:
-    # First remove any full tool invocation blocks (XML or pipe) including their payloads.
-    # This must happen before token stripping so that <|tool_foo|>body  removes body too.
-    cleaned = str(text or "")
-    original = cleaned
-    cleaned = _strip_arg_protocol_leaks(cleaned)
-    cleaned = _strip_dsml_tool_leaks(cleaned)
-    ranges = [
-        (start, end)
-        for start, end, *_rest in _iter_top_level_tool_tags(cleaned, KNOWN_TOOL_NAMES)
-    ]
-    for start, end in reversed(ranges):
-        cleaned = cleaned[:start] + cleaned[end:]
-    # Now clean remaining artifacts/markers on the leftovers.
-    cleaned = strip_model_artifact_leaks(cleaned)
-    # Final safety for any stray tokens left.
-    cleaned = TOKEN_ARTIFACT_RE.sub("", cleaned)
-    cleaned = PIPE_MARKER_RE.sub("", cleaned)
-    cleaned = re.sub(
-        r"<\|?[^<>\|\s]{0,30}tool[^<>\|\s]{0,30}\|?>", "", cleaned, flags=re.IGNORECASE
-    )
-    # Root, 2026-10-04: do not strip <think> or <reasoning> blocks here.
-    # The provider returns reasoning in its own field. A block in content is a
-    # prompt or tool-schema defect. It must stay visible in Discord.
-    # See AGENTS.md, "Failures stay visible".
-    # Strip leading JSON decision/tool-call blocks. The previous trigger set
-    # missed models that invent their own keys ("reasoning", "name", "arguments",
-    # "emoji") and emit the raw tool JSON as their visible reply. Match any JSON
-    # object that LOOKS like a tool invocation: has both a "name"/"tool" key and
-    # an "arguments"/"parameters" key, OR has a "thoughts" key.
-    tool_call_obj_re = re.compile(
-        r"\{(?:[^{}]|\{[^{}]*\})*?"
-        r"(?:\"name\"|\"tool\"|\"tool_name\"|\"function\")"
-        r"(?:[^{}]|\{[^{}]*\})*?"
-        r"(?:\"arguments\"|\"parameters\"|\"input\")"
-        r"(?:[^{}]|\{[^{}]*\})*\}",
-        re.IGNORECASE | re.DOTALL,
-    )
-    cleaned = tool_call_obj_re.sub("", cleaned)
-    # Root, 2026-10-31: JSON with reasoning, plan or thoughts keys stays
-    # visible. It is a prompt or tool-schema defect, not text to hide.
-    # Final catch-all: if a reply is *just* a JSON object (possibly with surrounding
-    # whitespace / quotes), treat it as a leak. Real replies don't start with `{`.
-    cleaned = _unwrap_openai_text_part(cleaned)
-    if cleaned.strip().startswith("{") and cleaned.strip().endswith("}"):
-        try:
-            parsed = json.loads(cleaned.strip())
-            if isinstance(parsed, dict):
-                tool_keys = {
-                    "name",
-                    "tool",
-                    "tool_name",
-                    "function",
-                    "arguments",
-                    "parameters",
-                    "input",
-                    "emoji",
-                }
-                # Response-envelope keys: the model sometimes emits a fake
-                # response object {"content": "...", "reply": true} as its
-                # visible reply instead of just the content string.
-                envelope_keys = {
-                    "content",
-                    "reply",
-                    "text",
-                    "message",
-                    "response",
-                    "channel",
-                    "recipient",
-                    "user_id",
-                    "message_id",
-                    "recipient_id",
-                    "target",
-                    "send",
-                    "should_reply",
-                }
-                keys = {k.lower() for k in parsed}
-                tool_hits = sum(1 for k in parsed if k.lower() in tool_keys)
-                env_hits = sum(1 for k in parsed if k.lower() in envelope_keys)
-                # 3) Single-key object with "content" -> the model forgot to
-                # strip the envelope, keep the inner text. Must run BEFORE the
-                # blanket envelope-strip below, otherwise the single content
-                # key matches the env-keys set and gets nuked.
-                if len(parsed) == 1 and "content" in keys:
-                    cleaned = str(parsed["content"] or "")
-                # 1) Any tool-shaped key, small dict -> nuke
-                # 2) Pure response envelope (all keys are envelope-shaped) -> nuke
-                elif (tool_hits >= 1 and len(parsed) <= 8) or (
-                    env_hits == len(parsed) and len(parsed) <= 6
-                ):
-                    cleaned = ""
-        except Exception as e:
-            # Not JSON after all - leave the text as-is.
-            logger.debug("Envelope strip skipped (unparseable): %s", e)
-    # After a fenced tool JSON body is stripped, the model often leaves
-    # ```json\n\n``` behind. Discord posted that empty fence as the reply.
-    cleaned = re.sub(r"(?:```|~~~)[^\n`~]{0,32}\s*(?:```|~~~)", "", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    if len(cleaned) < len(original) * 0.95 and logger.isEnabledFor(logging.DEBUG):
-        # Significant sanitization happened; helps debug persistent leak issues without always logging.
-        logger.debug(
-            "strip_tool_payload_leaks removed %d chars of artifacts",
-            len(original) - len(cleaned),
-        )
-    return cleaned
-
-
 def _sanitize_visible_reply(text: str) -> str:
-    """Remove leaked tool markup from a visible reply.
+    """Return the visible reply with outer whitespace removed.
 
-    Root, 1 November 2026: the cosmetic rewrites are removed. Literal "\\n",
-    bracket tokens, tool trace lines, sent markers, repeated words and echo
-    loops reach Discord as the model wrote them. A leak there is a signal to
-    fix the prompt, the schema or the provider.
+    Root, 1 November 2026: no filter rewrites model output. Bracket tokens,
+    sent markers, repetition, tool markup (XML, pipe, DSML, arg protocol,
+    tool JSON) and injected context tags reach Discord as the model wrote
+    them. A leak there is a signal to fix the prompt, the schema or the
+    provider.
     """
-    return strip_tool_payload_leaks(str(text or "")).strip()
+    return str(text or "").strip()
 
 
 def _format_incomplete_response(error: ProviderIncompleteResponseError) -> str:
@@ -7376,7 +6862,7 @@ class DameCurieBot(commands.Bot):
             await self._release_ai_slot()
 
     def _vc_format_response(self, raw_resp: str | None) -> str | None:
-        resp = strip_tool_payload_leaks((raw_resp or "").strip())
+        resp = (raw_resp or "").strip()
         if not resp or resp == "__NO_RESPONSE__":
             return None
         max_chars = max(
@@ -12606,8 +12092,8 @@ class DameCurieBot(commands.Bot):
             promise_followups = 0
             tool_results: list[str] = []
             loop_end = ""
-            # The provider text of the newest model response, before any
-            # cleanup, so a no-reply notice can name its exact cause.
+            # The provider text of the newest model response. The loop uses
+            # it to detect an empty final answer and a repeated update.
             last_model_text = str(response or "")
             final_without_calls = False
             # Text the model writes next to tool calls, posted at once as a
@@ -13063,11 +12549,9 @@ class DameCurieBot(commands.Bot):
             # A final batch of silent tools (react, wait) is a chosen silent
             # ending; only a final response without tool calls must carry text.
             if not response and (not tool_results or final_without_calls) and not delivered:
-                cause = (
-                    "my final response was empty"
-                    if not last_model_text.strip()
-                    else "my final response had no text left after reply cleanup"
-                )
+                # Reply cleanup only removes outer whitespace, so an empty
+                # response here was empty when the model returned it.
+                cause = "my final response was empty"
                 logger.warning("Turn ended with no reply in channel %s: %s", channel_id, cause)
                 if self._control.get("error_replies", True):
                     try:
@@ -13425,11 +12909,6 @@ class DameCurieBot(commands.Bot):
             if name == "send_message" and isinstance(params.get("content"), str):
                 params = dict(params)
                 content = params.get("content", "")
-                # 2026-07-25: apply the same leak/mention/URL sanitization
-                # to send_message content as the raw-text reply path.
-                # The model puts @Name(snowflake_id) mentions and <<url>>
-                # double-wrapped URLs into send_message content too.
-                content = strip_tool_payload_leaks(content)
                 if getattr(message, "guild", None):
                     content = self._render_custom_emojis(content, message.guild)
                 params["content"] = content
@@ -13635,9 +13114,7 @@ class DameCurieBot(commands.Bot):
         tool_media: list[dict] = []
         self._last_native_tool_media = []
         self._last_native_followup_messages = []
-        response = strip_model_artifact_leaks(response or "", strip_pipe_markers=False)
-        # Strip any accidental XML tags if the model dual-emitted
-        cleaned = strip_tool_payload_leaks(response)
+        cleaned = response or ""
 
         if not self._control.get("tools_enabled", True):
             return (cleaned, [], []) if include_images else (cleaned, [])
@@ -14247,17 +13724,16 @@ class DameCurieBot(commands.Bot):
     ) -> tuple[str, list[str]] | tuple[str, list[str], list[str]]:
         """Native tool_calls only. The XML text-tag dispatch is gone - Dame Curie
         is native function-calling only now. If the model didn't emit native
-        tool_calls, there's nothing to run; we just sanitize the text response
-        (e.g. a plain chat reply the model wrote directly) and return it.
+        tool_calls, there's nothing to run; the text response (e.g. a plain
+        chat reply the model wrote directly) is returned unchanged.
 
         If ``existing_progress`` is provided (a ToolProgress already started
         during the LLM generation phase), it's forwarded to the tool processor
         so the same Discord message transitions from "working on it…" to the
         tool's name/reasoning instead of being deleted and re-posted.
 
-        Defensive sanitization via strip_tool_payload_leaks still runs so any
-        stray <tool:...> tags a poorly-behaved model leaks into visible text
-        get scrubbed instead of shown to the user.
+        Text the model writes is returned unchanged. Root, 1 November 2026:
+        tool markup in visible text is a signal to fix, not text to remove.
         """
         self._last_native_followup_messages = []
         self._last_native_tool_media = []
@@ -14271,7 +13747,7 @@ class DameCurieBot(commands.Bot):
                 existing_progress=existing_progress,
                 response_metrics=response_metrics,
             )
-        cleaned = strip_tool_payload_leaks(response or "")
+        cleaned = response or ""
         return (cleaned, [], []) if include_images else (cleaned, [])
 
     def _consume_native_tool_calls(self) -> list:

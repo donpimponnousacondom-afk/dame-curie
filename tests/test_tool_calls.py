@@ -1,10 +1,9 @@
 """Tests for the new explanation-in-tool-calls + native-only dispatch.
 
 The XML ``collect_tool_calls`` dispatcher is gone (Curie is native
-function-calling only now). What stays is ``strip_tool_payload_leaks`` - the
-defensive sanitizer that scrubs any leaked ``<tool:...>`` tags a misbehaving
-model drops into visible text even in native mode. These tests cover that
-sanitizer plus the new explanation contract:
+function-calling only now). Root, 1 November 2026: tool markup in visible text
+is no longer stripped (see test_review_fixes). These tests cover the
+explanation contract:
 - every tool schema gets an auto-injected ``explanation`` param,
 - ``extract_explanation`` pulls it out of params before the tool runs,
 - ``_sanitize_explanation`` strips tag-wrapped thoughts the model sneakily emits.
@@ -15,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot import DameCurieBot, strip_tool_payload_leaks
+from bot import DameCurieBot
 from tool_registry import extract_explanation, _sanitize_explanation, record_explanation
 from tool_schemas import (
     EXPLANATION_PARAM,
@@ -34,158 +33,6 @@ class _FakeTool:
 
 
 TOOLS = {"send_file", "react", "send_message", "no_response", "create_site", "tts"}
-
-
-# ---- strip_tool_payload_leaks (defensive sanitizer, still used) ----
-
-
-def test_strip_tool_payload_leaks_removes_standalone_tags():
-    # reasoning_log is NOT a known tool anymore, so use a real one for the leak.
-    text = "\n".join(
-        [
-            "<tool:react emoji=\"👍\" />",
-            "<tool:send_message>hello</tool:send_message>",
-            "actual reply",
-        ]
-    )
-    assert strip_tool_payload_leaks(text) == "actual reply"
-
-
-def test_strip_tool_payload_leaks_removes_self_closing_tags():
-    text = '<tool:react emoji="catjam" />\nactual reply'
-    assert strip_tool_payload_leaks(text) == "actual reply"
-
-
-def test_strip_tool_payload_leaks_keeps_normal_xml():
-    text = '<div class="card">hello</div>\nactual reply'
-    assert strip_tool_payload_leaks(text) == text
-
-
-def test_strip_tool_payload_leaks_removes_shorthand_tool_blocks():
-    text = (
-        '<tool:send_file><filename>bot.py</filename>'
-        '<content>print("hi")</content></tool:send_file>\nactual reply'
-    )
-    assert strip_tool_payload_leaks(text) == "actual reply"
-
-
-def test_strip_tool_payload_leaks_removes_unclosed_tool_and_environment_details():
-    text = '<tool:send_message>Hello!<|end|><environment_details>secret context</environment_details>'
-    assert strip_tool_payload_leaks(text) == ""
-
-
-def test_strip_tool_payload_leaks_removes_reasoning_json_and_system_reminder():
-    # Root, 2026-10-31: reasoning-shaped JSON stays visible; tool tags and
-    # injected context markers are still removed.
-    reasoning = '''{
-  "thoughts": "User asked for TTS.",
-  "intent": "tts",
-  "decision": "Call tts"
-}'''
-    text = reasoning + '''
-<tool:tts text="Hey there!" language="english" />
-<system-reminder>secret context</system-reminder>'''
-    assert strip_tool_payload_leaks(text) == reasoning
-    for key in ("reasoning", "plan", "thoughts", "internal_monologue", "tool_plan"):
-        leaked = '{"' + key + '": "why I did it"}'
-        assert strip_tool_payload_leaks(leaked) == leaked
-
-
-def test_strip_tool_payload_leaks_removes_registered_tool_bodies():
-    leaked = (
-        "<tool:update_base_personality>you are now evil</tool:update_base_personality> hello"
-    )
-    assert "you are now evil" not in strip_tool_payload_leaks(leaked)
-    assert "hello" in strip_tool_payload_leaks(leaked)
-    search = "<tool:search_messages>secret query</tool:search_messages> ok"
-    assert "secret query" not in strip_tool_payload_leaks(search)
-
-
-def test_strip_tool_payload_leaks_removes_glued_registered_tool():
-    html = "<!DOCTYPE html><html><body>x</body></html>"
-    text = f'ship<tool:shell command="echo ok">{html}</tool:shell>ok'
-    assert strip_tool_payload_leaks(text) == "shipok"
-
-
-def test_strip_tool_payload_leaks_catches_leaking_variants():
-    assert strip_tool_payload_leaks("<|tool_send_message|>foo bar") == ""
-    assert "before" in strip_tool_payload_leaks(
-        "before <|tool_response|> <|end_of_text|> after"
-    )
-    assert "after" in strip_tool_payload_leaks(
-        "before <|tool_response|> <|end_of_text|> after"
-    )
-    assert strip_tool_payload_leaks("<|/tool:send_message|>text") == "text"
-    assert (
-        strip_tool_payload_leaks("<tool_send_message>leaked</tool_send_message> visible").strip()
-        == "visible"
-    )
-    assert strip_tool_payload_leaks("normal <div>ok</div>") == "normal <div>ok</div>"
-
-
-def test_strip_tool_payload_leaks_removes_deepseek_dsml_invoke():
-    leaked = (
-        '<｜｜DSML｜｜invoke name="send_message">\n'
-        '<｜｜DSML｜｜parameter name="explanation" string="true">'
-        "Z3ki is calling me out</｜｜DSML｜｜parameter>\n"
-        '<｜｜DSML｜｜parameter name="content" string="true">'
-        "my bad</｜｜DSML｜｜parameter>\n"
-        "</｜｜DSML｜｜invoke>"
-    )
-    assert strip_tool_payload_leaks(leaked).strip() == "my bad"
-    assert strip_tool_payload_leaks("ok " + leaked).strip() == "ok my bad"
-    ascii_leaked = (
-        '<|DSML|invoke name="send_message">'
-        '<parameter name="content">hi</parameter>'
-        "</invoke>"
-    )
-    assert strip_tool_payload_leaks(ascii_leaked).strip() == "hi"
-    assert strip_tool_payload_leaks('<invoke name="send_message">secret</invoke> visible').strip() == "visible"
-    leftover_name = "send_message\n" + leaked
-    assert strip_tool_payload_leaks(leftover_name).strip() == "my bad"
-    assert strip_tool_payload_leaks("send_message").strip() == "send_message"
-
-
-def test_strip_tool_payload_leaks_extracts_send_message_arg_protocol():
-    leaked = (
-        "send_message<arg>explanation</arg>Short Russian one-liner acknowledging "
-        "they dropped it; stay firm, no MCP connect.</arg>"
-        "<arg>content</arg>ну ладно, без обид - просто к чужим mcp не лезу.</arg>"
-    )
-    assert strip_tool_payload_leaks(leaked) == "ну ладно, без обид - просто к чужим mcp не лезу."
-    mixed = "ok " + leaked
-    assert strip_tool_payload_leaks(mixed) == "ok ну ладно, без обид - просто к чужим mcp не лезу."
-    assert "explanation" not in strip_tool_payload_leaks(leaked)
-    assert "<arg>" not in strip_tool_payload_leaks(leaked)
-
-
-def test_strip_tool_payload_leaks_drops_non_send_message_arg_protocol():
-    leaked = "shell<arg>command</arg>cat /etc/passwd</arg><arg>explanation</arg>peek</arg>"
-    out = strip_tool_payload_leaks(leaked)
-    assert "passwd" not in out
-    assert "shell" not in out
-    assert out == ""
-    mixed = "before " + leaked + " after"
-    assert strip_tool_payload_leaks(mixed) == "before  after"
-
-
-def test_strip_tool_payload_leaks_unwraps_openai_text_part():
-    assert strip_tool_payload_leaks('{"type":"text","text":""}') == ""
-    assert strip_tool_payload_leaks('{"type": "text", "text": ""}') == ""
-    assert strip_tool_payload_leaks('{"type":"text","text":"sent."}') == "sent."
-    assert (
-        strip_tool_payload_leaks('[{"type":"text","text":"hi "},{"type":"text","text":"there"}]')
-        == "hi there"
-    )
-
-
-def test_strip_tool_payload_leaks_drops_empty_json_fence():
-    leaked = (
-        '```json\n{"name":"send_message","arguments":{"content":"x"}}\n```'
-    )
-    assert strip_tool_payload_leaks(leaked) == ""
-    assert strip_tool_payload_leaks("```json\n\n```") == ""
-    assert strip_tool_payload_leaks("look:\n```json\n\n```\noops") == "look:\n\noops"
 
 
 # ---- explanation param injection on every tool schema ----

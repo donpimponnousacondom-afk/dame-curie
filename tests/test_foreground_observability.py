@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import discord
 import pytest
 
-from bot import DameCurieBot, TokenBudgetTracker, strip_tool_payload_leaks
+from bot import DameCurieBot, TokenBudgetTracker
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from control_defaults import DEFAULT_CONTROL
 from dirac_runtime import _NoticeInput
@@ -296,8 +296,8 @@ def configure_dispatch(bot, *, expand_catalog=False, native_continuations=False)
                 {"role": "assistant", "content": str(response), "tool_calls": paired_calls},
                 *paired_results,
             ]
-        # Like the real dispatch, return the text after leak cleanup.
-        return strip_tool_payload_leaks(str(response)), results, []
+        # Like the real dispatch, return the text unchanged.
+        return str(response), results, []
 
     bot._dispatch_tool_calls = AsyncMock(side_effect=dispatch)
 
@@ -663,18 +663,13 @@ def test_real_foreground_handler_preserves_producing_call(
                 "No reply: my final response was empty.",
             ]
             return
-        if mode == "limit_cleanup_empty":
-            # The round limit ends the loop right after a text answer that
-            # cleanup empties; the cause is still stated.
-            assert [sent.content for sent in message.channel.sent] == [
-                "No reply: my final response had no text left after reply cleanup.",
-            ]
-            return
-        if mode == "cleanup_empty":
-            # A final response that reply cleanup empties is stated, not silent.
-            assert [sent.content for sent in message.channel.sent] == [
-                "No reply: my final response had no text left after reply cleanup.",
-            ]
+        if mode in ("limit_cleanup_empty", "cleanup_empty"):
+            # Root, 1 November 2026: no cleanup removes injected context tags.
+            # The text reaches Discord as the model wrote it.
+            assert len(message.channel.sent) == 1
+            assert message.channel.sent[0].content.startswith(
+                "<system-reminder>internal</system-reminder>"
+            )
             return
         if mode == "native_round_limit":
             # Four rounds run, the fifth response still asks for a tool: the
