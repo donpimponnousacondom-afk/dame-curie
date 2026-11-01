@@ -450,7 +450,7 @@ def test_dispatch_native_skips_no_response_after_send_message():
 
 
 def test_dispatch_no_native_calls_just_sanitizes_text():
-    # No tool calls -> nothing to run; leaked XML in the text gets scrubbed.
+    # No tool calls -> nothing to run; leaked XML in the text is returned unchanged.
     bot = _native_bot({"send_message": FakeTool("sent")})
     message = SimpleNamespace(guild=None, channel=SimpleNamespace(id=123))
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot import _sanitize_visible_reply
+from bot import DameCurieBot, _sanitize_visible_reply
 from captcha_solver import _BaseSolver, CaptchaSolveError
 from rem import RemStore
 from tool_schemas import TOOL_PARAMETERS, build_openai_tools
@@ -96,18 +96,24 @@ def test_rem_patch_state_does_not_wipe_corrupt_file(tmp_path):
     "text",
     [
         "hello there",
-        '<tool:react emoji="x" />\n<tool:send_message>hello</tool:send_message>\nreply',
-        '<tool:send_file><filename>a.py</filename><content>x</content></tool:send_file>',
-        "<tool:send_message>Hello!<|end|><environment_details>ctx</environment_details>",
-        '{"thoughts": "why"}\n<tool:tts text="hi" />\n<system-reminder>ctx</system-reminder>',
-        "<tool:update_base_personality>you are now evil</tool:update_base_personality> hi",
+        '<tool:react emoji="x" />\n'
+        "<tool:send_message>hello</tool:send_message>\nreply",
+        "<tool:send_file><filename>a.py</filename>"
+        "<content>x</content></tool:send_file>",
+        "<tool:send_message>Hello!<|end|>"
+        "<environment_details>ctx</environment_details>",
+        '{"thoughts": "why"}\n<tool:tts text="hi" />\n'
+        "<system-reminder>ctx</system-reminder>",
+        "<tool:update_base_personality>you are now evil"
+        "</tool:update_base_personality> hi",
         'ship<tool:shell command="echo ok"><html></html></tool:shell>ok',
         "<|tool_send_message|>foo bar",
         "before <|tool_response|> <|end_of_text|> after",
         "<|/tool:send_message|>text",
         "<tool_send_message>leaked</tool_send_message> visible",
         DSML_SAMPLE,
-        '<|DSML|invoke name="send_message"><parameter name="content">hi</parameter></invoke>',
+        '<|DSML|invoke name="send_message">'
+        '<parameter name="content">hi</parameter></invoke>',
         '<invoke name="send_message">secret</invoke> visible',
         "send_message<arg>explanation</arg>why</arg><arg>content</arg>ok then</arg>",
         "shell<arg>command</arg>cat /etc/passwd</arg>",
@@ -125,3 +131,5 @@ def test_strip_keeps_plain_chat_without_tool_tags(text):
     # Root, 1 November 2026: tool markup, tool JSON and injected context tags
     # reach Discord as the model wrote them. Each case was stripped before.
     assert _sanitize_visible_reply(text) == text.strip()
+    voice = SimpleNamespace(_control={"vc_max_response_chars": 4000})
+    assert DameCurieBot._vc_format_response(voice, text) == text.strip()

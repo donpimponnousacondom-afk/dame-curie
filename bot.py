@@ -12092,8 +12092,8 @@ class DameCurieBot(commands.Bot):
             promise_followups = 0
             tool_results: list[str] = []
             loop_end = ""
-            # The provider text of the newest model response, before any
-            # cleanup, so a no-reply notice can name its exact cause.
+            # The provider text of the newest model response. The loop uses
+            # it to detect an empty final answer and a repeated update.
             last_model_text = str(response or "")
             final_without_calls = False
             # Text the model writes next to tool calls, posted at once as a
@@ -13724,8 +13724,8 @@ class DameCurieBot(commands.Bot):
     ) -> tuple[str, list[str]] | tuple[str, list[str], list[str]]:
         """Native tool_calls only. The XML text-tag dispatch is gone - Dame Curie
         is native function-calling only now. If the model didn't emit native
-        tool_calls, there's nothing to run; we just sanitize the text response
-        (e.g. a plain chat reply the model wrote directly) and return it.
+        tool_calls, there's nothing to run; the text response (e.g. a plain
+        chat reply the model wrote directly) is returned unchanged.
 
         If ``existing_progress`` is provided (a ToolProgress already started
         during the LLM generation phase), it's forwarded to the tool processor
