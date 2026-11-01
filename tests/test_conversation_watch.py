@@ -678,7 +678,7 @@ def test_reply_relation_includes_quote():
             "reply_to_content": "  i already   said that  ",
         }
     )
-    assert bit == 'replying to Alice(99) "i already said that"'
+    assert bit == 'replying to="Alice(99)", quote="i already said that"'
     self_bit = _reply_relation_bit(
         {
             "reply_to_author": "Curie",
@@ -687,9 +687,16 @@ def test_reply_relation_includes_quote():
             "reply_to_content": "hey",
         }
     )
-    assert self_bit == 'replying to you/Dame Curie(1) "hey"'
-    # The planner tags and the planner memory lines use the same wording,
-    # never the send_message argument name reply_to.
+    assert self_bit == 'replying to="you/Dame Curie(1)", quote="hey"'
+    # A double quote in a name or quote becomes a single quote; an empty
+    # quote and a missing id leave their parts out.
+    assert _reply_relation_bit(
+        {"reply_to_author": 'Ann "Bee"', "reply_to_author_id": "7",
+         "reply_to_content": 'say "hi"'}
+    ) == "replying to=\"Ann 'Bee'(7)\", quote=\"say 'hi'\""
+    assert _reply_relation_bit({"reply_to_author": "Bob"}) == 'replying to="Bob"'
+    # The planner activity tags never use the send_message argument name
+    # reply_to.
     bot_user = SimpleNamespace(id=1)
     tags = _message_relation_tags(
         SimpleNamespace(author=SimpleNamespace(id=7, bot=False), mentions=[]),
@@ -712,12 +719,13 @@ def test_reply_relation_includes_quote():
             "author": "Alice", "author_id": "99", "content": "ok",
             "reply_to_author": "Curie", "reply_to_author_id": "1",
             "reply_to_self": True, "reply_to_content": "hey",
-            "mentions": [{"name": "Bob", "id": "2"}],
+            "mentions": [{"name": "Bob", "id": "2"}, {"name": 'C "D"', "id": "3"}],
         },
         bot_user=bot_user,
     )
     assert line.endswith(
-        'Alice(99) [replying to you/Dame Curie(1) "hey"; mentions @Bob(2)]: ok'
+        'Alice(99) {replying to="you/Dame Curie(1)", quote="hey", '
+        "mentions=\"@Bob(2), @C 'D'(3)\"}: ok"
     )
     own = _format_memory_context_line(
         {
