@@ -363,6 +363,7 @@ from providers import (  # noqa: E402
 )
 from rag_memory import (  # noqa: E402
     QUERY_VECTOR_OVERRIDE,
+    SEARCH_ERRORS,
     RAGMemoryManager,
     RemEventLog,
     _parse_iso,
@@ -1288,6 +1289,27 @@ def _live_self_identity_line(user, guild=None, bot_name: str | None = None) -> s
         f"Your name here: {name} (no server nickname in {guild_name}; "
         f"this is your account name)."
     )
+
+
+def _recall_age_label(when: str, what: str, gaps: list[str]) -> str:
+    """The " [~Nd ago]" or " [today]" label of a recalled row.
+
+    A timestamp that cannot be read adds a failure line for the model
+    (root, 1 November 2026) and a warning; the row keeps no label.
+    """
+    if not when:
+        return ""
+    try:
+        dt = _parse_iso(when)
+        if dt is None:
+            raise ValueError("not an ISO timestamp")
+        age_days = (datetime.now(timezone.utc) - dt).days
+    except Exception as e:
+        cause = f"{type(e).__name__}: {e}"
+        logger.warning("Recall age label failed for %s (%r): %s", what, when, cause)
+        gaps.append(f"{what} has an unreadable timestamp ({when!r}, {cause}); its age label is missing")
+        return ""
+    return f" [~{age_days}d ago]" if age_days >= 1 else " [today]"
 
 
 # Root, 1 November 2026: the bot reads no intent from the words of a reply.
@@ -3782,7 +3804,9 @@ class DameCurieBot(commands.Bot):
             except Exception as e:
                 logger.debug("watermark save loop: %s", e)
 
-    async def _append_inbox_dynamic(self, dynamic_parts: list[str]) -> None:
+    async def _append_inbox_dynamic(
+        self, dynamic_parts: list[str], gaps: list[str] | None = None
+    ) -> None:
         store = getattr(self, "inbox", None)
         if store is None:
             return
@@ -3790,7 +3814,11 @@ class DameCurieBot(commands.Bot):
             items = await store.load_items()
             pending = store.planner_items(items, exclude_announced=True)
             text = store.render_planner(items)
-        except Exception:
+        except Exception as e:
+            cause = f"{type(e).__name__}: {e}"
+            logger.warning("Inbox notices could not be loaded: %s", cause)
+            if gaps is not None:
+                gaps.append(f"the inbox notices could not be loaded ({cause})")
             return
         if not text:
             return
@@ -8818,7 +8846,9 @@ class DameCurieBot(commands.Bot):
         except Exception as e:
             logger.debug("graph triple ingest skipped: %s", e)
 
-    def _graph_prompt_block(self, query: str, user_id: str, budget: int) -> str:
+    def _graph_prompt_block(
+        self, query: str, user_id: str, budget: int, gaps: list[str] | None = None
+    ) -> str:
         if not parse_bool(
             (getattr(self, "_control", None) or {}).get(
                 "knowledge_graph_enabled", True
@@ -8832,7 +8862,10 @@ class DameCurieBot(commands.Bot):
         try:
             return graph.prompt_block(query=query, user_id=user_id, budget=budget)
         except Exception as e:
-            logger.debug("graph prompt skipped: %s", e)
+            cause = f"{type(e).__name__}: {e}"
+            logger.warning("Knowledge graph block failed: %s", cause)
+            if gaps is not None:
+                gaps.append(f"the knowledge graph block could not be built ({cause})")
             return ""
 
     async def _backfill_site_graph(self) -> None:
@@ -14231,11 +14264,13 @@ class DameCurieBot(commands.Bot):
             store = self._warm_query_vectors = OrderedDict()
         store[key] = (vector, time.monotonic())
         store.move_to_end(key)
+        # A good vector ends an earlier refresh failure of this key.
+        (getattr(self, "_warm_refresh_failures", None) or {}).pop(key, None)
         while len(store) > 512:
             store.popitem(last=False)
 
     async def _prepare_turn_query_vector(
-        self, message, user_message: str
+        self, message, user_message: str, gaps: list[str] | None = None
     ) -> tuple[float, contextvars.Token] | None:
         """Choose the query vector for the memory searches of this turn.
 
@@ -14290,17 +14325,28 @@ class DameCurieBot(commands.Bot):
                 async def refresh() -> None:
                     vector = await memory._embed_for_query(text)
                     if vector is None:
+                        cause = memory.query_embedding_gap()
                         logger.warning(
                             "Memory recall: no background query vector for this message "
                             "(%s); the next message uses the vector from %.0fs ago",
-                            memory.query_embedding_gap(),
+                            cause,
                             time.monotonic() - warm[1],
                         )
+                        failures = getattr(self, "_warm_refresh_failures", None)
+                        if failures is None:
+                            failures = self._warm_refresh_failures = {}
+                        failures[key] = cause
                         return
                     DameCurieBot._store_warm_query_vector(self, key, vector)
 
                 # Created before the override is set, so the refresh asks
                 # the embedder for the vector of this message.
+                failed = (getattr(self, "_warm_refresh_failures", None) or {}).pop(key, None)
+                if failed is not None and gaps is not None:
+                    gaps.append(
+                        "the query vector of the previous message could not be computed "
+                        f"({failed}); memory recall is ranked for a message {age:.0f}s ago"
+                    )
                 _spawn_background(refresh())
                 token = QUERY_VECTOR_OVERRIDE.set((text, warm[0]))
                 logger.info(
@@ -14312,12 +14358,20 @@ class DameCurieBot(commands.Bot):
         started = time.monotonic()
         vector = await memory._embed_for_query(text)
         if vector is None:
+            cause = memory.query_embedding_gap()
             logger.warning(
                 "Memory recall: cold, no query vector for this message after %.2fs (%s); "
                 "the semantic memory searches of this turn return no rows",
                 time.monotonic() - started,
-                memory.query_embedding_gap(),
+                cause,
             )
+            if gaps is not None:
+                gaps.append(
+                    f"memory search did not run for this message ({cause}); older "
+                    "messages, cached web results and the relevance ranking of "
+                    "long-term memories and of this person's facts are missing from "
+                    "this prompt; the most recent long-term memories still appear"
+                )
             return None
         DameCurieBot._store_warm_query_vector(self, key, vector)
         logger.info(
@@ -14553,6 +14607,12 @@ class DameCurieBot(commands.Bot):
             _sections.append((name, now_cpu - _last[1], now_wall - _last[0]))
             _last[0], _last[1] = now_wall, now_cpu
 
+        # Failures while this prompt is built. Root, 1 November 2026: the
+        # model sees each one with its cause, so it does not guess why
+        # something is missing and can tell root.
+        memory_gaps: list[str] = []
+        search_errors_token = SEARCH_ERRORS.set(memory_gaps)
+
         # Collect recent users from conversation for pinging support
         conv_users = {}
         try:
@@ -14580,7 +14640,10 @@ class DameCurieBot(commands.Bot):
                         conv_users[mid] = mn
         except Exception as e:
             # Name hints are a nicety; the prompt still works without them.
-            logger.debug("Could not collect conversation user names: %s", e)
+            # Root, 1 November 2026: the model sees the failure too.
+            cause = f"{type(e).__name__}: {e}"
+            logger.warning("Could not collect conversation user names: %s", cause)
+            memory_gaps.append(f"the names of the people in this conversation could not be collected ({cause})")
 
         base_knowledge = getattr(self, "_base_knowledge", DAME_CURIE_BASE_KNOWLEDGE)
         system_parts = [
@@ -14715,14 +14778,14 @@ class DameCurieBot(commands.Bot):
         ):
             # Only when a memory search below will run.
             warm_recall = await DameCurieBot._prepare_turn_query_vector(
-                self, message, user_message
+                self, message, user_message, gaps=memory_gaps
             )
             _mark("query_vector")
         if warm_recall is not None:
             dynamic_parts.append(
-                "Memory recall in this prompt is ranked for the previous message "
-                "of this person in this channel. It refreshes in the background "
-                "for the next message."
+                "Memory recall in this prompt is ranked for an earlier message of "
+                f"this person in this channel ({warm_recall[0]:.0f}s ago). It "
+                "refreshes in the background for the next message."
             )
 
         entity_facts: list[dict] = []
@@ -14736,8 +14799,11 @@ class DameCurieBot(commands.Bot):
                     budget=ctx_plan.budget_for("entity"),
                 )
                 _mark("entity_profile")
+                memory_gaps.extend((entity_row or {}).get("recall_errors") or [])
             except Exception as e:
-                logger.debug(f"entity profile skipped: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Entity profile failed: %s", cause)
+                memory_gaps.append(f"the facts about this person could not be loaded ({cause})")
             block = DameCurieBot._render_entity_block(
                 self, message, entity_row, entity_facts
             )
@@ -14751,6 +14817,7 @@ class DameCurieBot(commands.Bot):
             user_message,
             str(getattr(message.author, "id", "") or ""),
             budget=min(900, max(ctx_spare, 240)),
+            gaps=memory_gaps,
         )
         if graph_block:
             dynamic_parts.append(graph_block)
@@ -14839,7 +14906,9 @@ class DameCurieBot(commands.Bot):
                             r for r in web_rows if r.get("similarity", 0) >= 0.40
                         ]
                     except Exception as e:
-                        logger.debug(f"recall_web_results skipped: {e}")
+                        cause = f"{type(e).__name__}: {e}"
+                        logger.warning("Web result recall failed: %s", cause)
+                        memory_gaps.append(f"cached web results could not be loaded ({cause})")
                 if rag_context or rag_recent or rag_web:
                     # Build RAG-augmented memory block. Durable facts first
                     # (LTM/shared_context - they don't decay), then recent
@@ -14873,21 +14942,9 @@ class DameCurieBot(commands.Bot):
                         rec_lines = []
                         for r in rag_recent:
                             when = r.get("timestamp", "")
-                            stamp = ""
-                            if when:
-                                try:
-                                    dt = _parse_iso(when)
-                                    if dt is not None:
-                                        age_days = (
-                                            datetime.now(timezone.utc) - dt
-                                        ).days
-                                        stamp = (
-                                            f" [~{age_days}d ago]"
-                                            if age_days >= 1
-                                            else " [today]"
-                                        )
-                                except Exception:
-                                    stamp = ""
+                            stamp = _recall_age_label(
+                                when, f"a recalled message from {r.get('author', 'anon')}", memory_gaps
+                            )
                             who = r.get("author", "anon")
                             sim_pct = int(r.get("similarity", 0) * 100)
                             rec_lines.append(
@@ -14924,21 +14981,7 @@ class DameCurieBot(commands.Bot):
                             title = r.get("title") or url
                             sim_pct = int(r.get("similarity", 0) * 100)
                             when = r.get("timestamp", "")
-                            stamp = ""
-                            if when:
-                                try:
-                                    dt = _parse_iso(when)
-                                    if dt is not None:
-                                        age_days = (
-                                            datetime.now(timezone.utc) - dt
-                                        ).days
-                                        stamp = (
-                                            f" [~{age_days}d ago]"
-                                            if age_days >= 1
-                                            else " [today]"
-                                        )
-                                except Exception:
-                                    stamp = ""
+                            stamp = _recall_age_label(when, "a cached web result", memory_gaps)
                             q = r.get("query") or ""
                             qpart = f" (was searching: {q})" if q else ""
                             content = _web_result_snippet(
@@ -14998,7 +15041,12 @@ class DameCurieBot(commands.Bot):
                             dropped=fb_dropped,
                         )
             except Exception as e:
-                logger.warning(f"Failed to load long-term memory: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Failed to load long-term memory: %s", cause)
+                memory_gaps.append(
+                    "the long-term memory and older-message sections could not be "
+                    f"built ({cause})"
+                )
             ctx_spare = ctx_plan.spare_after("entity", "ltm", "web")
         if warm_recall is not None:
             # The warm vector serves only the memory sections above. Later
@@ -15047,7 +15095,9 @@ class DameCurieBot(commands.Bot):
                             "facts", len(body), items=len(lines), dropped=facts_dropped
                         )
             except Exception as e:
-                logger.warning(f"Failed to build shared context: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Failed to build shared context: %s", cause)
+                memory_gaps.append(f"cross-context facts could not be loaded ({cause})")
         logger.debug("%s", ctx_plan.summary())
 
         if conv_users and not self._is_short_live_turn(message, user_message):
@@ -15089,8 +15139,14 @@ class DameCurieBot(commands.Bot):
             )
         append_inbox = getattr(self, "_append_inbox_dynamic", None)
         if callable(append_inbox):
-            await append_inbox(dynamic_parts)
+            await append_inbox(dynamic_parts, gaps=memory_gaps)
             _mark("inbox")
+        SEARCH_ERRORS.reset(search_errors_token)
+        if memory_gaps:
+            dynamic_parts.append(
+                "Harness failures while this prompt was built (tell root if they "
+                "matter for your answer):\n" + "\n".join(f"- {gap}" for gap in memory_gaps)
+            )
         # 2026-07-21: explicit memory-scope reminder. Short-term (the
         # user/assistant turns that follow the system message) is
         # scoped to THIS channel only - you do NOT share per-channel

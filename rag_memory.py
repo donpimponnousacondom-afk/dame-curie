@@ -44,6 +44,22 @@ QUERY_VECTOR_OVERRIDE: ContextVar[tuple[str, np.ndarray] | None] = ContextVar(
     "dame_curie_query_vector_override", default=None
 )
 
+# Failures inside memory searches for one prompt build. The bot sets a
+# list; rag_search appends one line per failure, and the bot shows the
+# lines to the model (root, 1 November 2026).
+SEARCH_ERRORS: ContextVar[list[str] | None] = ContextVar(
+    "dame_curie_search_errors", default=None
+)
+
+
+def _report_search_error(line: str) -> None:
+    """Log a memory search failure and add it to the prompt-build list."""
+    logger.warning("Memory search: %s", line)
+    errors = SEARCH_ERRORS.get()
+    # One bad row can come back from several searches of one build.
+    if errors is not None and line not in errors:
+        errors.append(line)
+
 # ─── constants ────────────────────────────────────────────────────────
 
 # Embedding backend. The default is a local Ollama serving
@@ -1464,6 +1480,14 @@ class RAGMemoryManager:
             (key, self.embed_dim, self.embedding_backend),
         ).fetchone()
         if row and row["embedding"] and embedding_blob_valid(row["embedding"], self.embed_dim):
+            # Count the hit, as _embed does, so the cache keeps used entries.
+            try:
+                self._db.execute(
+                    "UPDATE embed_cache SET last_used_at=?, hits=hits+1 WHERE key=? AND dim=?",
+                    (time.time(), key, self.embed_dim),
+                )
+            except sqlite3.Error as e:
+                logger.warning("embed_cache hit could not be counted: %s: %s", type(e).__name__, e)
             return _blob_to_embedding(row["embedding"])
         return None
 
@@ -1481,6 +1505,11 @@ class RAGMemoryManager:
         override = QUERY_VECTOR_OVERRIDE.get()
         if override is not None and override[0] == query:
             return override[1]
+        # A cached vector needs no embedder, so the pause below does not
+        # apply to it.
+        cached = self.cached_embedding(query)
+        if cached is not None:
+            return cached
         now = time.monotonic()
         if now < self._query_embed_disabled_until:
             return None
@@ -2305,8 +2334,12 @@ class RAGMemoryManager:
         top_k: int = 8,
         budget: int | None = None,
         include_shared_context: bool = True,
+        errors: list[str] | None = None,
     ) -> list[dict]:
         """Facts about one person, from every guild and DM they appear in.
+
+        ``errors`` collects the failure of the semantic recall, so the caller
+        can show it to the model (root, 1 November 2026).
 
         With a ``query`` the entity tier is ranked semantically; without one
         (or before embeddings are warm) it falls back to importance then
@@ -2343,7 +2376,10 @@ class RAGMemoryManager:
                         "origin": "entity",
                     }
             except Exception as e:
-                logger.debug(f"entity semantic recall skipped: {e}")
+                cause = f"{type(e).__name__}: {e}"
+                logger.warning("Entity semantic recall failed: %s", cause)
+                if errors is not None:
+                    errors.append(f"the relevance search for this person's facts failed ({cause})")
 
         # Always take the importance-ranked head too. Semantic recall answers
         # "what is relevant to this message"; a profile also needs the things
@@ -2465,9 +2501,11 @@ class RAGMemoryManager:
     ) -> dict:
         """Identity + facts in one call - what the prompt tier renders."""
         entity = self.get_user_entity(user_id) or {"user_id": str(user_id)}
+        errors: list[str] = []
         entity["facts"] = await self.get_entity_facts(
-            user_id, query=query, top_k=top_k, budget=budget
+            user_id, query=query, top_k=top_k, budget=budget, errors=errors
         )
+        entity["recall_errors"] = errors
         return entity
 
     def entity_stats(self) -> dict:
@@ -3318,11 +3356,16 @@ class RAGMemoryManager:
                     meta = json.loads(row["metadata"] or "{}")
                     entry.update(meta)
                 except Exception as e:
-                    logger.debug("Bad metadata JSON on row %s: %s", row["id"], e)
+                    _report_search_error(
+                        f"memory row {row['id']} has unreadable metadata ({type(e).__name__}: {e}); "
+                        "the row is used without it"
+                    )
                 results.append(entry)
             except Exception as e:
                 # One unusable row must not kill the whole search result set.
-                logger.debug("Skipping unreadable search row: %s", e)
+                _report_search_error(
+                    f"a memory row could not be read and is left out ({type(e).__name__}: {e})"
+                )
                 continue
 
         # Sort by decayed score (not raw cosine) so recent-but-slightly-less-
@@ -3375,7 +3418,10 @@ class RAGMemoryManager:
                             filtered.append(c)
                         candidates = filtered
             except Exception as e:
-                logger.debug(f"negative exclusion skipped: {e}")
+                _report_search_error(
+                    f"the filter for downvoted memories failed ({type(e).__name__}: {e}); "
+                    "downvoted memories can appear in this prompt"
+                )
 
         # ─── done ────────────────────────────────────────────────────
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)

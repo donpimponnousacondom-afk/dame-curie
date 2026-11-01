@@ -1125,3 +1125,122 @@ def test_backfill_and_status_leave_bot_output_rows_unembedded(memory, monkeypatc
     status = memory.embedding_status()
     assert status["eligible_pending"] == 0
     assert status["excluded"] == 1
+
+
+def test_cold_turn_without_a_vector_reports_the_gap_to_the_prompt(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+    install_transport(monkeypatch, Reply({}, 503))
+    gaps = []
+    assert asyncio.run(
+        DameCurieBot._prepare_turn_query_vector(bot, message, "a message", gaps=gaps)
+    ) is None
+    assert len(gaps) == 1
+    assert gaps[0].startswith("memory search did not run for this message (the embedding endpoint is paused for ")
+    assert gaps[0].endswith(
+        "older messages, cached web results and the relevance ranking of "
+        "long-term memories and of this person's facts are missing from "
+        "this prompt; the most recent long-term memories still appear"
+    )
+
+
+def test_entity_recall_failure_is_returned_with_the_profile(memory, monkeypatch):
+    async def broken(*args, **kwargs):
+        raise OSError("disk")
+
+    monkeypatch.setattr(memory, "rag_search", broken)
+    profile = asyncio.run(memory.get_user_profile("456", query="hello"))
+    assert profile["recall_errors"] == [
+        "the relevance search for this person's facts failed (OSError: disk)"
+    ]
+
+
+def test_a_cached_vector_is_served_during_the_query_pause(memory, monkeypatch):
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    stored = asyncio.run(memory._embed("cached query"))
+    memory._query_embed_disabled_until = rag.time.monotonic() + 60
+    memory._query_embed_pause_cause = "a query embedding returned no vector"
+    assert np.array_equal(asyncio.run(memory._embed_for_query("cached query")), stored)
+    assert asyncio.run(memory._embed_for_query("uncached query")) is None
+    assert len(transport.calls) == 1
+
+
+def test_search_row_failures_reach_the_prompt_build_list(memory, monkeypatch):
+    blob = rag._embedding_to_blob(np.array(vector(), dtype=np.float32))
+    insert(memory, row_id="bad-meta", text="a durable synthetic fact", blob=blob, backend=memory.embedding_backend)
+    memory._db.execute("UPDATE vectors SET metadata='{broken' WHERE id='bad-meta'")
+    install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    errors = []
+
+    async def run():
+        rag.SEARCH_ERRORS.set(errors)
+        return await memory.rag_search("a durable synthetic fact", kinds=["ltm"], min_similarity=0.0)
+
+    rows = asyncio.run(run())
+    assert [row["id"] for row in rows] == ["bad-meta"]
+    assert len(errors) == 1
+    assert errors[0].startswith("memory row bad-meta has unreadable metadata (JSONDecodeError: ")
+    assert errors[0].endswith("the row is used without it")
+
+
+def test_a_failed_refresh_is_named_in_the_next_warm_prompt(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+
+    async def run():
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        install_transport(monkeypatch, Reply({}, 503))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        for _ in range(20):
+            await asyncio.sleep(0)
+        gaps = []
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "third message", gaps=gaps)
+        return warm, gaps
+
+    warm, gaps = asyncio.run(run())
+    assert warm is not None
+    assert len(gaps) == 1
+    assert gaps[0].startswith(
+        "the query vector of the previous message could not be computed "
+        "(the embedding endpoint is paused for "
+    )
+    assert "memory recall is ranked for a message " in gaps[0]
+
+
+def test_a_good_vector_clears_an_earlier_refresh_failure(memory, monkeypatch):
+    DameCurieBot, bot, message = _recall_bot(memory)
+
+    async def run():
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        install_transport(monkeypatch, Reply({}, 503))
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert bot._warm_refresh_failures
+        # The pause ends; a cold turn after the window gets a good vector.
+        memory._embed_endpoint_down_until = 0.0
+        memory._query_embed_disabled_until = 0.0
+        key = ("100", "7")
+        stored_vector, _ = bot._warm_query_vectors[key]
+        bot._warm_query_vectors[key] = (stored_vector, rag.time.monotonic() - 901)
+        install_transport(monkeypatch, Reply({"embeddings": [vector(index=3)]}), Reply({"embeddings": [vector(index=4)]}))
+        assert await DameCurieBot._prepare_turn_query_vector(bot, message, "third message") is None
+        gaps = []
+        warm = await DameCurieBot._prepare_turn_query_vector(bot, message, "fourth message", gaps=gaps)
+        return warm, gaps
+
+    warm, gaps = asyncio.run(run())
+    assert warm is not None
+    assert gaps == []
+
+
+def test_a_repeated_search_error_is_listed_once():
+    errors = []
+
+    async def run():
+        rag.SEARCH_ERRORS.set(errors)
+        rag._report_search_error("a memory row could not be read and is left out (KeyError: 'x')")
+        rag._report_search_error("a memory row could not be read and is left out (KeyError: 'x')")
+
+    asyncio.run(run())
+    assert errors == ["a memory row could not be read and is left out (KeyError: 'x')"]

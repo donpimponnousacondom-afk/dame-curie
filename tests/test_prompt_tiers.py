@@ -349,4 +349,106 @@ def test_a_warm_turn_builds_its_prompt_without_waiting_for_the_embedder():
     assert all(vector is warm_vector for _, vector in memory.searches)
     # Only the background refresh asked the embedder.
     assert memory.embedder_calls == 1
-    assert "Memory recall in this prompt is ranked for the previous message" in prompt
+    assert "Memory recall in this prompt is ranked for an earlier message of this person" in prompt
+    assert "Harness failures" not in prompt
+
+
+class _FailingMemory(_Memory):
+    """A memory store whose lookups fail in chosen places."""
+
+    def __init__(self, fail):
+        super().__init__(entity={"user_id": "456"})
+        self.fail = set(fail)
+
+    async def get_user_profile(self, user_id, query="", top_k=8, budget=None):
+        if "entity" in self.fail:
+            raise RuntimeError("entity store locked")
+        out = {"user_id": user_id, "facts": []}
+        if "entity_recall" in self.fail:
+            out["recall_errors"] = ["the relevance search for this person's facts failed (OSError: disk)"]
+        return out
+
+    async def rag_search(self, query, **kwargs):
+        if "ltm" in self.fail:
+            raise RuntimeError("vector table missing")
+        return []
+
+    async def recall_web_results(self, query, **kwargs):
+        if "web" in self.fail:
+            raise ValueError("bad web row")
+        return []
+
+    async def get_relevant_shared_context(self, **kwargs):
+        if "shared" in self.fail:
+            raise RuntimeError("shared store locked")
+        return []
+
+    @property
+    def graph(self):
+        if "graph" not in self.fail:
+            return None
+
+        class _Graph:
+            def prompt_block(self, **kwargs):
+                raise KeyError("node")
+
+        return _Graph()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("fail", "line"),
+    [
+        ({"entity"}, "- the facts about this person could not be loaded (RuntimeError: entity store locked)"),
+        ({"entity_recall"}, "- the relevance search for this person's facts failed (OSError: disk)"),
+        ({"ltm"}, "- the long-term memory and older-message sections could not be built (RuntimeError: vector table missing)"),
+        ({"shared"}, "- cross-context facts could not be loaded (RuntimeError: shared store locked)"),
+        ({"graph"}, "- the knowledge graph block could not be built (KeyError: 'node')"),
+        ({"inbox"}, "- the inbox notices could not be loaded (OSError: inbox file unreadable)"),
+        ({"web"}, "- cached web results could not be loaded (ValueError: bad web row)"),
+    ],
+)
+def test_prompt_build_failures_reach_the_model_with_their_cause(fail, line):
+    # Root, 1 November 2026: the model sees harness failures, so it does
+    # not guess why memory is missing and can tell root.
+    bot = _bot(
+        _FailingMemory(fail),
+        {"long_term_memory_enabled": True, "cross_context_enabled": "shared" in fail},
+    )
+    bot.config = SimpleNamespace()
+    bot._is_admin = lambda user_id: False
+    if "inbox" in fail:
+
+        class _Inbox:
+            async def load_items(self):
+                raise OSError("inbox file unreadable")
+
+        bot.inbox = _Inbox()
+        bot._append_inbox_dynamic = DameCurieBot._append_inbox_dynamic.__get__(bot)
+    prompt = _prompt(bot)
+    assert "Harness failures while this prompt was built" in prompt
+    assert line in prompt
+
+
+@pytest.mark.parametrize(
+    ("when", "label", "gap"),
+    [
+        ("", "", None),
+        ("2020-01-01T00:00:00+00:00", "d ago]", None),
+        (
+            "yesterday-ish",
+            "",
+            "a cached web result has an unreadable timestamp ('yesterday-ish', "
+            "ValueError: not an ISO timestamp); its age label is missing",
+        ),
+    ],
+)
+def test_recall_age_label_reports_an_unreadable_timestamp(when, label, gap):
+    from bot import _recall_age_label
+
+    gaps = []
+    result = _recall_age_label(when, "a cached web result", gaps)
+    assert result.endswith(label)
+    assert gaps == ([gap] if gap else [])
