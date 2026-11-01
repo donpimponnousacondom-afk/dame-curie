@@ -3555,18 +3555,6 @@ class DameCurieBot(commands.Bot):
         await self.ai_provider.initialize()
         self.memory.load_from_disk()
         self.rem_log.load_from_disk()
-        # Backfill the bot's own old replies from REM into channel
-        # memory. Up until this fix the bot's own reply text only
-        # landed in REM (the dream log), never in the channel memory
-        # the LLM context pulls from - so a user asking "what did you
-        # explain about X?" got a blank stare from the model. We now
-        # write every reply to channel memory (see _handle_message
-        # normal-reply / send_message / auto_site branches) but for
-        # the historical replies still sitting in REM this one-shot
-        # backfill recovers them. Idempotent: synthetic message_ids
-        # are derived from the REM event so add_to_channel_memory's
-        # dedup skips anything we already wrote.
-        await self._backfill_bot_replies_from_rem()
         await self._load_rem_control()
         self._load_sites()
         self._load_admins()
@@ -8254,105 +8242,6 @@ class DameCurieBot(commands.Bot):
             )
         except Exception as e:
             logger.warning(f"Failed to record REM event: {e}")
-
-    async def _backfill_bot_replies_from_rem(self) -> None:
-        """One-shot recovery: copy the bot's own past replies from REM
-        into channel memory so the LLM context can find them.
-
-        Before this fix, the bot's own reply text only landed in REM
-        (the dream log), never in the channel memory the LLM context
-        pulls from. A user asking "what did you explain about X?" got a
-        blank stare. Every reply path now writes to channel memory
-        going forward; this recovers the historical ones still sitting
-        in REM (the buffer is capped at 500 events so the recovery is
-        necessarily partial, but anything in REM is recent and the
-        channels the user actually pings are usually the ones with
-        recent activity).
-
-        Idempotent: synthetic message_ids are derived from the REM
-        event's ts+channel so ``add_to_channel_memory``'s dedup skips
-        anything we already wrote. Running this on every startup is
-        cheap (the in-memory dict is fast).
-        """
-        if not getattr(self, "rem_log", None) or not getattr(self, "memory", None):
-            return
-        if not self._control.get("store_memory", True):
-            return
-        try:
-            events = list(getattr(self.rem_log, "events", []) or [])
-        except Exception as e:
-            logger.warning(f"Backfill: could not read REM events: {e}")
-            return
-
-        bot_user_id = str(self.user.id) if self.user else ""
-        written = 0
-        skipped = 0
-        for ev in events:
-            try:
-                if not isinstance(ev, dict):
-                    continue
-                if ev.get("role") != "assistant":
-                    continue
-                channel_id = str(ev.get("channel_id") or "").strip()
-                if not channel_id:
-                    continue
-                content = str(ev.get("content") or "").strip()
-                if not content:
-                    continue
-                # REM event backfill (legacy, root replaces REM): drop the
-                # internal control markers from the REM event text before it
-                # is written into channel memory, the model's history.
-                # Visible replies keep them since 1 November 2026.
-                for token in (
-                    "__NO_RESPONSE__",
-                    "__TTS_SENT__",
-                    "__SHELL_SENT__",
-                    "__MEME_SENT__",
-                    "__MEDIA_SENT__",
-                    "__MESSAGE_SENT__",
-                ):
-                    content = content.replace(token, "")
-                content = content.strip()
-                if not content:
-                    continue
-                ts = str(ev.get("ts") or "")
-                # Synthetic message_id derived from the REM event so
-                # dedup works on re-runs. Prepend a namespace prefix
-                # (``rem_backfill:``) so it can't collide with a real
-                # Discord message_id.
-                synthetic_id = f"rem_backfill:{channel_id}:{ts}"
-                try:
-                    await self.memory.add_to_channel_memory(
-                        channel_id,
-                        {
-                            "author": self.bot_name,
-                            # 2026-07-22: drop the bogus "self" literal fallback.
-                            # A non-numeric author_id ("self") never matches
-                            # self_user_id in _build_messages is_self, so the
-                            # bot's backfilled reply was rendered as a user turn.
-                            # Empty string falls back to name-only matching,
-                            # which correctly detects Dame Curie via bot_name.
-                            "author_id": ev.get("user_id") or bot_user_id or "",
-                            "author_is_bot": True,
-                            "content": content,
-                            "message_id": synthetic_id,
-                            "timestamp": ts or datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                    written += 1
-                except Exception as e:  # noqa: BLE001
-                    logger.debug(
-                        f"Backfill: failed to write assistant event to channel {channel_id}: {e}"
-                    )
-                    skipped += 1
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"Backfill: skipping malformed REM event: {e}")
-                skipped += 1
-        if written or skipped:
-            logger.info(
-                f"REM backfill: wrote {written} bot replies to channel memory"
-                + (f" ({skipped} skipped)" if skipped else "")
-            )
 
     def _load_control(self, force: bool = False):
         path = Path(self.config.DATA_DIR) / "bot_control.json"
