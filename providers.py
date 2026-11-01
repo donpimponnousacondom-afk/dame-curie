@@ -27,6 +27,7 @@ from provider_telemetry import (
     local_encoding,
     merge_usage,
     reasoning_content,
+    reported_cached_tokens,
     reported_count,
     reported_usage,
     token_count,
@@ -2365,7 +2366,7 @@ class OpenAICompatibleProvider:
                     }
                     self._last_usage = dict(usage)
                     logger.info(
-                        "Provider timing done endpoint=%s status=%s headers_ms=%.1f total_ms=%.1f content_chars=%s tool_calls=%s tokens=%s",
+                        "Provider timing done endpoint=%s status=%s headers_ms=%.1f total_ms=%.1f content_chars=%s tool_calls=%s tokens=%s input=%s input_source=%s cached=%s",
                         endpoint.name,
                         resp.status,
                         headers_ms,
@@ -2373,6 +2374,9 @@ class OpenAICompatibleProvider:
                         len(content or ""),
                         len(message.get("tool_calls") or []),
                         usage["total_tokens"],
+                        usage["prompt_tokens"],
+                        metrics.input_source,
+                        reported_cached_tokens(result),
                     )
                     incident.capture("Provider request recovered after upstream failures")
                     return ChatCompletionMessage(message, metrics=metrics, usage=usage)
