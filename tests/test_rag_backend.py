@@ -1244,3 +1244,36 @@ def test_a_repeated_search_error_is_listed_once():
 
     asyncio.run(run())
     assert errors == ["a memory row could not be read and is left out (KeyError: 'x')"]
+
+
+def test_dedupe_self_copies_removes_only_copies_a_gateway_row_holds(memory, tmp_path):
+    # Root, 1 November 2026: one row per Discord message.
+    def row(row_id, channel, author, content):
+        memory._db.execute(
+            "INSERT INTO vectors (id, kind, channel_id, author_id, content, timestamp, created_at) "
+            "VALUES (?, 'bot_output', ?, ?, ?, '', 1)",
+            (row_id, channel, author, content),
+        )
+
+    row("1001", "c1", "her", "[2026-11-01 17:00:00 CET] hello there")
+    row("bot_reply:1001", "c1", "her", "hello there")
+    row("bot_send_message:9", "c1", "her", "hello there")
+    row("bot_update:5", "c1", "her", "a text no gateway row holds")
+    row("rem_backfill:x", "c2", "her", "hello there")
+    db_path = memory.db_path
+
+    dry = rag_maintenance.dedupe_self_copies(db_path, apply=False)
+    assert dry["deleted"] == 0
+    assert dry["copies"]["bot_reply"] == {"matched": 1, "kept": 0}
+    assert dry["copies"]["bot_send_message"] == {"matched": 1, "kept": 0}
+    assert dry["copies"]["bot_update"] == {"matched": 0, "kept": 1}
+    assert dry["copies"]["rem_backfill"] == {"matched": 0, "kept": 1}
+
+    applied = rag_maintenance.dedupe_self_copies(db_path, apply=True)
+    assert applied["deleted"] == 2
+    left = {r[0] for r in memory._db.execute("SELECT id FROM vectors")}
+    assert left == {"1001", "bot_update:5", "rem_backfill:x"}
+    import sqlite3
+
+    with sqlite3.connect(applied["backup"]) as backup:
+        assert backup.execute("SELECT COUNT(*) FROM vectors").fetchone()[0] == 5

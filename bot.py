@@ -12368,54 +12368,10 @@ class DameCurieBot(commands.Bot):
                 await self._ensure_reasoning_trace(
                     message, all_tool_results, response, "send_message"
                 )
-                # The send_message tool path's _remember_tool_call writes
-                # a Tool entry which DOES contain the sent content, but
-                # it's rendered as "Called send_message with {…} ->
-                # __MESSAGE_SENT__\n<content>" which is noisy and easy
-                # for the model to miss when recalling "what did I just
-                # say?". The user reported "I asked for an explanation
-                # and Dame Curie couldn't recall its own explanation" - the
-                # plain message.reply() path was the main culprit, but
-                # the send_message path was a secondary hit because the
-                # Tool entry's prefix pushed the actual content past
-                # attention. We add a clean self-entry here too, with a
-                # stable synthetic message_id so dedup is correct on
-                # retries. The __MESSAGE_SENT__ Tool entry stays - the
-                # reasoning trace / audit needs it.
-                if (
-                    self._control.get("store_memory", True)
-                    and getattr(self, "memory", None) is not None
-                ):
-                    # Pull the actual sent content out of the tool
-                    # result. The result returned by send_message.execute()
-                    # is "__MESSAGE_SENT__\n<content>" - everything after
-                    # the marker newline is the text that was sent.
-                    sent_content = ""
-                    for tr in all_tool_results:
-                        if "__MESSAGE_SENT__" in tr:
-                            idx = tr.find("__MESSAGE_SENT__")
-                            tail = tr[idx + len("__MESSAGE_SENT__") :]
-                            sent_content = tail.lstrip("\n").strip()
-                            if sent_content:
-                                break
-                    if sent_content:
-                        try:
-                            await self.add_message_to_memory(
-                                str(message.channel.id),
-                                {
-                                    "author": self.bot_name,
-                                    "author_id": str(self.user.id) if self.user else "",
-                                    "author_is_bot": True,
-                                    "content": sent_content,
-                                    "message_id": f"bot_send_message:{message.id}",
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
-                                message,
-                            )
-                        except Exception as _e:  # noqa: BLE001
-                            logger.debug(
-                                f"Failed to record send_message content in memory: {_e}"
-                            )
+                # Root, 1 November 2026: one row per Discord message. The
+                # gateway stores the sent message under its Discord id
+                # (on_message for her own messages), so no copy is written
+                # here.
                 normal_reply_sent = True
                 return
             # TTS-only: no residual text reply required.
@@ -12553,36 +12509,31 @@ class DameCurieBot(commands.Bot):
                             else f"[Delivery incomplete: {len(delivered_chunks)} of "
                             f"{len(chunks)} chunks confirmed; unsent remainder omitted.]"
                         )
+                        # Root, 1 November 2026: one row per Discord message.
+                        # The gateway stores each delivered chunk under its
+                        # Discord id. Only the fact that a reply was not fully
+                        # delivered is new, so only that note is stored.
                         if (
-                            response
+                            delivery_note
                             and self._control.get("store_memory", True)
                             and getattr(self, "memory", None) is not None
                         ):
-                            for index, (chunk, sent_id) in enumerate(delivered_chunks):
-                                stored_content = chunk
-                                if index == len(delivered_chunks) - 1 and delivery_note:
-                                    stored_content = f"{stored_content}\n\n{delivery_note}"
-                                if not stored_content:
-                                    continue
-                                try:
-                                    await self.add_message_to_memory(
-                                        str(message.channel.id),
-                                        {
-                                            "author": self.bot_name,
-                                            "author_id": str(self.user.id) if self.user else "",
-                                            "author_is_bot": True,
-                                            "content": stored_content,
-                                            "message_id": (
-                                                f"bot_reply:{sent_id}"
-                                                if sent_id is not None
-                                                else f"bot_reply:{message.id}:chunk:{index}"
-                                            ),
-                                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                                        },
-                                        message,
-                                    )
-                                except Exception as exc:
-                                    logger.debug("Failed to record delivered reply chunk: %s", exc)
+                            last_sent_id = next(
+                                (sent_id for _chunk, sent_id in reversed(delivered_chunks) if sent_id is not None),
+                                None,
+                            )
+                            await self.add_message_to_memory(
+                                str(message.channel.id),
+                                {
+                                    "author": self.bot_name,
+                                    "author_id": str(self.user.id) if self.user else "",
+                                    "author_is_bot": True,
+                                    "content": delivery_note,
+                                    "message_id": f"bot_delivery_note:{last_sent_id or message.id}",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                message,
+                            )
                         delivered_text = "\n".join(
                             chunk for chunk, _sent_id in delivered_chunks if chunk
                         )
@@ -14461,21 +14412,10 @@ class DameCurieBot(commands.Bot):
         for chunk in chunks:
             if not chunk.strip():
                 continue
-            sent = await message.channel.send(chunk)
+            await message.channel.send(chunk)
             sent_any = True
-            if self._control.get("store_memory", True) and getattr(self, "memory", None) is not None:
-                await self.add_message_to_memory(
-                    str(message.channel.id),
-                    {
-                        "author": self.bot_name,
-                        "author_id": str(self.user.id) if self.user else "",
-                        "author_is_bot": True,
-                        "content": chunk,
-                        "message_id": f"bot_update:{getattr(sent, 'id', '')}",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    },
-                    message,
-                )
+            # One row per Discord message (root, 1 November 2026): the
+            # gateway stores this update under its Discord id.
         return sent_any
 
     def _apply_prompt_budget(
