@@ -14700,7 +14700,9 @@ class DameCurieBot(commands.Bot):
             )
         else:
             self._drugged_until.pop(channel_id, None)
-        local_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-4)))
+        # Root, 1 November 2026: the container time zone, never a fixed one.
+        # The legacy code used a fixed UTC-4 "AST" here.
+        local_now = datetime.now().astimezone()
         user_kind = (
             "bot"
             if getattr(getattr(message, "author", None), "bot", False)
@@ -14732,7 +14734,7 @@ class DameCurieBot(commands.Bot):
         if access:
             dynamic_parts.append(access)
         dynamic_parts.append(
-            f"User: {message.author.display_name} ({message.author.id}, {user_kind}) | {local_now.strftime('%a %b %d %I:%M %p')} AST | Channel: #{channel_name} ({channel_id}, {channel_kind})"
+            f"User: {message.author.display_name} ({message.author.id}, {user_kind}) | {local_now.strftime('%a %Y-%m-%d %H:%M %Z')} | Channel: #{channel_name} ({channel_id}, {channel_kind})"
         )
         # ─── per-tier context budget ────────────────────────────────────
         # Every lookup tier below (long-term facts, recalled messages, cached
