@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import traceback
+from collections import OrderedDict
 from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -359,7 +360,12 @@ from providers import (  # noqa: E402
     ProviderIncompleteResponseError,
     ProviderUsageExhaustedError,
 )
-from rag_memory import RAGMemoryManager, RemEventLog, _parse_iso  # noqa: E402
+from rag_memory import (  # noqa: E402
+    QUERY_VECTOR_OVERRIDE,
+    RAGMemoryManager,
+    RemEventLog,
+    _parse_iso,
+)
 from job_routing import JobProvider, create_job_provider, parse_background_request, resolve_job_endpoint  # noqa: E402
 from jobs import BackgroundJobManager, JOB_TURN, SpawnBackgroundTool  # noqa: E402
 from rem import RemStore, load_rem_defaults, run_rem_once  # noqa: E402
@@ -14217,6 +14223,71 @@ class DameCurieBot(commands.Bot):
             disabled.add("entity")
         return allocate(total, weights=weights_from_control(control), disabled=disabled)
 
+    def _store_warm_query_vector(self, key: tuple[str, str], vector) -> None:
+        """Keep the newest query vector of one person in one channel."""
+        store = getattr(self, "_warm_query_vectors", None)
+        if store is None:
+            store = self._warm_query_vectors = OrderedDict()
+        store[key] = (vector, time.monotonic())
+        store.move_to_end(key)
+        while len(store) > 512:
+            store.popitem(last=False)
+
+    async def _prepare_turn_query_vector(self, message, user_message: str) -> float | None:
+        """Choose the query vector for the memory searches of this turn.
+
+        Root, 1 November 2026: a follow-up message must not wait for the
+        embedder. Cold: no query vector of this person in this channel in
+        the last ``recall_warm_seconds``, so the turn waits for the vector of
+        this message, as before. Warm: the searches use the previous vector
+        at once, and the vector of this message is computed in the
+        background for the next message. Returns the age in seconds of the
+        vector a warm turn uses, or None.
+        """
+        memory = getattr(self, "memory", None)
+        text = str(user_message or "")
+        if memory is None or not text.strip() or not hasattr(memory, "cached_embedding"):
+            return None
+        key = (
+            str(getattr(message.channel, "id", "") or ""),
+            str(getattr(message.author, "id", "") or ""),
+        )
+        cached = memory.cached_embedding(text)
+        if cached is not None:
+            DameCurieBot._store_warm_query_vector(self, key, cached)
+            logger.info("Memory recall: the query vector of this message is cached")
+            return None
+        window = float(self._control.get("recall_warm_seconds", 900) or 0)
+        warm = (getattr(self, "_warm_query_vectors", None) or {}).get(key)
+        if warm is not None and window > 0:
+            age = time.monotonic() - warm[1]
+            if age <= window:
+
+                async def refresh() -> None:
+                    vector = await memory._embed_for_query(text)
+                    if vector is not None:
+                        DameCurieBot._store_warm_query_vector(self, key, vector)
+
+                # Created before the override is set, so the refresh asks
+                # the embedder for the vector of this message.
+                _spawn_background(refresh())
+                QUERY_VECTOR_OVERRIDE.set((text, warm[0]))
+                logger.info(
+                    "Memory recall: warm, searching with the query vector from %.0fs ago; "
+                    "the vector of this message is computed in the background",
+                    age,
+                )
+                return age
+        started = time.monotonic()
+        vector = await memory._embed_for_query(text)
+        if vector is not None:
+            DameCurieBot._store_warm_query_vector(self, key, vector)
+        logger.info(
+            "Memory recall: cold, waited %.2fs for the query vector of this message",
+            time.monotonic() - started,
+        )
+        return None
+
     async def _entity_profile_for(
         self, message, user_message: str, budget: int
     ) -> tuple[dict | None, list[dict]]:
@@ -14598,6 +14669,15 @@ class DameCurieBot(commands.Bot):
         # entity profile would leave that budget unspent while cross-context
         # facts were being trimmed.
         ctx_spare = 0
+
+        warm_age = await DameCurieBot._prepare_turn_query_vector(self, message, user_message)
+        _mark("query_vector")
+        if warm_age is not None:
+            dynamic_parts.append(
+                "Memory recall in this prompt is ranked for the previous message "
+                "of this person in this channel. It refreshes in the background "
+                "for the next message."
+            )
 
         entity_facts: list[dict] = []
         entity_row: dict | None = None

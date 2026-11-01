@@ -888,3 +888,107 @@ def test_doctor_disabled_rag_does_not_probe():
     state, detail = asyncio.run(doctor._probe_embeddings(doctor_config(enabled=False)))
     assert state == "warn"
     assert "no request" in detail
+
+
+def test_query_vector_override_serves_only_its_own_text(memory, monkeypatch):
+    # Root, 1 November 2026: a warm turn searches with the previous vector.
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector(index=1)]}))
+    warm = np.array(vector(index=2), dtype=np.float32)
+
+    async def run():
+        rag.QUERY_VECTOR_OVERRIDE.set(("new message", warm))
+        same = await memory._embed_for_query("new message")
+        other = await memory._embed_for_query("another text")
+        return same, other
+
+    same, other = asyncio.run(run())
+    assert np.array_equal(same, warm)
+    assert other is not None and not np.array_equal(other, warm)
+    assert len(transport.calls) == 1
+    # The override stays inside the task context that set it.
+    assert rag.QUERY_VECTOR_OVERRIDE.get() is None
+
+
+def test_cached_embedding_reads_the_cache_without_a_request(memory, monkeypatch):
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    assert memory.cached_embedding("cached text") is None
+    stored = asyncio.run(memory._embed("cached text"))
+    assert np.array_equal(memory.cached_embedding("cached text"), stored)
+    assert len(transport.calls) == 1
+
+
+def _recall_bot(memory, **control):
+    from bot import DameCurieBot
+
+    bot = SimpleNamespace(memory=memory, _control=dict(control))
+    message = SimpleNamespace(
+        channel=SimpleNamespace(id=100), author=SimpleNamespace(id=7)
+    )
+    return DameCurieBot, bot, message
+
+
+def test_turn_query_vector_is_cold_then_warm_then_refreshed(memory, monkeypatch, caplog):
+    DameCurieBot, bot, message = _recall_bot(memory)
+    caplog.set_level("INFO")
+    first = vector(index=1)
+    second = vector(index=2)
+    transport = install_transport(
+        monkeypatch, Reply({"embeddings": [first]}), Reply({"embeddings": [second]})
+    )
+
+    async def run():
+        # Cold: the turn waits for the vector of its own message.
+        assert await DameCurieBot._prepare_turn_query_vector(bot, message, "first message") is None
+        assert len(transport.calls) == 1
+        # Warm: the next message gets the first vector at once.
+        age = await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+        assert age is not None and age >= 0
+        assert np.array_equal(
+            await memory._embed_for_query("second message"), np.array(first, dtype=np.float32)
+        )
+        # The background refresh stores the vector of the second message.
+        for _ in range(20):
+            if len(transport.calls) == 2:
+                break
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return bot._warm_query_vectors[("100", "7")][0]
+
+    refreshed = asyncio.run(run())
+    assert np.array_equal(refreshed, np.array(second, dtype=np.float32))
+    assert "Memory recall: cold, waited" in caplog.text
+    assert "Memory recall: warm, searching with the query vector from" in caplog.text
+
+
+@pytest.mark.parametrize("window", [0, 900])
+def test_turn_query_vector_waits_when_not_warm(memory, monkeypatch, window):
+    DameCurieBot, bot, message = _recall_bot(memory, recall_warm_seconds=window)
+    transport = install_transport(
+        monkeypatch, Reply({"embeddings": [vector(index=1)]}), Reply({"embeddings": [vector(index=2)]})
+    )
+
+    async def run():
+        await DameCurieBot._prepare_turn_query_vector(bot, message, "first message")
+        if window == 900:
+            # Older than the window: cold again.
+            key = ("100", "7")
+            stored_vector, _ = bot._warm_query_vectors[key]
+            bot._warm_query_vectors[key] = (stored_vector, rag.time.monotonic() - 901)
+        return await DameCurieBot._prepare_turn_query_vector(bot, message, "second message")
+
+    assert asyncio.run(run()) is None
+    assert len(transport.calls) == 2
+
+
+def test_turn_query_vector_uses_the_cache_without_a_request(memory, monkeypatch, caplog):
+    DameCurieBot, bot, message = _recall_bot(memory)
+    caplog.set_level("INFO")
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    asyncio.run(memory._embed("same message"))
+
+    async def run():
+        return await DameCurieBot._prepare_turn_query_vector(bot, message, "same message")
+
+    assert asyncio.run(run()) is None
+    assert len(transport.calls) == 1
+    assert "the query vector of this message is cached" in caplog.text

@@ -26,6 +26,7 @@ import os
 import sqlite3
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -34,6 +35,14 @@ import aiohttp
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# The query vector for one turn: (query text, vector). The bot sets it for a
+# warm turn; _embed_for_query returns the vector for that exact text, so all
+# memory searches of the turn run at once. A contextvar keeps it inside the
+# task of that turn.
+QUERY_VECTOR_OVERRIDE: ContextVar[tuple[str, np.ndarray] | None] = ContextVar(
+    "dame_curie_query_vector_override", default=None
+)
 
 # ─── constants ────────────────────────────────────────────────────────
 
@@ -1408,6 +1417,24 @@ class RAGMemoryManager:
         self._embed_endpoint_down_until = 0.0
         self._query_embed_disabled_until = 0.0
 
+    def cached_embedding(self, text: str) -> np.ndarray | None:
+        """The cached vector of ``text``, or None. It sends no embedder request."""
+        if not EMBEDDINGS_ENABLED:
+            return None
+        projected = _embedding_projection(text)
+        if not projected:
+            return None
+        key = hashlib.sha256(
+            f"{self.embedding_backend}\0{projected}".encode()
+        ).hexdigest()
+        row = self._db.execute(
+            "SELECT embedding FROM embed_cache WHERE key=? AND dim=? AND backend=?",
+            (key, self.embed_dim, self.embedding_backend),
+        ).fetchone()
+        if row and row["embedding"] and embedding_blob_valid(row["embedding"], self.embed_dim):
+            return _blob_to_embedding(row["embedding"])
+        return None
+
     async def _embed_for_query(self, query: str) -> np.ndarray | None:
         """Best-effort query embedding with a strict interactive deadline.
 
@@ -1419,6 +1446,9 @@ class RAGMemoryManager:
         """
         if not EMBEDDINGS_ENABLED or not str(query or "").strip():
             return None
+        override = QUERY_VECTOR_OVERRIDE.get()
+        if override is not None and override[0] == query:
+            return override[1]
         now = time.monotonic()
         if now < self._query_embed_disabled_until:
             return None
