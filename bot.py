@@ -8829,9 +8829,9 @@ class DameCurieBot(commands.Bot):
                 if not content:
                     continue
                 # REM event backfill (legacy, root replaces REM): drop the
-                # internal control markers from stored event text before it
-                # enters the REM context. Visible replies keep them since
-                # 1 November 2026.
+                # internal control markers from the REM event text before it
+                # is written into channel memory, the model's history.
+                # Visible replies keep them since 1 November 2026.
                 for token in (
                     "__NO_RESPONSE__",
                     "__TTS_SENT__",
