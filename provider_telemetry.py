@@ -182,6 +182,14 @@ def token_count(value: object) -> int | None:
     return result
 
 
+_CACHED_TOKEN_FIELDS = (
+    ("prompt_tokens_details", "cached_tokens"),
+    ("input_tokens_details", "cached_tokens"),
+    (None, "prompt_cache_hit_tokens"),
+)
+_CACHED_TOKEN_KEYS = frozenset(key for _section, key in _CACHED_TOKEN_FIELDS)
+
+
 def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
     for key, value in incoming.items():
         if key in (
@@ -206,6 +214,9 @@ def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
             count = token_count(value)
             if count is not None:
                 target[key] = count
+            elif key in _CACHED_TOKEN_KEYS:
+                # Keep an invalid cache count so the call log names it.
+                target[key] = value
         elif (
             not details
             and key
@@ -234,24 +245,21 @@ def reported_count(usage: dict, *keys: str) -> int | None:
     return prefer_reported(*(token_count(usage.get(key)) for key in keys))
 
 
-_CACHED_TOKEN_FIELDS = (
-    ("prompt_tokens_details", "cached_tokens"),
-    ("input_tokens_details", "cached_tokens"),
-    (None, "prompt_cache_hit_tokens"),
-)
-
-
 def reported_cached_tokens(response: dict) -> str:
     """Cached prompt tokens as the provider reported them, for the call log.
 
-    Root, 1 November 2026: prompt-cache hits must be measurable. The text is
-    the count, "not in usage" when no known field is present, or the invalid
-    value and its field.
+    Root, 1 November 2026: prompt-cache hits must be measurable.
+    A valid count returns the count.
+    A known field with a value that is not a count returns "invalid", the
+    value and the field.
+    No known field returns "not in usage".
     """
     usage = response.get("usage")
     usage = usage if isinstance(usage, dict) else {}
     for section, key in _CACHED_TOKEN_FIELDS:
         holder = usage.get(section) if section else usage
+        if section and section in usage and not isinstance(holder, dict):
+            return f"invalid {str(holder)[:40]!r} in {section}"
         if isinstance(holder, dict) and key in holder:
             count = token_count(holder[key])
             field = f"{section}.{key}" if section else key

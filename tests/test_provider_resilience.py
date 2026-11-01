@@ -173,7 +173,7 @@ def test_upstream_error_labels_are_allowlisted_and_bounded():
 @pytest.mark.parametrize(
     "usage, logged",
     [
-        # Root, 1 November 2026: prompt-cache hits are logged on every call.
+        # Root, 1 November 2026: each successful call logs its cache count.
         (
             {"prompt_tokens": 120, "prompt_tokens_details": {"cached_tokens": 96}},
             "input=120 input_source=provider cached=96",
@@ -188,6 +188,10 @@ def test_upstream_error_labels_are_allowlisted_and_bounded():
             "cached=invalid '-1' in prompt_tokens_details.cached_tokens",
         ),
         (None, "input_source=cl100k_base cached=not in usage"),
+        (
+            {"prompt_tokens": 120, "prompt_tokens_details": "x"},
+            "cached=invalid 'x' in prompt_tokens_details",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -348,10 +352,18 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
 
 @pytest.mark.parametrize(
     "cache_field",
-    ['"prompt_tokens_details":{"cached_tokens":96}', '"prompt_cache_hit_tokens":96'],
+    [
+        ('"prompt_tokens_details":{"cached_tokens":96}', "cached=96"),
+        ('"prompt_cache_hit_tokens":96', "cached=96"),
+        (
+            '"prompt_tokens_details":{"cached_tokens":-1}',
+            "cached=invalid '-1' in prompt_tokens_details.cached_tokens",
+        ),
+    ],
 )
 @pytest.mark.parametrize("content_type", ["text/plain", "", "private-header-secret"])
 def test_unrecognized_content_type_preserves_valid_sse(content_type, cache_field, caplog):
+    cache_field, logged = cache_field
     caplog.set_level(logging.INFO, logger="providers")
     provider = OpenAICompatibleProvider(
         "http://example.test", "model", 8192, 0.6, retry_attempts=1, extra_body={"stream": True}
@@ -367,7 +379,7 @@ def test_unrecognized_content_type_preserves_valid_sse(content_type, cache_field
     )
     assert asyncio.run(provider.generate_response([])) == "hello"
     # The streamed usage frame reaches the call log.
-    assert "input=120 input_source=provider cached=96" in caplog.text
+    assert f"input=120 input_source=provider {logged}" in caplog.text
 
 
 @pytest.mark.parametrize("attempts", [1, 3, 5])
