@@ -67,10 +67,11 @@ services:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: "-1"
       OLLAMA_MAX_LOADED_MODELS: "1"
-      # Ollama 0.33.3 loads qwen3-embedding:0.6b with one slot (n_slots = 1)
-      # whatever this value is (measured on 1 November 2026). rag_memory.py
-      # keeps at most one background embedding request in flight, so a
-      # prompt query waits for at most one background piece.
+      # Ollama 0.33.3 loaded qwen3-embedding:0.6b with one slot
+      # (n_slots = 1) when this value was "2" (measured on 1 November 2026).
+      # rag_memory.py keeps at most one background embedding request in
+      # flight. In one measurement Ollama served a waiting query before the
+      # next background piece, so the query waited for one piece only.
       OLLAMA_NUM_PARALLEL: "1"
     command: ["serve"]
     mem_limit: 6g

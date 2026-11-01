@@ -776,8 +776,9 @@ class RAGMemoryManager:
         # Prompt queries use _embed_query_semaphore, so they do not wait
         # behind the bot's queue of background writes. Ollama runs one
         # embedding request at a time (compose.yaml), so a query still waits
-        # for the background piece in progress: up to about 7.7 s for
-        # 6,000 characters (measured on 1 November 2026).
+        # for the background piece in progress. With a 6,000-character piece
+        # the query took about 7.7 s in total (measured on 1 November 2026).
+        # The "query lane wait" in the log does not include that Ollama wait.
         self._embed_semaphore = asyncio.Semaphore(1)
         self._embed_query_semaphore = asyncio.Semaphore(1)
         # Self-tuning cache state (kept minimal; SQLite holds the real cache)
