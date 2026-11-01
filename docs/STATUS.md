@@ -25,7 +25,7 @@ How to revert one change:
    - #4 and #13 changed `scripts/publisher/*.py`. Reinstall them to
      `/opt/dame-curie/scripts/publisher/` and restart
      `dame-curie-publisher.service`.
-   - #4, #7 and #27 changed `compose.yaml`. Install the reverted file as the
+   - #4, #7, #27 and #28 changed `compose.yaml`. Install the reverted file as the
      deployed copy.
    - The deployed copy is `/opt/dame-curie/compose.yaml`, next to the
      deployed `scripts/instance.py`. Source: the coordinator's deploy
@@ -57,7 +57,8 @@ How to revert one change:
 | #23 | `153caa9` | The provider log line states `input=`, `input_source=` and `cached=` tokens. First live log measurement, 1 November 2026 (not in the repository): 9,232 of 17,470 input tokens cached. | Read `cached=` to measure prompt-cache hits. |
 | #24 | `9bbf2dd` | The bot no longer runs the startup REM backfill. It re-inserted up to 500 old replies on each start with the current time, so they moved to the newest end of her history. | History in time order after a restart. |
 | #26 | `170d5b5` | No intent is read from the words of a reply. The `_PROMISE_RE` regex took "checking" in a finished reply for an "on it" promise, called the model again, and the reply posted twice (14:09 CET, 1 November 2026). `send_message` now ends the turn whatever its words. Text written beside working tool calls posts as a progress update before those calls run. Media, final and pausing calls keep the after-call rule. | An update that posts after the tools, or a reply that posts twice. A message "Stopped: the progress update could not be posted (...)". |
-| #27 | `git log --grep '(#27)'` (the squash commit does not exist before the merge) | Prompt query embeddings have their own lane. Ollama runs two slots (`OLLAMA_NUM_PARALLEL` "2" in `compose.yaml`). Before, the query for her prompt waited behind background writes of web pages and tool records: 24.8 s on 1 November 2026 (live log, not in the repository). A query embedding that takes 1 s or more logs "Query embedding took ...", also when it times out or fails. Not measured: the query time under load with two slots, Ollama memory with two slots, and the effect of other processes that call the same Ollama service. | "Query embedding took" lines and the `entity_profile` time in "Prompt build" lines. Ollama memory with two slots. |
+| #27 | `0b9c661` | Prompt query embeddings have their own lane, so they no longer wait behind the bot's queue of background writes (web pages, tool records). Before, a query waited 24.8 s on 1 November 2026 (live log, not in the repository). A query embedding that takes 1 s or more logs "Query embedding took ...", also when it times out or fails. #27 also set `OLLAMA_NUM_PARALLEL` to "2"; #28 sets it back to "1" because it has no effect (see #28). | "Query embedding took" lines and the `entity_profile` time in "Prompt build" lines. |
+| #28 | `git log --grep '(#28)'` (the squash commit does not exist before the merge) | `OLLAMA_NUM_PARALLEL` is "1" again. With the value "2", Ollama 0.33.3 loaded `qwen3-embedding:0.6b` with one slot (`n_slots = 1`). Live measurements on 1 November 2026, after #27 (not in the repository): a 200-character query alone took 0.24 s. The same query during a 6,000-character background piece took 7.70 s. That piece alone took 7.54 s. In a second run, a query that arrived during the first of two background pieces finished before the second piece. | A total time above 8 s in "Query embedding took" lines. The "query lane wait" field does not include the time in the Ollama queue. |
 
 ### Known open items
 
