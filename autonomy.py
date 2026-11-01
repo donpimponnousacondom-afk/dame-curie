@@ -3938,6 +3938,7 @@ class AutonomyEngine:
             "content": _render_discord_context_text(
                 sent_message,
                 content,
+                timestamp=False,
                 known_users=(getattr(self.bot, "_recent_users", {}) or {}).get(
                     str(
                         getattr(getattr(sent_message, "channel", None), "id", "") or ""

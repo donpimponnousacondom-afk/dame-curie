@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from collections import OrderedDict
 from copy import deepcopy
 from types import SimpleNamespace
@@ -118,6 +119,7 @@ def test_fetched_pre_restart_reply_footer_is_visible_but_storage_quote_stays_cle
     if fenced:
         raw = f"```\n{raw}\n```"
     parent = message(raw, message_id=777, author_id=1)
+    parent.created_at = datetime(2026, 11, 1, 1, 30, tzinfo=timezone.utc)
     current = message("Explain that footer")
     current.reference = SimpleNamespace(message_id=777, resolved=None)
     current.channel.fetch_message = AsyncMock(return_value=parent)
@@ -132,7 +134,15 @@ def test_fetched_pre_restart_reply_footer_is_visible_but_storage_quote_stays_cle
     assert all(observability.FOOTER_MARKER not in str(item["content"]) for item in payload)
     assert old_footer in DameCurieBot._render_reply_parent(bot, current, parent)
     assert old_footer not in DameCurieBot._message_memory_content(bot, parent)
+    # 1 November 2026: stored text carries no time prefix; the history line
+    # renders the time once from the row's timestamp field.
+    assert DameCurieBot._message_memory_content(bot, parent).startswith(
+        "```" if fenced else "historic answer"
+    )
     stored_quote = DameCurieBot._reply_meta_from_message(bot, current)
+    assert stored_quote["reply_to_content"].startswith(
+        "```" if fenced else "historic answer"
+    )
     assert "historic answer" in stored_quote["reply_to_content"]
     assert old_footer not in stored_quote["reply_to_content"]
     assert observability.FOOTER_MARKER not in stored_quote["reply_to_content"]

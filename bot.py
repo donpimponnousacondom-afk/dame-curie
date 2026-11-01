@@ -3499,6 +3499,7 @@ class DameCurieBot(commands.Bot):
         rendered = render_discord_context_text(
             ref,
             clean_message_content(self, ref),
+            timestamp=False,
             known_users=(getattr(self, "_recent_users", None) or {}).get(
                 channel_id, {}
             ),
@@ -4531,6 +4532,7 @@ class DameCurieBot(commands.Bot):
         return render_discord_context_text(
             message,
             memory_content,
+            timestamp=False,
             known_users=(getattr(self, "_recent_users", None) or {}).get(
                 str(getattr(getattr(message, "channel", None), "id", "") or ""),
                 {},
@@ -5565,6 +5567,7 @@ class DameCurieBot(commands.Bot):
                         message,
                         memory_content or "[media attached]",
                         known_users=self._recent_users.get(channel_id, {}),
+                        timestamp=False,
                     ),
                     "message_id": str(message.id),
                     "timestamp": _message_created_at_iso(message),

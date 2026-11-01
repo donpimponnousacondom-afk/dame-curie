@@ -946,10 +946,19 @@ def _discord_id(obj: Any) -> str:
 
 
 def render_discord_context_text(
-    message: Any, content: str | None = None, known_users: dict | None = None
+    message: Any,
+    content: str | None = None,
+    known_users: dict | None = None,
+    *,
+    timestamp: bool = True,
 ) -> str:
     """Make Discord tokens readable for prompts/logged context without mutating the real message.
     known_users: optional {user_id: display_name} from conversation history to resolve pings.
+    timestamp: prefix the message time. Stored rows pass False: the history
+    renders each row's time from its own timestamp field. 1 November 2026:
+    a stored prefix gave every history line two times in two formats, made
+    the stored copies of one message differ (no dedup), and made the
+    self-repetition note read "2026" as an opening word.
 
     Also appends structured annotations for non-text payloads the message
     carries: polls, app-command invocations, system/welcome events, embeds,
@@ -1014,7 +1023,7 @@ def render_discord_context_text(
     # Timestamp of the message itself - the model needs to know WHEN each
     # message happened (recency, "yesterday vs now", dead conversations).
     created = getattr(message, "created_at", None)
-    if created is not None:
+    if timestamp and created is not None:
 #        ts = created.strftime("%Y-%m-%d %H:%M:%S UTC")
         ts = created.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
         text = f"[{ts}] {text}" if text else f"[{ts}]"
