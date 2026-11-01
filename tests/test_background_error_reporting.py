@@ -166,7 +166,12 @@ def test_job_public_progress_never_echoes_log_results_but_model_gets_full_text(t
     raw = "ERROR historical private log with synthetic key " + "x" * 5000 + " FULL LOG TAIL"
     bot, job, message, thread = background(tmp_path, [tool_response(), ProviderResult("safe final answer")], [("", [raw])])
     if native_followups:
-        bot._last_native_followup_messages = [{"role": "tool", "content": raw, "tool_call_id": "synthetic-tool"}]
+        bot._last_native_followup_messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "synthetic-tool", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "content": raw, "tool_call_id": "synthetic-tool"},
+        ]
     asyncio.run(run_background_job(bot, job.id))
     assert job.status == "done"
     assert raw in str(bot.model_messages[1])
@@ -479,3 +484,20 @@ def test_autonomy_do_nothing_and_cancellation_are_unchanged(tmp_path, private_st
         asyncio.run(engine.run_allowed([GateVerdict({"kind": "create_goal", "description": "cancelled"}, True)]))
     assert private_store.get(0) is None
     assert channel.sent == []
+
+
+def test_job_with_a_broken_tool_pairing_fails_with_its_cause(tmp_path, private_store):
+    # A tool result without its assistant call: masking validates the
+    # history, and the job stops with the exact cause (root, 1 November 2026).
+    bot, job, message, thread = background(
+        tmp_path, [tool_response(), ProviderResult("unreachable")], [("", ["Tool shell: ok"])]
+    )
+    bot._last_native_followup_messages = [
+        {"role": "tool", "content": "Tool shell: ok", "tool_call_id": "synthetic-tool"}
+    ]
+    asyncio.run(run_background_job(bot, job.id))
+    assert job.status == "error"
+    assert job.progress == (
+        "tool-result masking failed at step 1: ValueError: Orphan tool result in tool history"
+    )
+    assert len(bot.model_messages) == 1
