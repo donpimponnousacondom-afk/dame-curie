@@ -1832,11 +1832,12 @@ DISCORD_CHAT_PROTOCOL = (
     "[RESPOND TO THIS]. Don't answer older turns or other speakers who "
     "didn't ping you.\n"
     "Ping with exactly <@USER_ID> - no backticks, no markdown, no @Name(id).\n"
-    "In that history a user line starts with the speaker's name and id, and your "
-    "own past lines start with your name in brackets. Attribute by ID, never by a "
-    "similar nickname. If unsure who said it, say so.\n"
-    "Names, ids, times and bracketed reply or mention notes in the history are "
-    "metadata. Never write them in your reply.\n"
+    "In that history each line starts with its time. On a user line, the speaker's "
+    "name and id follow, then optional reply and mention notes in brackets. Your own "
+    "lines hold only your text, and a run of them starts with [Dame Curie]. "
+    "Attribute by ID, never by a similar nickname. If unsure who said it, say so.\n"
+    "The times, names, ids, [Dame Curie] and the bracketed notes are metadata. "
+    "Never write them in your reply.\n"
     "Your public name in this room is the per-turn 'Your name here' line "
     "(guild nick if set, otherwise your account name).\n"
     "Match the channel. Discord markdown when it helps. Lowercase-natural. "
@@ -15968,14 +15969,8 @@ class DameCurieBot(commands.Bot):
                 is_self = bool(self_user_id and author_id == self_user_id) or (
                     not author_id and author in self_names
                 )
-                if is_self:
-                    role = "assistant"
-                    if author_id:
-                        author_label = f"You/Dame Curie({author_id})"
-                    else:
-                        author_label = "You/Dame Curie"
-                else:
-                    role = "user"
+                role = "assistant" if is_self else "user"
+                if not is_self:
                     if author_id:
                         author_label = f"{author}({author_id})"
                     else:

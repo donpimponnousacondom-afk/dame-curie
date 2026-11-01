@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from autonomy import _reply_relation_bit
+from autonomy import _format_memory_context_line, _message_relation_tags, _reply_relation_bit
 from bot import DameCurieBot
 from concurrency_safety import KeyedLocks
 from control_defaults import DEFAULT_CONTROL
@@ -684,6 +684,26 @@ def test_reply_relation_includes_quote():
         }
     )
     assert self_bit == 'replying to you/Dame Curie(1) "hey"'
+    # The planner tags and the planner memory lines use the same wording,
+    # never the send_message argument name reply_to.
+    bot_user = SimpleNamespace(id=1)
+    tags = _message_relation_tags(
+        SimpleNamespace(author=SimpleNamespace(id=7, bot=False), mentions=[]),
+        bot_user=bot_user,
+        reply=SimpleNamespace(author=SimpleNamespace(id=1), content="hey"),
+    )
+    assert 'replying_to=you/Dame Curie(1) "hey"' in tags
+    assert "addressed_to=[reply:you/Dame Curie(1)]" in tags
+    line = _format_memory_context_line(
+        {
+            "author": "Alice", "author_id": "99", "content": "ok",
+            "reply_to_author": "Curie", "reply_to_author_id": "1",
+            "reply_to_self": True, "reply_to_content": "hey",
+            "mentions": [{"name": "Bob", "id": "2"}],
+        },
+        bot_user=bot_user,
+    )
+    assert line.endswith('Alice(99) [replying to you/Dame Curie(1) "hey"; mentions @Bob(2)]: ok')
 
 
 def test_memory_lock_timeout_is_bounded():
