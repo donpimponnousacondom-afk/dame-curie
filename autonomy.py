@@ -171,14 +171,19 @@ def _visible_message_content(
 
 
 def _reply_relation_bit(msg: dict) -> str | None:
-    """`reply_to=Name(id) "short quote"` for transcript and planner lines."""
+    """`replying to Name(id) "short quote"` for transcript and planner lines.
+
+    Not `reply_to=`: that is the name of a send_message argument, and the
+    model copied the history tag into its replies as text."""
     if not msg.get("reply_to_author"):
         return None
     reply_label = str(msg.get("reply_to_author"))
     reply_id = str(msg.get("reply_to_author_id") or "")
     if msg.get("reply_to_self"):
         reply_label = "you/Dame Curie"
-    bit = f"reply_to={reply_label}({reply_id})" if reply_id else f"reply_to={reply_label}"
+    bit = f"replying to {reply_label}"
+    if reply_id:
+        bit += f"({reply_id})"
     quoted = " ".join(str(msg.get("reply_to_content") or "").split())[:80]
     if quoted:
         quoted = quoted.replace('"', "'")
@@ -196,6 +201,11 @@ def _message_relation_tags(
     addressed: list[str] = []
 
     author = getattr(message, "author", None)
+    # Own messages carry no reply or mention tags: the model copied such
+    # notes from its own lines into new messages.
+    own = bot_user is not None and str(getattr(author, "id", "")) == str(
+        getattr(bot_user, "id", "")
+    )
     if getattr(author, "bot", False) or getattr(message, "webhook_id", None):
         tags.append("speaker_kind=bot")
     else:
@@ -207,18 +217,18 @@ def _message_relation_tags(
     if list(getattr(message, "attachments", None) or []):
         tags.append("has_media")
 
-    if reply is not None and hasattr(reply, "author"):
+    if not own and reply is not None and hasattr(reply, "author"):
         ref = _user_ref(reply.author, bot_user)
         reply_content = strip_footer(str(getattr(reply, "content", "") or ""), self_authored=bool(bot_user and str(reply.author.id) == str(bot_user.id)))
         quoted = " ".join(reply_content.split())[:80]
         if quoted:
             quoted = quoted.replace('"', "'")
-            tags.append(f'reply_to={ref} "{quoted}"')
+            tags.append(f'replying_to={ref} "{quoted}"')
         else:
-            tags.append(f"reply_to={ref}")
-        addressed.append(f"reply_to:{ref}")
+            tags.append(f"replying_to={ref}")
+        addressed.append(f"reply:{ref}")
 
-    mentions = list(getattr(message, "mentions", []) or [])[:10]
+    mentions = [] if own else list(getattr(message, "mentions", []) or [])[:10]
     if mentions:
         mention_refs = [_user_ref(user, bot_user) for user in mentions]
         tags.append("mentions=[" + ", ".join(mention_refs) + "]")
@@ -232,10 +242,7 @@ def _message_relation_tags(
     if addressed:
         tags.append("addressed_to=[" + "; ".join(addressed) + "]")
     elif private:
-        is_self = bot_user is not None and str(
-            getattr(getattr(message, "author", None), "id", "")
-        ) == str(getattr(bot_user, "id", ""))
-        tags.append("addressed_to=you" if not is_self else "addressed_to=them")
+        tags.append("addressed_to=you" if not own else "addressed_to=them")
     else:
         tags.append("addressed_to=channel")
     return tags
@@ -257,7 +264,10 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
     if (bot_id and author_id == bot_id) or (
         not author_id and bot_name and author == bot_name
     ):
+        # Own lines carry no reply or mention notes: the model copied them
+        # into new messages. See _build_messages in bot.py.
         label = f"You/Dame Curie({author_id})" if author_id else "You/Dame Curie"
+        return f"{prefix}{label}: {str(msg.get('content', ''))[:600]}"
     else:
         label = f"{author}({author_id})" if author_id else author
         if msg.get("author_is_bot"):
@@ -274,7 +284,7 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
         if isinstance(item, dict)
     ]
     if mention_bits:
-        relation_bits.append("mentions=" + ",".join(mention_bits))
+        relation_bits.append("mentions " + ",".join(mention_bits))
     relation = f" [{'; '.join(relation_bits)}]" if relation_bits else ""
     return f"{prefix}{label}{relation}: {str(msg.get('content', ''))[:600]}"
 
@@ -1820,7 +1830,8 @@ class AutonomyEngine:
                             tags.append(f"msg={msg_idx}")
 
                     addressed = []
-                    if ev.get("reply_to_author_id"):
+                    own = speaker_kind == "you/Dame Curie"
+                    if not own and ev.get("reply_to_author_id"):
                         reply_name = str(ev.get("reply_to_author") or "unknown")
                         reply_id = str(ev.get("reply_to_author_id") or "")
                         reply_ref = (
@@ -1833,12 +1844,12 @@ class AutonomyEngine:
                         )[:80]
                         if quoted:
                             quoted = quoted.replace('"', "'")
-                            tags.append(f'reply_to={reply_ref} "{quoted}"')
+                            tags.append(f'replying_to={reply_ref} "{quoted}"')
                         else:
-                            tags.append(f"reply_to={reply_ref}")
-                        addressed.append(f"reply_to:{reply_ref}")
+                            tags.append(f"replying_to={reply_ref}")
+                        addressed.append(f"reply:{reply_ref}")
                     mentions = []
-                    for row in list(ev.get("mentions") or [])[:10]:
+                    for row in [] if own else list(ev.get("mentions") or [])[:10]:
                         if not isinstance(row, dict):
                             continue
                         mid = str(row.get("id") or "")

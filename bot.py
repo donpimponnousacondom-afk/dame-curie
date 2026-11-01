@@ -1832,8 +1832,12 @@ DISCORD_CHAT_PROTOCOL = (
     "[RESPOND TO THIS]. Don't answer older turns or other speakers who "
     "didn't ping you.\n"
     "Ping with exactly <@USER_ID> - no backticks, no markdown, no @Name(id).\n"
-    "User lines are `Name(id): text`; your past lines are `[Dame Curie] text`. "
+    "In that history each line starts with its time. On a user line, the speaker's "
+    "name and id follow, then optional reply and mention notes in brackets. Your own "
+    "lines hold only your text, and a run of them starts with [Dame Curie]. "
     "Attribute by ID, never by a similar nickname. If unsure who said it, say so.\n"
+    "The times, the Name(id) labels, [Dame Curie] and the bracketed notes are "
+    "history metadata. Never copy them into a reply.\n"
     "Your public name in this room is the per-turn 'Your name here' line "
     "(guild nick if set, otherwise your account name).\n"
     "Match the channel. Discord markdown when it helps. Lowercase-natural. "
@@ -15923,10 +15927,10 @@ class DameCurieBot(commands.Bot):
                     turn_sequences.append(current_turn)
                 current_turn = None
 
-            def _new_turn(role: str, header: str):
+            def _new_turn(role: str):
                 nonlocal current_turn
                 _flush_turn()
-                current_turn = {"role": role, "header": header, "parts": []}
+                current_turn = {"role": role, "parts": []}
 
             for msg in context_memory:
                 if current_message_id is not None and str(msg.get("message_id")) == str(
@@ -15943,7 +15947,7 @@ class DameCurieBot(commands.Bot):
                         else f"[Tool] {msg.get('content', '')[:4000]}"
                     )
                     if current_turn is None or current_turn.get("role") != "user":
-                        _new_turn("user", "")
+                        _new_turn("user")
                     current_turn["parts"].append(line)
                     continue
                 author = str(msg.get("author", "?"))
@@ -15965,14 +15969,8 @@ class DameCurieBot(commands.Bot):
                 is_self = bool(self_user_id and author_id == self_user_id) or (
                     not author_id and author in self_names
                 )
-                if is_self:
-                    role = "assistant"
-                    if author_id:
-                        author_label = f"You/Dame Curie({author_id})"
-                    else:
-                        author_label = "You/Dame Curie"
-                else:
-                    role = "user"
+                role = "assistant" if is_self else "user"
+                if not is_self:
                     if author_id:
                         author_label = f"{author}({author_id})"
                     else:
@@ -15992,45 +15990,27 @@ class DameCurieBot(commands.Bot):
                     if isinstance(item, dict)
                 ]
                 if mention_bits:
-                    relation_bits.append("mentions=" + ",".join(mention_bits))
+                    relation_bits.append("mentions " + ",".join(mention_bits))
                 relation = f" [{'; '.join(relation_bits)}]" if relation_bits else ""
-                autonomy_tag = ""
-                if msg.get("autonomy"):
-                    reason = str(msg.get("autonomy_reason") or "").strip()
-                    autonomy_tag = " [your earlier autonomous message"
-                    if reason:
-                        autonomy_tag += f"; reason: {reason[:200]}"
-                    autonomy_tag += "]"
                 header = f"[{stamp}] " if stamp else ""
                 content_str = str(msg.get("content", ""))[:2500]
-                # 2026-07-21: assistant turns get NO 'You/Dame Curie(id):'
-                # author prefix - the role already says it's the bot,
-                # and putting that string inside the assistant content
-                # makes the model continue the prefix verbatim in its
-                # reply (parrot bug). User turns DO get a 'Name(id):'
-                # prefix so the model knows who is speaking across many
-                # users in a long transcript. We still keep the
-                # reply/mentions/autonomy metadata on assistant turns
-                # because it's diagnostic, not identity.
+                # Your own past lines carry only what you wrote. User lines
+                # get a 'Name(id) [relation]:' prefix so the model knows who
+                # is speaking. 1 November 2026: the reply, mention and
+                # autonomy notes on your own lines are removed. The model
+                # copied them into new replies, for example "[reply_to=@SirRooT]".
                 if is_self:
-                    meta = f"{relation}{autonomy_tag}".strip()
-                    if meta:
-                        line = f"{header}{content_str} {meta}"
-                    else:
-                        line = f"{header}{content_str}"
+                    line = f"{header}{content_str}"
                 else:
                     line = (
-                        f"{header}{author_label}{relation}{autonomy_tag}: {content_str}"
+                        f"{header}{author_label}{relation}: {content_str}"
                     )
                 annotate = getattr(self, "_reactions_annotation_for", None)
                 reactions = annotate(msg) if callable(annotate) else ""
                 if reactions:
                     line = f"{line} {reactions}"
                 if current_turn is None or current_turn.get("role") != role:
-                    _new_turn(role, header)
-                else:
-                    if header and not current_turn.get("header"):
-                        current_turn["header"] = header
+                    _new_turn(role)
                 current_turn["parts"].append(line)
             _flush_turn()
             # Walk the sequence and merge consecutive same-author messages
@@ -16053,8 +16033,9 @@ class DameCurieBot(commands.Bot):
             # alone. (The live message is always user role.)
             used = 0
             for turn in merged:
-                header = turn.get("header") or ""
-                content = f"{header}{turn.get('content', '')}".strip()
+                # Each line already starts with its own time. 1 November 2026:
+                # a second turn-level time doubled it on the first line.
+                content = turn.get("content", "").strip()
                 turn["_rendered"] = content
                 used += len(content)
             # Apply budget by trimming oldest turns first (front of the
