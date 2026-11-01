@@ -1,12 +1,13 @@
 # dame-curie status
 
 The first section was written on 1 November 2026. The sections after it
-date from 3 October 2026.
+are older. Their headings give their dates where they have one.
 
 ## Behaviour changes, 31 October to 1 November 2026
 
-Each row is one merge to `main`, in merge order. Use this list when a
-behaviour changes in the next days.
+Each row is one merge to `main`, in merge order. Row #4 also holds
+PR #6, which merged into the #4 branch 33 seconds before #4 merged to
+`main`. Use this list when a behaviour changes in the next days.
 
 These facts come from the session record, not from the repository:
 - Root made the coordinator director of dame-curie on 31 October 2026.
@@ -18,23 +19,25 @@ These facts come from the session record, not from the repository:
 How to revert one change:
 1. Create a branch from `main` and run `git revert <commit>`.
 2. Revert newer rows first. Later PRs touch the same files, so an old
-   revert can conflict. #17, #18 and #20 are three steps of one series;
-   #20 depends on code that #18 leaves.
+   revert can conflict. #17, #18 and #20 are three steps of one series.
 3. Open a PR, review it, merge it, then deploy.
 4. Extra steps:
    - #4 and #13 changed `scripts/publisher/*.py`. Reinstall them to
      `/opt/dame-curie/scripts/publisher/` and restart
      `dame-curie-publisher.service`.
-   - #4 and #7 changed `compose.yaml`. Install it as the deployed copy
-     that `instance.py` reads, `/opt/dame-curie/compose.yaml` (the
-     coordinator's deploy script installs it there; session record).
+   - #4 and #7 changed `compose.yaml`. Install the reverted file as the
+     deployed copy.
+   - The deployed copy is `/opt/dame-curie/compose.yaml`, next to the
+     deployed `scripts/instance.py`. Source: the coordinator's deploy
+     script (session record).
    - #7 renamed `DAME_CURIE_PUBLIC_BASE_URL` to
-     `DAME_CURIE_IMAGE_PUBLIC_BASE_URL` in `bot.env`. A revert needs the
-     old name back.
+     `DAME_CURIE_IMAGE_PUBLIC_BASE_URL` in `docker/bot.env.example`. The
+     operator's `bot.env` got the same rename at deploy. A revert of #7
+     needs the old name back in `bot.env`.
 
 | PR | Commit | Change | Watch for |
 | --- | --- | --- | --- |
-| #4, #6 | `afc9383` | The throne-v2 commits that ran live since 9 October 2026 (119 files). The tool argument `reasoning` is renamed to `explanation`. The reasoning and `<think>` filters are removed. The prompt invites batched independent calls, with a cap of 10 calls per response and byte limits. One AI slot is kept free for human replies. `compose.yaml` pins OpenBLAS and OpenMP to one thread. RAG search scores in one matrix pass. Em and en dashes are refused repo-wide. The publisher repair is recorded. #6 merged into the #4 branch as `3f87faa`, which is not on `main`; its change is inside `afc9383`: an over-limit batch returns a refusal with the exact cause, and jobs report an unresolved tool error. A revert of `afc9383` reverts #4 and #6 together. | "Error - " tool results in long tool rounds; "AI slot wait" log lines. |
+| #4, #6 | `afc9383` | The throne-v2 commits that ran live since 9 October 2026 (119 files). The tool argument `reasoning` is renamed to `explanation`. The reasoning and `<think>` filters are removed. The prompt invites batched independent calls, with a cap of 10 calls per response and byte limits. One AI slot is kept free for human replies. `compose.yaml` pins OpenBLAS and OpenMP to one thread. RAG search scores in one matrix pass. The commit hook, the GitHub workflow and the image build refuse em and en dashes. The publisher repair is recorded. #6 merged into the #4 branch as `3f87faa`, which is not on `main`; its change is inside `afc9383`: an over-limit batch returns a refusal with the exact cause, and jobs report an unresolved tool error. A revert of `afc9383` reverts #4 and #6 together. | "Error - " tool results in long tool rounds; "AI slot wait" log lines. |
 | #7 | `57083ed` | The tool history has its own prompt allowance: 42 messages and 96,000 characters, and a note marks dropped rounds. `DAME_CURIE_PUBLIC_BASE_URL` is renamed to `DAME_CURIE_IMAGE_PUBLIC_BASE_URL`; the old name stops startup with its cause. `see_image` and `image_generator` read her own images from disk. Reasoning-shaped JSON stays visible. The bot class is renamed to `DameCurieBot`. `instance.py` refuses to start without the smoke directories, and `compose.yaml` mounts them. The voice wake word default is `curie`. | Forgetting earlier tool results; wrong image links; startup refusal after a config change. |
 | #8 | `8d72c97` | Background jobs compact their history with a model summary at about 180,000 tokens. | "compacted" notes in job threads; jobs that fail with a compaction cause. |
 | #9 | `338534a` | Tool images stay attached for the whole turn. A turn that stops posts "Stopped: <cause>.". An empty final answer posts "No reply: my final response was empty.". | These notices in channels. |
