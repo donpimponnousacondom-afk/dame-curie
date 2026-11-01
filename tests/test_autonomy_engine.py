@@ -499,7 +499,23 @@ def test_gather_context_uses_numbered_channels_and_messages(tmp_path):
 
     class RemLog:
         async def drain_slice(self, since):
-            return []
+            # Own events carry no reply or mention tags; user events keep them.
+            now = datetime.now(timezone.utc).isoformat()
+            return [
+                {
+                    "ts": now, "channel_id": "100", "user_id": "42",
+                    "user_name": "Curie", "role": "assistant", "content": "own words",
+                    "reply_to_author_id": "7", "reply_to_author": "Alice",
+                    "reply_to_content": "hello there",
+                    "mentions": [{"id": "7", "name": "Alice"}],
+                },
+                {
+                    "ts": now, "channel_id": "100", "user_id": "7",
+                    "user_name": "Alice", "role": "user", "content": "user words",
+                    "reply_to_author_id": "42", "reply_to_author": "Curie",
+                    "reply_to_self": True, "reply_to_content": "own words",
+                },
+            ]
 
     class HistoryMessage:
         id = 555
@@ -555,6 +571,9 @@ def test_gather_context_uses_numbered_channels_and_messages(tmp_path):
     assert "msg=1" in context
     assert "  1: #general" in context
     assert "100" not in context.split("=== AVAILABLE CHANNELS")[1].split("===")[0]
+    own_line = next(line for line in context.splitlines() if 'content="own words"' in line)
+    assert "replying_to" not in own_line and "mentions=" not in own_line
+    assert 'replying_to=you/Dame Curie(42) "own words"' in context
 
 
 def test_gather_context_keeps_every_active_room(tmp_path):

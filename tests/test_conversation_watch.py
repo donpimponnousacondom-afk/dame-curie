@@ -698,6 +698,15 @@ def test_reply_relation_includes_quote():
     )
     assert 'replying_to=you/Dame Curie(1) "hey"' in tags
     assert "addressed_to=[reply:you/Dame Curie(1)]" in tags
+    own_tags = _message_relation_tags(
+        SimpleNamespace(
+            author=SimpleNamespace(id=1, bot=True),
+            mentions=[SimpleNamespace(id=7, display_name="Alice")],
+        ),
+        bot_user=bot_user,
+        reply=SimpleNamespace(author=SimpleNamespace(id=7), content="ok"),
+    )
+    assert not [tag for tag in own_tags if tag.startswith(("replying_to", "mentions"))]
     line = _format_memory_context_line(
         {
             "author": "Alice", "author_id": "99", "content": "ok",
