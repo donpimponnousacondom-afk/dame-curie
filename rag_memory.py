@@ -774,8 +774,10 @@ class RAGMemoryManager:
         # Two embedding lanes with one request in flight each. Background
         # writes (messages, tool records, web pages) use _embed_semaphore.
         # Prompt queries use _embed_query_semaphore, so they do not wait
-        # behind a queue of long background writes. Ollama runs
-        # OLLAMA_NUM_PARALLEL=2 (compose.yaml), one slot for each lane.
+        # behind the bot's queue of background writes. Ollama runs one
+        # embedding request at a time (compose.yaml), so a query still waits
+        # for the background piece in progress: up to about 7.7 s for
+        # 6,000 characters (measured on 1 November 2026).
         self._embed_semaphore = asyncio.Semaphore(1)
         self._embed_query_semaphore = asyncio.Semaphore(1)
         # Self-tuning cache state (kept minimal; SQLite holds the real cache)
