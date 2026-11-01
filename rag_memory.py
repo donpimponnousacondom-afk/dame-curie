@@ -221,9 +221,17 @@ def embedding_blob_valid(blob: bytes, dimension: int) -> bool:
 
 
 def embedding_eligible(kind: str, source: str, content: str) -> bool:
-    """Keep raw chat noise unembedded without excluding system-authored durable facts."""
+    """Keep raw chat noise unembedded without excluding system-authored durable facts.
+
+    Root, 1 November 2026: bot_output rows (her replies and tool records)
+    are not embedded. No memory search reads that kind, and the embeddings
+    took the CPU embedder from the searches a reply waits for. The rows
+    stay for the chat history, which reads them with SQL.
+    """
+    if kind == "bot_output":
+        return False
     eligible = bool(content.strip())
-    if kind in {"message", "bot_output"}:
+    if kind == "message":
         eligible = source != "system" and len(_strip_for_embedding(content)) >= _MIN_EMBED_LEN
     return eligible
 
@@ -1912,7 +1920,7 @@ class RAGMemoryManager:
         # Embed the whole message in background. qwen3-embedding:0.6b's
         # 32k-token context absorbs any Discord message - no chunking.
         # Skip if content too short to be worth embedding.
-        if should_embed:
+        if should_embed and embedding_eligible(kind, source, content):
             self._spawn(self._embed_and_store(msg_id, content[:8000]))
 
     async def clear_channel_memory(self, channel_id: str):
@@ -3373,6 +3381,9 @@ class RAGMemoryManager:
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return candidates[:top_k]  # type: ignore[index]  # always len > 0 here
 
+    # No caller (1 November 2026). Since #31, new bot_output rows have no
+    # vectors. Rows from before #31 keep theirs, so the bot_output search
+    # below can return them if this function is called.
     async def rag_relevant_context(  # type: ignore[override]
         self,
         query: str,
