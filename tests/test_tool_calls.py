@@ -204,25 +204,69 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     assert finite["name"] == "create_site"
     assert finite["arguments"] == {"values": [0.0, -1.25, 1e300], "nested": {"value": 1e-300}}
 
-    for arguments in (
-        json.dumps({"body": body}) + "<provider-markup>",
-        "42",
-        "[]",
-        "body=value",
-        '{"value":NaN}',
-        '{"value":Infinity}',
-        '{"value":-Infinity}',
-        '{"value":1e10000}',
-        '{"value":-1e10000}',
-        '{"nested":{"values":[0,NaN]}}',
-        '{"nested":[{"value":-Infinity}]}',
-        '{"arguments":{"value":Infinity}}',
-        json.dumps('{"nested":[{"value":1e10000}]}'),
+    # Three decode or unwrap steps are accepted: two wrappers and a JSON string.
+    (three_steps,) = normalize_native_tool_calls([{"function": {
+        "name": "shell",
+        "arguments": {"arguments": {"parameters": json.dumps({"command": "x"})}},
+    }}])
+    assert three_steps["arguments"] == {"command": "x"}
+    for bad_name, kind in ((5, "int"), ([], "list"), (False, "bool")):
+        message = rf"of call 1 of 1 has type {kind}, not str$"
+        with pytest.raises(ValueError, match=message):
+            normalize_native_tool_calls([{"function": {"name": bad_name}}])
+    message = r"call 1 of 1: character 0 \(from 0\) of the name"
+    with pytest.raises(ValueError, match=message):
+        normalize_native_tool_calls([{"function": {"name": "\ud800"}}])
+    # Each error names the call and its one exact cause.
+    place = "Malformed native tool-call batch: call 1 of 1 ('create_site'): "
+    non_finite = place + "the arguments hold a non-finite number"
+    for arguments, cause in (
+        (
+            json.dumps({"body": body}) + "<provider-markup>",
+            place + "the arguments have text after the JSON value, from character "
+            f"{len(json.dumps({'body': body}))} of the decoded text (from 0)",
+        ),
+        ("42", place + "the arguments decode to type int, not a JSON object"),
+        ("[]", place + "the arguments decode to type list, not a JSON object"),
+        (
+            "body=value",
+            place + "the arguments are not valid JSON: Expecting value at "
+            "character 0 of the decoded text (from 0)",
+        ),
+        ('{"value":NaN}', non_finite),
+        ('{"value":Infinity}', non_finite),
+        ('{"value":-Infinity}', non_finite),
+        ('{"value":1e10000}', non_finite),
+        ('{"value":-1e10000}', non_finite),
+        ('{"nested":{"values":[0,NaN]}}', non_finite),
+        ('{"nested":[{"value":-Infinity}]}', non_finite),
+        ('{"arguments":{"value":Infinity}}', non_finite),
+        (json.dumps('{"nested":[{"value":1e10000}]}'), non_finite),
+        ('{"a":1', place + "the arguments leave 1 open bracket"),
+        ('{"a":"x}', place + "the arguments end inside a string"),
+        (
+            '{"a":1}}',
+            place + "the arguments close an unopened bracket at character 7 (from 0)",
+        ),
+        (
+            json.dumps(json.dumps(json.dumps(json.dumps({"a": 1})))),
+            place + "the arguments need more than 3 decode or unwrap steps",
+        ),
+        (
+            json.dumps(json.dumps(json.dumps(json.dumps([1])))),
+            place + "the arguments decode to type list, not a JSON object",
+        ),
+        (
+            '{"a":"\ud800"}',
+            "Malformed native tool-call batch: call 1 of 1 ('create_site'): "
+            "character 6 (from 0) of the arguments is not valid UTF-8",
+        ),
     ):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError) as raised:
             normalize_native_tool_calls(
                 [{"function": {"name": "create_site", "arguments": arguments}}]
             )
+        assert str(raised.value) == cause
     for arguments in (
         {"value": float("nan")},
         {"nested": [float("inf")]},
@@ -230,19 +274,19 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         {"nested": {"values": [0.0, float("nan")]}},
         {"parameters": {"value": float("inf")}},
     ):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="hold a non-finite number$"):
             normalize_native_tool_calls(
                 [{"function": {"name": "create_site", "arguments": arguments}}]
             )
     for bad in ({"nested": [float("nan")]}, '{"nested":[{"value":1e10000}]}'):
         batch = [calls[0], {"id": "bad", "function": {"name": "create_site", "arguments": bad}}]
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="call 2 of 2 .* non-finite number$"):
             normalize_native_tool_calls(batch)
         assert batch[0]["function"]["arguments"] == {"body": body}
     nested = "0"
     for _ in range(33):
         nested = f'{{"value":{nested}}}'
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="nest deeper than 32 levels$"):
         normalize_native_tool_calls([{"function": {"name": "create_site", "arguments": nested}}])
 
     wide = json.dumps({"value": "é" * 7_997}, ensure_ascii=False, separators=(",", ":"))
@@ -252,12 +296,12 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         {"id": "é" * 65, "function": {"name": "create_site", "arguments": "{}"}},
     ]
     for call in oversized_calls:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is longer than 128 bytes$"):
             normalize_native_tool_calls([call])
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is longer than 128 bytes$"):
             normalize_native_tool_calls([call], allow_oversized_arguments=True)
     wide_envelope = {"id": "meta", "function": {"name": "x", "arguments": "{}"}, "meta": "é" * 20_000}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="batch envelope reaches .* at call 1 of 1"):
         normalize_native_tool_calls([wide_envelope])
     (envelope_refused,) = normalize_native_tool_calls(
         [wide_envelope], allow_oversized_arguments=True
@@ -265,7 +309,7 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     assert envelope_refused["oversized_arguments"] is False
     assert envelope_refused["batch_limit_error"].startswith("the batch envelope is 40,0")
     assert envelope_refused["batch_limit_error"].endswith("bytes; the limit is 40,000")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bytes; the limit is 16,000$"):
         normalize_native_tool_calls([{"function": {"name": "create_site", "arguments": wide}}])
     oversized = normalize_native_tool_calls(
         [{"id": "oversized-id", "function": {"name": "create_site", "arguments": wide}}],
@@ -277,17 +321,17 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
     assert oversized["oversized_arguments"] is True
     assert oversized["raw"] is None
     assert oversized["batch_limit_error"] == ""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="text after the JSON value"):
         normalize_native_tool_calls(
             [{"function": {"name": "create_site", "arguments": wide + "!"}}],
             allow_oversized_arguments=True,
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="hold a non-finite number$"):
         normalize_native_tool_calls(
             [{"function": {"name": "create_site", "arguments": wide[:-1] + ',"bad":NaN}'}}],
             allow_oversized_arguments=True,
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="call 2 of 2 .* repeats the id 'duplicate'$"):
         normalize_native_tool_calls(
             [
                 {"id": "duplicate", "function": {"name": "create_site", "arguments": wide}},
@@ -300,10 +344,10 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         {"id": str(index), "function": {"name": "x", "arguments": batch_argument}}
         for index in range(3)
     ]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="the batch reaches .* at call 3 of 3"):
         normalize_native_tool_calls(oversized_batch)
     many_calls = [{"id": str(index), "function": {"name": "x", "arguments": "{}"}} for index in range(11)]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="the response has 11 calls; the limit is 10$"):
         normalize_native_tool_calls(many_calls)
     many_refused = normalize_native_tool_calls(many_calls, allow_oversized_arguments=True)
     assert [call["id"] for call in many_refused] == [str(index) for index in range(11)]
@@ -316,7 +360,7 @@ def test_normalize_native_tool_calls_decodes_provider_argument_shapes():
         f"the batch carries {3 * len(batch_argument.encode('utf-8')):,} bytes of "
         "arguments; the limit is 32,000"
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="hold a non-string key$"):
         normalize_native_tool_calls([{"function": {"name": "x", "arguments": {"nested": {1: "bad"}}}}])
 
 
