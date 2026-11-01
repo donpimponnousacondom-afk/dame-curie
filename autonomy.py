@@ -267,8 +267,8 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
     if (bot_id and author_id == bot_id) or (
         not author_id and bot_name and author == bot_name
     ):
-        # Planner memory: own lines carry no notes. The planner posts rarely
-        # and its own replies need no reply note here.
+        # Planner memory: own lines carry no notes. Root, 1 November 2026:
+        # autonomous mode is almost never used, so this stays minimal.
         label = f"You/Dame Curie({author_id})" if author_id else "You/Dame Curie"
         return f"{prefix}{label}: {str(msg.get('content', ''))[:600]}"
     else:
