@@ -192,6 +192,14 @@ def test_upstream_error_labels_are_allowlisted_and_bounded():
             {"prompt_tokens": 120, "prompt_tokens_details": "x"},
             "cached=invalid 'x' in prompt_tokens_details",
         ),
+        (
+            {
+                "prompt_tokens": 120,
+                "prompt_tokens_details": None,
+                "prompt_cache_hit_tokens": 96,
+            },
+            "input=120 input_source=provider cached=96",
+        ),
     ],
 )
 @pytest.mark.parametrize(

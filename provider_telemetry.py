@@ -214,7 +214,7 @@ def merge_usage(target: dict, incoming: dict, *, details: bool = False) -> None:
             count = token_count(value)
             if count is not None:
                 target[key] = count
-            elif key in _CACHED_TOKEN_KEYS:
+            elif key in _CACHED_TOKEN_KEYS and value is not None:
                 # Keep an invalid cache count so the call log names it.
                 target[key] = value
         elif (
@@ -249,6 +249,7 @@ def reported_cached_tokens(response: dict) -> str:
     """Cached prompt tokens as the provider reported them, for the call log.
 
     Root, 1 November 2026: prompt-cache hits must be measurable.
+    A null field or value counts as absent.
     A valid count returns the count.
     A known field with a value that is not a count returns "invalid", the
     value and the field.
@@ -258,9 +259,9 @@ def reported_cached_tokens(response: dict) -> str:
     usage = usage if isinstance(usage, dict) else {}
     for section, key in _CACHED_TOKEN_FIELDS:
         holder = usage.get(section) if section else usage
-        if section and section in usage and not isinstance(holder, dict):
+        if section and holder is not None and not isinstance(holder, dict):
             return f"invalid {str(holder)[:40]!r} in {section}"
-        if isinstance(holder, dict) and key in holder:
+        if isinstance(holder, dict) and holder.get(key) is not None:
             count = token_count(holder[key])
             field = f"{section}.{key}" if section else key
             if count is None:
