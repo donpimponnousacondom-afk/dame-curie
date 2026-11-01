@@ -346,8 +346,12 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
     assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
 
 
+@pytest.mark.parametrize(
+    "cache_field",
+    ['"prompt_tokens_details":{"cached_tokens":96}', '"prompt_cache_hit_tokens":96'],
+)
 @pytest.mark.parametrize("content_type", ["text/plain", "", "private-header-secret"])
-def test_unrecognized_content_type_preserves_valid_sse(content_type, caplog):
+def test_unrecognized_content_type_preserves_valid_sse(content_type, cache_field, caplog):
     caplog.set_level(logging.INFO, logger="providers")
     provider = OpenAICompatibleProvider(
         "http://example.test", "model", 8192, 0.6, retry_attempts=1, extra_body={"stream": True}
@@ -355,7 +359,8 @@ def test_unrecognized_content_type_preserves_valid_sse(content_type, caplog):
     provider.available = True
     usage_frame = (
         b'data: {"usage":{"prompt_tokens":120,"completion_tokens":5,'
-        b'"prompt_tokens_details":{"cached_tokens":96}}}\n\n'
+        + cache_field.encode()
+        + b"}}\n\n"
     )
     provider._session = FakeSession(
         StreamResponse([CONTENT, usage_frame, DONE], content_type)
