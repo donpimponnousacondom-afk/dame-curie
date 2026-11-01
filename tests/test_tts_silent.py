@@ -258,8 +258,14 @@ def test_dispatch_native_runs_nonterminal_tool():
         _native_call("react", {"emoji": "must not execute"}, "blocked"),
         {"id": "bad", "type": "function", "function": {"name": "web_search", "arguments": "{} tail"}},
     ]
-    with pytest.raises(ValueError, match="Malformed native tool-call batch"):
+    # The error names the call and the exact cause.
+    cause = (
+        "Malformed native tool-call batch: call 2 of 2 (web_search): the "
+        "arguments have text after the JSON value at position 2"
+    )
+    with pytest.raises(ValueError) as raised:
         asyncio.run(DameCurieBot._dispatch_tool_calls(bot, message, "", native_tool_calls=malformed))
+    assert str(raised.value) == cause
     assert (react.calls, broken.calls) == calls_before
 
 
