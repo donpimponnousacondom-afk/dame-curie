@@ -14277,6 +14277,9 @@ class DameCurieBot(commands.Bot):
     _ECHO_OPENER_WORDS = 4
     _ECHO_LOOKBACK = 8
     _ECHO_MIN_REPEATS = 3
+    _ECHO_STORED_STAMP_RE = re.compile(
+        r"^\s*\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\]]*\]\s*"
+    )
 
     def _self_repetition_note(self, memory: list[dict] | None) -> str:
         """Tell him when he has been opening every message the same way.
@@ -14306,14 +14309,22 @@ class DameCurieBot(commands.Bot):
                 break
             if entry.get("is_tool"):
                 continue
-            is_self = bool(entry.get("author_is_bot")) or (
-                self_id and str(entry.get("author_id") or "") == self_id
+            # 1 November 2026: author_is_bot is also true for other bots in
+            # the channel, so the id decides when the row has one.
+            author_id = str(entry.get("author_id") or "")
+            is_self = (
+                author_id == self_id
+                if author_id and self_id
+                else bool(entry.get("author_is_bot"))
             )
             if not is_self:
                 continue
-            words = re.findall(
-                r"[\w\u00C0-\u024F']+", str(entry.get("content") or "").lower()
+            # Stored rows start with "[2026-11-01 02:30:00 CET] ". That time
+            # is not her opening word; the note read it as "2026".
+            text = DameCurieBot._ECHO_STORED_STAMP_RE.sub(
+                "", str(entry.get("content") or "")
             )
+            words = re.findall(r"[\w\u00C0-\u024F']+", text.lower())
             if not words:
                 continue
             openers.append(" ".join(words[: DameCurieBot._ECHO_OPENER_WORDS]))
