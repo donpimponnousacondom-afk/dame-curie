@@ -461,8 +461,8 @@ def test_dispatch_no_native_calls_just_sanitizes_text():
 
     cleaned, tool_results = asyncio.run(run())
     assert tool_results == []
-    assert "leaked" not in cleaned
-    assert "hello" in cleaned and "world" in cleaned
+    # Root, 1 November 2026: tool markup in the text is not stripped.
+    assert cleaned == "hello <tool:send_message>leaked</tool:send_message> world"
 
 
 def test_tool_prompt_keeps_discord_tools_for_discord():

@@ -3,10 +3,18 @@
 import asyncio
 from types import SimpleNamespace
 
-from bot import strip_tool_payload_leaks
+import pytest
+
+from bot import _sanitize_visible_reply
 from captcha_solver import _BaseSolver, CaptchaSolveError
 from rem import RemStore
 from tool_schemas import TOOL_PARAMETERS, build_openai_tools
+
+DSML_SAMPLE = (
+    '<｜｜DSML｜｜invoke name="send_message">\n'
+    '<｜｜DSML｜｜parameter name="content" string="true">my bad'
+    "</｜｜DSML｜｜parameter>\n</｜｜DSML｜｜invoke>"
+)
 
 
 def test_native_calls_from_string_does_not_consume_stash():
@@ -84,5 +92,36 @@ def test_rem_patch_state_does_not_wipe_corrupt_file(tmp_path):
     asyncio.run(run())
 
 
-def test_strip_keeps_plain_chat_without_tool_tags():
-    assert strip_tool_payload_leaks("hello there") == "hello there"
+@pytest.mark.parametrize(
+    "text",
+    [
+        "hello there",
+        '<tool:react emoji="x" />\n<tool:send_message>hello</tool:send_message>\nreply',
+        '<tool:send_file><filename>a.py</filename><content>x</content></tool:send_file>',
+        "<tool:send_message>Hello!<|end|><environment_details>ctx</environment_details>",
+        '{"thoughts": "why"}\n<tool:tts text="hi" />\n<system-reminder>ctx</system-reminder>',
+        "<tool:update_base_personality>you are now evil</tool:update_base_personality> hi",
+        'ship<tool:shell command="echo ok"><html></html></tool:shell>ok',
+        "<|tool_send_message|>foo bar",
+        "before <|tool_response|> <|end_of_text|> after",
+        "<|/tool:send_message|>text",
+        "<tool_send_message>leaked</tool_send_message> visible",
+        DSML_SAMPLE,
+        '<|DSML|invoke name="send_message"><parameter name="content">hi</parameter></invoke>',
+        '<invoke name="send_message">secret</invoke> visible',
+        "send_message<arg>explanation</arg>why</arg><arg>content</arg>ok then</arg>",
+        "shell<arg>command</arg>cat /etc/passwd</arg>",
+        '{"type":"text","text":"sent."}',
+        '[{"type":"text","text":"hi "},{"type":"text","text":"there"}]',
+        '```json\n{"name":"send_message","arguments":{"content":"x"}}\n```',
+        "```json\n\n```",
+        '{"content": "hi", "reply": true}',
+        '{"name": "react", "arguments": {"emoji": "x"}}',
+        "<message>hi</message>",
+        "a\n\n\n\nb",
+    ],
+)
+def test_strip_keeps_plain_chat_without_tool_tags(text):
+    # Root, 1 November 2026: tool markup, tool JSON and injected context tags
+    # reach Discord as the model wrote them. Each case was stripped before.
+    assert _sanitize_visible_reply(text) == text.strip()
