@@ -55,10 +55,12 @@ def test_reply_typing_adds_no_compose_delay(monkeypatch):
 
     monkeypatch.setattr(asyncio, "sleep", recording_sleep)
     bot = _bot(typing=True)
+    # The old helper: on main the sleep then records 1.2 s.
+    bot._reply_typing_delay = lambda _content: 1.2
     channel = FakeChannel()
 
     async def run():
-        async with bot._reply_typing(channel, "x" * 5000):
+        async with bot._reply_typing(channel):
             pass
 
     asyncio.run(run())
@@ -123,13 +125,13 @@ def test_no_typing_while_thinking_helper_is_send_gated():
     channel = FakeChannel()
 
     async def run():
-        async with bot._reply_typing(channel, "hey"):
+        async with bot._reply_typing(channel):
             assert channel.log == ["enter"]
         assert channel.log == ["enter", "exit"]
 
         quiet = _bot(typing=False)
         silent = FakeChannel()
-        async with quiet._reply_typing(silent, "hey"):
+        async with quiet._reply_typing(silent):
             pass
         assert silent.log == []
 

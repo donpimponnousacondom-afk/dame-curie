@@ -9136,7 +9136,7 @@ class DameCurieBot(commands.Bot):
             await cm.__aexit__(None, None, None)
 
     @contextlib.asynccontextmanager
-    async def _reply_typing(self, channel, content: str = "", *, message=None):
+    async def _reply_typing(self, channel, *, message=None):
         """Hold typing around the actual send.
 
         Root, 1 November 2026: no compose delay before the send. A pause of
@@ -12470,9 +12470,7 @@ class DameCurieBot(commands.Bot):
                 if delivered_chunks:
                     transitioned = True
                 try:
-                    async with self._reply_typing(
-                        message.channel, response, message=message
-                    ):
+                    async with self._reply_typing(message.channel, message=message):
                         for i, chunk in enumerate(chunks):
                             if i == 0 and transitioned:
                                 continue
