@@ -867,8 +867,15 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     calls = list(bot._native_calls_from(response) or [])
                 except Exception as exc:
                     terminal_failure = exc
-                    failure_text = f"reading tool calls failed at step {step + 1}: {exc}"
-                    capture_incident("jobs", "Background tool-call read failed", exception=exc, context=job_context | {"step": str(step + 1)})
+                    failure_text = (
+                        f"reading tool calls failed at step {step + 1}: {exc}"
+                    )
+                    capture_incident(
+                        "jobs",
+                        "Background tool-call read failed",
+                        exception=exc,
+                        context=job_context | {"step": str(step + 1)},
+                    )
                     break
                 metrics_kwargs = {"response_metrics": response_metrics} if response_metrics is not None else {}
                 if turn is not None and turn.remaining_seconds <= 0:
