@@ -76,6 +76,30 @@ JOB_SUMMARY_HEADER = "=== JOB PROGRESS SUMMARY ==="
 BG_MASK_KEEP_ROUNDS = 4
 BG_MASK_MIN_CHARS = 400
 BG_MASK_PREFIX = "[masked]"
+# The call that produced a masked result, shortened to this many characters
+# (root and Dame Curie, 1 November 2026: a bare first line is ambiguous when
+# the output starts with a header).
+BG_MASK_CALL_CHARS = 120
+
+
+def _call_excerpt(call: dict) -> str:
+    """The tool name and its arguments without ``explanation``, shortened."""
+    function = call.get("function") or {}
+    raw = function.get("arguments")
+    arguments = raw
+    if isinstance(raw, str):
+        try:
+            arguments = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError:
+            arguments = raw
+    if isinstance(arguments, dict):
+        arguments = {key: value for key, value in arguments.items() if key != "explanation"}
+        text = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(arguments)
+    if len(text) > BG_MASK_CALL_CHARS:
+        text = text[: BG_MASK_CALL_CHARS - 3] + "..."
+    return f"{function.get('name') or 'tool'} {text}"
 JOB_COMPACT_PROMPT = (
     "You compact the working history of a background job so the job can "
     "continue without its older steps. Write a progress summary in plain "
@@ -171,8 +195,9 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
     ``keep_rounds``.
     The prompt prefix therefore changes once every ``keep_rounds`` steps, not
     at every step. A result shorter than BG_MASK_MIN_CHARS stays. The marker
-    keeps the first line of the result (for example "Tool shell: Error ..."),
-    so the outcome of a call stays visible. A masked result is never changed
+    names the call that produced the result (tool and shortened arguments)
+    and keeps the first line of the result (for example "Tool shell: Error
+    ..."), so the outcome of a call stays visible. A masked result is never changed
     again. Returns the number of results masked by this call and the
     characters removed.
     """
@@ -200,10 +225,7 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
         return 0, 0
     masked = removed = 0
     for group in groups[: max(0, len(groups) - keep_rounds)]:
-        names = {
-            str(call.get("id")): str((call.get("function") or {}).get("name") or "tool")
-            for call in group[0].get("tool_calls") or []
-        }
+        calls = {str(call.get("id")): call for call in group[0].get("tool_calls") or []}
         for msg in group[1:]:
             if not maskable(msg):
                 continue
@@ -211,12 +233,13 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
             content = msg["content"]
             body = content[len(head):]
             first_line = body.split("\n", 1)[0].strip()[:200] or "(an empty line)"
-            if msg.get("role") == "tool":
-                what = f"the {names.get(str(msg.get('tool_call_id')), 'tool')} result"
+            call = calls.get(str(msg.get("tool_call_id"))) if msg.get("role") == "tool" else None
+            if call is not None:
+                what = f"the result of the older call {_call_excerpt(call)}"
             else:
-                what = "the tool results"
+                what = "the tool results of an older step"
             marker = (
-                f"{head}{BG_MASK_PREFIX} {what} of an older step ({len(body):,} characters) "
+                f"{head}{BG_MASK_PREFIX} {what} ({len(body):,} characters) "
                 f"is masked to keep the job prompt small. It began: {first_line} "
                 "Call it again only if repeating it is safe."
             )
