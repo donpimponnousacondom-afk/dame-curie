@@ -674,7 +674,7 @@ def test_reply_relation_includes_quote():
             "reply_to_content": "  i already   said that  ",
         }
     )
-    assert bit == 'reply_to=Alice(99) "i already said that"'
+    assert bit == 'replying to Alice(99) "i already said that"'
     self_bit = _reply_relation_bit(
         {
             "reply_to_author": "Curie",
@@ -683,7 +683,7 @@ def test_reply_relation_includes_quote():
             "reply_to_content": "hey",
         }
     )
-    assert self_bit == 'reply_to=you/Dame Curie(1) "hey"'
+    assert self_bit == 'replying to you/Dame Curie(1) "hey"'
 
 
 def test_memory_lock_timeout_is_bounded():

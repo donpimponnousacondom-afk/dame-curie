@@ -171,14 +171,17 @@ def _visible_message_content(
 
 
 def _reply_relation_bit(msg: dict) -> str | None:
-    """`reply_to=Name(id) "short quote"` for transcript and planner lines."""
+    """`replying to Name(id) "short quote"` for transcript and planner lines.
+
+    Not `reply_to=`: that is the name of a send_message argument, and the
+    model copied the history tag into its replies as text."""
     if not msg.get("reply_to_author"):
         return None
     reply_label = str(msg.get("reply_to_author"))
     reply_id = str(msg.get("reply_to_author_id") or "")
     if msg.get("reply_to_self"):
         reply_label = "you/Dame Curie"
-    bit = f"reply_to={reply_label}({reply_id})" if reply_id else f"reply_to={reply_label}"
+    bit = f"replying to {reply_label}({reply_id})" if reply_id else f"replying to {reply_label}"
     quoted = " ".join(str(msg.get("reply_to_content") or "").split())[:80]
     if quoted:
         quoted = quoted.replace('"', "'")
@@ -213,10 +216,10 @@ def _message_relation_tags(
         quoted = " ".join(reply_content.split())[:80]
         if quoted:
             quoted = quoted.replace('"', "'")
-            tags.append(f'reply_to={ref} "{quoted}"')
+            tags.append(f'replying_to={ref} "{quoted}"')
         else:
-            tags.append(f"reply_to={ref}")
-        addressed.append(f"reply_to:{ref}")
+            tags.append(f"replying_to={ref}")
+        addressed.append(f"reply:{ref}")
 
     mentions = list(getattr(message, "mentions", []) or [])[:10]
     if mentions:
@@ -274,7 +277,7 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
         if isinstance(item, dict)
     ]
     if mention_bits:
-        relation_bits.append("mentions=" + ",".join(mention_bits))
+        relation_bits.append("mentions " + ",".join(mention_bits))
     relation = f" [{'; '.join(relation_bits)}]" if relation_bits else ""
     return f"{prefix}{label}{relation}: {str(msg.get('content', ''))[:600]}"
 
@@ -1833,10 +1836,10 @@ class AutonomyEngine:
                         )[:80]
                         if quoted:
                             quoted = quoted.replace('"', "'")
-                            tags.append(f'reply_to={reply_ref} "{quoted}"')
+                            tags.append(f'replying_to={reply_ref} "{quoted}"')
                         else:
-                            tags.append(f"reply_to={reply_ref}")
-                        addressed.append(f"reply_to:{reply_ref}")
+                            tags.append(f"replying_to={reply_ref}")
+                        addressed.append(f"reply:{reply_ref}")
                     mentions = []
                     for row in list(ev.get("mentions") or [])[:10]:
                         if not isinstance(row, dict):
