@@ -140,3 +140,45 @@ def test_forwarded_snapshot_mention_is_not_a_direct_ping(mention_bot, app_messag
         resolved=SimpleNamespace(author=mention_bot.user),
     )
     assert mention_bot._directly_addressed(app_message) is False
+
+
+@pytest.mark.parametrize(
+    "gate",
+    ["stopped", "blocked", "not_allowed", "disabled", "command_prefix"],
+)
+def test_her_own_message_is_stored_before_every_gate(mention_bot, gate):
+    # Root, 1 November 2026: one row per Discord message. The bot writes no
+    # copies of what it sends, so the gateway row must exist in every channel.
+    own = SimpleNamespace(
+        id=100000000000000009,
+        author=SimpleNamespace(id=mention_bot.user.id, bot=False, display_name="Dame Curie"),
+        channel=SimpleNamespace(id=100000000000000003, name="general"),
+        guild=SimpleNamespace(id=100000000000000005),
+        content=", her reply" if gate == "command_prefix" else "her reply",
+        mentions=[],
+        reference=None,
+        attachments=[],
+        embeds=[],
+        stickers=[],
+    )
+    mention_bot._control["store_memory"] = True
+    if gate == "stopped":
+        mention_bot._stop_until["100000000000000003"] = float("inf")
+    elif gate == "blocked":
+        mention_bot._control["blocked_channels"] = ["100000000000000003"]
+    elif gate == "not_allowed":
+        mention_bot._control["allowed_channels"] = ["1"]
+    elif gate == "disabled":
+        mention_bot._control["bot_enabled"] = False
+    mention_bot.add_message_to_memory = AsyncMock()
+    mention_bot._message_memory_item = lambda message: {"message_id": str(message.id), "content": message.content}
+    mention_bot._handle_command = AsyncMock()
+    import bot as bot_module
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(bot_module, "record_delivered_footer", lambda *args, **kwargs: None)
+        asyncio.run(DameCurieBot._on_message_impl(mention_bot, own))
+    mention_bot.add_message_to_memory.assert_awaited_once()
+    assert mention_bot.add_message_to_memory.await_args.args[1]["message_id"] == str(own.id)
+    mention_bot._handle_command.assert_not_awaited()
+    mention_bot._dispatch_reply.assert_not_called()

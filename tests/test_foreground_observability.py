@@ -862,7 +862,10 @@ def test_real_foreground_handler_preserves_producing_call(
                     call for call in bot._record_rem_event.call_args_list
                     if call.args[1] == "assistant"
                 ]
-                assert assistant_memory
+                # One row per Discord message (root, 1 November 2026): the
+                # gateway stores delivered chunks; the bot stores only the
+                # note of an incomplete delivery.
+                assert all(item["message_id"].startswith("bot_delivery_note:") for item in assistant_memory)
                 assert len(assistant_events) == 1
                 if mode == "incomplete":
                     assert len(message.channel.sent) > 1
@@ -878,10 +881,7 @@ def test_real_foreground_handler_preserves_producing_call(
                         is first
                         for sent in message.channel.sent
                     )
-                    assert any(
-                        "UNDELIVERED-TAIL" in item["content"]
-                        for item in assistant_memory
-                    )
+                    assert assistant_memory == []
                 elif mode == "incomplete_truncated":
                     assert "visible partial text was also truncated" in message.channel.sent[0].content
                     assert len(message.channel.sent) > 1
@@ -892,10 +892,9 @@ def test_real_foreground_handler_preserves_producing_call(
                     assert len(message.channel.sent) == 1
                     assert "UNDELIVERED-TAIL" not in sent.content
                     assert len(assistant_memory) == 1
-                    assert assistant_memory[0]["message_id"] == f"bot_reply:{sent.id}"
-                    assert "INCOMPLETE RESPONSE" in assistant_memory[0]["content"]
+                    assert assistant_memory[0]["message_id"] == f"bot_delivery_note:{sent.id}"
+                    assert assistant_memory[0]["content"].startswith("[Delivery incomplete: 1 of ")
                     assert "UNDELIVERED-TAIL" not in assistant_memory[0]["content"]
-                    assert "Delivery incomplete" in assistant_memory[0]["content"]
                     assert "UNDELIVERED-TAIL" not in assistant_events[0].args[2]
                     assert "Delivery incomplete" in assistant_events[0].args[2]
             elif mode == "followup_incomplete":
@@ -917,18 +916,18 @@ def test_real_foreground_handler_preserves_producing_call(
                     for call in bot.add_message_to_memory.call_args_list
                     if call.args[1].get("author_is_bot")
                 ]
-                assert len(assistant_memory) == 1
-                assert assistant_memory[0]["content"] == (
-                    "INCOMPLETE RESPONSE: The provider stopped at the output-token limit. "
-                    "No tool calls from this response were executed.\n\n"
-                    "provider follow-up partial"
-                )
+                # The delivered reply is stored by the gateway, not as a copy.
+                assert assistant_memory == []
                 assistant_events = [
                     call for call in bot._record_rem_event.call_args_list
                     if call.args[1] == "assistant"
                 ]
                 assert len(assistant_events) == 1
-                assert assistant_events[0].args[2] == assistant_memory[0]["content"]
+                assert assistant_events[0].args[2] == (
+                    "INCOMPLETE RESPONSE: The provider stopped at the output-token limit. "
+                    "No tool calls from this response were executed.\n\n"
+                    "provider follow-up partial"
+                )
             elif mode == "reasoning_only":
                 assert len(message.channel.sent) == 1
                 assert "reasoning without a usable answer" in message.channel.sent[0].content
@@ -1040,6 +1039,10 @@ def test_real_foreground_handler_preserves_producing_call(
             assert dispatches[1].kwargs["response_metrics"] is second
         for call in bot.add_message_to_memory.call_args_list:
             assert FOOTER_MARKER not in call.args[1]["content"]
+            # One row per Discord message (root, 1 November 2026).
+            assert not str(call.args[1].get("message_id", "")).startswith(
+                ("bot_reply:", "bot_send_message:", "bot_update:")
+            )
         for call in bot._record_rem_event.call_args_list:
             assert FOOTER_MARKER not in call.args[2]
 
@@ -1138,7 +1141,11 @@ def test_foreground_deferred_image_has_one_preview_reply_and_preserves_metrics(
         assert final.content.startswith(text)
         assert final.content.endswith(FOOTER_MARKER)
         assert bot._delivery_measurements.lookup("100", str(final.id))[1] is final_metrics
-        assert bot.add_message_to_memory.call_args.args[1]["content"] == text
+        # One row per Discord message: the gateway stores the reply.
+        assert not [
+            call for call in bot.add_message_to_memory.call_args_list
+            if call.args[1].get("author_is_bot")
+        ]
         assert bot._record_rem_event.call_args.args[2] == text
         following = Message()
         following.id = 8
