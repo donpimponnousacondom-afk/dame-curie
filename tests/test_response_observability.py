@@ -824,8 +824,10 @@ def test_background_producing_call_survives_string_recovery_without_error_borrow
             ]
             dispatched = [("", ["Tool web_search: found things"])]
         else:
-            responses = [ProviderResult("x" * 3500, metrics=metrics)]
-            dispatched = [("x" * 3500, [])]
+            # A tool call written as text stays text (root, 1 November 2026).
+            text = '{"name": "send_message", "arguments": {}} ' + "x" * 3460
+            responses = [ProviderResult(text, metrics=metrics)]
+            dispatched = [(text, [])]
         bot = fake_bot(
             bg_jobs=manager,
             config=SimpleNamespace(),
@@ -852,6 +854,8 @@ def test_background_producing_call_survives_string_recovery_without_error_borrow
                 FOOTER_MARKER not in sent.content for sent in message.channel.sent
             )
         else:
+            assert bot._dispatch_tool_calls.call_args.args[1] == text
+            assert "native_tool_calls" not in bot._dispatch_tool_calls.call_args.kwargs
             assert len(message.channel.sent) > 1
             assert message.channel.sent[-1].content.endswith(FOOTER_MARKER)
             assert FOOTER_MARKER not in job.result

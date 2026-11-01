@@ -12003,8 +12003,7 @@ class DameCurieBot(commands.Bot):
             native_calls = (
                 [] if incomplete_error is not None else self._native_calls_from(response)
             )
-            # Token usage rides on the ProviderResult or terminal error; read it
-            # BEFORE recovery can replace a result with plain text.
+            # Token usage rides on the ProviderResult or terminal error.
             response_metrics = (
                 incomplete_error.metrics
                 if incomplete_error is not None

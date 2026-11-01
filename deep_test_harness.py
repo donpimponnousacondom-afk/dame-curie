@@ -185,7 +185,7 @@ class DeepTestHarness:
         self.run_sync_test("Environment helper parsing with bounds", test_env_parsing_helpers)
 
     # =========================================================================
-    # SUITE 2: Providers, Completions, Reasoning & Tool Recovery
+    # SUITE 2: Providers, Completions and Reasoning
     # =========================================================================
     def test_suite_providers(self):
         self.current_suite = "Providers & LLM Engine"

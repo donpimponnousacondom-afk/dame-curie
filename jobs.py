@@ -863,10 +863,7 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     if actual_route != effective_route:
                         await _post_thread(thread, f"Effective response route: {actual_route}", context=job_context)
                         effective_route = actual_route
-                try:
-                    calls = list(bot._native_calls_from(response) or [])
-                except Exception:
-                    calls = []
+                calls = list(bot._native_calls_from(response) or [])
                 metrics_kwargs = {"response_metrics": response_metrics} if response_metrics is not None else {}
                 if turn is not None and turn.remaining_seconds <= 0:
                     terminal_failure = TurnBudgetExceeded("deadline")

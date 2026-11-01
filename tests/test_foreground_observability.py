@@ -666,9 +666,9 @@ def test_real_foreground_handler_preserves_producing_call(
             ]
             return
         if mode in ("limit_cleanup_empty", "cleanup_empty"):
-            # Root, 1 November 2026: no cleanup removes injected context tags,
-            # and no text is turned into a tool call. The text reaches
-            # Discord as the model wrote it.
+            # Root, 1 November 2026: no cleanup removes injected context tags.
+            # No text is turned into a tool call. The text reaches Discord as
+            # the model wrote it.
             assert len(message.channel.sent) == 1
             assert message.channel.sent[0].content.startswith(
                 TEXT_TOOL_CALL
