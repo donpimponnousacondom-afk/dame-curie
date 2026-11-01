@@ -1834,8 +1834,8 @@ DISCORD_CHAT_PROTOCOL = (
     "Ping with exactly <@USER_ID> - no backticks, no markdown, no @Name(id).\n"
     "In that history each line starts with its time. On a user line, the speaker's "
     "name and id follow, then optional reply and mention notes in braces. Your own "
-    "lines hold your text, then an optional reply note in braces, and a run of them "
-    "starts with [Dame Curie]. "
+    "lines hold your text, then an optional reply note in braces. A run of your "
+    "lines starts with [Dame Curie]. "
     "Attribute by ID, never by a similar nickname. If unsure who said it, say so.\n"
     "The times, the Name(id) labels, [Dame Curie] and the notes in braces are "
     "history metadata. Never copy them into a reply.\n"
@@ -15986,7 +15986,8 @@ class DameCurieBot(commands.Bot):
                     msg.get("mentions") if isinstance(msg.get("mentions"), list) else []
                 )
                 mention_bits = [
-                    f"@{item.get('name', 'unknown')}({item.get('id', 'unknown')})"
+                    f"@{str(item.get('name', 'unknown')).replace(chr(34), chr(39))}"
+                    f"({item.get('id', 'unknown')})"
                     for item in mentions[:10]
                     if isinstance(item, dict)
                 ]
