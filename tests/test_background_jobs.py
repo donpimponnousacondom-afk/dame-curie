@@ -1149,3 +1149,18 @@ def test_a_masked_error_result_keeps_its_first_line():
     count, _ = mask_old_tool_results(messages, keep_rounds=4)
     assert count == 4
     assert "It began: Tool shell: Error - exit 1: permission denied" in messages[3]["content"]
+
+
+def test_a_result_is_not_masked_when_the_marker_is_not_shorter():
+    from jobs import mask_old_tool_results
+
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
+    for index in range(8):
+        call = {"id": f"c{index}", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+        # A 200-character first line plus a short tail: just over 400 characters.
+        content = "a" * 200 + "\n" + "b" * 210
+        messages += [
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": f"c{index}", "content": content},
+        ]
+    assert mask_old_tool_results(messages, keep_rounds=4) == (0, 0)

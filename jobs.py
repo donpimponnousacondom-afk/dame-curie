@@ -165,8 +165,9 @@ def _render_job_rounds(groups: list[list[dict]]) -> str:
 def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_ROUNDS) -> tuple[int, int]:
     """Replace long tool results of older job rounds with one line, in place.
 
-    Masking runs in batches: only when 2 * ``keep_rounds`` rounds or more
-    hold unmasked long results, and then down to the newest ``keep_rounds``.
+    Masking runs in batches: it waits until the rounds from the oldest round
+    with an unmasked long result up to the newest round number 2 *
+    ``keep_rounds`` or more. It then masks down to the newest ``keep_rounds``.
     The prompt prefix therefore changes once every ``keep_rounds`` steps, not
     at every step. A result shorter than BG_MASK_MIN_CHARS stays. The marker
     keeps the first line of the result (for example "Tool shell: Error ..."),
@@ -208,7 +209,7 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
             head = head_of(msg)
             content = msg["content"]
             body = content[len(head):]
-            first_line = body.split("\n", 1)[0].strip()[:200]
+            first_line = body.split("\n", 1)[0].strip()[:200] or "(an empty line)"
             if msg.get("role") == "tool":
                 what = f"the {names.get(str(msg.get('tool_call_id')), 'tool')} result"
             else:
@@ -218,6 +219,9 @@ def mask_old_tool_results(messages: list[dict], keep_rounds: int = BG_MASK_KEEP_
                 f"is masked to keep the job prompt small. It began: {first_line} "
                 "Call it again only if repeating it is safe."
             )
+            if len(marker) >= len(content):
+                # The marker would not be shorter: the result stays.
+                continue
             msg["content"] = marker
             masked += 1
             removed += len(content) - len(marker)
@@ -1040,9 +1044,10 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     masked, masked_chars = mask_old_tool_results(
                         messages, keep_rounds=BG_MASK_KEEP_ROUNDS
                     )
-                except ValueError as exc:
-                    # A broken call/result pairing: the job stops with the
-                    # exact cause, as a failed compaction does.
+                except (ValueError, AttributeError, TypeError, KeyError) as exc:
+                    # A broken call/result pairing or a malformed call: the
+                    # job stops with the exact cause, as a failed compaction
+                    # does.
                     terminal_failure = exc
                     failure_text = f"tool-result masking failed at step {step + 1}: {exc}"
                     capture_incident("jobs", "Background tool-result masking failed", exception=exc, context=job_context | {"step": str(step + 1)})
