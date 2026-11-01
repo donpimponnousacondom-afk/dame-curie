@@ -1836,8 +1836,8 @@ DISCORD_CHAT_PROTOCOL = (
     "name and id follow, then optional reply and mention notes in brackets. Your own "
     "lines hold only your text, and a run of them starts with [Dame Curie]. "
     "Attribute by ID, never by a similar nickname. If unsure who said it, say so.\n"
-    "The times, names, ids, [Dame Curie] and the bracketed notes are metadata. "
-    "Never write them in your reply.\n"
+    "The times, the Name(id) labels, [Dame Curie] and the bracketed notes are "
+    "history metadata. Never copy them into a reply.\n"
     "Your public name in this room is the per-turn 'Your name here' line "
     "(guild nick if set, otherwise your account name).\n"
     "Match the channel. Discord markdown when it helps. Lowercase-natural. "
@@ -15998,7 +15998,7 @@ class DameCurieBot(commands.Bot):
                 # get a 'Name(id) [relation]:' prefix so the model knows who
                 # is speaking. 1 November 2026: the reply, mention and
                 # autonomy notes on your own lines are removed. The model
-                # copied them into new replies, for example "reply_to=SirRoot".
+                # copied them into new replies, for example "[reply_to=@SirRooT]".
                 if is_self:
                     line = f"{header}{content_str}"
                 else:

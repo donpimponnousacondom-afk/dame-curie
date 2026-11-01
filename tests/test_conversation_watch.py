@@ -5,7 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from autonomy import _format_memory_context_line, _message_relation_tags, _reply_relation_bit
+from autonomy import (
+    _format_memory_context_line,
+    _message_relation_tags,
+    _reply_relation_bit,
+)
 from bot import DameCurieBot
 from concurrency_safety import KeyedLocks
 from control_defaults import DEFAULT_CONTROL
@@ -703,7 +707,18 @@ def test_reply_relation_includes_quote():
         },
         bot_user=bot_user,
     )
-    assert line.endswith('Alice(99) [replying to you/Dame Curie(1) "hey"; mentions @Bob(2)]: ok')
+    assert line.endswith(
+        'Alice(99) [replying to you/Dame Curie(1) "hey"; mentions @Bob(2)]: ok'
+    )
+    own = _format_memory_context_line(
+        {
+            "author": "Curie", "author_id": "1", "content": "sure",
+            "reply_to_author": "Alice", "reply_to_author_id": "99",
+            "mentions": [{"name": "Alice", "id": "99"}],
+        },
+        bot_user=bot_user,
+    )
+    assert own.endswith("You/Dame Curie(1): sure")
 
 
 def test_memory_lock_timeout_is_bounded():

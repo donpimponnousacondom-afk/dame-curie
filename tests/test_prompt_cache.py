@@ -95,15 +95,18 @@ def test_static_prefix_and_transcript_are_identical_across_turns():
     memory = FakeMemory(
         [
             {
-                "author": "alice", "author_id": "456", "content": "hi", "timestamp": old,
+                "author": "alice", "author_id": "456", "content": "hi",
+                "timestamp": old,
                 "reply_to_author": "Curie", "reply_to_author_id": "1",
                 "reply_to_self": True, "reply_to_content": "earlier",
                 "mentions": [{"name": "Bob", "id": "2"}],
             },
             {
-                "author": "Curie", "author_id": "1", "content": "hey", "timestamp": old,
+                "author": "Curie", "author_id": "1", "content": "hey",
+                "timestamp": old,
                 "reply_to_author": "SirRooT", "reply_to_author_id": "456",
-                "reply_to_content": "hi", "mentions": [{"name": "SirRooT", "id": "456"}],
+                "reply_to_content": "hi",
+                "mentions": [{"name": "SirRooT", "id": "456"}],
                 "autonomy": True, "autonomy_reason": "checking in",
             },
         ]
@@ -128,11 +131,16 @@ def test_static_prefix_and_transcript_are_identical_across_turns():
     # history lines into a reply. Its own lines carry only its text; user
     # lines keep the relation note without the send_message argument name.
     history = next(
-        m["content"] for m in first if str(m["content"]).startswith("<previous_conversation>")
+        m["content"]
+        for m in first
+        if str(m["content"]).startswith("<previous_conversation>")
     )
     lines = history.splitlines()
     stamp = _format_context_timestamp(old, relative=False)
-    assert lines[1] == f'[{stamp}] alice(456) [replying to you/Dame Curie(1) "earlier"; mentions @Bob(2)]: hi'
+    assert lines[1] == (
+        f'[{stamp}] alice(456) [replying to you/Dame Curie(1) "earlier"; '
+        "mentions @Bob(2)]: hi"
+    )
     assert lines[2] == f"[Dame Curie] [{stamp}] hey"
     assert "reply_to" not in history
 

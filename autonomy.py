@@ -181,7 +181,9 @@ def _reply_relation_bit(msg: dict) -> str | None:
     reply_id = str(msg.get("reply_to_author_id") or "")
     if msg.get("reply_to_self"):
         reply_label = "you/Dame Curie"
-    bit = f"replying to {reply_label}({reply_id})" if reply_id else f"replying to {reply_label}"
+    bit = f"replying to {reply_label}"
+    if reply_id:
+        bit += f"({reply_id})"
     quoted = " ".join(str(msg.get("reply_to_content") or "").split())[:80]
     if quoted:
         quoted = quoted.replace('"', "'")
@@ -260,7 +262,10 @@ def _format_memory_context_line(msg: dict, *, bot_user: Any = None, now=None) ->
     if (bot_id and author_id == bot_id) or (
         not author_id and bot_name and author == bot_name
     ):
+        # Own lines carry no reply or mention notes: the model copied them
+        # into new messages. See _build_messages in bot.py.
         label = f"You/Dame Curie({author_id})" if author_id else "You/Dame Curie"
+        return f"{prefix}{label}: {str(msg.get('content', ''))[:600]}"
     else:
         label = f"{author}({author_id})" if author_id else author
         if msg.get("author_is_bot"):
