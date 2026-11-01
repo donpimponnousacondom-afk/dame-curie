@@ -166,7 +166,12 @@ def test_job_public_progress_never_echoes_log_results_but_model_gets_full_text(t
     raw = "ERROR historical private log with synthetic key " + "x" * 5000 + " FULL LOG TAIL"
     bot, job, message, thread = background(tmp_path, [tool_response(), ProviderResult("safe final answer")], [("", [raw])])
     if native_followups:
-        bot._last_native_followup_messages = [{"role": "tool", "content": raw, "tool_call_id": "synthetic-tool"}]
+        bot._last_native_followup_messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "synthetic-tool", "type": "function", "function": {"name": "shell", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "content": raw, "tool_call_id": "synthetic-tool"},
+        ]
     asyncio.run(run_background_job(bot, job.id))
     assert job.status == "done"
     assert raw in str(bot.model_messages[1])

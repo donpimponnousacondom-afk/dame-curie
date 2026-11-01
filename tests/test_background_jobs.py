@@ -25,6 +25,7 @@ from turn_budget import (
     reset_foreground_turn,
     set_foreground_turn,
 )
+import jobs as jobs_module
 from jobs import (
     JOB_COMPACT_PROMPT,
     JOB_SUMMARY_HEADER,
@@ -481,8 +482,11 @@ class RunnerStubBot(StubBot):
 @pytest.mark.parametrize("descendant", [False, True])
 @pytest.mark.parametrize("dispatch_delay", [0.0, 0.2])
 def test_runner_delivers_final_reply_with_mention(
-    tmp_path, discover, descendant, dispatch_delay, refuse_ending, long_steps,
+    tmp_path, monkeypatch, discover, descendant, dispatch_delay, refuse_ending, long_steps,
 ):
+    # This test covers the model summary; masking would keep these prompts
+    # under the limit, so it is off here. Masking has its own test.
+    monkeypatch.setattr(jobs_module, "BG_MASK_KEEP_ROUNDS", 10_000)
     oversized_prompt = "x" * (SERVER_PROMPT_MAX_BYTES + 1)
 
     async def scenario():
@@ -1003,3 +1007,96 @@ def test_placement_gate_refuses_a_blocked_parent_and_keeps_an_allowed_one(monkey
         gate_bot._channel_allowed(FakeThreadChannel(SimpleNamespace(id="666")), allowed)
         is True
     )
+
+
+def test_job_masks_old_tool_results_and_keeps_the_newest_rounds(tmp_path):
+    # Root, 1 November 2026 (Fable's research, arXiv 2508.21433): results of
+    # rounds older than the newest BG_MASK_KEEP_ROUNDS become one line, so a
+    # long job stays under the compaction limit without a model summary.
+    from jobs import BG_MASK_KEEP_ROUNDS, BG_MASK_PREFIX
+
+    async def scenario():
+        manager = BackgroundJobManager(data_path=str(tmp_path / "jobs.json"))
+        bot = RunnerStubBot(manager)
+        bot.long_steps = 10
+        message = FakeMessage()
+        message.channel.thread.native_result_owner = bot
+        job = manager.create(guild_id="g", channel_id="222", user_id="111", goal="a portfolio site")
+        manager.attach_runtime(job.id, message=message, channel=message.channel)
+        head = estimate_job_tokens(background_messages(bot, job, message, "discord"))
+        call = {"id": "call_9", "type": "function", "function": {"name": "shell", "arguments": '{"command":"true"}'}}
+        step_tokens = estimate_job_tokens([
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": "call_9", "content": "Tool shell: ok call_9 " + "x" * 3000},
+        ])
+        # Without masking this limit forces two compactions (see the test above).
+        bot._control["bg_compact_at_tokens"] = head + int(6.5 * step_tokens)
+        await run_background_job(bot, job.id)
+        return manager.get(job.id), message.channel, bot
+
+    job, channel, bot = asyncio.run(scenario())
+    assert job.status == "done"
+    assert bot.compact_requests == []
+    final = bot.generated_messages
+    results = [m for m in final if m.get("role") == "tool"]
+    masked = [m for m in results if m["content"].startswith(BG_MASK_PREFIX)]
+    kept = [m for m in results if not m["content"].startswith(BG_MASK_PREFIX)]
+    assert len(kept) == BG_MASK_KEEP_ROUNDS
+    assert len(masked) == len(results) - BG_MASK_KEEP_ROUNDS > 0
+    assert masked[0]["content"].startswith(
+        f"{BG_MASK_PREFIX} the shell result of an older step ("
+    )
+    assert masked[0]["content"].endswith(
+        "characters) is masked to keep the job prompt small. Call the tool again if you need it."
+    )
+    # A masked row keeps its call pairing.
+    pairs = [(a["tool_calls"][0]["id"], t["tool_call_id"]) for a, t in zip(final[2::2], final[3::2]) if a.get("tool_calls")]
+    assert all(left == right for left, right in pairs)
+
+
+@pytest.mark.parametrize("keep", [0, 1, 4])
+def test_mask_old_tool_results_is_deterministic_and_skips_short_results(keep):
+    from jobs import BG_MASK_PREFIX, mask_old_tool_results
+
+    def round_(index, size):
+        call = {"id": f"c{index}", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}
+        return [
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": f"c{index}", "content": "r" * size},
+        ]
+
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
+    for index in range(6):
+        messages += round_(index, 50 if index == 0 else 1000)
+    count, removed = mask_old_tool_results(messages, keep_rounds=keep)
+    results = [m["content"] for m in messages if m.get("role") == "tool"]
+    old = results[: max(0, 6 - keep)]
+    # The short result of round 0 stays; long old results are masked.
+    assert old[0] == "r" * 50
+    assert all(text.startswith(BG_MASK_PREFIX) for text in old[1:])
+    assert results[max(0, 6 - keep):] == ["r" * 1000] * min(keep, 6)
+    assert count == max(0, len(old) - 1)
+    assert removed > 0 if count else removed == 0
+    snapshot = [dict(m) for m in messages]
+    # A second pass changes nothing: a masked row is never rewritten.
+    assert mask_old_tool_results(messages, keep_rounds=keep) == (0, 0)
+    assert messages == snapshot
+
+
+def test_masking_keeps_the_synthetic_results_line_and_the_round_count():
+    from jobs import BG_MASK_PREFIX, mask_old_tool_results
+    from tool_schemas import tool_tail_groups
+
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "goal"}]
+    for index in range(6):
+        messages += [
+            {"role": "assistant", "content": f"step {index}"},
+            {"role": "user", "content": "=== TOOL RESULTS ===\n" + "r" * 1000},
+        ]
+    before = len(tool_tail_groups(messages[2:]))
+    count, _ = mask_old_tool_results(messages, keep_rounds=2)
+    assert count == 4
+    assert len(tool_tail_groups(messages[2:])) == before == 6
+    masked = [m["content"] for m in messages[2:] if m["role"] == "user"][:4]
+    assert all(text.startswith("=== TOOL RESULTS ===\n" + BG_MASK_PREFIX + " the tool results") for text in masked)
+    assert mask_old_tool_results(messages, keep_rounds=2) == (0, 0)
