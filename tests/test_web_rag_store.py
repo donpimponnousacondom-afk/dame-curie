@@ -65,7 +65,7 @@ def _stub_embed(monkeypatch):
                 out.add(tok)
         return out
 
-    async def _embed_stub(self, text):
+    async def _embed_stub(self, text, *, query=False):
         text = str(text or "").strip()
         if not text:
             return None

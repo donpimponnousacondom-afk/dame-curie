@@ -150,7 +150,7 @@ def test_embed_pending_all_does_not_truncate_long_rows(tmp_path, monkeypatch):
 
     seen: list[str] = []
 
-    async def _embed_stub(self, text):
+    async def _embed_stub(self, text, *, query=False):
         seen.append(text)
         return _unit_vec(1)
 
@@ -225,7 +225,7 @@ def test_embed_pending_all_terminates_when_embedding_always_fails(
 
 
 def _stub_simple_embed(monkeypatch):
-    async def _embed_stub(self, text):
+    async def _embed_stub(self, text, *, query=False):
         return _unit_vec(abs(hash(str(text))) % 10_000)
 
     monkeypatch.setattr(RAGMemoryManager, "_embed", _embed_stub)
@@ -349,7 +349,7 @@ def test_rag_query_timeout_opens_short_circuit(tmp_path, monkeypatch):
     mgr = RAGMemoryManager(str(tmp_path))
     calls = {"count": 0}
 
-    async def slow_embed(_text):
+    async def slow_embed(_text, *, query=False):
         calls["count"] += 1
         await asyncio.sleep(0.05)
         return _unit_vec(42)
