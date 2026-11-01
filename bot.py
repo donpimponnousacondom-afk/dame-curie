@@ -9107,13 +9107,6 @@ class DameCurieBot(commands.Bot):
             return
         self._last_bot_send[channel_id] = time.monotonic()
 
-    def _reply_typing_delay(self, content: str) -> float:
-        """How long to look like we're composing before the send lands."""
-        n = len(str(content or "").strip())
-        if n <= 0:
-            return 0.35
-        return max(0.35, min(1.2, 0.3 + n / 120.0))
-
     def _should_show_live_typing(self, message) -> bool:
         """Typing for the whole turn: @Dame Curie, reply-to-Dame Curie, or a DM."""
         if not (getattr(self, "_control", None) or {}).get("typing_indicator", True):
@@ -9143,8 +9136,12 @@ class DameCurieBot(commands.Bot):
             await cm.__aexit__(None, None, None)
 
     @contextlib.asynccontextmanager
-    async def _reply_typing(self, channel, content: str = "", *, message=None):
-        """Hold typing around the actual send, after a short compose delay."""
+    async def _reply_typing(self, channel, *, message=None):
+        """Hold typing around the actual send.
+
+        Root, 1 November 2026: no compose delay before the send. A pause of
+        0.35 s to 1.2 s that only looked like typing delayed every reply.
+        """
         if not (getattr(self, "_control", None) or {}).get("typing_indicator", True):
             yield
             return
@@ -9155,7 +9152,6 @@ class DameCurieBot(commands.Bot):
         if not callable(typing):
             yield
             return
-        delay = self._reply_typing_delay(content)
         try:
             cm = typing()
             await cm.__aenter__()
@@ -9163,8 +9159,6 @@ class DameCurieBot(commands.Bot):
             yield
             return
         try:
-            if delay > 0:
-                await asyncio.sleep(delay)
             yield
         finally:
             with contextlib.suppress(Exception):
@@ -12476,9 +12470,7 @@ class DameCurieBot(commands.Bot):
                 if delivered_chunks:
                     transitioned = True
                 try:
-                    async with self._reply_typing(
-                        message.channel, response, message=message
-                    ):
+                    async with self._reply_typing(message.channel, message=message):
                         for i, chunk in enumerate(chunks):
                             if i == 0 and transitioned:
                                 continue

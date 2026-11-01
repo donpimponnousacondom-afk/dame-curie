@@ -32,10 +32,9 @@ class FakeChannel:
         self.sent.append(text)
 
 
-def _bot(*, typing=True, delay=0.0):
+def _bot(*, typing=True):
     bot = SimpleNamespace(
         _control={"typing_indicator": typing},
-        _reply_typing_delay=lambda _content: delay,
         user=SimpleNamespace(id=1382894657624866889),
     )
     bot._directly_addressed = DameCurieBot._directly_addressed.__get__(bot)
@@ -46,11 +45,28 @@ def _bot(*, typing=True, delay=0.0):
     return bot
 
 
-def test_reply_typing_delay_scales_and_clamps():
-    bot = SimpleNamespace()
-    assert DameCurieBot._reply_typing_delay(bot, "") == 0.35
-    assert 0.35 <= DameCurieBot._reply_typing_delay(bot, "hi") <= 1.2
-    assert DameCurieBot._reply_typing_delay(bot, "x" * 5000) == 1.2
+def test_reply_typing_adds_no_compose_delay(monkeypatch):
+    # Root, 1 November 2026: a compose delay of 0.35 s to 1.2 s before each
+    # send only looked like typing and slowed every reply.
+    sleeps = []
+
+    async def recording_sleep(seconds, *args, **kwargs):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", recording_sleep)
+    bot = _bot(typing=True)
+    # The old helper: on main the sleep then records 1.2 s.
+    bot._reply_typing_delay = lambda _content: 1.2
+    channel = FakeChannel()
+
+    async def run():
+        async with bot._reply_typing(channel):
+            pass
+
+    asyncio.run(run())
+    assert sleeps == []
+    assert channel.log == ["enter", "exit"]
+    assert not hasattr(DameCurieBot, "_reply_typing_delay")
 
 
 def test_ping_shows_live_typing_for_the_whole_turn():
@@ -105,17 +121,17 @@ def test_unpinged_or_suppressed_turn_does_not_start_live_typing():
 
 
 def test_no_typing_while_thinking_helper_is_send_gated():
-    bot = _bot(typing=True, delay=0.0)
+    bot = _bot(typing=True)
     channel = FakeChannel()
 
     async def run():
-        async with bot._reply_typing(channel, "hey"):
+        async with bot._reply_typing(channel):
             assert channel.log == ["enter"]
         assert channel.log == ["enter", "exit"]
 
-        quiet = _bot(typing=False, delay=0.0)
+        quiet = _bot(typing=False)
         silent = FakeChannel()
-        async with quiet._reply_typing(silent, "hey"):
+        async with quiet._reply_typing(silent):
             pass
         assert silent.log == []
 
@@ -135,7 +151,7 @@ def test_send_message_tool_types_only_around_the_send():
         message.replies.append(text)
 
     message.reply = reply
-    bot = _bot(typing=True, delay=0.0)
+    bot = _bot(typing=True)
 
     async def run():
         result = await SendMessageTool(bot).execute(message, content="yo")

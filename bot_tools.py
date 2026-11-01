@@ -4260,11 +4260,11 @@ class WebSearchTool(Tool):
 
 
 @contextlib.asynccontextmanager
-async def _tool_reply_typing(bot, message, content: str = ""):
+async def _tool_reply_typing(bot, message):
     """Use the bot's send-time typing helper when present; otherwise no-op."""
     helper = getattr(bot, "_reply_typing", None) if bot is not None else None
     if callable(helper):
-        async with helper(getattr(message, "channel", None), content, message=message):
+        async with helper(getattr(message, "channel", None), message=message):
             yield
         return
     yield
@@ -4636,7 +4636,7 @@ class SendMessageTool(Tool):
             send_fn = (
                 getattr(self.bot, "_send_with_slowmode", None) if self.bot else None
             )
-            async with _tool_reply_typing(self.bot, message, text):
+            async with _tool_reply_typing(self.bot, message):
                 for i, chunk in enumerate(chunks):
                     chunk_stickers = stickers if i == 0 else None
                     try:
