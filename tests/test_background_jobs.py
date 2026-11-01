@@ -436,9 +436,6 @@ class RunnerStubBot(StubBot):
             "name": "more_tools", "arguments": '{"group":"identity"}',
         }}] if response == "discover" else []
 
-    def _recover_text_tool_calls(self, response):
-        return [], response
-
     async def _dispatch_tool_calls(self, message, response, **kwargs):
         self.dispatch_events.append("started")
         try:

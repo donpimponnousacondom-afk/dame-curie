@@ -344,7 +344,6 @@ from control_defaults import (  # noqa: E402
     DEAD_CONTROL_KEYS,
     DEFAULT_CONTROL,
     SERVER_PROMPT_MAX_BYTES,
-    KNOWN_TOOLS,
     parse_bool,
 )
 import guild_onboarding  # noqa: E402
@@ -387,7 +386,6 @@ from tool_schemas import (  # noqa: E402
     message_chars,
     _NATIVE_MAX_CALLS as NATIVE_MAX_CALLS,
     normalize_native_tool_calls,
-    recover_text_tool_calls,
     returns_result as tool_schemas_returns_result,
     TOOL_TAIL_MAX_CHARS,
     trim_tool_tail,
@@ -1026,19 +1024,6 @@ def _is_unknown_reference_error(exc: Exception) -> bool:
             return "message_reference" in str(exc).lower()
         return True
     return False
-
-
-# Tool names that text tool-call recovery (_recover_text_tool_calls) accepts.
-# (reasoning_log is intentionally absent - reasoning lives inside every tool's
-# `explanation` param now, not as a standalone tool.)
-KNOWN_TOOL_NAMES: frozenset[str] = frozenset(KNOWN_TOOLS) | frozenset(
-    {
-        "wait",
-        "search_messages",
-        "update_base_personality",
-        "update_server_prompt",
-    }
-)
 
 
 def _sanitize_visible_reply(text: str) -> str:
@@ -12028,10 +12013,6 @@ class DameCurieBot(commands.Bot):
             usage = self._usage_from(incomplete_error or response)
             if usage:
                 self._token_tracker.record(usage)
-            # Incomplete responses are terminal: their partial text is display
-            # only and must never be recovered into executable tool calls.
-            if not native_calls and incomplete_error is None:
-                native_calls, response = self._recover_text_tool_calls(response)
             # If the model returned tool calls, hand the generation progress off
             # to the tool dispatch so the same Discord message transitions from
             # "working on it…" to "tool_name: reasoning" and gets deleted when
@@ -12404,10 +12385,6 @@ class DameCurieBot(commands.Bot):
                     if usage:
                         self._token_tracker.record(usage)
                     pending_native = self._native_calls_from(followup)
-                    if not pending_native:
-                        pending_native, followup = self._recover_text_tool_calls(
-                            followup
-                        )
                     # Hand off the followup progress to the next dispatch iteration
                     # so the same message transitions to the tool name/reasoning.
                     # If no tool calls, KEEP the progress alive so the final
@@ -13779,37 +13756,6 @@ class DameCurieBot(commands.Bot):
         if isinstance(response, str):
             return []
         return self._consume_native_tool_calls()
-
-    def _recover_text_tool_calls(self, response) -> tuple[list, str]:
-        """Rescue a tool call the model wrote as visible text.
-
-        We only ever ask for native ``tools=``, but models keep answering in
-        their own text dialect instead (GLM ``<tool_call>`` + ``<arg_key>``,
-        Qwen ``<function=…>``, DeepSeek DSML ``<invoke>``, bare JSON). Both
-        old outcomes were wrong: a dialect the scrubber knew was deleted and
-        the turn went silent, and one it did not know was posted to the
-        channel as a raw parameter dump. Recovering the call instead means it
-        RUNS - send_message actually sends.
-
-        Returns ``(raw_calls, visible_text)``; the text has the recovered
-        markup removed.
-        """
-        text = str(response or "")
-        if not text.strip() or not self._control.get("tools_enabled", True):
-            return [], text
-        try:
-            calls, leftover = recover_text_tool_calls(text, KNOWN_TOOL_NAMES)
-        except Exception:
-            logger.exception("Text tool-call recovery failed; keeping raw text")
-            return [], text
-        if not calls:
-            return [], text
-        logger.warning(
-            "Recovered %d text-form tool call(s) the model wrote as content: %s",
-            len(calls),
-            ", ".join(c["function"]["name"] for c in calls),
-        )
-        return calls, leftover
 
     def _usage_from(self, response) -> dict:
         """Race-free token-usage extraction (see ``_native_calls_from``)."""

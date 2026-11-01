@@ -839,7 +839,6 @@ def test_background_producing_call_survives_string_recovery_without_error_borrow
             _release_ai_slot=AsyncMock(),
             _generate_response=AsyncMock(side_effect=responses),
             _native_calls_from=lambda response: response.tool_calls,
-            _recover_text_tool_calls=lambda response: ([], str(response)),
             _dispatch_tool_calls=AsyncMock(side_effect=dispatched),
         )
         await run_background_job(bot, "job")

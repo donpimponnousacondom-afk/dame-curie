@@ -70,9 +70,6 @@ class JobBot:
     def _native_calls_from(self, response):
         return response.tool_calls
 
-    def _recover_text_tool_calls(self, response):
-        return [], response
-
     async def _dispatch_tool_calls(self, message, response, **kwargs):
         result = self.dispatches.pop(0) if self.dispatches else (str(response), [])
         if isinstance(result, BaseException):

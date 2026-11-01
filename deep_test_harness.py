@@ -6,7 +6,7 @@ subsystem, API, database, provider, engine, and security guardrail in Dame Curie
 
 Features tested:
   1. Config & Environment System (Tri-state feature resolution, system binaries)
-  2. Providers & LLM Engine (Completions, fallbacks, tool parsing, recovery, streaming)
+  2. Providers & LLM Engine (Completions, fallbacks, tool parsing, streaming)
   3. Tool Registry & Schemas (All tools registration, ENABLE_* gates, schema validity)
   4. Shell Engine (Sandboxing, commands, limits)
   5. RAG Vector Memory & Context Budgeting (SQLite vector DB, similarity, entity memory, tier budget)
@@ -278,13 +278,6 @@ class DeepTestHarness:
             assert call["arguments"]["explanation"] == "Need current timestamp"
             return "Native tool calls normalized and argument JSON parsed"
 
-        def test_text_tool_call_recovery():
-            text = 'Building website:\n<tool_call name="create_site">\n<name>test-site</name>\n<body><h1>Test</h1></body>\n</tool_call>'
-            recovered, leftover = tool_schemas.recover_text_tool_calls(text, frozenset(["create_site", "shell"]))
-            assert len(recovered) == 1
-            assert recovered[0]["function"]["name"] == "create_site"
-            return "Text tag tool calls successfully recovered"
-
         def test_reasoning_extraction_and_clamping():
             params = {"explanation": "A" * 500, "command": "uname"}
             explanation, clean_params = tool_registry.extract_explanation(params)
@@ -297,7 +290,6 @@ class DeepTestHarness:
 
         self.run_sync_test("OpenAI tools schema builder", test_tool_schema_building)
         self.run_sync_test("Native tool calls normalization", test_native_tool_call_normalization)
-        self.run_sync_test("Text-embedded tool call recovery", test_text_tool_call_recovery)
         self.run_sync_test("Reasoning extraction and length clamping", test_reasoning_extraction_and_clamping)
 
     # =========================================================================

@@ -867,12 +867,6 @@ async def run_background_job(bot: Any, job_id: str) -> None:
                     calls = list(bot._native_calls_from(response) or [])
                 except Exception:
                     calls = []
-                if not calls:
-                    try:
-                        recovered, response = bot._recover_text_tool_calls(response)
-                        calls = list(recovered or [])
-                    except Exception:
-                        calls = []
                 metrics_kwargs = {"response_metrics": response_metrics} if response_metrics is not None else {}
                 if turn is not None and turn.remaining_seconds <= 0:
                     terminal_failure = TurnBudgetExceeded("deadline")
