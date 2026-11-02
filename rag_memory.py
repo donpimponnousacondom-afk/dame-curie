@@ -3215,6 +3215,7 @@ class RAGMemoryManager:
         recency_tau_days: float | None = None,  # override global RECENCY_TAU_SECONDS
         exclude_negatives: bool = True,
         over_fetch: int = 3,
+        exact_guild: bool = False,
     ) -> list[dict]:
         """Semantic search across the vector store.
 
@@ -3241,6 +3242,9 @@ class RAGMemoryManager:
             over_fetch: NEW - internally pull top_k*over_fetch candidates
                         from cosine before applying recency/rerank/dedup
                         (gives room for filtering without starving the limit)
+            exact_guild: match guild_id exactly, without the rows that
+                        have no guild. Rows without a guild are DMs and
+                        global rows; a server search must not return a DM.
 
         Returns list of dicts with: id, kind, content, author, channel_id,
             guild_id, timestamp, similarity, score (recency-decayed),
@@ -3283,7 +3287,7 @@ class RAGMemoryManager:
             where_parts.append("(channel_id=? OR channel_id='')")
             params.append(str(channel_id))
         if guild_id:
-            where_parts.append("(guild_id=? OR guild_id='')")
+            where_parts.append("guild_id=?" if exact_guild else "(guild_id=? OR guild_id='')")
             params.append(str(guild_id))
         if source:
             src = [source] if isinstance(source, str) else list(source)

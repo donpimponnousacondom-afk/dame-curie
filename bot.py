@@ -13803,6 +13803,15 @@ class DameCurieBot(commands.Bot):
         return custom, None
 
     def _is_short_live_turn(self, message, content: str | None = None) -> bool:
+        """True when this turn skips memory recall and other prompt parts.
+
+        `short_turn_skip_enabled` switches the whole gate. Off, every turn
+        gets the full prompt. On, a watch follow-up, a turn during an active
+        conversation watch that does not address her, and a message shorter
+        than `short_turn_max_chars` that does not address her are short.
+        """
+        if not self._control.get("short_turn_skip_enabled", False):
+            return False
         text = str(
             content if content is not None else getattr(message, "content", "") or ""
         )
@@ -13812,7 +13821,8 @@ class DameCurieBot(commands.Bot):
             getattr(getattr(message, "channel", None), "id", "")
         ) and not self._directly_addressed(message):
             return True
-        return len(text.strip()) < 80 and not self._directly_addressed(message)
+        max_chars = _safe_int(self._control.get("short_turn_max_chars", 80), 80)
+        return len(text.strip()) < max_chars and not self._directly_addressed(message)
 
     def _build_openai_tools(
         self, platform: str = "discord", *, message=None, content: str | None = None
@@ -14821,17 +14831,21 @@ class DameCurieBot(commands.Bot):
                     rag_context = [
                         r for r in rag_results if r.get("similarity", 0) >= 0.35
                     ]
-                    # Recent user messages from this guild/channel pair -
-                    # this is what was missing before. Past conversations
-                    # were invisible to the prompt. We pull them from the
-                    # same channel first (high relevance) then fall back
-                    # to whole-guild.
+                    # Past user messages that match this message. In a server,
+                    # search every channel of this server (root, 2 November
+                    # 2026: the server is public; only DMs are private). The
+                    # guild match is exact, so a DM row never enters a server
+                    # prompt. In a DM, search that DM channel only.
+                    recall_guild = str(getattr(message.guild, "id", "") or "")
                     recent_results = await self.memory.rag_search(
                         user_message,
                         kinds=["message"],
                         source="user",
-                        guild_id=str(getattr(message.guild, "id", "") or ""),
-                        channel_id=str(getattr(message.channel, "id", "") or ""),
+                        guild_id=recall_guild,
+                        channel_id="" if recall_guild else str(
+                            getattr(message.channel, "id", "") or ""
+                        ),
+                        exact_guild=bool(recall_guild),
                         apply_recency=True,
                         recency_tau_days=3.0,  # tight tau - recent chat
                         top_k=8,
@@ -14906,8 +14920,14 @@ class DameCurieBot(commands.Bot):
                             )
                             who = r.get("author", "anon")
                             sim_pct = int(r.get("similarity", 0) * 100)
+                            row_channel = str(r.get("channel_id") or "")
+                            where = (
+                                f" in <#{row_channel}>"
+                                if row_channel and row_channel != str(message.channel.id)
+                                else ""
+                            )
                             rec_lines.append(
-                                f"- [{who}{stamp}, {sim_pct}% match] {str(r['content'])[:300]}"
+                                f"- [{who}{where}{stamp}, {sim_pct}% match] {str(r['content'])[:300]}"
                             )
                         # Same tier as the facts above - recalled chat and
                         # recalled facts are both "things looked up about this

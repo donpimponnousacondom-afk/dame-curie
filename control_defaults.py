@@ -52,6 +52,13 @@ DEFAULT_CONTROL = {
     # (median 8.4 s). With 60 s for each attempt, 2 attempts were cut at
     # 60 s and the third answered after 50 s.
     "cross_context_extract_timeout_seconds": 120,
+    # Short-turn gate. On, a short message that does not address her skips
+    # memory recall (LTM, facts, web), the user list, the emoji context and
+    # the longer transcript. Off, every turn gets the full prompt. Root,
+    # 2 November 2026: off for a few days to measure latency and behaviour.
+    "short_turn_skip_enabled": False,
+    # With the gate on: a message shorter than this many characters is short.
+    "short_turn_max_chars": 80,
     # How dense a message has to look before it is worth a context-watcher
     # call (0..1, see watch_policy.extraction_score). Lower stores more and
     # spends more; higher is stingier. This replaced a fixed list of English
