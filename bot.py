@@ -8988,17 +8988,19 @@ class DameCurieBot(commands.Bot):
         while True:
             await asyncio.sleep(600)
             try:
-                await self._cleanup_stale_memory()
+                await self._prune_idle_channel_state()
             except Exception as e:
                 logger.error(f"Memory cleanup error: {e}")
 
-    async def _cleanup_stale_memory(self):
+    async def _prune_idle_channel_state(self):
         """Prune idle channel locks and per-channel state on the 10-minute sweep.
 
-        Channel memory is not deleted here. A quiet channel keeps its rows;
-        `add_to_channel_memory` limits each channel to `max_messages` rows and
-        keeps the newest `MAX_CHANNELS` channels. Until 2 November 2026 this
-        sweep deleted all rows of a channel with no user message for 12 hours.
+        Channel memory is not deleted here. A quiet channel keeps its rows.
+        `add_to_channel_memory` limits each channel to `max_messages` rows.
+        When a write makes more than `MAX_CHANNELS` channels, it deletes the
+        rows of the channels with the oldest last row. Until 2 November 2026
+        this sweep deleted all message and reply rows of a channel with no
+        user message for 12 hours.
         """
         # KeyedLocks trims itself as it grows. This pass drops every idle
         # channel lock; a held lock stays.

@@ -259,7 +259,7 @@ def test_periodic_sweep_keeps_the_memory_of_a_quiet_channel(tmp_path):
             _channel_locks=SimpleNamespace(prune=Mock(return_value=0)),
             _prune_per_channel_state=Mock(return_value=0),
         )
-        await DameCurieBot._cleanup_stale_memory(bot)
+        await DameCurieBot._prune_idle_channel_state(bot)
         rows = await mgr.get_channel_memory("quiet")
         assert [row["content"] for row in rows] == ["the deploy key lives in the vault"]
         bot._channel_locks.prune.assert_called_once_with(all_idle=True)
