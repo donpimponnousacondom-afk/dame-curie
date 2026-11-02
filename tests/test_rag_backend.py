@@ -1342,12 +1342,12 @@ def test_catch_up_pass_embeds_the_facts_a_full_queue_deferred(memory, monkeypatc
         await asyncio.gather(*memory._embed_tasks)
         assert memory.embedding_status()["eligible_pending"] == 2
         assert len(transport.calls) == 1
-        with caplog.at_level("INFO"):
-            await DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory))
+        await DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory))
         assert memory.embedding_status()["eligible_pending"] == 0
         assert len(transport.calls) == 3
 
-    asyncio.run(run())
+    with caplog.at_level("INFO"):
+        asyncio.run(run())
     assert "Background embed deferred to the catch-up pass: 1 tasks already queued" in caplog.text
     assert (
         "Embedding catch-up pass: 2 embedded, 0 failed, stopped at scan_complete, "
