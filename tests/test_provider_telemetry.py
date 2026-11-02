@@ -588,7 +588,7 @@ def test_correction_does_not_extend_budget_on_final_rejection(no_wait):
         "stream": True, "stream_options": {"include_usage": True},
     }] * 2
     assert len(provider._session.responses) == 1
-    assert [call.args[0] for call in no_wait.await_args_list] == [10]
+    assert [call.args[0] for call in no_wait.await_args_list] == [5]
 
 
 @pytest.mark.parametrize("configured", [{}, {"stream": False}, {"stream": True, "stream_options": {"include_usage": True}}])
@@ -603,7 +603,7 @@ def test_forced_json_removes_stream_options(no_wait, configured):
         "model": "model", "max_tokens": 8192, "temperature": 0.6,
         "messages": [], **configured,
     }] * 2
-    assert [call.args[0] for call in no_wait.await_args_list] == [10]
+    assert [call.args[0] for call in no_wait.await_args_list] == [5]
 
 
 @pytest.mark.parametrize(
@@ -1137,7 +1137,7 @@ def test_failed_attempt_time_is_not_accumulated(monkeypatch):
 
     class Success(StreamResponse):
         async def json(self, **kwargs):
-            now[0] = 65
+            now[0] = 60
             return {
                 "choices": [{"message": {"content": "hello"}}],
                 "usage": {"completion_tokens": 8},
@@ -1164,12 +1164,13 @@ def test_usage_correction_preserves_five_attempt_ceiling_and_waits(no_wait):
             json_response(),
         ],
         extra_body={"stream": True, "stream_options": {"include_usage": True}},
+        retry_attempts=5,
     )
     result = asyncio.run(provider.generate_response([]))
     assert result.metrics.attempt == len(provider._session.payloads) == 5
     assert result.metrics.stream is False
     assert result.metrics.output_source == "cl100k_base"
-    assert [call.args[0] for call in no_wait.await_args_list] == [10, 20, 30, 40]
+    assert [call.args[0] for call in no_wait.await_args_list] == [5, 20, 60, 60]
     assert provider._session.payloads == [{
         "model": "model", "max_tokens": 8192, "temperature": 0.6, "messages": [],
         "stream": True, "stream_options": {"include_usage": True},

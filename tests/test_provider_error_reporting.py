@@ -314,7 +314,7 @@ def test_retried_http_failures_recover_in_one_incident(status, max_tokens, captu
     assert provider.extra_body == original
     assert {request[0] for request in provider._session.requests} == {"https://primary.example.test/v1/chat/completions"}
     assert turn.attempts == 3
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5, 20]
     assert len(captured) == 1
     error = captured[0]["exception"]
     assert type(error) is RuntimeError
@@ -349,7 +349,7 @@ def test_terminal_transient_failures_preserve_budget_and_exception(captured, ret
     with pytest.raises(RuntimeError, match="Provider API error: 503: last server explanation") as caught:
         asyncio.run(provider.generate_response(MESSAGES))
     assert len(provider._session.requests) == 2
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5]
     assert len(captured) == 1
     assert captured[0]["exception"] is caught.value
     assert "first server explanation" in caught.value.incident_details
@@ -654,7 +654,7 @@ def test_http200_wrong_shape_is_captured_before_existing_retry(body, captured, r
     assert body.decode() in captured[0]["details"]
     assert len(captured) == 1
     assert len(provider._session.requests) == 2
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5]
 
 
 @pytest.mark.parametrize("tail", [b"data: {malformed private frame}\n\n", b"data: unterminated private tail"])
@@ -715,7 +715,7 @@ def test_timeout_then_network_recovery_keeps_all_traces_and_backoff(captured, re
         success(),
     ], retry_attempts=3)
     assert asyncio.run(provider.generate_response(MESSAGES)) == "ok"
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5, 20]
     assert len(captured) == 1
     assert "original timeout detail" in captured[0]["details"]
     assert "original network detail" in captured[0]["details"]
@@ -741,7 +741,7 @@ def test_empty_response_recovery_keeps_original_shape_and_nonstream_switch(captu
         {**extras, "model": "synthetic-model", "messages": MESSAGES},
     ] * 2
     assert provider.extra_body == extras
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5]
 
 
 def test_terminal_empty_response_uses_original_typed_error(captured):
@@ -1151,7 +1151,7 @@ def test_cancelled_http_backoff_retains_complete_prior_failure(production_handle
         task.cancel("synthetic cancellation")
         with pytest.raises(asyncio.CancelledError, match="synthetic cancellation"):
             await task
-        assert waits == [10]
+        assert waits == [5]
 
     asyncio.run(run())
     incident = production_handler.get(0)
@@ -1190,7 +1190,7 @@ def test_cancellation_inside_exception_handler_retry_keeps_existing_group(error_
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert waits == [10, 20]
+        assert waits == [5, 20]
         return existing_id
 
     incident_id = asyncio.run(run())
@@ -1386,7 +1386,7 @@ def test_handled_caller_cancellation_does_not_flush_normal_provider_attempts(rec
     assert asyncio.run(run()) == "ok"
     assert len(provider._session.requests) == len(responses)
     if recovered:
-        assert waits == [10, 20]
+        assert waits == [5, 20]
         incident = production_handler.get(0)
         assert incident_ids == [incident.incident_id] * 2
         assert "Provider request recovered after upstream failures" in incident.details

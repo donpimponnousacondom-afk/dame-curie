@@ -133,7 +133,7 @@ def parse_provider_settings(env: Mapping[str, str], *, require_primary: bool = T
         "OPENAI_TOP_K": _int_field(env, "OPENAI_TOP_K", None),
         "OPENAI_EXTRA_HEADERS": _headers_field(env, "OPENAI_EXTRA_HEADERS"),
         "OPENAI_EXTRA_BODY": _json_field(env, "OPENAI_EXTRA_BODY"),
-        "OPENAI_RETRY_ATTEMPTS": _int_field(env, "OPENAI_RETRY_ATTEMPTS", 5, minimum=1),
+        "OPENAI_RETRY_ATTEMPTS": _int_field(env, "OPENAI_RETRY_ATTEMPTS", 3, minimum=1),
         "OPENAI_EMPTY_RESPONSE_RETRIES": _int_field(env, "OPENAI_EMPTY_RESPONSE_RETRIES", 2, minimum=0),
         "AUTONOMY_BASE_URL": _url_field(env, "AUTONOMY_BASE_URL"),
         "AUTONOMY_API_KEY": env.get("AUTONOMY_API_KEY"),

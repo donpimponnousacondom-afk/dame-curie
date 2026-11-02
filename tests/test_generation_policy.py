@@ -74,10 +74,117 @@ def test_context_watcher_overrides_shared_main_policy(aux_policy, night_fallback
 
     bot.ai_provider.generate_response.assert_awaited_once()
     kwargs = bot.ai_provider.generate_response.await_args.kwargs
-    assert kwargs == {"timeout": 60}
+    assert set(kwargs) == {"timeout"}
+    assert 119 < kwargs["timeout"] <= 120
     assert bot.ai_provider.temperature == 0.6
     assert bot.ai_provider.disable_reasoning is False
     bot._release_ai_slot.assert_awaited_once()
+
+
+def _watcher_message():
+    return SimpleNamespace(
+        content="I prefer Python for my projects.",
+        author=SimpleNamespace(id=7, display_name="root"),
+        channel=SimpleNamespace(id=8),
+        guild=SimpleNamespace(id=9),
+        attachments=[],
+        embeds=[],
+    )
+
+
+def test_context_watcher_limit_covers_slow_provider_with_one_request(shared_bot, caplog):
+    """A provider slower than the watcher limit gets one request, stopped at the limit."""
+    bot = shared_bot
+    bot._control = {"cross_context_extract_timeout_seconds": 5}
+
+    async def slow_answer(messages, *, timeout):
+        await asyncio.sleep(30)
+
+    bot.ai_provider.generate_response = AsyncMock(side_effect=slow_answer)
+    caplog.set_level("INFO", logger="bot")
+
+    elapsed = asyncio.run(_timed(bot._extract_shared_context_fact(_watcher_message())))
+
+    assert elapsed < 9
+    bot.ai_provider.generate_response.assert_awaited_once()
+    assert 4 < bot.ai_provider.generate_response.await_args.kwargs["timeout"] <= 5
+    bot._release_ai_slot.assert_awaited_once()
+    assert (
+        "Context extraction error: TimeoutError: the provider call did not "
+        "finish in the 5 s watcher limit and its 2 s guard"
+    ) in caplog.text
+    assert "reason=error" in caplog.text
+
+
+def test_context_watcher_lets_the_provider_timeout_fire_first(shared_bot, caplog):
+    """The provider's own attempt timeout reports first; the guard does not hide it."""
+    bot = shared_bot
+    bot._control = {"cross_context_extract_timeout_seconds": 5}
+
+    async def provider_timeout(messages, *, timeout):
+        await asyncio.sleep(timeout)
+        raise RuntimeError(f"Provider request timed out after {timeout}s")
+
+    bot.ai_provider.generate_response = AsyncMock(side_effect=provider_timeout)
+    caplog.set_level("INFO", logger="bot")
+
+    asyncio.run(bot._extract_shared_context_fact(_watcher_message()))
+
+    assert "Context extraction error: RuntimeError: Provider request timed out after" in caplog.text
+    assert "watcher limit" not in caplog.text
+    bot._release_ai_slot.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "setup_seconds, cause",
+    [
+        (4.5, "the slot wait and the provider setup left less than 1 s of the 5 s watcher limit"),
+        (30, "the provider setup did not finish in the 5 s watcher limit and its 2 s guard"),
+    ],
+    ids=["less-than-1-s-left", "setup-cut-by-guard"],
+)
+def test_context_watcher_limit_used_before_the_provider_call(
+    shared_bot, caplog, setup_seconds, cause
+):
+    bot = shared_bot
+    bot._control = {"cross_context_extract_timeout_seconds": 5}
+
+    async def late_provider():
+        await asyncio.sleep(setup_seconds)
+        return bot.ai_provider
+
+    bot._get_aux_provider = late_provider
+    caplog.set_level("INFO", logger="bot")
+
+    elapsed = asyncio.run(_timed(bot._extract_shared_context_fact(_watcher_message())))
+
+    assert elapsed < 9
+    bot.ai_provider.generate_response.assert_not_awaited()
+    bot._release_ai_slot.assert_awaited_once()
+    assert f"Context extraction error: TimeoutError: {cause}" in caplog.text
+
+
+def test_context_watcher_slot_wait_failure_names_its_cause(shared_bot, caplog):
+    bot = shared_bot
+    bot._acquire_ai_slot = AsyncMock(side_effect=TimeoutError())
+    caplog.set_level("INFO", logger="bot")
+
+    asyncio.run(bot._extract_shared_context_fact(_watcher_message()))
+
+    bot.ai_provider.generate_response.assert_not_awaited()
+    bot._release_ai_slot.assert_not_awaited()
+    assert bot._acquire_ai_slot.await_args.kwargs["timeout"] == 120
+    assert (
+        "Context extraction error: TimeoutError: "
+        "no background model slot became free in 120 s"
+    ) in caplog.text
+
+
+async def _timed(coro):
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await coro
+    return loop.time() - start
 
 
 @pytest.mark.parametrize("night_fallback", [False, True])

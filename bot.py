@@ -8722,35 +8722,62 @@ class DameCurieBot(commands.Bot):
                 f"Message:\n{text[:2500]}{attachment_note}{embed_note}\n\n"
                 'Extract a fact or return {"should_store": false}.'
             )
-            # Both the AI-slot acquisition and the provider call share one
-            # configurable timeout. 20s was too tight for cold-start
-            # 1M-context models - the call would time out, retry, fall
-            # back to a smaller model, and flood the provider log. Operators
-            # who want a stricter cap can lower the runtime control.
+            # One limit covers the slot wait, the provider setup and every
+            # provider attempt. The provider gets the time that is left as its
+            # attempt timeout. An answer that arrives inside the limit is not
+            # cut, and a fast failure still retries inside the limit. The guard
+            # ends 2 s after the limit, so on the first attempt the provider's
+            # own timeout fires first and logs itself. A later attempt keeps
+            # the first timeout value, so the guard cuts it; the provider then
+            # records its earlier failures as cancelled.
             extract_timeout = max(
                 5,
                 min(
                     _safe_int(
-                        self._control.get("cross_context_extract_timeout_seconds", 60)
-                        or 60,
-                        60,
+                        self._control.get("cross_context_extract_timeout_seconds", 120)
+                        or 120,
+                        120,
                     ),
                     600,
                 ),
             )
-            await self._acquire_ai_slot(
-                timeout=extract_timeout,
-                key=f"extract:{getattr(getattr(message, 'channel', None), 'id', '') or ''}",
-            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + extract_timeout
             try:
-                context_provider = await self._get_aux_provider()
-                raw = await context_provider.generate_response(
-                    [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": user},
-                    ],
+                await self._acquire_ai_slot(
                     timeout=extract_timeout,
+                    key=f"extract:{getattr(getattr(message, 'channel', None), 'id', '') or ''}",
                 )
+            except TimeoutError as e:
+                raise TimeoutError(
+                    f"no background model slot became free in {extract_timeout} s"
+                ) from e
+            try:
+                try:
+                    step = "provider setup"
+                    async with asyncio.timeout_at(deadline + 2) as guard:
+                        context_provider = await self._get_aux_provider()
+                        step = "provider call"
+                        remaining = deadline - loop.time()
+                        if remaining < 1:
+                            raise TimeoutError(
+                                f"the slot wait and the provider setup left less "
+                                f"than 1 s of the {extract_timeout} s watcher limit"
+                            )
+                        raw = await context_provider.generate_response(
+                            [
+                                {"role": "system", "content": prompt},
+                                {"role": "user", "content": user},
+                            ],
+                            timeout=remaining,
+                        )
+                except TimeoutError as e:
+                    if not guard.expired():
+                        raise
+                    raise TimeoutError(
+                        f"the {step} did not finish in the "
+                        f"{extract_timeout} s watcher limit and its 2 s guard"
+                    ) from e
             finally:
                 await self._release_ai_slot()
             data = self._json_object_from_text(raw)
@@ -8778,7 +8805,7 @@ class DameCurieBot(commands.Bot):
             await self._mirror_fact_to_entity(message, entry)
             self._ingest_graph_triples(message, data)
         except Exception as e:
-            logger.warning(f"Context extraction error: {e}")
+            logger.warning("Context extraction error: %s: %s", type(e).__name__, e)
             logger.info(
                 "Context watcher result score=%s stored=False reason=error", score_text
             )
