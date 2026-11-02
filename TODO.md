@@ -7,10 +7,14 @@
   - The `dame-curie-ollama-1` container is stopped, not removed.
   - Kept: the image `ollama/ollama:0.40.13`, the volume `dame-curie_ollama-models`, and the `ollama` and `ollama-pull` services in `compose.yaml`.
   - Removal, part 1 (host): delete the stopped Ollama containers, the volume and the image.
-  - Removal, part 2 (one PR): remove the two services and the `embeddings` and `model-download` networks from `compose.yaml`.
-  - Removal, part 2 (same PR): fold the external overlay into the base `bot` service. Remove its `depends_on`, the local mode, the local base URL and the `embeddings` network. Then update the modes in `scripts/instance.py` (`EMBED_MODES`, `owned_config_files`) and their tests.
-  - To plug Ollama back in: set `DAME_CURIE_EMBED_MODE=local`, then put the Qwen settings in `bot.env` (`docs/OPERATIONS.md`). Run `instance.py dame-curie up`.
-  - Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Qwen uses 1024 dimensions, so the catch-up pass must embed every row again on the CPU.
+  - Removal, part 2 (one PR, first change): remove the two services and the `embeddings` and `model-download` networks from `compose.yaml`.
+  - Removal, part 2 (same PR, second change): fold the external overlay into the base `bot` service. Remove its `depends_on`, the local mode, the local base URL and the `embeddings` network. Then update the modes in `scripts/instance.py` (`EMBED_MODES`, `owned_config_files`) and their tests.
+  - To plug Ollama back in, step 1: set `DAME_CURIE_EMBED_MODE=local` in `/srv/dame-curie/deploy.env`. The mode is not read from `bot.env`.
+  - Step 2, in `/srv/dame-curie/config/bot.env`: `DAME_CURIE_EMBED_BASE_URL="http://ollama:11434"`, `DAME_CURIE_EMBED_MODEL="qwen3-embedding:0.6b"`, `DAME_CURIE_EMBED_DIM="1024"`, and blank `DAME_CURIE_EMBED_API_KEY` and `DAME_CURIE_EMBED_REQUEST_DIMENSIONS`.
+  - Step 3, in the same file: set the four `DAME_CURIE_RAG_*_SIMILARITY` cut-offs blank. Blank gives the Qwen values 0.35, 0.40, 0.40 and 0.85.
+  - Step 4: run `instance.py dame-curie up`.
+  - Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Search reads only vectors of the configured backend, so recall finds no row until that row has a Qwen vector.
+  - The catch-up pass embeds for at most 60 s every 10 minutes, on the CPU. A manual `rag_maintenance.py backfill` is faster. Its time on Qwen is not measured; on OpenAI, 6,247 row attempts took 24.5 minutes (#42).
 
 # Current completion state - 2026-10-03
 
