@@ -20,6 +20,7 @@ Each test here pins a bug that was live in the tree at 9b6755c:
 import asyncio
 
 import numpy as np
+import pytest
 
 import rag_memory
 from bot import _web_result_snippet
@@ -365,3 +366,38 @@ def test_rag_query_timeout_opens_short_circuit(tmp_path, monkeypatch):
     assert first == []
     assert second == []
     assert calls["count"] == 1
+
+
+def test_server_message_recall_spans_channels_and_never_returns_a_dm(tmp_path, monkeypatch):
+    """Root, 2 November 2026: recall searches every channel of the same server only."""
+    _stub_simple_embed(monkeypatch)
+    mgr = RAGMemoryManager(str(tmp_path))
+    text = "the deploy key lives in the vault"
+    blob = rag_memory._embedding_to_blob(_unit_vec(abs(hash(text)) % 10_000))
+    rows = [
+        ("other-channel", "g1", "c1"),
+        ("this-channel", "g1", "c2"),
+        ("this-channel-no-guild", "", "c2"),
+        ("dm", "", "d1"),
+        ("other-server", "g2", "c3"),
+    ]
+    for row_id, guild, channel in rows:
+        mgr._db.execute(
+            "INSERT INTO vectors (id, kind, channel_id, guild_id, author, author_id, source, "
+            "content, embedding, embedding_backend, timestamp, created_at) "
+            "VALUES (?, 'message', ?, ?, 'Ada', '7', 'user', ?, ?, ?, '2026-11-01T10:00:00+00:00', ?)",
+            (row_id, channel, guild, text, blob, mgr.embedding_backend, 1_793_500_000.0),
+        )
+
+    def found(**kwargs):
+        results = _run(mgr.rag_search(text, kinds=["message"], source="user", top_k=8, **kwargs))
+        return sorted(r["id"] for r in results)
+
+    assert found(guild_id="g1", channel_id="c2", exact_guild=True) == [
+        "other-channel", "this-channel", "this-channel-no-guild",
+    ]
+    assert "dm" in found(guild_id="g1", channel_id=""), "the default filter adds rows without a guild"
+    assert found(guild_id="", channel_id="d1") == ["dm"]
+    for guild, channel in (("", "d1"), ("g1", "")):
+        with pytest.raises(ValueError, match="needs a guild_id and a channel_id"):
+            found(guild_id=guild, channel_id=channel, exact_guild=True)

@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+
 from bot import DameCurieBot, ToolCircuitBreaker
 from bot_tools import MoreToolsTool
 from rag_memory import RAGMemoryManager
@@ -185,10 +186,41 @@ def test_disabled_tools_still_hidden():
 
 def test_short_live_turn_for_watch_followup_not_hard_ping():
     bot = _live_bot()
+    bot._control["short_turn_skip_enabled"] = True
     watch = _msg("dont be like him max", watch_followup=True)
     ping = _msg("wyd", mentions=[bot.user])
     assert DameCurieBot._is_short_live_turn(bot, watch, "dont be like him max") is True
     assert DameCurieBot._is_short_live_turn(bot, ping, "wyd") is False
+
+
+def test_short_turn_gate_is_off_by_default_and_has_a_length_setting():
+    """Root, 2 November 2026: the gate is off; on, its length limit is a setting."""
+    from control_defaults import DEFAULT_CONTROL
+
+    assert DEFAULT_CONTROL["short_turn_skip_enabled"] is False
+    assert DEFAULT_CONTROL["short_turn_max_chars"] == 80
+    bot = _live_bot()
+    watch = _msg("dont be like him max", watch_followup=True)
+    plain = _msg("ok sure")
+    assert DameCurieBot._is_short_live_turn(bot, watch, "dont be like him max") is False
+    assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is False
+
+    bot._control["short_turn_skip_enabled"] = True
+    assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is True
+    bot._control["short_turn_max_chars"] = 3
+    assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is False
+    assert DameCurieBot._is_short_live_turn(bot, _msg(":D"), ":D") is True
+
+    # A setting of the wrong type turns the gate off; the prompt build names
+    # the cause to her (tests/test_prompt_tiers.py).
+    bot._control["short_turn_skip_enabled"] = True
+    for bad in ("80", 0, True, 2.5):
+        bot._control["short_turn_max_chars"] = bad
+        assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is False
+    bot._control["short_turn_max_chars"] = 80
+    for bad in ("tru", 1, None):
+        bot._control["short_turn_skip_enabled"] = bad
+        assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is False
 
 
 def test_emoji_grid_skipped_unless_asked():

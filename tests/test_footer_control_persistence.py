@@ -144,3 +144,23 @@ def test_footer_update_cannot_bypass_api_sidecar_lock(tmp_path, monkeypatch):
         with pytest.raises(FileLockTimeout):
             update_footer_control(path, "footer_enabled", True)
         assert path.read_text(encoding="utf-8") == original
+
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("short_turn_skip_enabled", "tru"), ("short_turn_skip_enabled", 1), ("short_turn_max_chars", "eighty")],
+)
+def test_a_bad_short_turn_setting_is_kept_as_written_and_the_rest_loads(tmp_path, key, value):
+    """parse_bool would turn "tru" into the default; the loader keeps the raw value.
+
+    The gate then names the bad value to her every turn. The other settings
+    load, and a later write of the control dict keeps the operator's text.
+    """
+    bot = control_bot(tmp_path)
+    _atomic_json_write_sync(tmp_path / "bot_control.json", {key: value, "footer_format": "new"})
+
+    bot._load_control(force=True)
+
+    assert bot._control[key] == value
+    assert bot._control["footer_format"] == "new"

@@ -12,6 +12,8 @@ conversation.
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from bot import DameCurieBot, ToolCircuitBreaker
 
 
@@ -101,9 +103,9 @@ def _message():
     )
 
 
-# A turn under ~80 chars that does not address the bot reads as ambient, and
-# the lookup tiers are deliberately skipped for those (see
-# _is_short_live_turn). Anything testing those tiers has to be a real turn.
+# With the short-turn gate on (short_turn_skip_enabled), a turn under
+# short_turn_max_chars that does not address the bot skips the lookup tiers.
+# The tests below use a long turn, so they hold with the gate on or off.
 LONG_TURN = (
     "hey curie, do you remember what we agreed about the deploy schedule "
     "for the staging cluster last week? I want to double-check before friday."
@@ -275,12 +277,60 @@ def test_an_ambient_turn_gives_the_lookup_tiers_budget_to_the_transcript():
     # A short line that does not address the bot skips RAG on purpose - a
     # watch/ambient turn needs the running thread, not a research pass. The
     # budget has to follow, or the transcript pays for tiers that never render.
-    bot = _bot(_Memory(), {"long_term_memory_enabled": True, "cross_context_enabled": True})
+    # The gate is a setting, off by default since 2 November 2026.
+    control = {"long_term_memory_enabled": True, "cross_context_enabled": True}
+    bot = _bot(_Memory(), {**control, "short_turn_skip_enabled": True})
     plan = DameCurieBot._context_budget_plan(bot, _message(), "lol", ["prefix"])
     assert plan.budget_for("ltm") == 0
     assert plan.budget_for("facts") == 0
     assert plan.budget_for("web") == 0
     assert plan.budget_for("recent") > 0
+
+    bot = _bot(_Memory(), control)
+    plan = DameCurieBot._context_budget_plan(bot, _message(), "lol", ["prefix"])
+    assert plan.budget_for("ltm") > 0
+    assert plan.budget_for("facts") > 0
+    assert plan.budget_for("web") > 0
+
+
+@pytest.mark.parametrize("in_server", [True, False])
+def test_message_recall_spans_the_server_and_names_the_other_channel(in_server):
+    """Root, 2 November 2026: recall searches every channel of the server; a DM stays alone."""
+
+    class _RecallMemory(_Memory):
+        def __init__(self):
+            super().__init__(entity={"user_id": "456"})
+            self.message_search = None
+
+        async def rag_search(self, query, **kwargs):
+            if kwargs.get("kinds") == ["message"]:
+                self.message_search = kwargs
+                return [{
+                    "author": "bob", "channel_id": "555", "content": "staging deploys on friday",
+                    "timestamp": "2026-11-01T10:00:00+00:00", "similarity": 0.9,
+                }]
+            return []
+
+        async def recall_web_results(self, query, **kwargs):
+            return []
+
+    memory = _RecallMemory()
+    bot = _bot(memory, {"long_term_memory_enabled": True})
+    bot.config = SimpleNamespace()
+    message = _message()
+    if in_server:
+        message.guild = SimpleNamespace(id=9, emojis=[])
+    prompt = "\n".join(
+        str(m.get("content") or "")
+        for m in asyncio.run(DameCurieBot._build_messages(bot, message, LONG_TURN))
+    )
+
+    search = memory.message_search
+    if in_server:
+        assert (search["guild_id"], search["channel_id"], search["exact_guild"]) == ("9", "123", True)
+    else:
+        assert (search["guild_id"], search["channel_id"], search["exact_guild"]) == ("", "123", False)
+    assert "- [bob in <#555>" in prompt
 
 
 def test_a_warm_turn_builds_its_prompt_without_waiting_for_the_embedder():
@@ -395,9 +445,6 @@ class _FailingMemory(_Memory):
         return _Graph()
 
 
-import pytest  # noqa: E402
-
-
 @pytest.mark.parametrize(
     ("fail", "line"),
     [
@@ -489,3 +536,12 @@ def test_no_source_file_hardcodes_a_time_zone():
         if pattern.search(text)
     ]
     assert offenders == []
+
+
+def test_a_bad_short_turn_setting_reaches_the_model_with_its_cause():
+    bot = _bot(_Memory(entity={"user_id": "456"}), {"short_turn_max_chars": "eighty"})
+    prompt = _prompt(bot)
+    assert (
+        "- the short-turn gate is off for this turn (bot_control short_turn_max_chars "
+        "must be a positive integer; it is 'eighty')"
+    ) in prompt

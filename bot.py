@@ -1581,6 +1581,21 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
+def _short_turn_settings_error(control: dict) -> str | None:
+    """Name the short-turn setting that has the wrong type, or return None.
+
+    With a bad value the gate is off for the turn, and the prompt build shows
+    this text to her as a harness failure (root's rule of 1 November 2026).
+    """
+    enabled = control.get("short_turn_skip_enabled", False)
+    if type(enabled) is not bool:
+        return f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
+    max_chars = control.get("short_turn_max_chars", 80)
+    if type(max_chars) is not int or max_chars < 1:
+        return f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
+    return None
+
+
 class DameCurieBot(commands.Bot):
     """AI-powered Discord bot."""
 
@@ -8293,7 +8308,9 @@ class DameCurieBot(commands.Bot):
             for dead_key in DEAD_CONTROL_KEYS:
                 control.pop(dead_key, None)
             for key, default in DEFAULT_CONTROL.items():
-                if isinstance(default, bool):
+                # short_turn_skip_enabled keeps its raw value: parse_bool would
+                # turn an unreadable text into the default without a message.
+                if isinstance(default, bool) and key != "short_turn_skip_enabled":
                     control[key] = parse_bool(control.get(key), default)
             control["ai_concurrency"] = max(
                 1, min(_safe_int(control.get("ai_concurrency", 2) or 2, 2), 10)
@@ -13803,6 +13820,17 @@ class DameCurieBot(commands.Bot):
         return custom, None
 
     def _is_short_live_turn(self, message, content: str | None = None) -> bool:
+        """True when this turn skips memory recall and other prompt parts.
+
+        `short_turn_skip_enabled` switches the whole gate. Off, or with a
+        short-turn setting of the wrong type, every turn gets the full prompt. On, a watch follow-up, a turn during an active
+        conversation watch that does not address her, and a message shorter
+        than `short_turn_max_chars` that does not address her are short.
+        """
+        if _short_turn_settings_error(self._control) is not None:
+            return False
+        if not self._control.get("short_turn_skip_enabled", False):
+            return False
         text = str(
             content if content is not None else getattr(message, "content", "") or ""
         )
@@ -13812,7 +13840,8 @@ class DameCurieBot(commands.Bot):
             getattr(getattr(message, "channel", None), "id", "")
         ) and not self._directly_addressed(message):
             return True
-        return len(text.strip()) < 80 and not self._directly_addressed(message)
+        max_chars = self._control.get("short_turn_max_chars", 80)
+        return len(text.strip()) < max_chars and not self._directly_addressed(message)
 
     def _build_openai_tools(
         self, platform: str = "discord", *, message=None, content: str | None = None
@@ -14214,9 +14243,8 @@ class DameCurieBot(commands.Bot):
         disabled: set[str] = set()
         short_turn = self._is_short_live_turn(message, user_message)
         if not control.get("long_term_memory_enabled", True) or short_turn:
-            # A short ambient turn deliberately skips RAG (see the transcript
-            # comment below) - its budget belongs to the transcript, not to a
-            # tier that will not render.
+            # With the short-turn gate on, a short turn skips RAG; its budget
+            # goes to the transcript, not to a tier that will not render.
             disabled.add("ltm")
             disabled.add("web")
         if not control.get("cross_context_enabled", True) or short_turn:
@@ -14568,6 +14596,10 @@ class DameCurieBot(commands.Bot):
         # model sees each one with its cause, so it does not guess why
         # something is missing and can tell root.
         memory_gaps: list[str] = []
+        settings_error = _short_turn_settings_error(self._control)
+        if settings_error is not None:
+            logger.warning("Short-turn gate off for this turn: %s", settings_error)
+            memory_gaps.append(f"the short-turn gate is off for this turn ({settings_error})")
         search_errors_token = SEARCH_ERRORS.set(memory_gaps)
 
         # Collect recent users from conversation for pinging support
@@ -14821,17 +14853,19 @@ class DameCurieBot(commands.Bot):
                     rag_context = [
                         r for r in rag_results if r.get("similarity", 0) >= 0.35
                     ]
-                    # Recent user messages from this guild/channel pair -
-                    # this is what was missing before. Past conversations
-                    # were invisible to the prompt. We pull them from the
-                    # same channel first (high relevance) then fall back
-                    # to whole-guild.
+                    # Past user messages that match this message. In a server,
+                    # search every channel of this server (root, 2 November
+                    # 2026: the server is public; only DMs are private). The
+                    # guild match is exact, so a DM row never enters a server
+                    # prompt. In a DM, search that DM channel only.
+                    recall_guild = str(getattr(message.guild, "id", "") or "")
                     recent_results = await self.memory.rag_search(
                         user_message,
                         kinds=["message"],
                         source="user",
-                        guild_id=str(getattr(message.guild, "id", "") or ""),
+                        guild_id=recall_guild,
                         channel_id=str(getattr(message.channel, "id", "") or ""),
+                        exact_guild=bool(recall_guild),
                         apply_recency=True,
                         recency_tau_days=3.0,  # tight tau - recent chat
                         top_k=8,
@@ -14906,8 +14940,14 @@ class DameCurieBot(commands.Bot):
                             )
                             who = r.get("author", "anon")
                             sim_pct = int(r.get("similarity", 0) * 100)
+                            row_channel = str(r.get("channel_id") or "")
+                            where = (
+                                f" in <#{row_channel}>"
+                                if row_channel and row_channel != str(message.channel.id)
+                                else ""
+                            )
                             rec_lines.append(
-                                f"- [{who}{stamp}, {sim_pct}% match] {str(r['content'])[:300]}"
+                                f"- [{who}{where}{stamp}, {sim_pct}% match] {str(r['content'])[:300]}"
                             )
                         # Same tier as the facts above - recalled chat and
                         # recalled facts are both "things looked up about this
@@ -15200,9 +15240,8 @@ class DameCurieBot(commands.Bot):
                 ),
             )
             if self._is_short_live_turn(message, user_message):
-                # Watch/ambient turns still need the current thread. 20 lines
-                # cuts off the exchange and he riffs on the last 'lol'. Keep
-                # this-channel transcript; skip RAG/cross-context instead.
+                # With the short-turn gate on, a short turn keeps 40 lines of
+                # this channel's transcript and skips RAG and cross-context.
                 count = min(count, 40)
             current_message_id = getattr(message, "id", None)
             # Slide the history window in BLOCKS, not one message per turn.
