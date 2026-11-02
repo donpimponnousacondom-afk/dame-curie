@@ -58,6 +58,51 @@ If set, `DAME_CURIE_CONTAINER_MODE=true` and `DAME_CURIE_INSTANCE_ID=dame-curie-
 
 Dirac uses the existing shared Ollama embedding service; it does not run its own Ollama/model-pull. The relay forwards only `POST /api/embed`, `POST /api/embeddings`, and `POST /v1/embeddings`; other paths/methods are rejected locally. This is an endpoint/method boundary, not independent same-UID or model-resource isolation: permitted embedding arguments remain client-controlled and no body-size quota was added. No canonical/V1/shared service mutation, model administration, publisher, remote destination, or activation follows from this contract.
 
+## Embedding model and recall cut-offs
+
+`bot.env` selects the embedding model. A value in `bot.env` wins over the compose default (`http://ollama:11434`). The settings are:
+
+- `DAME_CURIE_EMBED_BASE_URL`, `DAME_CURIE_EMBED_MODEL`, `DAME_CURIE_EMBED_API_KEY` and `DAME_CURIE_EMBED_DIM` (vector length).
+- `DAME_CURIE_EMBED_REQUEST_DIMENSIONS`: the `dimensions` request field. Blank sends no field. A value must equal `DAME_CURIE_EMBED_DIM`, or the readiness gate and the bot stop with that cause.
+- `DAME_CURIE_RAG_FACT_MIN_SIMILARITY`, `DAME_CURIE_RAG_MESSAGE_MIN_SIMILARITY`, `DAME_CURIE_RAG_WEB_MIN_SIMILARITY` and `DAME_CURIE_RAG_NEGATIVE_SIMILARITY`: the recall cut-offs. Each model has its own score range. Blank keeps the `qwen3-embedding:0.6b` values: 0.35, 0.40, 0.40 and 0.85. A value outside 0 to 1 stops startup.
+
+A model change does not delete memory. The stored text stays. Each vector carries the identity of its model (`embedding_backend`), and search reads only the vectors of the configured model. To change the model:
+
+1. Back up `dame-curie-rag.db`.
+2. Pre-warm: copy the database with the SQLite backup API. Run `rag_maintenance.py backfill --db <copy> --limit 10000 --batch-size 64 --max-seconds 600` with the new settings until `eligible_pending` is 0. The live bot keeps running.
+3. Calibrate the cut-offs on the two copies (method below).
+4. Stop the bot. Copy the `embed_cache` rows of the new model from the copy into the live database. Set the new values in `bot.env`. Run the backfill on the live database: cached rows need no request. Start the bot.
+5. Rollback: restore the old `bot.env` lines and the backup of step 1.
+
+The bot also runs a catch-up pass every 10 minutes. It embeds the rows that have no vector for the configured model, for at most 60 s. A write that finds `DAME_CURIE_MAX_BACKGROUND_EMBED_TASKS` (8) embeds in the queue stores its row without a vector and logs "Background embed deferred to the catch-up pass". On 2 November 2026, 1,495 of 3,079 long-term facts had no vector for this reason.
+
+Calibration method (equal pass volume): real user messages are the queries. For each search, find the fraction of (query, row) pairs that pass the old cut-off in the old space. The new cut-off passes the same fraction in the new space. Labelled pairs (a message and the fact extracted from it) check that the new cut-off keeps the true matches.
+
+### Benchmark, 2 November 2026
+
+Recall at 1 and 10 (R@1 / R@10). Queries: SciFact 300 (public set), her web searches 93, her memory facts 45.
+
+| Model | SciFact | Web searches | Memory facts |
+|---|---|---|---|
+| `qwen3-embedding:0.6b`, 1024 | 0.737 / 0.903 | 0.247 / 0.677 | 0.689 / 0.889 |
+| Qwen with the query instruction | 0.750 / 0.923 | 0.344 / 0.720 | 0.689 / 0.867 |
+| `text-embedding-3-small`, 1536 | 0.767 / 0.937 | 0.419 / 0.720 | 0.756 / 0.889 |
+| `text-embedding-3-large`, 1536 | 0.810 / 0.953 | 0.366 / 0.774 | 0.778 / 0.889 |
+| `text-embedding-3-large`, 3072 | 0.817 / 0.963 | 0.366 / 0.774 | 0.800 / 0.889 |
+
+Query latency from this server: 3-large median 0.30 s, 95th percentile 0.44 s. Qwen median 0.15 s to 0.20 s, but a query waits behind a background piece (10 s to 12 s for 6,000 characters).
+
+### Note: the Qwen query instruction
+
+Root asked to keep this note (2 November 2026). If the bot uses `qwen3-embedding` again, add the query instruction of the model. It costs nothing and it needs no model change. Qwen3-Embedding expects an instruction before a query and no instruction before a stored document:
+
+```text
+Instruct: Given a chat message, retrieve stored facts that are relevant to it
+Query: <the message>
+```
+
+The bot sends no instruction today. With the instruction, the web searches went from R@1 0.247 to 0.344 and SciFact from 0.737 to 0.750. The memory facts went from R@10 0.889 to 0.867 (45 queries; one query is 2 points). The change is in code, not in `bot.env`: put the instruction on the query text of `rag_search` only. Stored rows keep their vectors, because a stored document has no instruction. Test the instruction text on her memory facts before release.
+
 ## V2 shell tools and authored-path compatibility
 
 The image retains the measured shell CLI packages, including ordinary Debian Git and its approved normal Perl dependencies, with `--no-install-recommends`. It builds the exact `docker/shell-requirements.lock` packages into `/opt/dame-curie/shell-wheelhouse`, without installing them into app Python or changing `docker/requirements.lock`. Shell tools and the app use NumPy 2.5.4 and setuptools 84.2.1 (#41). setuptools 84 has no `pkg_resources`; `py-mini-racer` 0.6.0 falls back to its module folder when that import fails. Measured on 2 November 2026: in a shell venv built from the wheelhouse, `MiniRacer().eval("6*7")` returned 42. `phply` is a Python parser, not a PHP interpreter or hosting service. No removed hosting features or model-facing tool menu is restored.
