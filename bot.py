@@ -1581,17 +1581,17 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
-def _recalled_author_label(row: dict, own_id: str, own_name: str) -> str:
+def _recalled_author_label(row: dict, own_id: str) -> str:
     """Who wrote a recalled message, in the labels of her history.
 
-    Her own message: "you/<name>(id)", as in the reply notes. Another
+    Her own message: "you/Dame Curie(id)", as in the reply notes. Another
     author: "Name(id)", with " [bot]" for a bot account (the APP tag in
     Discord), as in the transcript. Root, 2 November 2026: a bot here is
     named "curie", and recalled lines showed only display names.
     """
     author_id = str(row.get("author_id") or "")
     if own_id and author_id == own_id:
-        return f"you/{own_name}({own_id})"
+        return f"you/Dame Curie({own_id})"
     name = str(row.get("author") or "anon")
     label = f"{name}({author_id})" if author_id else name
     return f"{label} [bot]" if row.get("author_is_bot") else label
@@ -8718,13 +8718,21 @@ class DameCurieBot(commands.Bot):
 
         lines = []
         reply = self._reply_meta_from_message(message)
+        unresolved = (
+            not reply
+            and getattr(message, "reference", None) is not None
+            and not message_reference_is_forward(message)
+        )
+        if unresolved:
+            lines.append("Replying to: a message that could not be loaded")
         if reply:
             target = who(
                 reply.get("reply_to_author", ""),
                 reply.get("reply_to_author_id", ""),
                 bool(reply.get("reply_to_author_is_bot")),
             )
-            quoted = str(reply.get("reply_to_content") or "")
+            # As in the history notes: a double quote would end the quote early.
+            quoted = str(reply.get("reply_to_content") or "").replace('"', "'")
             lines.append(
                 f"Replying to: {target}"
                 + (f'. That message said: "{quoted}"' if quoted else "")
@@ -8735,13 +8743,20 @@ class DameCurieBot(commands.Bot):
                 str(getattr(user, "id", "") or ""),
                 bool(getattr(user, "bot", False)),
             )
-            for user in list(getattr(message, "mentions", None) or [])[:10]
+            for user in list(getattr(message, "mentions", None) or [])
         ]
         if mentioned:
-            lines.append("Mentions: " + ", ".join(who(*m) for m in mentioned))
-        to_her = bool(reply.get("reply_to_self")) or any(m[1] == own_id for m in mentioned)
+            lines.append("Mentions: " + ", ".join(who(*m) for m in mentioned[:10]))
+        # A private DM has only her and the author, so it speaks to her.
+        to_her = (
+            isinstance(getattr(message, "channel", None), discord.DMChannel)
+            or bool(reply.get("reply_to_self"))
+            or bool(own_id and any(m[1] == own_id for m in mentioned))
+        )
         if to_her:
             verdict = "yes"
+        elif unresolved:
+            verdict = "not stated (the reply target could not be loaded)"
         elif reply or mentioned:
             verdict = "no"
         else:
@@ -15068,14 +15083,12 @@ class DameCurieBot(commands.Bot):
                     if rag_recent:
                         rec_lines = []
                         for r in rag_recent:
+                            who = _recalled_author_label(
+                                r, str(getattr(getattr(self, "user", None), "id", "") or "")
+                            )
                             when = r.get("timestamp", "")
                             stamp = _recall_age_label(
-                                when, f"a recalled message from {r.get('author', 'anon')}", memory_gaps
-                            )
-                            who = _recalled_author_label(
-                                r,
-                                str(getattr(getattr(self, "user", None), "id", "") or ""),
-                                self.bot_name,
+                                when, f"a recalled message from {who}", memory_gaps
                             )
                             sim_pct = int(r.get("similarity", 0) * 100)
                             row_channel = str(r.get("channel_id") or "")

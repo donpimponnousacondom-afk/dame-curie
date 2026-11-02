@@ -624,4 +624,4 @@ def test_recalled_lines_name_their_author_by_id(row, label):
     """Root, 2 November 2026: a bot named "curie" was taken for her in recalled lines."""
     from bot import _recalled_author_label
 
-    assert _recalled_author_label(row, "1545541390392369165", "Dame Curie") == label
+    assert _recalled_author_label(row, "1545541390392369165") == label

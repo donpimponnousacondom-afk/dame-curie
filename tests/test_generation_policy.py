@@ -310,3 +310,42 @@ def test_watcher_addressing_verdict_comes_from_discord_data(shared_bot, mentions
     assert lines.splitlines()[-1] == f"Addressed to dame_curie: {verdict}"
     if HER in mentions:
         assert f"dame_curie({HER_ID})" in lines
+
+
+def test_a_private_dm_is_addressed_to_her(shared_bot):
+    """A 1:1 DM has only her and the author; "call me Max" there is to her."""
+    import discord
+
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    message = _discord_message("call me Max from now on", ROOT)
+    message.channel = Mock(spec=discord.DMChannel)
+    assert bot._watcher_addressing(message).splitlines()[-1] == "Addressed to dame_curie: yes"
+
+
+def test_her_mention_after_ten_others_still_counts(shared_bot):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    others = [SimpleNamespace(id=100 + i, display_name=f"u{i}", name=f"u{i}", bot=False) for i in range(10)]
+    lines = bot._watcher_addressing(_discord_message("hi all", ROOT, mentions=[*others, HER]))
+    assert lines.splitlines()[-1] == "Addressed to dame_curie: yes"
+
+
+def test_an_unloaded_reply_target_is_named_and_not_called_a_message_without_reply(shared_bot):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    message = _discord_message("you were wrong", ROOT)
+    message.reference = SimpleNamespace(message_id=42, resolved=None)
+    lines = bot._watcher_addressing(message).splitlines()
+    assert lines == [
+        "Replying to: a message that could not be loaded",
+        "Addressed to dame_curie: not stated (the reply target could not be loaded)",
+    ]
+
+
+def test_a_quote_with_double_quotes_cannot_end_the_quote(shared_bot):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    loki_message = _discord_message('he said "stop" twice', LOKI)
+    lines = bot._watcher_addressing(_discord_message("lol", ROOT, reply_to=loki_message))
+    assert "That message said: \"he said 'stop' twice\"" in lines

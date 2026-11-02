@@ -1753,8 +1753,8 @@ class RAGMemoryManager:
         ).fetchone()
         report["cursor"] = progress["cursor"] if progress else 0
         highwater = self._db.execute("SELECT COALESCE(MAX(rowid), 0) FROM vectors").fetchone()[0]
-        # Rows that are never embedded (bot_output, low-signal messages) are
-        # left out here, so a pass does not walk them again each time.
+        # Rows that are never embedded (tool records, low-signal messages)
+        # are left out here, so a pass does not walk them again each time.
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(vectors)")}
         source = "source" if "source" in columns else "'user'"
         author = "author_id" if "author_id" in columns else "''"
@@ -3564,9 +3564,8 @@ class RAGMemoryManager:
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return candidates[:top_k]  # type: ignore[index]  # always len > 0 here
 
-    # No caller (1 November 2026). Since #31, new bot_output rows have no
-    # vectors. Rows from before #31 keep theirs, so the bot_output search
-    # below can return them if this function is called.
+    # No caller (1 November 2026). Since #44, bot messages (hers and other
+    # bots') have vectors again; tool records have none.
     async def rag_relevant_context(  # type: ignore[override]
         self,
         query: str,
