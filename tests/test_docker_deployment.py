@@ -150,6 +150,8 @@ def test_ollama_is_private_and_has_persistent_per_project_models():
             "ollama/ollama:0.40.13@sha256:"
             "b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429"
         )
+        # Ollama 0.40 calls ollama.com unless this is "1" (2 November 2026).
+        assert service["environment"]["OLLAMA_NO_CLOUD"] == "1"
         assert "ports" not in service
         assert "env_file" not in service
         assert all(
@@ -166,9 +168,6 @@ def test_pull_is_one_shot_and_runtime_waits_for_download_and_embedding():
     pull = services["ollama-pull"]
     assert pull["restart"] == "no"
     assert pull["environment"]["OLLAMA_HOST"] == "127.0.0.1:11434"
-    # Ollama 0.40 calls ollama.com from the serving container unless this is
-    # "1"; the embeddings network has no internet (2 November 2026).
-    assert services["ollama"]["environment"]["OLLAMA_NO_CLOUD"] == "1"
     assert "ollama pull qwen3-embedding:0.6b" in pull["command"][0]
     assert services["ollama"]["depends_on"] == {
         "ollama-pull": {"condition": "service_completed_successfully"}
