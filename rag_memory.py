@@ -76,6 +76,8 @@ from config import Config as _Cfg
 
 EMBED_MODEL = _Cfg.EMBED_MODEL
 EMBED_DIM = _Cfg.EMBED_DIM
+# Sent as the "dimensions" request field only when bot.env sets it.
+EMBED_REQUEST_DIMENSIONS = _Cfg.EMBED_REQUEST_DIMENSIONS
 EMBED_API_KEY = _Cfg.EMBED_API_KEY
 EMBED_BASE_URL = _Cfg.EMBED_BASE_URL
 EMBEDDINGS_ENABLED = _Cfg.ENABLE_RAG
@@ -315,8 +317,12 @@ MAX_ENTITY_ALIASES = 8
 MAX_ENTITY_GUILDS = 32
 
 # Cosine similarity threshold for RAG retrieval. Below this, results are
-# considered noise and filtered out.
-SIM_THRESHOLD = 0.35
+# considered noise and filtered out. bot.env sets it per embedding model
+# (DAME_CURIE_RAG_FACT_MIN_SIMILARITY).
+SIM_THRESHOLD = _Cfg.RAG_FACT_MIN_SIMILARITY
+# A recall candidate with at least this cosine to a kind='negative' row is
+# left out (DAME_CURIE_RAG_NEGATIVE_SIMILARITY).
+NEGATIVE_SIMILARITY = _Cfg.RAG_NEGATIVE_SIMILARITY
 
 # ─── web result store (added 2026-08-09) ────────────────────────────────
 # When web_search runs, top results are persisted as kind='web_result' so
@@ -793,6 +799,7 @@ class RAGMemoryManager:
         self.embed_url = EMBED_URL
         self.embed_model = EMBED_MODEL
         self.embed_dim = EMBED_DIM
+        self.embed_request_dimensions = EMBED_REQUEST_DIMENSIONS
         self.embed_headers = dict(EMBED_HEADERS)
         self.embedding_backend = embedding_backend_id(
             self.embed_url, self.embed_model, self.embed_dim
@@ -847,13 +854,13 @@ class RAGMemoryManager:
                 coro.close()
             return None
         if len(self._embed_tasks) >= MAX_BACKGROUND_EMBED_TASKS:
-            # The row remains embedding=NULL and can be picked up by a later
-            # maintenance pass. Dropping work here is safer than allowing a
-            # message burst to build an unbounded queue behind Ollama.
+            # The row remains embedding=NULL. The bot's 10-minute catch-up
+            # pass (backfill_embeddings) embeds it later. Deferring here is
+            # safer than allowing a message burst to build an unbounded queue.
             with contextlib.suppress(Exception):
                 coro.close()
-            logger.debug(
-                "Skipping background embed: %s tasks already queued",
+            logger.info(
+                "Background embed deferred to the catch-up pass: %s tasks already queued",
                 MAX_BACKGROUND_EMBED_TASKS,
             )
             return None
@@ -1334,6 +1341,8 @@ class RAGMemoryManager:
                             if not EMBEDDINGS_ENABLED:
                                 return None
                             payload = {"model": self.embed_model, "input": chunk_text}
+                            if self.embed_request_dimensions is not None:
+                                payload["dimensions"] = self.embed_request_dimensions
                             async with session.post(
                                 self.embed_url,
                                 json=payload,
@@ -2793,7 +2802,7 @@ class RAGMemoryManager:
     async def add_negative(self, content: str, reason: str = "") -> str:
         """Persist a (query, bad_response) pair as a negative example.
 
-        Retrieval excludes any candidate within cosine ≥ 0.85 of a
+        Retrieval excludes any candidate within cosine ≥ NEGATIVE_SIMILARITY of a
         negative, so this is the bot's active learning channel for
         'don't dredge this up again'. Use with the bot's owner-control
         command from bot.py.
@@ -3389,7 +3398,7 @@ class RAGMemoryManager:
 
         # ─── exclude negatives ───────────────────────────────────────
         # Compare each candidate's embedding against everything in
-        # kind='negative'. If cosine ≥ 0.85, drop the candidate.
+        # kind='negative'. If cosine ≥ NEGATIVE_SIMILARITY, drop the candidate.
         # Negatives are rare so this is cheap.
         if exclude_negatives:
             try:
@@ -3424,7 +3433,7 @@ class RAGMemoryManager:
                             cv_norm = validate_embedding(cv, self.embed_dim)
                             # max cosine with any negative
                             max_neg_sim = float(np.max(neg_stack @ cv_norm))
-                            if max_neg_sim >= 0.85:
+                            if max_neg_sim >= NEGATIVE_SIMILARITY:
                                 continue  # too similar to a known bad rec
                             filtered.append(c)
                         candidates = filtered

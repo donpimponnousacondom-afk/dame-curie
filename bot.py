@@ -9007,13 +9007,43 @@ class DameCurieBot(commands.Bot):
 
         self._track_task(_spawn_background(_daily_summarizer_loop()))
 
-        # Prune idle channel locks and per-channel state every 10 minutes.
+        # Prune idle channel locks and per-channel state every 10 minutes,
+        # then embed the rows that have no vector for the configured model.
         while True:
             await asyncio.sleep(600)
             try:
                 await self._prune_idle_channel_state()
             except Exception as e:
                 logger.error(f"Memory cleanup error: {e}")
+            await self._catch_up_embeddings()
+
+    async def _catch_up_embeddings(self) -> None:
+        """Embed rows that have no vector for the configured embedding model.
+
+        Root, 2 November 2026: the memory must not forget. A write that finds
+        MAX_BACKGROUND_EMBED_TASKS embeds in the queue stores its row without
+        a vector, and memory search cannot find that row. On 2 November 2026,
+        1,495 of 3,079 stored facts had no vector, because a summary writes
+        more facts at one time than the queue holds. This pass embeds them.
+        One pass stops after 60 s, so it keeps the embedder free for queries.
+        """
+        if not hasattr(self.memory, "backfill_embeddings"):
+            return
+        try:
+            report = await self.memory.backfill_embeddings(limit=10000, max_seconds=60)
+        except Exception as e:
+            logger.error("Embedding catch-up pass failed: %s: %s", type(e).__name__, e)
+            return
+        if report["attempted"]:
+            log = logger.warning if report["failed"] else logger.info
+            log(
+                "Embedding catch-up pass: %s embedded, %s failed, stopped at %s, "
+                "%s rows still without a vector",
+                report["embedded"],
+                report["failed"],
+                report["stopped"],
+                report["counts"]["eligible_pending"],
+            )
 
     async def _prune_idle_channel_state(self):
         """Prune idle channel locks and per-channel state on the 10-minute sweep.
@@ -14858,7 +14888,9 @@ class DameCurieBot(commands.Bot):
                     )
                     _mark("rag_ltm")
                     rag_context = [
-                        r for r in rag_results if r.get("similarity", 0) >= 0.35
+                        r
+                        for r in rag_results
+                        if r.get("similarity", 0) >= Config.RAG_FACT_MIN_SIMILARITY
                     ]
                     # Past user messages that match this message. In a server,
                     # search every channel of this server (root, 2 November
@@ -14879,7 +14911,9 @@ class DameCurieBot(commands.Bot):
                     )
                     _mark("rag_recent")
                     rag_recent = [
-                        r for r in recent_results if r.get("similarity", 0) >= 0.40
+                        r
+                        for r in recent_results
+                        if r.get("similarity", 0) >= Config.RAG_MESSAGE_MIN_SIMILARITY
                     ][:5]  # cap to 5 recent messages
                 # ─── web results (operator feature 2026-08-09) ───
                 # Recall any web_result rows from previous searches that
@@ -14898,12 +14932,14 @@ class DameCurieBot(commands.Bot):
                             user_message,
                             guild_id=str(getattr(message.guild, "id", "") or ""),
                             top_k=4,
-                            min_similarity=0.40,
+                            min_similarity=Config.RAG_WEB_MIN_SIMILARITY,
                             max_age_days=7,
                         )
                         _mark("web_results")
                         rag_web = [
-                            r for r in web_rows if r.get("similarity", 0) >= 0.40
+                            r
+                            for r in web_rows
+                            if r.get("similarity", 0) >= Config.RAG_WEB_MIN_SIMILARITY
                         ]
                     except Exception as e:
                         cause = f"{type(e).__name__}: {e}"

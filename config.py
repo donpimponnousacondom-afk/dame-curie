@@ -72,6 +72,33 @@ def _float_env(
     return value
 
 
+def _optional_dimensions_env(name: str, expected: int) -> int | None:
+    """Read an optional request dimension; a value that is not EMBED_DIM stops startup."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) != expected:
+        raise ValueError(
+            f"{name}={raw!r} must be blank or the same whole number as "
+            f"DAME_CURIE_EMBED_DIM ({expected})"
+        )
+    return int(raw)
+
+
+def _similarity_env(name: str, default: float) -> float:
+    """Read a cosine cut-off; a value outside 0 to 1 stops startup."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name}={raw!r} must be a number from 0 to 1")
+    return value
+
+
 def _bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -316,6 +343,20 @@ class Config:
     EMBED_MODEL = os.getenv("DAME_CURIE_EMBED_MODEL", os.getenv("EMBED_MODEL", ""))
     EMBED_API_KEY = os.getenv("DAME_CURIE_EMBED_API_KEY", os.getenv("EMBED_API_KEY", ""))
     EMBED_DIM = _int_env("DAME_CURIE_EMBED_DIM", 1024, min_value=8, max_value=16384)
+    # The "dimensions" field of the embedding request. Blank or absent: the
+    # request has no such field. OpenAI text-embedding-3 models shorten their
+    # vectors to this size. It must equal EMBED_DIM.
+    EMBED_REQUEST_DIMENSIONS = _optional_dimensions_env(
+        "DAME_CURIE_EMBED_REQUEST_DIMENSIONS", EMBED_DIM
+    )
+    # Cosine cut-offs for memory recall. Each embedding model has its own
+    # score range, so change these together with EMBED_MODEL. The defaults
+    # are the values for qwen3-embedding:0.6b.
+    RAG_FACT_MIN_SIMILARITY = _similarity_env("DAME_CURIE_RAG_FACT_MIN_SIMILARITY", 0.35)
+    RAG_MESSAGE_MIN_SIMILARITY = _similarity_env("DAME_CURIE_RAG_MESSAGE_MIN_SIMILARITY", 0.40)
+    RAG_WEB_MIN_SIMILARITY = _similarity_env("DAME_CURIE_RAG_WEB_MIN_SIMILARITY", 0.40)
+    # A recall candidate this similar to a downvoted ("negative") row is left out.
+    RAG_NEGATIVE_SIMILARITY = _similarity_env("DAME_CURIE_RAG_NEGATIVE_SIMILARITY", 0.85)
 
     TTS_ENGINE = os.getenv("TTS_ENGINE", "").strip().lower()
     FISH_API_KEY = os.getenv("FISH_API_KEY", "")

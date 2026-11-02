@@ -34,6 +34,11 @@ DISABLED = {"0", "false", "no", "off"}
 BASE_URL_KEYS = ("DAME_CURIE_EMBED_BASE_URL", "EMBED_BASE_URL")
 MODEL_KEYS = ("DAME_CURIE_EMBED_MODEL", "EMBED_MODEL")
 API_KEY_KEYS = ("DAME_CURIE_EMBED_API_KEY", "EMBED_API_KEY")
+REQUEST_DIMENSIONS_KEY = "DAME_CURIE_EMBED_REQUEST_DIMENSIONS"
+
+
+class ConfigurationError(ValueError):
+    """A bot.env value is wrong. The message names it and holds no credential."""
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -88,6 +93,23 @@ def embedding_dimension(environment: dict[str, str]) -> int:
     return max(MIN_DIMENSION, min(MAX_DIMENSION, value))
 
 
+def request_dimensions(environment: dict[str, str], dimension: int) -> int | None:
+    """Resolve the optional "dimensions" request field the way config.py does.
+
+    Blank or absent: the request has no such field. Any other value must be the
+    same whole number as the configured dimension, or the gate stops.
+    """
+    raw = environment.get(REQUEST_DIMENSIONS_KEY, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) != dimension:
+        raise ConfigurationError(
+            f"{REQUEST_DIMENSIONS_KEY}={raw!r} must be blank or the same whole number as "
+            f"DAME_CURIE_EMBED_DIM ({dimension})"
+        )
+    return int(raw)
+
+
 def embedding_endpoint(base_url: str) -> str:
     """Resolve a base URL to its request URL, as rag_memory._embed_endpoint does.
 
@@ -133,11 +155,17 @@ def extract_vectors(payload: object) -> list:
 
 
 def check_embeddings(
-    base_url: str, model: str, dimension: int, api_key: str = ""
+    base_url: str,
+    model: str,
+    dimension: int,
+    api_key: str = "",
+    dimensions_field: int | None = None,
 ) -> None:
     """Require one finite, nonzero numeric vector of exactly ``dimension`` length."""
     url = embedding_endpoint(base_url)
     payload: dict[str, object] = {"model": model, "input": "readiness"}
+    if dimensions_field is not None:
+        payload["dimensions"] = dimensions_field
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -169,11 +197,12 @@ def main() -> None:
         return
     model = first_setting(environment, MODEL_KEYS)
     dimension = embedding_dimension(environment)
+    dimensions_field = request_dimensions(environment, dimension)
     api_key = first_setting(environment, API_KEY_KEYS)
     base_url = first_setting(environment, BASE_URL_KEYS)
     if not base_url or not model:
         raise ValueError("embedding readiness requires an explicit non-blank endpoint and model")
-    check_embeddings(base_url, model, dimension, api_key)
+    check_embeddings(base_url, model, dimension, api_key, dimensions_field)
 
 
 def cli() -> None:
@@ -188,6 +217,9 @@ def cli() -> None:
     """
     try:
         main()
+    except ConfigurationError as error:
+        print(f"embedding readiness failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
     except (OSError, ValueError, HTTPException) as error:
         # HTTPError/URLError, HTTP protocol errors, timeouts, JSON decoding,
         # and this gate's own configuration errors.

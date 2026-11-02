@@ -815,6 +815,7 @@ def doctor_config(enabled=True):
         EMBED_MODEL="configured-model",
         EMBED_API_KEY="synthetic-key",
         EMBED_DIM=8,
+        EMBED_REQUEST_DIMENSIONS=None,
     )
 
 
@@ -1297,3 +1298,110 @@ def test_dedupe_self_copies_removes_only_copies_a_gateway_row_holds(memory, tmp_
     import stat
 
     assert stat.S_IMODE(os.stat(applied["backup"]).st_mode) == 0o600
+
+
+@pytest.mark.parametrize("dimensions,expected", [
+    (None, {"model": "test-model-a", "input": "configured request fields"}),
+    (8, {"model": "test-model-a", "input": "configured request fields", "dimensions": 8}),
+])
+def test_dimensions_field_is_on_the_wire_only_when_configured(
+    memory, monkeypatch, dimensions, expected
+):
+    """Root, 3 October 2026: an optional request field that bot.env does not set stays absent."""
+    memory.embed_request_dimensions = dimensions
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    assert asyncio.run(memory._embed("configured request fields")).shape == (8,)
+    assert [call[1]["json"] for call in transport.calls] == [expected]
+
+
+@pytest.mark.parametrize("dimensions", [None, 8])
+def test_doctor_sends_the_configured_dimensions_field(monkeypatch, dimensions):
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    cfg = doctor_config()
+    cfg.EMBED_REQUEST_DIMENSIONS = dimensions
+    assert asyncio.run(doctor._probe_embeddings(cfg))[0] == "ok"
+    sent = transport.calls[0][1]["json"]
+    assert sent.get("dimensions") == dimensions
+    assert ("dimensions" in sent) is (dimensions is not None)
+
+
+def test_catch_up_pass_embeds_the_facts_a_full_queue_deferred(memory, monkeypatch, caplog):
+    """Root, 2 November 2026: 1,495 of 3,079 facts had no vector because the queue was full."""
+    from bot import DameCurieBot
+
+    monkeypatch.setattr(rag, "MAX_BACKGROUND_EMBED_TASKS", 1)
+
+    async def run():
+        transport = install_transport(
+            monkeypatch, *[Reply({"embeddings": [vector(index=i)]}) for i in range(3)]
+        )
+        result = await memory.apply_ltm_batch(
+            [{"kind": "add", "content": f"synthetic fact {i}"} for i in range(3)]
+        )
+        assert result["added"] == 3
+        await asyncio.gather(*memory._embed_tasks)
+        assert memory.embedding_status()["eligible_pending"] == 2
+        assert len(transport.calls) == 1
+        with caplog.at_level("INFO"):
+            await DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory))
+        assert memory.embedding_status()["eligible_pending"] == 0
+        assert len(transport.calls) == 3
+
+    asyncio.run(run())
+    assert "Background embed deferred to the catch-up pass: 1 tasks already queued" in caplog.text
+    assert (
+        "Embedding catch-up pass: 2 embedded, 0 failed, stopped at scan_complete, "
+        "0 rows still without a vector"
+    ) in caplog.text
+
+
+def test_catch_up_pass_failures_are_warnings_with_their_count(memory, monkeypatch, caplog):
+    from bot import DameCurieBot
+
+    insert(memory)
+    install_transport(monkeypatch, Reply({}, 503))
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    record = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
+    assert record.levelname == "WARNING"
+    assert "0 embedded, 1 failed, stopped at endpoint_paused, 1 rows still without a vector" in (
+        record.getMessage()
+    )
+
+
+def test_catch_up_pass_names_an_unexpected_error(caplog):
+    from bot import DameCurieBot
+
+    memory = SimpleNamespace(backfill_embeddings=AsyncMock(side_effect=RuntimeError("disk full")))
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    memory.backfill_embeddings.assert_awaited_once_with(limit=10000, max_seconds=60)
+    assert "Embedding catch-up pass failed: RuntimeError: disk full" in caplog.text
+
+
+def test_negative_cut_off_comes_from_configuration(memory, monkeypatch):
+    insert(memory, "candidate", "a durable synthetic fact")
+    insert(memory, "negative", "a durable synthetic fact again", kind="negative")
+    blob = np.array([0.8, 0.6] + [0.0] * 6, dtype=np.float32).tobytes()
+    memory._db.execute(
+        "UPDATE vectors SET embedding=?, embedding_backend=? WHERE id='candidate'",
+        (np.array(vector(), dtype=np.float32).tobytes(), memory.embedding_backend),
+    )
+    memory._db.execute(
+        "UPDATE vectors SET embedding=?, embedding_backend=? WHERE id='negative'",
+        (blob, memory.embedding_backend),
+    )
+
+    def search():
+        install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+        memory._embed_cache.clear()
+        memory._db.execute("DELETE FROM embed_cache")
+        return [row["id"] for row in asyncio.run(
+            memory.rag_search("a query", kinds=["ltm"], exclude_negatives=True)
+        )]
+
+    # The candidate has cosine 0.8 to the negative row.
+    monkeypatch.setattr(rag, "NEGATIVE_SIMILARITY", 0.85)
+    assert search() == ["candidate"]
+    monkeypatch.setattr(rag, "NEGATIVE_SIMILARITY", 0.75)
+    assert search() == []

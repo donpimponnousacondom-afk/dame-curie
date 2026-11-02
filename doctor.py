@@ -154,12 +154,15 @@ async def _probe_embeddings(cfg) -> tuple[str, str]:
         return "warn", "disabled (ENABLE_RAG=false); no request sent"
     url = _embed_endpoint(cfg.EMBED_BASE_URL)
     headers = {"Authorization": f"Bearer {cfg.EMBED_API_KEY}"} if cfg.EMBED_API_KEY else {}
+    payload = {"model": cfg.EMBED_MODEL, "input": "dame-curie doctor probe"}
+    if cfg.EMBED_REQUEST_DIMENSIONS is not None:
+        payload["dimensions"] = cfg.EMBED_REQUEST_DIMENSIONS
     state, detail = "warn", "embedding probe failed"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
-                json={"model": cfg.EMBED_MODEL, "input": "dame-curie doctor probe"},
+                json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=15),
                 allow_redirects=False,
