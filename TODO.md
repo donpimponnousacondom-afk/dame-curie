@@ -14,7 +14,7 @@
   - Step 3, in the same file: set the four `DAME_CURIE_RAG_*_SIMILARITY` cut-offs blank. Blank gives the Qwen values 0.35, 0.40, 0.40 and 0.85.
   - Step 4: run `instance.py dame-curie up`.
   - Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Search reads only vectors of the configured backend, so recall finds no row until that row has a Qwen vector.
-  - The catch-up pass embeds for at most 60 s every 10 minutes, on the CPU. A manual `rag_maintenance.py backfill` is faster. Its time on Qwen is not measured; on OpenAI, 6,247 row attempts took 24.5 minutes (#42).
+  - The catch-up pass embeds for at most 60 s every 10 minutes, on the CPU. A manual `rag_maintenance.py backfill` runs without the 10-minute gaps. Its time on Qwen: not measured. On OpenAI, 6,247 row attempts took 24.5 minutes (#42).
 
 # Current completion state - 2026-10-03
 
