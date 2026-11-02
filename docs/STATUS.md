@@ -128,8 +128,9 @@ How to revert one change:
   characters with a 200-character overlap. A fetched web result of up to
   12,000 characters is three pieces, about 21 s (estimated from the one 7 s measurement; not measured as a whole). A user message row
   embeds up to 8,000 characters (`add_to_channel_memory` in
-  `rag_memory.py`): two pieces. Since #31, `bot_output` rows (her replies
-  and tool records) are not embedded.
+  `rag_memory.py`): two pieces. Since #44, her messages and the messages
+  of other bots are embedded again. Tool records (`bot_output` rows without
+  an author id) are not embedded, and search never returns them.
 
 ## Publisher inventory update - 2026-10-03, 19:44Z
 

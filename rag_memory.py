@@ -3571,7 +3571,8 @@ class RAGMemoryManager:
         return candidates[:top_k]  # type: ignore[index]  # always len > 0 here
 
     # No caller (1 November 2026). Since #44, bot messages (hers and other
-    # bots') have vectors again; tool records have none.
+    # bots') have vectors again. New tool records have none; an older one
+    # can hold a vector, and rag_search never returns it.
     async def rag_relevant_context(  # type: ignore[override]
         self,
         query: str,
