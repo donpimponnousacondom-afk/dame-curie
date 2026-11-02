@@ -326,6 +326,9 @@ def test_message_recall_spans_the_server_and_names_the_other_channel(in_server):
     )
 
     search = memory.message_search
+    # Root, 2 November 2026: recall reads bot messages (hers and other bots') again.
+    assert search["kinds"] == ["message", "bot_output"]
+    assert "source" not in search
     if in_server:
         assert (search["guild_id"], search["channel_id"], search["exact_guild"]) == ("9", "123", True)
     else:
@@ -604,3 +607,20 @@ def test_recall_cut_offs_come_from_configuration(monkeypatch, cut_off):
     for kind in ("ltm row", "message row", "web row"):
         assert f"{kind} at 0.5" in prompt
         assert (f"{kind} at 0.3" in prompt) is low_rows_kept
+
+
+@pytest.mark.parametrize(
+    ("row", "label"),
+    [
+        ({"author": "Red Queen", "author_id": "1545541390392369165", "author_is_bot": True}, "you"),
+        ({"author": "curie", "author_id": "1546469985340231800", "author_is_bot": True},
+         "curie(1546469985340231800), a bot"),
+        ({"author": "SirRooT", "author_id": "1482143139828596916"}, "SirRooT(1482143139828596916)"),
+        ({"author": "bob"}, "bob"),
+    ],
+)
+def test_recalled_lines_name_their_author_by_id(row, label):
+    """Root, 2 November 2026: a bot named "curie" was taken for her in recalled lines."""
+    from bot import _recalled_author_label
+
+    assert _recalled_author_label(row, "1545541390392369165") == label

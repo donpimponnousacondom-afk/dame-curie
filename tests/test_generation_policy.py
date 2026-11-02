@@ -238,3 +238,75 @@ def test_rem_guard_forwards_aux_policy_on_shared_main(monkeypatch, aux_policy):
     assert bot._rem_running is False
     bot._release_ai_slot.assert_awaited_once()
     bot.ai_provider.generate_response.assert_not_awaited()
+
+
+HER_ID = 1545541390392369165
+LOKI = SimpleNamespace(id=1548576826778194011, display_name="_LOKI_", name="_LOKI_", bot=True)
+ROOT = SimpleNamespace(id=1482143139828596916, display_name="SirRooT", name="SirRooT", bot=False)
+HER = SimpleNamespace(id=HER_ID, display_name="Red Queen", name="Red Queen", bot=True)
+
+
+def _discord_message(content, author, mentions=(), reply_to=None):
+    reference = None
+    if reply_to is not None:
+        reference = SimpleNamespace(message_id=reply_to.id, resolved=reply_to)
+    return SimpleNamespace(
+        id=1566879296734367795,
+        content=content,
+        author=author,
+        channel=SimpleNamespace(id=1548588998983946290),
+        guild=SimpleNamespace(id=1545673830960340992),
+        attachments=[],
+        embeds=[],
+        stickers=[],
+        mentions=list(mentions),
+        role_mentions=[],
+        channel_mentions=[],
+        reference=reference,
+    )
+
+
+def test_watcher_prompt_names_who_a_reply_to_another_bot_speaks_to(shared_bot):
+    """Root, 2 November 2026: "your cot" in a reply to _LOKI_ was read as words to her."""
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    loki_message = _discord_message("ah THAT. locked in the iron vault", LOKI)
+    message = _discord_message(
+        "(i am reading your cot idiot)", ROOT, mentions=[LOKI], reply_to=loki_message
+    )
+
+    asyncio.run(bot._extract_shared_context_fact(message))
+
+    system, user = [m["content"] for m in bot.ai_provider.generate_response.await_args.args[0]]
+    assert "Author: SirRooT (1482143139828596916)\n" in user
+    assert (
+        'Replying to: _LOKI_(1548576826778194011), a bot. That message said: '
+        '"ah THAT. locked in the iron vault"'
+    ) in user
+    assert "Mentions: _LOKI_(1548576826778194011), a bot" in user
+    assert "Addressed to dame_curie: no" in user
+    assert "They mean dame_curie only when 'Addressed to dame_curie' is yes." in system
+    assert "never write 'you', 'I' or 'me'" in system
+
+
+@pytest.mark.parametrize(
+    ("mentions", "reply_author", "verdict"),
+    [
+        ([], HER, "yes"),
+        ([HER], None, "yes"),
+        ([LOKI, HER], LOKI, "yes"),
+        ([], LOKI, "no"),
+        ([LOKI], None, "no"),
+        ([], None, "not stated (no reply and no mention)"),
+    ],
+)
+def test_watcher_addressing_verdict_comes_from_discord_data(shared_bot, mentions, reply_author, verdict):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    reply_to = _discord_message("an earlier message", reply_author) if reply_author else None
+    lines = bot._watcher_addressing(
+        _discord_message("you did well", ROOT, mentions=mentions, reply_to=reply_to)
+    )
+    assert lines.splitlines()[-1] == f"Addressed to dame_curie: {verdict}"
+    if HER in mentions:
+        assert f"dame_curie({HER_ID})" in lines
