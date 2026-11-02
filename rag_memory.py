@@ -3215,6 +3215,7 @@ class RAGMemoryManager:
         recency_tau_days: float | None = None,  # override global RECENCY_TAU_SECONDS
         exclude_negatives: bool = True,
         over_fetch: int = 3,
+        exact_guild: bool = False,
     ) -> list[dict]:
         """Semantic search across the vector store.
 
@@ -3241,11 +3242,17 @@ class RAGMemoryManager:
             over_fetch: NEW - internally pull top_k*over_fetch candidates
                         from cosine before applying recency/rerank/dedup
                         (gives room for filtering without starving the limit)
+            exact_guild: search every channel of guild_id. A row without a
+                        guild matches only when it is in channel_id, so a
+                        DM row never enters a server search. Needs guild_id
+                        and channel_id.
 
         Returns list of dicts with: id, kind, content, author, channel_id,
             guild_id, timestamp, similarity, score (recency-decayed),
             metadata.
         """
+        if exact_guild and not (guild_id and channel_id):
+            raise ValueError("rag_search(exact_guild=True) needs a guild_id and a channel_id")
         query_vec = await self._embed_for_query(query)
         if query_vec is None:
             return []
@@ -3279,12 +3286,16 @@ class RAGMemoryManager:
             placeholders = ",".join("?" * len(kinds))
             where_parts.append(f"kind IN ({placeholders})")
             params.extend(kinds)
-        if channel_id:
-            where_parts.append("(channel_id=? OR channel_id='')")
-            params.append(str(channel_id))
-        if guild_id:
-            where_parts.append("(guild_id=? OR guild_id='')")
-            params.append(str(guild_id))
+        if exact_guild:
+            where_parts.append("(guild_id=? OR (guild_id='' AND channel_id=?))")
+            params.extend([str(guild_id), str(channel_id)])
+        else:
+            if channel_id:
+                where_parts.append("(channel_id=? OR channel_id='')")
+                params.append(str(channel_id))
+            if guild_id:
+                where_parts.append("(guild_id=? OR guild_id='')")
+                params.append(str(guild_id))
         if source:
             src = [source] if isinstance(source, str) else list(source)
             placeholders = ",".join("?" * len(src))
