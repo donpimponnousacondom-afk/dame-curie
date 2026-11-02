@@ -1122,7 +1122,8 @@ def test_backfill_and_status_leave_bot_output_rows_unembedded(memory, monkeypatc
     transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
     insert(memory, row_id="reply", text="an old reply of hers", kind="bot_output")
     report = asyncio.run(memory.backfill_embeddings(kind="bot_output"))
-    assert report["skipped"] == 1 and report["attempted"] == 0
+    # The backfill select leaves out rows that are never embedded.
+    assert (report["skipped"], report["attempted"], report["stopped"]) == (0, 0, "scan_complete")
     assert transport.calls == []
     status = memory.embedding_status()
     assert status["eligible_pending"] == 0
