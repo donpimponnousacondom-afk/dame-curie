@@ -1,6 +1,9 @@
 """Tests for RAGMemoryManager (replaces old MemoryManager tests)."""
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import Mock
 
+from bot import DameCurieBot
 from rag_memory import RAGMemoryManager
 
 
@@ -237,3 +240,29 @@ def test_duplicate_content_hash_does_not_crash_init(tmp_path):
         ).fetchall()
     ]
     assert ids == ["dup-a"]
+
+
+def test_periodic_sweep_keeps_the_memory_of_a_quiet_channel(tmp_path):
+    """A channel with no message for days keeps its rows after the 10-minute sweep."""
+
+    async def run():
+        mgr = RAGMemoryManager(str(tmp_path))
+        await mgr.add_to_channel_memory("quiet", {
+            "message_id": "m1",
+            "author": "Alice",
+            "author_id": "123",
+            "content": "the deploy key lives in the vault",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+        })
+        bot = SimpleNamespace(
+            memory=mgr,
+            _channel_locks=SimpleNamespace(prune=Mock(return_value=0)),
+            _prune_per_channel_state=Mock(return_value=0),
+        )
+        await DameCurieBot._prune_idle_channel_state(bot)
+        rows = await mgr.get_channel_memory("quiet")
+        assert [row["content"] for row in rows] == ["the deploy key lives in the vault"]
+        bot._channel_locks.prune.assert_called_once_with(all_idle=True)
+        bot._prune_per_channel_state.assert_called_once_with()
+
+    _run(run())
