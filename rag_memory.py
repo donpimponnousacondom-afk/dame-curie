@@ -76,6 +76,8 @@ from config import Config as _Cfg
 
 EMBED_MODEL = _Cfg.EMBED_MODEL
 EMBED_DIM = _Cfg.EMBED_DIM
+# Sent as the "dimensions" request field only when bot.env sets it.
+EMBED_REQUEST_DIMENSIONS = _Cfg.EMBED_REQUEST_DIMENSIONS
 EMBED_API_KEY = _Cfg.EMBED_API_KEY
 EMBED_BASE_URL = _Cfg.EMBED_BASE_URL
 EMBEDDINGS_ENABLED = _Cfg.ENABLE_RAG
@@ -315,8 +317,12 @@ MAX_ENTITY_ALIASES = 8
 MAX_ENTITY_GUILDS = 32
 
 # Cosine similarity threshold for RAG retrieval. Below this, results are
-# considered noise and filtered out.
-SIM_THRESHOLD = 0.35
+# considered noise and filtered out. bot.env sets it per embedding model
+# (DAME_CURIE_RAG_FACT_MIN_SIMILARITY).
+SIM_THRESHOLD = _Cfg.RAG_FACT_MIN_SIMILARITY
+# A recall candidate with at least this cosine to a kind='negative' row is
+# left out (DAME_CURIE_RAG_NEGATIVE_SIMILARITY).
+NEGATIVE_SIMILARITY = _Cfg.RAG_NEGATIVE_SIMILARITY
 
 # ─── web result store (added 2026-08-09) ────────────────────────────────
 # When web_search runs, top results are persisted as kind='web_result' so
@@ -793,6 +799,7 @@ class RAGMemoryManager:
         self.embed_url = EMBED_URL
         self.embed_model = EMBED_MODEL
         self.embed_dim = EMBED_DIM
+        self.embed_request_dimensions = EMBED_REQUEST_DIMENSIONS
         self.embed_headers = dict(EMBED_HEADERS)
         self.embedding_backend = embedding_backend_id(
             self.embed_url, self.embed_model, self.embed_dim
@@ -822,6 +829,8 @@ class RAGMemoryManager:
         # in-flight embeds are silently dropped and rows stay embedding=NULL)
         # and so tests don't spam "coroutine ignored GeneratorExit".
         self._embed_tasks: set[asyncio.Task] = set()
+        # Embeds deferred by a full queue since the last catch-up pass.
+        self._deferred_embeds = 0
         # If the local embedder is unavailable or too slow, don't retry it for
         # every RAG search in the same turn (or every concurrent turn).
         self._query_embed_disabled_until = 0.0
@@ -837,6 +846,11 @@ class RAGMemoryManager:
         self._embed_suppressed_failures = 0
         self._init_db()
 
+    def pop_deferred_embeds(self) -> int:
+        """Return the count of embeds deferred since the last call, and reset it."""
+        count, self._deferred_embeds = self._deferred_embeds, 0
+        return count
+
     def _embed_endpoint_paused(self) -> bool:
         return time.monotonic() < self._embed_endpoint_down_until
 
@@ -847,15 +861,18 @@ class RAGMemoryManager:
                 coro.close()
             return None
         if len(self._embed_tasks) >= MAX_BACKGROUND_EMBED_TASKS:
-            # The row remains embedding=NULL and can be picked up by a later
-            # maintenance pass. Dropping work here is safer than allowing a
-            # message burst to build an unbounded queue behind Ollama.
+            # The row remains embedding=NULL. The bot's 10-minute catch-up
+            # pass (backfill_embeddings) embeds it later. Deferring here is
+            # safer than allowing a message burst to build an unbounded queue.
             with contextlib.suppress(Exception):
                 coro.close()
-            logger.debug(
-                "Skipping background embed: %s tasks already queued",
-                MAX_BACKGROUND_EMBED_TASKS,
-            )
+            self._deferred_embeds += 1
+            if self._deferred_embeds == 1:
+                # One line per burst; the catch-up line states the count.
+                logger.info(
+                    "Background embed deferred to the catch-up pass: %s tasks already queued",
+                    MAX_BACKGROUND_EMBED_TASKS,
+                )
             return None
         task = asyncio.ensure_future(coro)
         self._embed_tasks.add(task)
@@ -1124,6 +1141,7 @@ class RAGMemoryManager:
         self._db.create_function(
             "embedding_valid", 1, lambda blob: embedding_blob_valid(blob, self.embed_dim)
         )
+        self._db.create_function("embedding_eligible", 3, embedding_eligible)
 
     def embedding_status(self) -> dict:
         """Counts for the configured vector space, not every non-NULL blob."""
@@ -1334,6 +1352,8 @@ class RAGMemoryManager:
                             if not EMBEDDINGS_ENABLED:
                                 return None
                             payload = {"model": self.embed_model, "input": chunk_text}
+                            if self.embed_request_dimensions is not None:
+                                payload["dimensions"] = self.embed_request_dimensions
                             async with session.post(
                                 self.embed_url,
                                 json=payload,
@@ -1622,7 +1642,7 @@ class RAGMemoryManager:
         if not 0 < max_seconds <= 600:
             raise ValueError("max_seconds must be >0 and <=600")
         report = {
-            "attempted": 0, "embedded": 0, "failed": 0, "skipped": 0,
+            "attempted": 0, "embedded": 0, "failed": 0, "failed_ids": [], "skipped": 0,
             "cursor": 0, "scan_complete": False, "stopped": "disabled",
         }
         if EMBEDDINGS_ENABLED:
@@ -1644,6 +1664,10 @@ class RAGMemoryManager:
         ).fetchone()
         report["cursor"] = progress["cursor"] if progress else 0
         highwater = self._db.execute("SELECT COALESCE(MAX(rowid), 0) FROM vectors").fetchone()[0]
+        # Rows that are never embedded (bot_output, low-signal messages) are
+        # left out here, so a pass does not walk them again each time.
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(vectors)")}
+        source = "source" if "source" in columns else "'user'"
         remaining = limit
         report["stopped"] = "limit"
         while remaining:
@@ -1657,7 +1681,8 @@ class RAGMemoryManager:
                 "SELECT rowid AS position, * FROM vectors "
                 "WHERE rowid>? AND rowid<=? AND (?='' OR kind=?) AND "
                 "(embedding IS NULL OR COALESCE(embedding_backend, '') != ? "
-                "OR NOT embedding_valid(embedding)) ORDER BY rowid LIMIT ?",
+                f"OR NOT embedding_valid(embedding)) AND embedding_eligible(kind, {source}, content) "
+                "ORDER BY rowid LIMIT ?",
                 (report["cursor"], highwater, kind, kind, self.embedding_backend,
                  min(batch_size, remaining)),
             ).fetchall()
@@ -1681,6 +1706,8 @@ class RAGMemoryManager:
                     report["attempted"] += 1
                     stored = await self._embed_and_store(row["id"], content)
                     report["embedded" if stored else "failed"] += 1
+                    if not stored and len(report["failed_ids"]) < 10:
+                        report["failed_ids"].append(str(row["id"]))
                 report["cursor"] = row["position"]
                 self._db.execute(
                     "INSERT OR REPLACE INTO embed_backfill VALUES (?, ?, ?)",
@@ -2793,7 +2820,7 @@ class RAGMemoryManager:
     async def add_negative(self, content: str, reason: str = "") -> str:
         """Persist a (query, bad_response) pair as a negative example.
 
-        Retrieval excludes any candidate within cosine ≥ 0.85 of a
+        Retrieval excludes any candidate within cosine ≥ NEGATIVE_SIMILARITY of a
         negative, so this is the bot's active learning channel for
         'don't dredge this up again'. Use with the bot's owner-control
         command from bot.py.
@@ -3389,7 +3416,7 @@ class RAGMemoryManager:
 
         # ─── exclude negatives ───────────────────────────────────────
         # Compare each candidate's embedding against everything in
-        # kind='negative'. If cosine ≥ 0.85, drop the candidate.
+        # kind='negative'. If cosine ≥ NEGATIVE_SIMILARITY, drop the candidate.
         # Negatives are rare so this is cheap.
         if exclude_negatives:
             try:
@@ -3424,7 +3451,7 @@ class RAGMemoryManager:
                             cv_norm = validate_embedding(cv, self.embed_dim)
                             # max cosine with any negative
                             max_neg_sim = float(np.max(neg_stack @ cv_norm))
-                            if max_neg_sim >= 0.85:
+                            if max_neg_sim >= NEGATIVE_SIMILARITY:
                                 continue  # too similar to a known bad rec
                             filtered.append(c)
                         candidates = filtered

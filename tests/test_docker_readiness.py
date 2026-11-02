@@ -24,6 +24,7 @@ EMBEDDING_SETTINGS = (
     "DAME_CURIE_EMBED_MODEL",
     "EMBED_MODEL",
     "DAME_CURIE_EMBED_DIM",
+    "DAME_CURIE_EMBED_REQUEST_DIMENSIONS",
     "DAME_CURIE_EMBED_API_KEY",
     "EMBED_API_KEY",
 )
@@ -512,3 +513,54 @@ def test_one_shot_pull_is_idempotent_and_propagates_failure(
         assert (tmp_path / "pulled").read_text() == "qwen3-embedding:0.6b"
     with pytest.raises(ProcessLookupError):
         os.kill(int((tmp_path / "server").read_text()), 0)
+
+
+def test_readiness_main_sends_the_configured_dimensions_field(
+    embeddings_server, tmp_path, monkeypatch
+):
+    url, state = embeddings_server
+    state["shape"] = "openai"
+    state["vectors"] = [[0.25] * 1536]
+    isolate_readiness(
+        monkeypatch,
+        tmp_path,
+        {
+            "ENABLE_RAG": "true",
+            "DAME_CURIE_EMBED_BASE_URL": f"{url}/v1",
+            "DAME_CURIE_EMBED_MODEL": "text-embedding-3-large",
+            "DAME_CURIE_EMBED_DIM": "1536",
+            "DAME_CURIE_EMBED_REQUEST_DIMENSIONS": "1536",
+            "DAME_CURIE_EMBED_API_KEY": "test-key",
+        },
+    )
+    run_readiness()
+    assert state["requests"] == [
+        (
+            "/v1/embeddings",
+            {"model": "text-embedding-3-large", "input": "readiness", "dimensions": 1536},
+        )
+    ]
+
+
+def test_readiness_cli_names_a_dimensions_field_that_differs_from_embed_dim(
+    embeddings_server, tmp_path, monkeypatch, capsys
+):
+    url, state = embeddings_server
+    isolate_readiness(
+        monkeypatch,
+        tmp_path,
+        {
+            "ENABLE_RAG": "true",
+            "DAME_CURIE_EMBED_BASE_URL": url,
+            "DAME_CURIE_EMBED_DIM": "1024",
+            "DAME_CURIE_EMBED_REQUEST_DIMENSIONS": "1536",
+        },
+    )
+    with pytest.raises(SystemExit) as stop:
+        runpy.run_path(str(CHECKER))["cli"]()
+    assert stop.value.code == 1
+    assert capsys.readouterr().err == (
+        "embedding readiness failed: DAME_CURIE_EMBED_REQUEST_DIMENSIONS='1536' must be "
+        "blank or the same whole number as DAME_CURIE_EMBED_DIM (1024)\n"
+    )
+    assert state["requests"] == []

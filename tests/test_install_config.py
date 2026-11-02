@@ -202,3 +202,88 @@ def test_embedding_response_shapes():
     assert _extract_embeddings({"data": []}) == []
     assert _extract_embeddings({}) == []
     assert _extract_embeddings(None) == []
+
+
+@pytest.mark.parametrize("raw,expected", [(None, None), ("", None), ("  ", None), ("1536", 1536)])
+def test_request_dimensions_are_absent_unless_configured(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", raising=False)
+    else:
+        monkeypatch.setenv("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", raw)
+    assert config_module._optional_dimensions_env(
+        "DAME_CURIE_EMBED_REQUEST_DIMENSIONS", 1536
+    ) == expected
+
+
+@pytest.mark.parametrize("raw", ["1024", "-1536", "1536.0", "large", "0"])
+def test_request_dimensions_that_differ_from_embed_dim_stop_startup(monkeypatch, raw):
+    monkeypatch.setenv("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", raw)
+    with pytest.raises(ValueError) as error:
+        config_module._optional_dimensions_env("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", 1536)
+    assert str(error.value) == (
+        f"DAME_CURIE_EMBED_REQUEST_DIMENSIONS={raw!r} must be blank or the same whole "
+        "number as DAME_CURIE_EMBED_DIM (1536)"
+    )
+
+
+@pytest.mark.parametrize("raw,expected", [(None, 0.35), ("", 0.35), ("0.2", 0.2), ("0", 0.0), ("1", 1.0)])
+def test_similarity_cut_off_reads_bot_env(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("DAME_CURIE_RAG_FACT_MIN_SIMILARITY", raising=False)
+    else:
+        monkeypatch.setenv("DAME_CURIE_RAG_FACT_MIN_SIMILARITY", raw)
+    assert config_module._similarity_env("DAME_CURIE_RAG_FACT_MIN_SIMILARITY", 0.35) == expected
+
+
+@pytest.mark.parametrize("raw", ["1.2", "-0.1", "nan", "inf", "high"])
+def test_a_bad_similarity_cut_off_stops_startup(monkeypatch, raw):
+    monkeypatch.setenv("DAME_CURIE_RAG_WEB_MIN_SIMILARITY", raw)
+    with pytest.raises(ValueError) as error:
+        config_module._similarity_env("DAME_CURIE_RAG_WEB_MIN_SIMILARITY", 0.40)
+    assert str(error.value) == (
+        f"DAME_CURIE_RAG_WEB_MIN_SIMILARITY={raw!r} must be a number from 0 to 1"
+    )
+
+
+def test_default_cut_offs_are_the_qwen_values():
+    """Blank settings keep the values that the code had before they moved to bot.env."""
+    import rag_memory
+
+    assert (
+        config_module.Config.RAG_FACT_MIN_SIMILARITY,
+        config_module.Config.RAG_MESSAGE_MIN_SIMILARITY,
+        config_module.Config.RAG_WEB_MIN_SIMILARITY,
+        config_module.Config.RAG_NEGATIVE_SIMILARITY,
+        config_module.Config.EMBED_REQUEST_DIMENSIONS,
+    ) == (0.35, 0.40, 0.40, 0.85, None)
+    assert (rag_memory.SIM_THRESHOLD, rag_memory.NEGATIVE_SIMILARITY) == (0.35, 0.85)
+
+
+def test_config_reads_the_documented_setting_names(tmp_path):
+    """A typo in a setting name would keep the default; read each name in a fresh process."""
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "DAME_CURIE_ENV_FILE": str(tmp_path / "absent.env"),
+        "DAME_CURIE_EMBED_DIM": "1536",
+        "DAME_CURIE_EMBED_REQUEST_DIMENSIONS": "1536",
+        "DAME_CURIE_RAG_FACT_MIN_SIMILARITY": "0.21",
+        "DAME_CURIE_RAG_MESSAGE_MIN_SIMILARITY": "0.22",
+        "DAME_CURIE_RAG_WEB_MIN_SIMILARITY": "0.23",
+        "DAME_CURIE_RAG_NEGATIVE_SIMILARITY": "0.74",
+    }
+    code = (
+        "from config import Config as C; print(C.EMBED_REQUEST_DIMENSIONS, "
+        "C.RAG_FACT_MIN_SIMILARITY, C.RAG_MESSAGE_MIN_SIMILARITY, "
+        "C.RAG_WEB_MIN_SIMILARITY, C.RAG_NEGATIVE_SIMILARITY)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code], cwd=Path(config_module.__file__).parent,
+        env=env, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.split() == ["1536", "0.21", "0.22", "0.23", "0.74"]
+
+
+def test_superscript_digits_are_refused_with_their_name(monkeypatch):
+    monkeypatch.setenv("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", "\u00b2")
+    with pytest.raises(ValueError, match="DAME_CURIE_EMBED_REQUEST_DIMENSIONS='\u00b2' must be blank"):
+        config_module._optional_dimensions_env("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", 2)

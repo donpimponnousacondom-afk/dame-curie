@@ -554,3 +554,53 @@ def test_a_bad_short_turn_setting_reaches_the_model_with_its_cause(control, caus
     prompt = _prompt(bot)
     assert f"- the short-turn gate is off for this turn (bot_control {cause})" in prompt
     assert "x" * 41 not in prompt
+
+
+@pytest.mark.parametrize("cut_off", [None, 0.25])
+def test_recall_cut_offs_come_from_configuration(monkeypatch, cut_off):
+    """Each embedding model has its own score range, so bot.env sets the cut-offs."""
+    from config import Config
+
+    if cut_off is not None:
+        for name in ("RAG_FACT_MIN_SIMILARITY", "RAG_MESSAGE_MIN_SIMILARITY", "RAG_WEB_MIN_SIMILARITY"):
+            monkeypatch.setattr(Config, name, cut_off)
+
+    class _ScoredMemory(_Memory):
+        def __init__(self):
+            super().__init__(entity={"user_id": "456"})
+            self.web_kwargs = None
+
+        async def rag_search(self, query, **kwargs):
+            # Like RAGMemoryManager.rag_search: the default cut-off is the
+            # fact cut-off that the module read at import (0.35).
+            kind = (kwargs.get("kinds") or [""])[0]
+            return [
+                {
+                    "kind": kind, "author": "bob", "channel_id": "123",
+                    "content": f"{kind} row at {similarity}", "similarity": similarity,
+                    "timestamp": "2026-11-01T10:00:00+00:00",
+                }
+                for similarity in (0.30, 0.50)
+                if similarity >= kwargs.get("min_similarity", 0.35)
+            ]
+
+        async def recall_web_results(self, query, **kwargs):
+            self.web_kwargs = kwargs
+            return [
+                {"content": f"web row at {similarity}", "similarity": similarity,
+                 "query": "q", "url": "https://example.invalid", "title": "t"}
+                for similarity in (0.30, 0.50)
+            ]
+
+    memory = _ScoredMemory()
+    bot = _bot(memory, {"long_term_memory_enabled": True})
+    bot.config = SimpleNamespace()
+    prompt = "\n".join(
+        str(m.get("content") or "")
+        for m in asyncio.run(DameCurieBot._build_messages(bot, _message(), LONG_TURN))
+    )
+    low_rows_kept = cut_off is not None
+    assert memory.web_kwargs["min_similarity"] == (0.25 if low_rows_kept else 0.40)
+    for kind in ("ltm row", "message row", "web row"):
+        assert f"{kind} at 0.5" in prompt
+        assert (f"{kind} at 0.3" in prompt) is low_rows_kept

@@ -8962,7 +8962,7 @@ class DameCurieBot(commands.Bot):
     async def _memory_cleanup_loop(self):
         # Do not stampede local Ollama on boot. Pending-row migration used
         # to POST batches of 50 into /api/embed and stall the whole box.
-        # Catch up lazily on search / new writes instead.
+        # The 10-minute catch-up pass below embeds pending rows in 60 s steps.
         if os.getenv("DAME_CURIE_EMBED_PENDING_ON_BOOT", "").strip().lower() in {
             "1",
             "true",
@@ -9007,13 +9007,48 @@ class DameCurieBot(commands.Bot):
 
         self._track_task(_spawn_background(_daily_summarizer_loop()))
 
-        # Prune idle channel locks and per-channel state every 10 minutes.
+        # Prune idle channel locks and per-channel state every 10 minutes,
+        # then embed the rows that have no vector for the configured model.
         while True:
             await asyncio.sleep(600)
             try:
                 await self._prune_idle_channel_state()
             except Exception as e:
                 logger.error(f"Memory cleanup error: {e}")
+            await self._catch_up_embeddings()
+
+    async def _catch_up_embeddings(self) -> None:
+        """Embed rows that have no vector for the configured embedding model.
+
+        Root, 2 November 2026: the memory must not forget. A write that finds
+        MAX_BACKGROUND_EMBED_TASKS embeds in the queue stores its row without
+        a vector, and memory search cannot find that row. On 2 November 2026,
+        1,495 of 3,079 stored facts had no vector, because a summary writes
+        more facts at one time than the queue holds. This pass embeds them.
+        One pass stops after 60 s. Queries have their own lane, but they use
+        the same embedding endpoint, so a pass can make a query wait.
+        Measured on 2 November 2026 with 10,123 rows: the count scan of one
+        pass took 0.072 s.
+        """
+        deferred = self.memory.pop_deferred_embeds()
+        try:
+            report = await self.memory.backfill_embeddings(limit=10000, max_seconds=60)
+        except Exception as e:
+            logger.error("Embedding catch-up pass failed: %s: %s", type(e).__name__, e)
+            return
+        if report["attempted"] or deferred or report["stopped"] not in ("scan_complete", "disabled"):
+            log = logger.warning if report["failed"] else logger.info
+            log(
+                "Embedding catch-up pass: %s embedded, %s failed%s, stopped at %s, "
+                "%s rows still pending for the configured model, %s embeds deferred "
+                "since the last pass",
+                report["embedded"],
+                report["failed"],
+                f" (rows {', '.join(report['failed_ids'])})" if report["failed_ids"] else "",
+                report["stopped"],
+                report["counts"]["eligible_pending"],
+                deferred,
+            )
 
     async def _prune_idle_channel_state(self):
         """Prune idle channel locks and per-channel state on the 10-minute sweep.
@@ -14843,6 +14878,7 @@ class DameCurieBot(commands.Bot):
                         kinds=["ltm"],
                         guild_id=str(getattr(message.guild, "id", "") or ""),
                         channel_id=str(getattr(message.channel, "id", "") or ""),
+                        min_similarity=Config.RAG_FACT_MIN_SIMILARITY,
                         apply_recency=False,
                         top_k=max(
                             5,
@@ -14858,7 +14894,9 @@ class DameCurieBot(commands.Bot):
                     )
                     _mark("rag_ltm")
                     rag_context = [
-                        r for r in rag_results if r.get("similarity", 0) >= 0.35
+                        r
+                        for r in rag_results
+                        if r.get("similarity", 0) >= Config.RAG_FACT_MIN_SIMILARITY
                     ]
                     # Past user messages that match this message. In a server,
                     # search every channel of this server (root, 2 November
@@ -14873,13 +14911,16 @@ class DameCurieBot(commands.Bot):
                         guild_id=recall_guild,
                         channel_id=str(getattr(message.channel, "id", "") or ""),
                         exact_guild=bool(recall_guild),
+                        min_similarity=Config.RAG_MESSAGE_MIN_SIMILARITY,
                         apply_recency=True,
                         recency_tau_days=3.0,  # tight tau - recent chat
                         top_k=8,
                     )
                     _mark("rag_recent")
                     rag_recent = [
-                        r for r in recent_results if r.get("similarity", 0) >= 0.40
+                        r
+                        for r in recent_results
+                        if r.get("similarity", 0) >= Config.RAG_MESSAGE_MIN_SIMILARITY
                     ][:5]  # cap to 5 recent messages
                 # ─── web results (operator feature 2026-08-09) ───
                 # Recall any web_result rows from previous searches that
@@ -14898,12 +14939,14 @@ class DameCurieBot(commands.Bot):
                             user_message,
                             guild_id=str(getattr(message.guild, "id", "") or ""),
                             top_k=4,
-                            min_similarity=0.40,
+                            min_similarity=Config.RAG_WEB_MIN_SIMILARITY,
                             max_age_days=7,
                         )
                         _mark("web_results")
                         rag_web = [
-                            r for r in web_rows if r.get("similarity", 0) >= 0.40
+                            r
+                            for r in web_rows
+                            if r.get("similarity", 0) >= Config.RAG_WEB_MIN_SIMILARITY
                         ]
                     except Exception as e:
                         cause = f"{type(e).__name__}: {e}"
