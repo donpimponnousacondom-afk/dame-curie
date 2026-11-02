@@ -9,7 +9,7 @@ x-host-timezone: &host-timezone
     create_host_path: false
 
 x-ollama: &ollama
-  image: ollama/ollama:0.33.3@sha256:32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2
+  image: ollama/ollama:0.40.13@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429
   init: true
   user: "0:0"
   read_only: true
@@ -38,6 +38,10 @@ services:
     environment:
       TZ: ":/etc/dame-curie-localtime"
       OLLAMA_HOST: 127.0.0.1:11434
+      # "1" stops the calls to ollama.com that Ollama 0.40 makes (see the
+      # ollama service below). A pull with this "1" works (measured on
+      # 2 November 2026: pull and show passed, 0 warnings).
+      OLLAMA_NO_CLOUD: "1"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
@@ -69,10 +73,17 @@ services:
       OLLAMA_MAX_LOADED_MODELS: "1"
       # Ollama 0.33.3 loaded qwen3-embedding:0.6b with one slot
       # (n_slots = 1) when this value was "2" (measured on 1 November 2026).
+      # Ollama 0.40.13 also logs n_slots = 1 with this value "1".
       # rag_memory.py keeps at most one background embedding request in
       # flight. In one measurement Ollama served a waiting query before the
       # next background piece, so the query waited for one piece only.
       OLLAMA_NUM_PARALLEL: "1"
+      # Ollama 0.40 calls ollama.com for a cloud model cache and model
+      # recommendations. This network has no internet, so each call failed
+      # with a warning in the log. "1" stops the calls. Measured on
+      # 2 November 2026: 0 warnings; 1.11 GiB instead of 1.23 GiB of RAM
+      # after 30 embeddings.
+      OLLAMA_NO_CLOUD: "1"
     command: ["serve"]
     mem_limit: 6g
     cpus: 12

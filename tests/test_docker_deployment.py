@@ -147,9 +147,11 @@ def test_ollama_is_private_and_has_persistent_per_project_models():
     for name in ("ollama", "ollama-pull"):
         service = services[name]
         assert service["image"] == (
-            "ollama/ollama:0.33.3@sha256:"
-            "32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2"
+            "ollama/ollama:0.40.13@sha256:"
+            "b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429"
         )
+        # Ollama 0.40 calls ollama.com unless this is "1" (2 November 2026).
+        assert service["environment"]["OLLAMA_NO_CLOUD"] == "1"
         assert "ports" not in service
         assert "env_file" not in service
         assert all(
