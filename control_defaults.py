@@ -46,9 +46,10 @@ DEFAULT_CONTROL = {
     "cross_context_dm_to_global_admin_only": True,
     # Total time limit for one context-watcher run: the wait for the one
     # background model slot plus every provider attempt. The provider gets
-    # the time that is left, so a slow answer is not cut and sent again.
+    # the time that is left, so an answer inside the limit is not cut.
     # Measured on 2 November 2026: 17 watcher calls took 1.5 s to 54 s
-    # (median 8.4 s), so 60 s cancelled answers that were nearly ready.
+    # (median 8.4 s). With 60 s for each attempt, 2 attempts were cut at
+    # 60 s and the third answered after 50 s.
     "cross_context_extract_timeout_seconds": 120,
     # How dense a message has to look before it is worth a context-watcher
     # call (0..1, see watch_policy.extraction_score). Lower stores more and

@@ -8722,9 +8722,12 @@ class DameCurieBot(commands.Bot):
                 f"Message:\n{text[:2500]}{attachment_note}{embed_note}\n\n"
                 'Extract a fact or return {"should_store": false}.'
             )
-            # One total limit covers the slot wait and all provider attempts.
-            # The provider gets the time that is left as its attempt timeout,
-            # so it retries a fast failure but does not cut a slow answer.
+            # One limit covers the slot wait, the provider setup and every
+            # provider attempt. The provider gets the time that is left as its
+            # attempt timeout. An answer that arrives inside the limit is not
+            # cut, and a fast failure still retries inside the limit. The outer
+            # guard waits 2 s more, so the provider's own timeout fires first
+            # and logs the attempt; the guard then stops the retry wait.
             extract_timeout = max(
                 5,
                 min(
@@ -8749,9 +8752,14 @@ class DameCurieBot(commands.Bot):
                 ) from e
             try:
                 context_provider = await self._get_aux_provider()
-                remaining = max(1.0, deadline - loop.time())
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"the slot wait and the provider setup used all of the "
+                        f"{extract_timeout} s watcher limit"
+                    )
                 try:
-                    async with asyncio.timeout(remaining):
+                    async with asyncio.timeout(remaining + 2) as guard:
                         raw = await context_provider.generate_response(
                             [
                                 {"role": "system", "content": prompt},
@@ -8760,9 +8768,11 @@ class DameCurieBot(commands.Bot):
                             timeout=remaining,
                         )
                 except TimeoutError as e:
+                    if not guard.expired():
+                        raise
                     raise TimeoutError(
-                        f"the provider gave no answer in the {remaining:.0f} s left "
-                        f"of the {extract_timeout} s watcher limit"
+                        f"the provider call did not finish in the {remaining:.1f} s "
+                        f"left of the {extract_timeout} s watcher limit"
                     ) from e
             finally:
                 await self._release_ai_slot()
