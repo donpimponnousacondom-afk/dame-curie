@@ -61,8 +61,7 @@ def test_outer_container_privilege_boundary():
 def test_image_uses_allowlisted_source_and_locked_dependencies():
     dockerfile = (ROOT / "docker/app.Dockerfile").read_text()
     assert "python:3.14.10-slim-trixie" in dockerfile
-    # Debian security fixes newer than the base image (root, 2 November 2026:
-    # libraries up to date).
+    # The build installs Debian security fixes newer than the base image.
     assert "apt-get upgrade -y --no-install-recommends" in dockerfile
     assert "COPY . " not in dockerfile
     assert "COPY *.py" not in dockerfile
@@ -79,7 +78,13 @@ def test_image_uses_allowlisted_source_and_locked_dependencies():
     assert all("==" in line and ">" not in line for line in dependencies)
     assert "discord.py-self==2.1.0" in dependencies
     assert not any(line.startswith("discord.py==") for line in dependencies)
-    assert {"numpy==2.5.4", "setuptools==84.2.1", "pillow==13.0.0", "aiohttp==3.14.5", "certifi==2026.10.23"} <= set(dependencies)
+    assert {
+        "numpy==2.5.4",
+        "setuptools==84.2.1",
+        "pillow==13.0.0",
+        "aiohttp==3.14.5",
+        "certifi==2026.10.23",
+    } <= set(dependencies)
     assert "docker/shell-requirements.lock" in allowed
     assert "COPY docker/shell-requirements.lock /opt/dame-curie/shell-requirements.lock" in dockerfile
     assert (ROOT / "docker/shell-requirements.lock").read_text().splitlines() == [
