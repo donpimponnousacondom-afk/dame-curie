@@ -6,9 +6,9 @@ The core catalog stays visible; specialized groups expand through more_tools.
 import asyncio
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock
 
 from bot import DameCurieBot, ToolCircuitBreaker
 from bot_tools import MoreToolsTool
@@ -212,6 +212,8 @@ def test_short_turn_gate_is_off_by_default_and_has_a_length_setting():
     assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is False
     assert DameCurieBot._is_short_live_turn(bot, _msg(":D"), ":D") is True
 
+    # A bad value stops the turn even with the gate off.
+    bot._control["short_turn_skip_enabled"] = False
     for bad in ("80", 0, True, 2.5):
         bot._control["short_turn_max_chars"] = bad
         with pytest.raises(ValueError, match="short_turn_max_chars must be a positive integer"):

@@ -398,5 +398,6 @@ def test_server_message_recall_spans_channels_and_never_returns_a_dm(tmp_path, m
     ]
     assert "dm" in found(guild_id="g1", channel_id=""), "the default filter adds rows without a guild"
     assert found(guild_id="", channel_id="d1") == ["dm"]
-    with pytest.raises(ValueError, match="needs a guild_id"):
-        found(guild_id="", channel_id="d1", exact_guild=True)
+    for guild, channel in (("", "d1"), ("g1", "")):
+        with pytest.raises(ValueError, match="needs a guild_id and a channel_id"):
+            found(guild_id=guild, channel_id=channel, exact_guild=True)

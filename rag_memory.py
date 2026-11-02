@@ -3244,12 +3244,15 @@ class RAGMemoryManager:
                         (gives room for filtering without starving the limit)
             exact_guild: search every channel of guild_id. A row without a
                         guild matches only when it is in channel_id, so a
-                        DM row never enters a server search. Needs guild_id.
+                        DM row never enters a server search. Needs guild_id
+                        and channel_id.
 
         Returns list of dicts with: id, kind, content, author, channel_id,
             guild_id, timestamp, similarity, score (recency-decayed),
             metadata.
         """
+        if exact_guild and not (guild_id and channel_id):
+            raise ValueError("rag_search(exact_guild=True) needs a guild_id and a channel_id")
         query_vec = await self._embed_for_query(query)
         if query_vec is None:
             return []
@@ -3284,8 +3287,6 @@ class RAGMemoryManager:
             where_parts.append(f"kind IN ({placeholders})")
             params.extend(kinds)
         if exact_guild:
-            if not guild_id:
-                raise ValueError("rag_search(exact_guild=True) needs a guild_id")
             where_parts.append("(guild_id=? OR (guild_id='' AND channel_id=?))")
             params.extend([str(guild_id), str(channel_id)])
         else:

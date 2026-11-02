@@ -1581,6 +1581,24 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
+
+def _check_short_turn_settings(control: dict) -> None:
+    """Raise a named ValueError when a short-turn setting has the wrong type.
+
+    The control loader calls this on the raw file values, before parse_bool
+    turns an unreadable text into the default. The gate calls it every turn.
+    """
+    enabled = control.get("short_turn_skip_enabled", False)
+    if type(enabled) is not bool:
+        raise ValueError(
+            f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
+        )
+    max_chars = control.get("short_turn_max_chars", 80)
+    if type(max_chars) is not int or max_chars < 1:
+        raise ValueError(
+            f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
+        )
+
 class DameCurieBot(commands.Bot):
     """AI-powered Discord bot."""
 
@@ -8288,6 +8306,7 @@ class DameCurieBot(commands.Bot):
                     loaded = json.load(f)
                 if not isinstance(loaded, dict):
                     loaded = {}
+            _check_short_turn_settings(loaded)
             control = dict(DEFAULT_CONTROL)
             control.update(loaded)
             for dead_key in DEAD_CONTROL_KEYS:
@@ -13810,12 +13829,8 @@ class DameCurieBot(commands.Bot):
         conversation watch that does not address her, and a message shorter
         than `short_turn_max_chars` that does not address her are short.
         """
-        enabled = self._control.get("short_turn_skip_enabled", False)
-        if type(enabled) is not bool:
-            raise ValueError(
-                f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
-            )
-        if not enabled:
+        _check_short_turn_settings(self._control)
+        if not self._control.get("short_turn_skip_enabled", False):
             return False
         text = str(
             content if content is not None else getattr(message, "content", "") or ""
@@ -13827,10 +13842,6 @@ class DameCurieBot(commands.Bot):
         ) and not self._directly_addressed(message):
             return True
         max_chars = self._control.get("short_turn_max_chars", 80)
-        if type(max_chars) is not int or max_chars < 1:
-            raise ValueError(
-                f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
-            )
         return len(text.strip()) < max_chars and not self._directly_addressed(message)
 
     def _build_openai_tools(
