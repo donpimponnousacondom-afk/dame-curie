@@ -78,6 +78,17 @@ The bot also runs a catch-up pass every 10 minutes. It embeds the rows that have
 
 Calibration method (equal pass volume): real user messages are the queries. For each search, find the fraction of (query, row) pairs that pass the old cut-off in the old space. The new cut-off passes the same fraction in the new space. Labelled pairs (a message and the fact extracted from it) check that the new cut-off keeps the true matches.
 
+Calibration of 2 November 2026, `qwen3-embedding:0.6b` to `text-embedding-3-large` at 1536. Queries: her last 600 user messages. Values in `bot.env` are rounded toward more recall.
+
+| Search | Qwen cut-off | Pairs that pass | Calibrated | In `bot.env` |
+|---|---|---|---|---|
+| Facts (1,584 rows) | 0.35 | 67.2% | 0.155 | 0.15 |
+| Messages (954 rows) | 0.40 | 92.1% | 0.292 | 0.29 |
+| Web results (96 rows) | 0.40 | 20.5% | 0.210 | 0.21 |
+| Negative exclusion (fact pairs) | 0.85 | 0.024% | 0.738 | 0.74 |
+
+Median pair score for facts: 0.382 with Qwen, 0.183 with 3-large. The "% match" label in her prompt shows the new scale. The labelled pairs: 47; 47 pass the Qwen cut-off, 46 pass the new one. The facts and messages cut-offs pass most pairs in both spaces, so the `top_k` cap of each search selects the rows.
+
 ### Benchmark, 2 November 2026
 
 Recall at 1 and 10 (R@1 / R@10). Queries: SciFact 300 (public set), her web searches 93, her memory facts 45.
