@@ -1581,6 +1581,22 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
+def _recalled_author_label(row: dict, own_id: str) -> str:
+    """Who wrote a recalled message, in the labels of her history.
+
+    Her own message: "you/Dame Curie(id)", as in the reply notes. Another
+    author: "Name(id)", with " [bot]" for a bot account (the APP tag in
+    Discord), as in the transcript. Root, 2 November 2026: a bot here is
+    named "curie", and recalled lines showed only display names.
+    """
+    author_id = str(row.get("author_id") or "")
+    if own_id and author_id == own_id:
+        return f"you/Dame Curie({own_id})"
+    name = str(row.get("author") or "anon")
+    label = f"{name}({author_id})" if author_id else name
+    return f"{label} [bot]" if row.get("author_is_bot") else label
+
+
 def _short_turn_settings_error(control: dict) -> str | None:
     """Name the short-turn setting that has the wrong type, or return None.
 
@@ -3058,6 +3074,7 @@ class DameCurieBot(commands.Bot):
                 or getattr(ref.author, "id", "unknown")
             ),
             "reply_to_author_id": str(getattr(ref.author, "id", "") or ""),
+            "reply_to_author_is_bot": bool(getattr(ref.author, "bot", False)),
             "reply_to_self": bool(
                 self.user and getattr(ref.author, "id", None) == self.user.id
             ),
@@ -8685,6 +8702,68 @@ class DameCurieBot(commands.Bot):
             "expires_at": expires_at,
         }
 
+    def _watcher_addressing(self, message) -> str:
+        """Who the message speaks to: its reply target, its mentions and a verdict.
+
+        Root, 2 November 2026: the watcher read "your cot" in a reply to the
+        bot _LOKI_ as words to Dame Curie, because its prompt held only the
+        message text. These lines come from Discord data, not from words.
+        """
+        own_id = str(getattr(getattr(self, "user", None), "id", "") or "")
+
+        def who(name: str, user_id: str, is_bot: bool) -> str:
+            if own_id and user_id == own_id:
+                return f"{self.bot_name}({user_id})"
+            return f"{name}({user_id})" + (" [bot]" if is_bot else "")
+
+        lines = []
+        reply = self._reply_meta_from_message(message)
+        unresolved = (
+            not reply
+            and getattr(message, "reference", None) is not None
+            and not message_reference_is_forward(message)
+        )
+        if unresolved:
+            lines.append("Replying to: a message that could not be loaded")
+        if reply:
+            target = who(
+                reply.get("reply_to_author", ""),
+                reply.get("reply_to_author_id", ""),
+                bool(reply.get("reply_to_author_is_bot")),
+            )
+            # As in the history notes: a double quote would end the quote early.
+            quoted = str(reply.get("reply_to_content") or "").replace('"', "'")
+            lines.append(
+                f"Replying to: {target}"
+                + (f'. That message said: "{quoted}"' if quoted else "")
+            )
+        mentioned = [
+            (
+                str(getattr(user, "display_name", "") or getattr(user, "id", "")),
+                str(getattr(user, "id", "") or ""),
+                bool(getattr(user, "bot", False)),
+            )
+            for user in list(getattr(message, "mentions", None) or [])
+        ]
+        if mentioned:
+            lines.append("Mentions: " + ", ".join(who(*m) for m in mentioned[:10]))
+        # A private DM has only her and the author, so it speaks to her.
+        to_her = (
+            isinstance(getattr(message, "channel", None), discord.DMChannel)
+            or bool(reply.get("reply_to_self"))
+            or bool(own_id and any(m[1] == own_id for m in mentioned))
+        )
+        if to_her:
+            verdict = "yes"
+        elif unresolved:
+            verdict = "not stated (the reply target could not be loaded)"
+        elif reply or mentioned:
+            verdict = "no"
+        else:
+            verdict = "not stated (no reply and no mention)"
+        lines.append(f"Addressed to {self.bot_name}: {verdict}")
+        return "\n".join(lines)
+
     async def _extract_shared_context_fact(self, message, score: float | None = None):
         score_text = f"{score:.2f}" if score is not None else "n/a"
         try:
@@ -8736,11 +8815,19 @@ class DameCurieBot(commands.Bot):
                 "expires_in_hours null = persistent. If unsure, should_store false. "
                 "triples optional; rel ∈ OWNS,USES,DISLIKES,DEPENDS_ON,"
                 "CONFIGURED_WITH,PREFERS,BUILT,WORKS_ON. Only durable project/"
-                "ownership/preference links - omit triples rather than guess."
+                "ownership/preference links - omit triples rather than guess.\n"
+                "WHO: the lines Replying to, Mentions and Addressed to say who the "
+                "message speaks to. 'you' and 'your' in the message mean them. They "
+                f"mean {self.bot_name} only when 'Addressed to {self.bot_name}' is yes. "
+                "When it is not stated, do not decide who 'you' is; skip a fact that "
+                "depends on it. In the summary, name each person or bot with the name "
+                "and id from these lines; never write 'you', 'I' or 'me'."
             )
             user = (
-                f"Author: {message.author.display_name} ({message.author.id})\n"
+                f"Author: {message.author.display_name} ({message.author.id})"
+                f"{' [bot]' if getattr(message.author, 'bot', False) else ''}\n"
                 f"Admin author: {'yes' if is_admin else 'no'}\n"
+                f"{self._watcher_addressing(message)}\n"
                 f"Source: {self._context_source_kind(message)} channel={channel_id} guild={guild_id or 'none'}\n"
                 f"Message:\n{text[:2500]}{attachment_note}{embed_note}\n\n"
                 'Extract a fact or return {"should_store": false}.'
@@ -14909,16 +14996,17 @@ class DameCurieBot(commands.Bot):
                         for r in rag_results
                         if r.get("similarity", 0) >= Config.RAG_FACT_MIN_SIMILARITY
                     ]
-                    # Past user messages that match this message. In a server,
-                    # search every channel of this server (root, 2 November
-                    # 2026: the server is public; only DMs are private). The
-                    # guild match is exact, so a DM row never enters a server
-                    # prompt. In a DM, search that DM channel only.
+                    # Past messages that match this message: from people, from
+                    # other bots and her own (root, 2 November 2026). Tool
+                    # records have no vector, so they never come back. In a
+                    # server, search every channel of this server (root,
+                    # 2 November 2026: the server is public; only DMs are
+                    # private). The guild match is exact, so a DM row never
+                    # enters a server prompt. In a DM, search that DM channel only.
                     recall_guild = str(getattr(message.guild, "id", "") or "")
                     recent_results = await self.memory.rag_search(
                         user_message,
-                        kinds=["message"],
-                        source="user",
+                        kinds=["message", "bot_output"],
                         guild_id=recall_guild,
                         channel_id=str(getattr(message.channel, "id", "") or ""),
                         exact_guild=bool(recall_guild),
@@ -14995,11 +15083,13 @@ class DameCurieBot(commands.Bot):
                     if rag_recent:
                         rec_lines = []
                         for r in rag_recent:
+                            who = _recalled_author_label(
+                                r, str(getattr(getattr(self, "user", None), "id", "") or "")
+                            )
                             when = r.get("timestamp", "")
                             stamp = _recall_age_label(
-                                when, f"a recalled message from {r.get('author', 'anon')}", memory_gaps
+                                when, f"a recalled message from {who}", memory_gaps
                             )
-                            who = r.get("author", "anon")
                             sim_pct = int(r.get("similarity", 0) * 100)
                             row_channel = str(r.get("channel_id") or "")
                             where = (

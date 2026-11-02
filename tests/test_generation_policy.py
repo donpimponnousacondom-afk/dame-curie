@@ -238,3 +238,114 @@ def test_rem_guard_forwards_aux_policy_on_shared_main(monkeypatch, aux_policy):
     assert bot._rem_running is False
     bot._release_ai_slot.assert_awaited_once()
     bot.ai_provider.generate_response.assert_not_awaited()
+
+
+HER_ID = 1545541390392369165
+LOKI = SimpleNamespace(id=1548576826778194011, display_name="_LOKI_", name="_LOKI_", bot=True)
+ROOT = SimpleNamespace(id=1482143139828596916, display_name="SirRooT", name="SirRooT", bot=False)
+HER = SimpleNamespace(id=HER_ID, display_name="Red Queen", name="Red Queen", bot=True)
+
+
+def _discord_message(content, author, mentions=(), reply_to=None):
+    reference = None
+    if reply_to is not None:
+        reference = SimpleNamespace(message_id=reply_to.id, resolved=reply_to)
+    return SimpleNamespace(
+        id=1566879296734367795,
+        content=content,
+        author=author,
+        channel=SimpleNamespace(id=1548588998983946290),
+        guild=SimpleNamespace(id=1545673830960340992),
+        attachments=[],
+        embeds=[],
+        stickers=[],
+        mentions=list(mentions),
+        role_mentions=[],
+        channel_mentions=[],
+        reference=reference,
+    )
+
+
+def test_watcher_prompt_names_who_a_reply_to_another_bot_speaks_to(shared_bot):
+    """Root, 2 November 2026: "your cot" in a reply to _LOKI_ was read as words to her."""
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    loki_message = _discord_message("ah THAT. locked in the iron vault", LOKI)
+    message = _discord_message(
+        "(i am reading your cot idiot)", ROOT, mentions=[LOKI], reply_to=loki_message
+    )
+
+    asyncio.run(bot._extract_shared_context_fact(message))
+
+    system, user = [m["content"] for m in bot.ai_provider.generate_response.await_args.args[0]]
+    assert "Author: SirRooT (1482143139828596916)\n" in user
+    assert (
+        'Replying to: _LOKI_(1548576826778194011) [bot]. That message said: '
+        '"ah THAT. locked in the iron vault"'
+    ) in user
+    assert "Mentions: _LOKI_(1548576826778194011) [bot]" in user
+    assert "Addressed to dame_curie: no" in user
+    assert "They mean dame_curie only when 'Addressed to dame_curie' is yes." in system
+    assert "never write 'you', 'I' or 'me'" in system
+
+
+@pytest.mark.parametrize(
+    ("mentions", "reply_author", "verdict"),
+    [
+        ([], HER, "yes"),
+        ([HER], None, "yes"),
+        ([LOKI, HER], LOKI, "yes"),
+        ([], LOKI, "no"),
+        ([LOKI], None, "no"),
+        ([], None, "not stated (no reply and no mention)"),
+    ],
+)
+def test_watcher_addressing_verdict_comes_from_discord_data(shared_bot, mentions, reply_author, verdict):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    reply_to = _discord_message("an earlier message", reply_author) if reply_author else None
+    lines = bot._watcher_addressing(
+        _discord_message("you did well", ROOT, mentions=mentions, reply_to=reply_to)
+    )
+    assert lines.splitlines()[-1] == f"Addressed to dame_curie: {verdict}"
+    if HER in mentions:
+        assert f"dame_curie({HER_ID})" in lines
+
+
+def test_a_private_dm_is_addressed_to_her(shared_bot):
+    """A 1:1 DM has only her and the author; "call me Max" there is to her."""
+    import discord
+
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    message = _discord_message("call me Max from now on", ROOT)
+    message.channel = Mock(spec=discord.DMChannel)
+    assert bot._watcher_addressing(message).splitlines()[-1] == "Addressed to dame_curie: yes"
+
+
+def test_her_mention_after_ten_others_still_counts(shared_bot):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    others = [SimpleNamespace(id=100 + i, display_name=f"u{i}", name=f"u{i}", bot=False) for i in range(10)]
+    lines = bot._watcher_addressing(_discord_message("hi all", ROOT, mentions=[*others, HER]))
+    assert lines.splitlines()[-1] == "Addressed to dame_curie: yes"
+
+
+def test_an_unloaded_reply_target_is_named_and_not_called_a_message_without_reply(shared_bot):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    message = _discord_message("you were wrong", ROOT)
+    message.reference = SimpleNamespace(message_id=42, resolved=None)
+    lines = bot._watcher_addressing(message).splitlines()
+    assert lines == [
+        "Replying to: a message that could not be loaded",
+        "Addressed to dame_curie: not stated (the reply target could not be loaded)",
+    ]
+
+
+def test_a_quote_with_double_quotes_cannot_end_the_quote(shared_bot):
+    bot = shared_bot
+    bot._connection = SimpleNamespace(user=SimpleNamespace(id=HER_ID))
+    loki_message = _discord_message('he said "stop" twice', LOKI)
+    lines = bot._watcher_addressing(_discord_message("lol", ROOT, reply_to=loki_message))
+    assert "That message said: \"he said 'stop' twice\"" in lines

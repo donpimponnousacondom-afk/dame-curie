@@ -429,6 +429,8 @@ def test_exec_post_channel_records_autonomy_message_as_self_memory(tmp_path):
         "author": "Curie",
         "author_id": "42",
         "author_is_bot": True,
+        # Server-wide recall matches the guild exactly (#44).
+        "guild_id": "9",
         "content": "that was me",
         "message_id": "777",
         "autonomy": True,

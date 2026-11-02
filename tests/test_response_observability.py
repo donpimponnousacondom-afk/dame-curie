@@ -1014,3 +1014,24 @@ def test_version_without_git_is_honest_unknown(monkeypatch, tmp_path):
     assert snapshot.dirty is None
     assert snapshot.provenance == PROVENANCE_UNKNOWN
     assert snapshot.python.startswith("3.14")
+
+
+def test_an_autonomous_post_is_stored_with_its_guild_for_server_wide_recall():
+    """Root, 2 November 2026: recall reads her messages in every channel of the server."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from autonomy import AutonomyEngine
+
+    memory = SimpleNamespace(add_to_channel_memory=AsyncMock())
+    engine = object.__new__(AutonomyEngine)
+    engine.bot = SimpleNamespace(
+        memory=memory, user=SimpleNamespace(id=1545541390392369165, display_name="Red Queen"),
+        bot_name="Dame Curie", _recent_users={},
+    )
+    channel = SimpleNamespace(id=100, guild=SimpleNamespace(id=1545673830960340992))
+    sent = SimpleNamespace(id=5, channel=channel, created_at=None, content="hello", mentions=[],
+                           role_mentions=[], channel_mentions=[], attachments=[], embeds=[], stickers=[])
+    asyncio.run(engine._remember_visible_self_message(channel, sent, "hello"))
+    item = memory.add_to_channel_memory.await_args.args[1]
+    assert item["guild_id"] == "1545673830960340992"

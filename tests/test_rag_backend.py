@@ -1095,14 +1095,24 @@ def test_query_pause_names_its_cause(memory, monkeypatch):
 @pytest.mark.parametrize(
     ("message", "kind", "embedded"),
     [
-        ({"author_is_bot": True, "content": "her reply to the channel"}, "bot_output", False),
+        (
+            {"author_is_bot": True, "author_id": "1545541390392369165", "content": "her reply to the channel"},
+            "bot_output", True,
+        ),
+        (
+            {"author_is_bot": True, "author_id": "1546469985340231800", "content": "another bot speaks here"},
+            "bot_output", True,
+        ),
         ({"tool_name": "shell", "content": "Called shell with {} -> output text"}, "bot_output", False),
         ({"author": "alice", "content": "a message from a user"}, "message", True),
     ],
 )
-def test_bot_output_rows_are_stored_but_not_embedded(memory, monkeypatch, message, kind, embedded):
-    # Root, 1 November 2026: no memory search reads bot_output rows. Their
-    # embeddings only delayed the searches a reply waits for.
+def test_bot_messages_are_embedded_and_tool_records_are_not(memory, monkeypatch, message, kind, embedded):
+    """Root, 2 November 2026: recall reads her messages and other bots' messages again.
+
+    #31 stopped these embeddings to save the CPU embedder. A tool record has
+    no author id, no search reads it, and it stays unembedded.
+    """
     transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
 
     async def run():
@@ -1115,12 +1125,27 @@ def test_bot_output_rows_are_stored_but_not_embedded(memory, monkeypatch, messag
     assert row["kind"] == kind
     assert (row["embedding"] is not None) is embedded
     assert len(transport.calls) == (1 if embedded else 0)
-    assert rag.embedding_eligible(kind, "bot" if kind == "bot_output" else "user", message["content"]) is embedded
+    assert rag.embedding_eligible(
+        kind, "bot" if kind == "bot_output" else "user", message["content"], message.get("author_id", "")
+    ) is embedded
 
 
-def test_backfill_and_status_leave_bot_output_rows_unembedded(memory, monkeypatch):
+def test_backfill_embeds_bot_messages_and_skips_tool_records(memory, monkeypatch):
     transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
-    insert(memory, row_id="reply", text="an old reply of hers", kind="bot_output")
+    insert(memory, row_id="tool", text="Called shell with {} -> output text", kind="bot_output")
+    insert(memory, row_id="hers", text="an old reply of hers", kind="bot_output")
+    memory._db.execute("UPDATE vectors SET author_id='1545541390392369165' WHERE id='hers'")
+    report = asyncio.run(memory.backfill_embeddings())
+    assert (report["embedded"], report["skipped"]) == (1, 0)
+    assert [call[1]["json"]["input"] for call in transport.calls] == ["an old reply of hers"]
+    status = memory.embedding_status()
+    assert (status["eligible_pending"], status["excluded"]) == (0, 1)
+
+
+def test_backfill_and_status_leave_tool_records_unembedded(memory, monkeypatch):
+    transport = install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    # A tool record has no author id.
+    insert(memory, row_id="tool", text="Called shell with {} -> output text", kind="bot_output")
     report = asyncio.run(memory.backfill_embeddings(kind="bot_output"))
     # The backfill select leaves out rows that are never embedded.
     assert (report["skipped"], report["attempted"], report["stopped"]) == (0, 0, "scan_complete")
@@ -1610,3 +1635,16 @@ def test_a_stored_query_cause_is_in_the_past_tense(memory, monkeypatch):
         f"query embedding is paused for {rag.RAG_QUERY_FAILURE_COOLDOWN_SECONDS - 6:.0f}s "
         "because the embedding endpoint was paused after a failure (HTTP 503)"
     )
+
+
+def test_a_tool_record_with_an_old_vector_is_never_a_search_result(memory, monkeypatch):
+    """Tool records from before #31 can hold vectors; search must not return them."""
+    blob = np.array(vector(), dtype=np.float32).tobytes()
+    insert(memory, "tool", "Called shell with {} -> output text", kind="bot_output",
+           blob=blob, backend=memory.embedding_backend)
+    insert(memory, "hers", "her reply in another channel", kind="bot_output",
+           blob=blob, backend=memory.embedding_backend)
+    memory._db.execute("UPDATE vectors SET author_id='1545541390392369165' WHERE id='hers'")
+    install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    rows = asyncio.run(memory.rag_search("a query", kinds=["message", "bot_output"]))
+    assert [row["id"] for row in rows] == ["hers"]

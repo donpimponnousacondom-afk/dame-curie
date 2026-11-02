@@ -262,16 +262,19 @@ def embedding_blob_valid(blob: bytes, dimension: int) -> bool:
     return bool(np.isfinite(vector).all() and np.any(vector))
 
 
-def embedding_eligible(kind: str, source: str, content: str) -> bool:
+def embedding_eligible(kind: str, source: str, content: str, author_id: str = "") -> bool:
     """Keep raw chat noise unembedded without excluding system-authored durable facts.
 
-    Root, 1 November 2026: bot_output rows (her replies and tool records)
-    are not embedded. No memory search reads that kind, and the embeddings
-    took the CPU embedder from the searches a reply waits for. The rows
-    stay for the chat history, which reads them with SQL.
+    A bot_output row with a Discord author id is a message of hers or of
+    another bot, and message recall reads it. Root, 2 November 2026: embed
+    them again (#31 stopped it to save the CPU embedder; the OpenAI
+    embedder has no such cost). A tool record has no author id and stays
+    unembedded: no search reads it, and the chat history reads it with SQL.
     """
     if kind == "bot_output":
-        return False
+        return bool(str(author_id or "").strip()) and (
+            len(_strip_for_embedding(content)) >= _MIN_EMBED_LEN
+        )
     eligible = bool(content.strip())
     if kind == "message":
         eligible = source != "system" and len(_strip_for_embedding(content)) >= _MIN_EMBED_LEN
@@ -289,9 +292,10 @@ def embedding_status(
         raise ValueError("database has no RAG vectors table")
     tag = "embedding_backend" if "embedding_backend" in columns else "''"
     source = "source" if "source" in columns else "'user'"
-    eligible = f"embedding_eligible(kind, {source}, content)"
+    author = "author_id" if "author_id" in columns else "''"
+    eligible = f"embedding_eligible(kind, {source}, content, {author})"
     db.create_function("embedding_valid", 1, lambda blob: embedding_blob_valid(blob, dimension))
-    db.create_function("embedding_eligible", 3, embedding_eligible)
+    db.create_function("embedding_eligible", 4, embedding_eligible)
     counts = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(embedding IS NULL), 0), "
         f"COALESCE(SUM(embedding IS NOT NULL AND COALESCE({tag}, '') != ?), 0), "
@@ -1169,7 +1173,7 @@ class RAGMemoryManager:
         self._db.create_function(
             "embedding_valid", 1, lambda blob: embedding_blob_valid(blob, self.embed_dim)
         )
-        self._db.create_function("embedding_eligible", 3, embedding_eligible)
+        self._db.create_function("embedding_eligible", 4, embedding_eligible)
 
     def embedding_status(self) -> dict:
         """Counts for the configured vector space, not every non-NULL blob."""
@@ -1749,10 +1753,11 @@ class RAGMemoryManager:
         ).fetchone()
         report["cursor"] = progress["cursor"] if progress else 0
         highwater = self._db.execute("SELECT COALESCE(MAX(rowid), 0) FROM vectors").fetchone()[0]
-        # Rows that are never embedded (bot_output, low-signal messages) are
-        # left out here, so a pass does not walk them again each time.
+        # Rows that are never embedded (tool records, low-signal messages)
+        # are left out here, so a pass does not walk them again each time.
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(vectors)")}
         source = "source" if "source" in columns else "'user'"
+        author = "author_id" if "author_id" in columns else "''"
         remaining = limit
         report["stopped"] = "limit"
         while remaining:
@@ -1766,7 +1771,7 @@ class RAGMemoryManager:
                 "SELECT rowid AS position, * FROM vectors "
                 "WHERE rowid>? AND rowid<=? AND (?='' OR kind=?) AND "
                 "(embedding IS NULL OR COALESCE(embedding_backend, '') != ? "
-                f"OR NOT embedding_valid(embedding)) AND embedding_eligible(kind, {source}, content) "
+                f"OR NOT embedding_valid(embedding)) AND embedding_eligible(kind, {source}, content, {author}) "
                 "ORDER BY rowid LIMIT ?",
                 (report["cursor"], highwater, kind, kind, self.embedding_backend,
                  min(batch_size, remaining)),
@@ -1785,7 +1790,10 @@ class RAGMemoryManager:
                 if self._embed_endpoint_paused() or not EMBEDDINGS_ENABLED:
                     break
                 content = row["content"]
-                if not embedding_eligible(row["kind"], dict(row).get("source", "user"), content):
+                if not embedding_eligible(
+                    row["kind"], dict(row).get("source", "user"), content,
+                    dict(row).get("author_id", ""),
+                ):
                     report["skipped"] += 1
                 else:
                     report["attempted"] += 1
@@ -2067,7 +2075,7 @@ class RAGMemoryManager:
         # Embed the whole message in background. qwen3-embedding:0.6b's
         # 32k-token context absorbs any Discord message - no chunking.
         # Skip if content too short to be worth embedding.
-        if should_embed and embedding_eligible(kind, source, content):
+        if should_embed and embedding_eligible(kind, source, content, author_id):
             self._spawn(self._embed_and_store(msg_id, content[:8000]))
 
     async def clear_channel_memory(self, channel_id: str):
@@ -3398,7 +3406,13 @@ class RAGMemoryManager:
                 return _score_with_recency(1.0, ts_str)  # just the multiplier
 
         # ─── build SQL ───────────────────────────────────────────────
-        where_parts = ["embedding IS NOT NULL", "embedding_backend=?"]
+        # A tool record (bot_output without an author id) is never a search
+        # result, also when it holds a vector from an older backend.
+        where_parts = [
+            "embedding IS NOT NULL",
+            "embedding_backend=?",
+            "NOT (kind='bot_output' AND COALESCE(author_id, '')='')",
+        ]
         params: list = [self.embedding_backend]
         if kinds:
             placeholders = ",".join("?" * len(kinds))
@@ -3556,9 +3570,9 @@ class RAGMemoryManager:
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return candidates[:top_k]  # type: ignore[index]  # always len > 0 here
 
-    # No caller (1 November 2026). Since #31, new bot_output rows have no
-    # vectors. Rows from before #31 keep theirs, so the bot_output search
-    # below can return them if this function is called.
+    # No caller (1 November 2026). Since #44, bot messages (hers and other
+    # bots') have vectors again. New tool records have none; an older one
+    # can hold a vector, and rag_search never returns it.
     async def rag_relevant_context(  # type: ignore[override]
         self,
         query: str,
