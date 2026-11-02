@@ -1,6 +1,16 @@
 # Open items - 2 November 2026
 
-- [ ] Remove the local Ollama embedding service when root says so (date not decided). Root, 2 November 2026: "Turn it off, but don't delete it just yet, just unplug the wire from the whole harness and leave it as side note to remove in the future". Since 2 November 2026 (19:17 UTC) the live deployment runs with `DAME_CURIE_EMBED_MODE=external` in `/srv/dame-curie/deploy.env`, and the bot embeds with OpenAI `text-embedding-3-large` (#42). The `dame-curie-ollama-1` container is stopped, not removed. Kept for now: the image `ollama/ollama:0.40.13`, the volume `dame-curie_ollama-models` and the `ollama` and `ollama-pull` services in `compose.yaml`. To remove them later: delete the stopped containers, the volume and the image, then remove the two services, the `embeddings` and `model-download` networks and `docker/compose.embeddings-external.yaml` in one PR. To plug Ollama back in: set `DAME_CURIE_EMBED_MODE=local` and the Qwen settings in `bot.env` (docs/OPERATIONS.md), then run `instance.py dame-curie up`.
+- [ ] Remove the local Ollama embedding service when root says so. The date is not decided.
+  - Root, 2 November 2026: "Turn it off, but don't delete it just yet, just unplug the wire from the whole harness and leave it as side note to remove in the future".
+  - Live state since 2 November 2026, 19:17 UTC: `DAME_CURIE_EMBED_MODE=external` in `/srv/dame-curie/deploy.env`. With this value, `scripts/instance.py` adds the overlay `docker/compose.embeddings-external.yaml`.
+  - The bot embeds with OpenAI `text-embedding-3-large` (#42).
+  - The `dame-curie-ollama-1` container is stopped, not removed.
+  - Kept: the image `ollama/ollama:0.40.13`, the volume `dame-curie_ollama-models`, and the `ollama` and `ollama-pull` services in `compose.yaml`.
+  - Removal, part 1 (host): delete the stopped Ollama containers, the volume and the image.
+  - Removal, part 2 (one PR): remove the two services and the `embeddings` and `model-download` networks from `compose.yaml`.
+  - Removal, part 2 (same PR): fold the external overlay into the base `bot` service. Remove its `depends_on`, the local mode, the local base URL and the `embeddings` network. Then update the modes in `scripts/instance.py` (`EMBED_MODES`, `owned_config_files`) and their tests.
+  - To plug Ollama back in: set `DAME_CURIE_EMBED_MODE=local`, then put the Qwen settings in `bot.env` (`docs/OPERATIONS.md`). Run `instance.py dame-curie up`.
+  - Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Qwen uses 1024 dimensions, so the catch-up pass must embed every row again on the CPU.
 
 # Current completion state - 2026-10-03
 
