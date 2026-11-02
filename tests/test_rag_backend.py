@@ -1370,7 +1370,7 @@ def test_catch_up_pass_failures_are_warnings_with_their_count(memory, monkeypatc
     assert record.getMessage() == (
         "Embedding catch-up pass: 0 embedded, 1 failed, stopped at endpoint_paused, "
         "1 rows still pending for the configured model, 0 embeds deferred since the last pass. "
-        "Failed rows: fact: the embedding request failed (HTTP 503)"
+        "Failed rows: fact: embedding failed (HTTP 503)"
     )
 
 
@@ -1457,8 +1457,7 @@ def test_a_refused_input_does_not_pause_other_embeds(memory, monkeypatch, caplog
     assert memory._query_embed_disabled_until == 0
     assert memory.embedding_status()["eligible_pending"] == 1
     assert (
-        f"Embedding failed: the embedding endpoint refused this input (HTTP {status}, 36 characters); "
-        "other embeds continue"
+        f"Embedding failed: the embedding endpoint refused this input (HTTP {status}, 36 characters)"
     ) in caplog.text
     assert (
         "Embedding catch-up pass: 1 embedded, 1 failed, stopped at scan_complete, "
@@ -1499,18 +1498,20 @@ def test_catch_up_line_states_how_many_failed_rows_it_leaves_out(memory, monkeyp
         insert(memory, f"row{index:02d}", f"synthetic row number {index}")
 
     async def embed(text):
+        rag._note_embed_failure(f"synthetic cause for {text[-2:].strip()}")
         return None
 
     monkeypatch.setattr(memory, "_embed", embed)
     with caplog.at_level("INFO"):
         asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
     line = next(r.getMessage() for r in caplog.records if "catch-up pass" in r.getMessage())
-    assert line.count("no vector and no recorded cause") == 10
+    assert line.count("synthetic cause for") == 10
+    assert "row09: synthetic cause for 9" in line
     assert line.endswith("; and 2 more")
 
 
-def test_backfill_stops_after_three_refused_rows_in_a_row(memory, monkeypatch, caplog):
-    """An endpoint that refuses every input costs 3 requests per pass, not one per row."""
+def test_three_refusals_in_a_row_open_the_breaker_with_that_cause(memory, monkeypatch, caplog):
+    """An endpoint that refuses every input gets 3 requests, then the breaker opens."""
     from bot import DameCurieBot
 
     for index in range(6):
@@ -1519,8 +1520,43 @@ def test_backfill_stops_after_three_refused_rows_in_a_row(memory, monkeypatch, c
     with caplog.at_level("INFO"):
         asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
     assert len(transport.calls) == 3
-    assert memory._embed_endpoint_down_until == 0
+    assert memory._embed_endpoint_down_until > 0
     line = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
     assert line.levelname == "WARNING"
-    assert "0 embedded, 3 failed, stopped at consecutive_refusals, 6 rows still pending" in line.getMessage()
-    assert "row2: the embedding endpoint refused this input (HTTP 400, 23 characters)" in line.getMessage()
+    message = line.getMessage()
+    assert "0 embedded, 3 failed, stopped at endpoint_paused, 6 rows still pending" in message
+    assert "row0: the embedding endpoint refused this input (HTTP 400, 23 characters)" in message
+    assert (
+        "row2: embedding failed (the embedding endpoint refused 3 inputs in a row "
+        "(last: HTTP 400), so the fault is not in one input)"
+    ) in message
+
+
+def test_a_success_resets_the_refusal_count(memory, monkeypatch):
+    statuses = [400, 400, 200, 400, 400, 400]
+    install_transport(monkeypatch, *[
+        Reply({"embeddings": [vector()]}, status) if status == 200 else Reply({}, status)
+        for status in statuses
+    ])
+    for index in range(5):
+        asyncio.run(memory._embed(f"synthetic text {index}"))
+        assert memory._embed_endpoint_down_until == 0
+    asyncio.run(memory._embed("synthetic text 5"))
+    assert memory._embed_endpoint_down_until > 0
+
+
+def test_a_refused_piece_of_a_long_row_names_the_piece(memory, monkeypatch, caplog):
+    text = "First sentence of a long row. " * 300
+    pieces = rag._split_embed_chunks(rag._embedding_projection(text))
+    assert len(pieces) == 2
+    install_transport(monkeypatch, Reply({"embeddings": [vector()]}), Reply({}, 413))
+    failures: list[str] = []
+    token = rag.EMBED_FAILURES.set(failures)
+    try:
+        assert asyncio.run(memory._embed(text)) is None
+    finally:
+        rag.EMBED_FAILURES.reset(token)
+    assert failures == [
+        f"the embedding endpoint refused this input (HTTP 413, piece 2 of 2, "
+        f"{len(pieces[1])} of {len(rag._embedding_projection(text))} characters)"
+    ]

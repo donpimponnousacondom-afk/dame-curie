@@ -180,7 +180,7 @@ def test_existing_contaminated_vectors_are_not_invalidated_or_reembedded(memory,
     assert tuple(row) == (text, blob)
 
 
-def test_context_rejection_splits_only_offending_chunk_without_losing_unicode(memory, transport):
+def test_context_rejection_is_not_split_and_sends_the_unicode_chunk_unchanged(memory, transport):
     text = "😀漢字" * 2000 + "tail"
     accepted = []
 
@@ -241,7 +241,10 @@ def test_unrecognized_400_does_not_trigger_split_retries(memory, transport, payl
     assert len(transport.calls) == 1
     assert transport.calls[0][1]["allow_redirects"] is False
     # A redirect pauses the endpoint; a 400 refuses only this input.
-    assert (memory._embed_endpoint_down_until > 0.0) is (status != 400)
+    if status == 400:
+        assert memory._embed_endpoint_down_until == 0.0
+    else:
+        assert memory._embed_endpoint_down_until > 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
 
 

@@ -53,8 +53,8 @@ SEARCH_ERRORS: ContextVar[list[str] | None] = ContextVar(
 
 
 # The causes of failed embedding requests for one caller. A caller that needs
-# the exact cause sets a list; _embed appends one phrase per failure. A child
-# task (asyncio.wait_for) shares the list through its copy of the context.
+# the exact cause sets a list; _embed appends one phrase per failure. A task
+# created inside that window shares the list through its copy of the context.
 EMBED_FAILURES: ContextVar[list[str] | None] = ContextVar(
     "dame_curie_embed_failures", default=None
 )
@@ -62,10 +62,10 @@ EMBED_FAILURES: ContextVar[list[str] | None] = ContextVar(
 # HTTP statuses that refuse one input, not the endpoint. Root, 2 November
 # 2026: one refused row must not pause the embeds of every other row.
 INPUT_REJECTION_STATUSES = frozenset({400, 413, 422})
-REFUSAL_CAUSE = "the embedding endpoint refused this input"
-# A backfill pass stops after this many refused rows in a row. An endpoint
-# that refuses every input (for example a wrong model setting) then costs
-# a few requests per pass, not one request per pending row.
+# After this many refused inputs in a row (writes, queries and backfill
+# together), the fault is not in one input: the breaker opens. An endpoint
+# that refuses every input (for example a wrong model setting) then gets a
+# few requests per cooldown, not one request per row.
 MAX_CONSECUTIVE_REFUSALS = 3
 
 
@@ -869,6 +869,8 @@ class RAGMemoryManager:
         self._embed_endpoint_down_until = 0.0
         # The cause of the failure that opened the breaker.
         self._embed_pause_reason = ""
+        # Refused inputs in a row; a success or a breaker trip resets it.
+        self._refusal_streak = 0
         self._embed_suppressed_failures = 0
         self._init_db()
 
@@ -1349,7 +1351,9 @@ class RAGMemoryManager:
         # served while the embedder is down.
         if time.monotonic() < self._embed_endpoint_down_until:
             self._embed_suppressed_failures += 1
-            _note_embed_failure(self._embed_pause_phrase())
+            _note_embed_failure(
+                f"the embedding endpoint is paused after a failure ({self._embed_pause_reason})"
+            )
             return None
 
         # ─── embed (single-chunk fast path vs multi-chunk mean-pool) ───
@@ -1367,7 +1371,10 @@ class RAGMemoryManager:
                         _note_embed_failure("embeddings are off (ENABLE_RAG)")
                         return None
                     if self._embed_endpoint_paused():
-                        _note_embed_failure(self._embed_pause_phrase())
+                        _note_embed_failure(
+                            "the embedding endpoint is paused after a failure "
+                            f"({self._embed_pause_reason})"
+                        )
                         return None
                     missing = [
                         name
@@ -1381,8 +1388,9 @@ class RAGMemoryManager:
                         self._trip_embed_breaker(" and ".join(missing) + " not configured")
                         return None
                     async with aiohttp.ClientSession() as session:
-                        for chunk_text in chunks_to_embed:
+                        for piece, chunk_text in enumerate(chunks_to_embed, 1):
                             if not EMBEDDINGS_ENABLED:
+                                _note_embed_failure("embeddings are off (ENABLE_RAG)")
                                 return None
                             payload = {"model": self.embed_model, "input": chunk_text}
                             if self.embed_request_dimensions is not None:
@@ -1395,12 +1403,9 @@ class RAGMemoryManager:
                                 allow_redirects=False,
                             ) as resp:
                                 if resp.status in INPUT_REJECTION_STATUSES:
-                                    cause = (
-                                        f"{REFUSAL_CAUSE} "
-                                        f"(HTTP {resp.status}, {len(chunk_text)} characters)"
+                                    self._refuse_input(
+                                        resp.status, piece, chunks_to_embed, len(text)
                                     )
-                                    logger.warning("Embedding failed: %s; other embeds continue", cause)
-                                    _note_embed_failure(cause)
                                     return None
                                 if resp.status != 200:
                                     self._trip_embed_breaker(f"HTTP {resp.status}")
@@ -1481,8 +1486,25 @@ class RAGMemoryManager:
             _note_embed_failure(f"the embedding request failed ({type(e).__name__})")
             return None
 
+    def _refuse_input(self, status: int, piece: int, chunks: list[str], length: int) -> None:
+        """Record a refused input; a run of refusals opens the breaker."""
+        where = (
+            f"{length} characters"
+            if len(chunks) == 1
+            else f"piece {piece} of {len(chunks)}, {len(chunks[piece - 1])} of {length} characters"
+        )
+        cause = f"the embedding endpoint refused this input (HTTP {status}, {where})"
+        logger.warning("Embedding failed: %s", cause)
+        _note_embed_failure(cause)
+        self._refusal_streak += 1
+        if self._refusal_streak >= MAX_CONSECUTIVE_REFUSALS:
+            self._trip_embed_breaker(
+                f"the embedding endpoint refused {self._refusal_streak} inputs in a row "
+                f"(last: HTTP {status}), so the fault is not in one input"
+            )
+
     def _embed_pause_phrase(self) -> str:
-        """Why embeds are paused now, with the cause of the failure that paused them."""
+        """Why embeds are paused now, with the live countdown and the cause."""
         remaining = max(0.0, self._embed_endpoint_down_until - time.monotonic())
         return (
             f"the embedding endpoint is paused for {remaining:.0f}s after a failure "
@@ -1492,7 +1514,8 @@ class RAGMemoryManager:
     def _trip_embed_breaker(self, reason: str) -> None:
         """Open the embed circuit, logging once per outage rather than per call."""
         self._embed_pause_reason = str(reason)[:200]
-        _note_embed_failure(f"the embedding request failed ({self._embed_pause_reason})")
+        self._refusal_streak = 0
+        _note_embed_failure(f"embedding failed ({self._embed_pause_reason})")
         first = time.monotonic() >= self._embed_endpoint_down_until
         self._embed_endpoint_down_until = (
             time.monotonic() + EMBED_ENDPOINT_COOLDOWN_SECONDS
@@ -1506,6 +1529,7 @@ class RAGMemoryManager:
 
     def _embed_endpoint_recovered(self) -> None:
         """Close the circuit after a success, reporting what we skipped."""
+        self._refusal_streak = 0
         if self._embed_suppressed_failures:
             logger.info(
                 "Embedding endpoint recovered (%d embed(s) skipped while down)",
@@ -1730,7 +1754,6 @@ class RAGMemoryManager:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(vectors)")}
         source = "source" if "source" in columns else "'user'"
         remaining = limit
-        refusals = 0
         report["stopped"] = "limit"
         while remaining:
             if time.monotonic() >= deadline:
@@ -1773,20 +1796,15 @@ class RAGMemoryManager:
                     finally:
                         EMBED_FAILURES.reset(token)
                     report["embedded" if stored else "failed"] += 1
-                    cause = failures[-1] if failures else "no vector and no recorded cause"
                     if not stored and len(report["failures"]) < 10:
+                        cause = failures[-1] if failures else "no vector and no recorded cause"
                         report["failures"].append(f"{row['id']}: {cause}")
-                    refused = not stored and cause.startswith(REFUSAL_CAUSE)
-                    refusals = refusals + 1 if refused else 0
                 report["cursor"] = row["position"]
                 self._db.execute(
                     "INSERT OR REPLACE INTO embed_backfill VALUES (?, ?, ?)",
                     (*key, report["cursor"]),
                 )
                 remaining -= 1
-                if refusals >= MAX_CONSECUTIVE_REFUSALS:
-                    report["stopped"] = "consecutive_refusals"
-                    return
 
     # ─── channel memory (short-term) ──────────────────────────────
 
