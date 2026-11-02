@@ -8984,7 +8984,7 @@ class DameCurieBot(commands.Bot):
 
         self._track_task(_spawn_background(_daily_summarizer_loop()))
 
-        # Active cleanup of stale channel rows on a 10-minute cadence.
+        # Prune idle channel locks and per-channel state every 10 minutes.
         while True:
             await asyncio.sleep(600)
             try:
@@ -8993,58 +8993,20 @@ class DameCurieBot(commands.Bot):
                 logger.error(f"Memory cleanup error: {e}")
 
     async def _cleanup_stale_memory(self):
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=12)
-        cleared = 0
-        # RAGMemoryManager uses SQLite, not an in-memory dict.
-        # Clean up old channels by querying the DB directly.
-        if hasattr(self.memory, "_db") and self.memory._db:
-            try:
-                rows = self.memory._db.execute(
-                    "SELECT channel_id, MAX(timestamp) as latest FROM vectors WHERE kind='message' GROUP BY channel_id"
-                ).fetchall()
-                for row in rows:
-                    cid = row["channel_id"]
-                    if not cid:
-                        continue
-                    ts = row["latest"]
-                    if not ts:
-                        continue
-                    try:
-                        if datetime.fromisoformat(ts) < cutoff:
-                            await self.memory.clear_channel_memory(cid)
-                            cleared += 1
-                    except Exception as e:
-                        # Unparseable timestamp or a failed clear for one
-                        # channel must not stop the cleanup sweep.
-                        logger.debug("Cleanup skipped channel %s: %s", cid, e)
-            except Exception as e:
-                logger.warning(f"RAG memory cleanup query failed: {e}")
-        # Fallback: old-style memory dict (shouldn't exist with RAG but be safe)
-        else:
-            for cid, msgs in list(getattr(self.memory, "memory", {}).items()):
-                if not msgs:
-                    continue
-                ts = msgs[-1].get("timestamp")
-                if not ts:
-                    continue
-                try:
-                    if datetime.fromisoformat(ts) < cutoff:
-                        await self.memory.clear_channel_memory(cid)
-                        cleared += 1
-                except Exception as e:
-                    logger.debug("Cleanup skipped channel %s: %s", cid, e)
-        # KeyedLocks self-prunes as it grows; this pass additionally drops
-        # locks for rooms whose memory we just cleared, keeping anything still
-        # held or still live.
-        live_channels = set(getattr(self.memory, "memory", {}) or {})
-        pruned_locks = self._channel_locks.prune(keep=live_channels, all_idle=True)
+        """Prune idle channel locks and per-channel state on the 10-minute sweep.
+
+        Channel memory is not deleted here. A quiet channel keeps its rows;
+        `add_to_channel_memory` limits each channel to `max_messages` rows and
+        keeps the newest `MAX_CHANNELS` channels. Until 2 November 2026 this
+        sweep deleted all rows of a channel with no user message for 12 hours.
+        """
+        # KeyedLocks trims itself as it grows. This pass drops every idle
+        # channel lock; a held lock stays.
+        pruned_locks = self._channel_locks.prune(all_idle=True)
         pruned_state = self._prune_per_channel_state()
-        if cleared or pruned_locks or pruned_state:
+        if pruned_locks or pruned_state:
             logger.info(
-                "Cleared %s stale channel memories, pruned %s idle channel locks "
-                "and %s per-channel state entries",
-                cleared,
+                "Pruned %s idle channel locks and %s per-channel state entries",
                 pruned_locks,
                 pruned_state,
             )
