@@ -180,7 +180,7 @@ def test_existing_contaminated_vectors_are_not_invalidated_or_reembedded(memory,
     assert tuple(row) == (text, blob)
 
 
-def test_context_rejection_splits_only_offending_chunk_without_losing_unicode(memory, transport):
+def test_context_rejection_is_not_split_and_sends_the_unicode_chunk_unchanged(memory, transport):
     text = "😀漢字" * 2000 + "tail"
     accepted = []
 
@@ -198,10 +198,13 @@ def test_context_rejection_splits_only_offending_chunk_without_losing_unicode(me
     assert transport.calls[0][1]["json"] == {
         "model": memory.embed_model, "input": original_chunks[0],
     }
-    assert memory._embed_endpoint_down_until > 0.0
+    # A refused input does not pause the endpoint (root, 2 November 2026), so
+    # the second attempt sends its own request; it is still not split.
+    assert memory._embed_endpoint_down_until == 0.0
     assert transport.calls[0][1]["timeout"].total == rag.EMBED_HTTP_TIMEOUT_SECONDS
     assert asyncio.run(memory._embed(text)) is None
-    assert len(transport.calls) == 1
+    assert len(transport.calls) == 2
+    assert accepted == []
 
 
 @pytest.mark.parametrize("text", ["x", "x" * 6000])
@@ -209,7 +212,7 @@ def test_repeated_context_rejections_stop_without_cache_or_global_outage(memory,
     transport.respond = lambda chunk: Reply(CONTEXT_ERROR, 400)
     assert asyncio.run(memory._embed(text)) is None
     assert len(transport.calls) == 1
-    assert memory._embed_endpoint_down_until > 0.0
+    assert memory._embed_endpoint_down_until == 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
 
 
@@ -219,7 +222,7 @@ def test_partial_success_is_not_cached_when_later_chunk_cannot_fit(memory, trans
     assert asyncio.run(memory._embed(text)) is None
     assert transport.calls[0][1]["json"]["input"] == "a" * 6000
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
-    assert memory._embed_endpoint_down_until > 0.0
+    assert memory._embed_endpoint_down_until == 0.0
 
 
 @pytest.mark.parametrize(
@@ -237,7 +240,11 @@ def test_unrecognized_400_does_not_trigger_split_retries(memory, transport, payl
     assert asyncio.run(memory._embed("Synthetic text.")) is None
     assert len(transport.calls) == 1
     assert transport.calls[0][1]["allow_redirects"] is False
-    assert memory._embed_endpoint_down_until > 0.0
+    # A redirect pauses the endpoint; a 400 refuses only this input.
+    if status == 400:
+        assert memory._embed_endpoint_down_until == 0.0
+    else:
+        assert memory._embed_endpoint_down_until > 0.0
     assert memory._db.execute("SELECT COUNT(*) FROM embed_cache").fetchone()[0] == 0
 
 
@@ -246,7 +253,7 @@ def test_context_message_from_non_ollama_endpoint_is_not_retried(memory, transpo
     transport.respond = lambda chunk: Reply(CONTEXT_ERROR, 400)
     assert asyncio.run(memory._embed("Synthetic text.")) is None
     assert len(transport.calls) == 1
-    assert memory._embed_endpoint_down_until > 0.0
+    assert memory._embed_endpoint_down_until == 0.0
 
 
 def test_cancellation_during_context_recovery_propagates(memory, transport):

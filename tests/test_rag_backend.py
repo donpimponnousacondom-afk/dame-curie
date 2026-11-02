@@ -1368,8 +1368,9 @@ def test_catch_up_pass_failures_are_warnings_with_their_count(memory, monkeypatc
     record = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
     assert record.levelname == "WARNING"
     assert record.getMessage() == (
-        "Embedding catch-up pass: 0 embedded, 1 failed (rows fact), stopped at endpoint_paused, "
-        "1 rows still pending for the configured model, 0 embeds deferred since the last pass"
+        "Embedding catch-up pass: 0 embedded, 1 failed, stopped at endpoint_paused, "
+        "1 rows still pending for the configured model, 0 embeds deferred since the last pass. "
+        "Failed rows: fact: embedding failed (HTTP 503)"
     )
 
 
@@ -1378,12 +1379,15 @@ def test_catch_up_pass_names_an_unexpected_error(caplog):
 
     memory = SimpleNamespace(
         backfill_embeddings=AsyncMock(side_effect=RuntimeError("disk full")),
-        pop_deferred_embeds=lambda: 0,
+        pop_deferred_embeds=lambda: 3,
     )
     with caplog.at_level("INFO"):
         asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
     memory.backfill_embeddings.assert_awaited_once_with(limit=10000, max_seconds=60)
-    assert "Embedding catch-up pass failed: RuntimeError: disk full" in caplog.text
+    assert (
+        "Embedding catch-up pass failed: RuntimeError: disk full "
+        "(3 embeds deferred since the last pass)"
+    ) in caplog.text
 
 
 def test_negative_exclusion_uses_negative_similarity(memory, monkeypatch):
@@ -1434,3 +1438,175 @@ def test_catch_up_pass_reports_a_pass_that_could_not_run(memory, caplog):
         "Embedding catch-up pass: 0 embedded, 0 failed, stopped at endpoint_paused, "
         "1 rows still pending for the configured model, 0 embeds deferred since the last pass"
     ) in caplog.text
+
+
+@pytest.mark.parametrize("status", [400, 413, 422])
+def test_a_refused_input_does_not_pause_other_embeds(memory, monkeypatch, caplog, status):
+    """Root, 2 November 2026: one refused row must not pause recall for everyone."""
+    from bot import DameCurieBot
+
+    insert(memory, "refused", "a synthetic row the endpoint refuses")
+    insert(memory, "accepted", "a synthetic row the endpoint embeds")
+    transport = install_transport(
+        monkeypatch, Reply({"error": "private detail"}, status), Reply({"embeddings": [vector()]})
+    )
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    assert len(transport.calls) == 2
+    assert memory._embed_endpoint_down_until == 0
+    assert memory._query_embed_disabled_until == 0
+    assert memory.embedding_status()["eligible_pending"] == 1
+    assert (
+        f"Embedding failed: the embedding endpoint refused this input (HTTP {status}, 36 characters)"
+    ) in caplog.text
+    assert (
+        "Embedding catch-up pass: 1 embedded, 1 failed, stopped at scan_complete, "
+        "1 rows still pending for the configured model, 0 embeds deferred since the last pass. "
+        f"Failed rows: refused: the embedding endpoint refused this input (HTTP {status}, 36 characters)"
+    ) in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize("status,gap", [
+    (400, "query embedding is paused for 15s because the embedding endpoint refused this "
+          "input (HTTP 400, 13 characters)"),
+    (503, "the embedding endpoint is paused for 30s after a failure (HTTP 503)"),
+])
+def test_a_failed_query_names_its_exact_cause_to_the_prompt(memory, monkeypatch, status, gap):
+    monkeypatch.setattr(rag.time, "monotonic", lambda: 100.0)
+    install_transport(monkeypatch, Reply({}, status))
+    assert asyncio.run(memory._embed_for_query("a query text.")) is None
+    assert memory.query_embedding_gap() == gap
+
+
+def test_an_edit_during_the_request_is_named_as_an_edit(memory, monkeypatch):
+    insert(memory)
+
+    async def embed(text):
+        memory._db.execute("UPDATE vectors SET content='edited' WHERE id='fact'")
+        return np.array(vector(), dtype=np.float32)
+
+    monkeypatch.setattr(memory, "_embed", embed)
+    report = asyncio.run(memory.backfill_embeddings())
+    assert report["failures"] == ["fact: the row changed or was deleted during the request"]
+
+
+def test_catch_up_line_states_how_many_failed_rows_it_leaves_out(memory, monkeypatch, caplog):
+    from bot import DameCurieBot
+
+    for index in range(12):
+        insert(memory, f"row{index:02d}", f"synthetic row number {index}")
+
+    async def embed(text):
+        rag._note_embed_failure(f"synthetic cause for {text[-2:].strip()}")
+        return None
+
+    monkeypatch.setattr(memory, "_embed", embed)
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    line = next(r.getMessage() for r in caplog.records if "catch-up pass" in r.getMessage())
+    assert line.count("synthetic cause for") == 10
+    assert "row09: synthetic cause for 9" in line
+    assert line.endswith("; and 2 more")
+
+
+def test_three_refusals_in_a_row_open_the_breaker_with_that_cause(memory, monkeypatch, caplog):
+    """An endpoint that refuses every input gets 3 requests, then the breaker opens."""
+    from bot import DameCurieBot
+
+    for index in range(6):
+        insert(memory, f"row{index}", f"synthetic refused row {index}")
+    transport = install_transport(monkeypatch, *[Reply({}, 400) for _ in range(6)])
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    assert len(transport.calls) == 3
+    assert memory._embed_endpoint_down_until > 0
+    line = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
+    assert line.levelname == "WARNING"
+    message = line.getMessage()
+    assert "0 embedded, 3 failed, stopped at endpoint_paused, 6 rows still pending" in message
+    assert "row0: the embedding endpoint refused this input (HTTP 400, 23 characters)" in message
+    assert (
+        "row2: the embedding endpoint refused this input (HTTP 400, 23 characters); then "
+        "embedding failed (the embedding endpoint refused 3 inputs in a row; last: HTTP 400; "
+        "the fault is not in one input)"
+    ) in message
+
+
+def test_a_success_resets_the_refusal_count(memory, monkeypatch):
+    statuses = [400, 400, 200, 400, 400, 400]
+    install_transport(monkeypatch, *[
+        Reply({"embeddings": [vector()]}, status) if status == 200 else Reply({}, status)
+        for status in statuses
+    ])
+    for index in range(5):
+        asyncio.run(memory._embed(f"synthetic text {index}"))
+        assert memory._embed_endpoint_down_until == 0
+    asyncio.run(memory._embed("synthetic text 5"))
+    assert memory._embed_endpoint_down_until > 0
+
+
+def test_a_refused_piece_of_a_long_row_names_the_piece(memory, monkeypatch, caplog):
+    text = "First sentence of a long row. " * 300
+    pieces = rag._split_embed_chunks(rag._embedding_projection(text))
+    assert len(pieces) == 2
+    install_transport(monkeypatch, Reply({"embeddings": [vector()]}), Reply({}, 413))
+    failures: list[str] = []
+    token = rag.EMBED_FAILURES.set(failures)
+    try:
+        assert asyncio.run(memory._embed(text)) is None
+    finally:
+        rag.EMBED_FAILURES.reset(token)
+    assert failures == [
+        f"the embedding endpoint refused this input (HTTP 413, piece 2 of 2, "
+        f"{len(pieces[1])} of {len(rag._embedding_projection(text))} characters)"
+    ]
+
+
+def test_refusals_on_write_query_and_backfill_count_together(memory, monkeypatch):
+    """The bound is process-wide: one refused write, query and backfill row open the breaker."""
+    insert(memory, "backfill-row", "a synthetic backfill row")
+    insert(memory, "write-row", "a synthetic written row")
+    install_transport(monkeypatch, *[Reply({}, 422) for _ in range(3)])
+    assert asyncio.run(memory._embed_and_store("write-row", "a synthetic written row")) is False
+    assert asyncio.run(memory._embed_for_query("a synthetic query")) is None
+    assert memory._embed_endpoint_down_until == 0
+    report = asyncio.run(memory.backfill_embeddings())
+    assert memory._embed_endpoint_down_until > 0
+    assert report["failures"][0].endswith(
+        "embedding failed (the embedding endpoint refused 3 inputs in a row; last: HTTP 422; "
+        "the fault is not in one input)"
+    )
+
+
+def test_a_refused_write_names_its_row_and_cause(memory, monkeypatch, caplog):
+    insert(memory, "write-row", "a synthetic written row")
+    install_transport(monkeypatch, Reply({}, 413))
+    failures: list[str] = []
+    token = rag.EMBED_FAILURES.set(failures)
+    try:
+        with caplog.at_level("WARNING"):
+            assert asyncio.run(memory._embed_and_store("write-row", "a synthetic written row")) is False
+    finally:
+        rag.EMBED_FAILURES.reset(token)
+    assert failures == ["the embedding endpoint refused this input (HTTP 413, 23 characters)"]
+    assert memory._embed_endpoint_down_until == 0
+    assert "Embedding failed: the embedding endpoint refused this input (HTTP 413, 23 characters)" in caplog.text
+
+
+def test_a_stored_query_cause_is_in_the_past_tense(memory, monkeypatch):
+    """The query pause can outlive the endpoint pause, so its cause must stay true."""
+    clock = [100.0]
+    monkeypatch.setattr(rag.time, "monotonic", lambda: clock[0])
+    install_transport(monkeypatch, Reply({}, 503))
+    assert asyncio.run(memory._embed("open the breaker")) is None
+    # The query arrives 5 s before the endpoint pause ends.
+    clock[0] = memory._embed_endpoint_down_until - 5
+    assert asyncio.run(memory._embed_for_query("a query while paused")) is None
+    # 1 s after the endpoint pause ends, the query pause still runs.
+    clock[0] += 6
+    assert memory._embed_endpoint_down_until < clock[0] < memory._query_embed_disabled_until
+    assert memory.query_embedding_gap() == (
+        f"query embedding is paused for {rag.RAG_QUERY_FAILURE_COOLDOWN_SECONDS - 6:.0f}s "
+        "because the embedding endpoint was paused after a failure (HTTP 503)"
+    )
