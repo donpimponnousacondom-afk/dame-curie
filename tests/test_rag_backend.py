@@ -1368,8 +1368,9 @@ def test_catch_up_pass_failures_are_warnings_with_their_count(memory, monkeypatc
     record = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
     assert record.levelname == "WARNING"
     assert record.getMessage() == (
-        "Embedding catch-up pass: 0 embedded, 1 failed (rows fact), stopped at endpoint_paused, "
-        "1 rows still pending for the configured model, 0 embeds deferred since the last pass"
+        "Embedding catch-up pass: 0 embedded, 1 failed, stopped at endpoint_paused, "
+        "1 rows still pending for the configured model, 0 embeds deferred since the last pass. "
+        "Failed rows: fact: the embedding request failed (HTTP 503)"
     )
 
 
@@ -1378,12 +1379,15 @@ def test_catch_up_pass_names_an_unexpected_error(caplog):
 
     memory = SimpleNamespace(
         backfill_embeddings=AsyncMock(side_effect=RuntimeError("disk full")),
-        pop_deferred_embeds=lambda: 0,
+        pop_deferred_embeds=lambda: 3,
     )
     with caplog.at_level("INFO"):
         asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
     memory.backfill_embeddings.assert_awaited_once_with(limit=10000, max_seconds=60)
-    assert "Embedding catch-up pass failed: RuntimeError: disk full" in caplog.text
+    assert (
+        "Embedding catch-up pass failed: RuntimeError: disk full "
+        "(3 embeds deferred since the last pass)"
+    ) in caplog.text
 
 
 def test_negative_exclusion_uses_negative_similarity(memory, monkeypatch):
@@ -1434,3 +1438,70 @@ def test_catch_up_pass_reports_a_pass_that_could_not_run(memory, caplog):
         "Embedding catch-up pass: 0 embedded, 0 failed, stopped at endpoint_paused, "
         "1 rows still pending for the configured model, 0 embeds deferred since the last pass"
     ) in caplog.text
+
+
+@pytest.mark.parametrize("status", [400, 413, 422])
+def test_a_refused_input_does_not_pause_other_embeds(memory, monkeypatch, caplog, status):
+    """Root, 2 November 2026: one refused row must not pause recall for everyone."""
+    from bot import DameCurieBot
+
+    insert(memory, "refused", "a synthetic row the endpoint refuses")
+    insert(memory, "accepted", "a synthetic row the endpoint embeds")
+    transport = install_transport(
+        monkeypatch, Reply({"error": "private detail"}, status), Reply({"embeddings": [vector()]})
+    )
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    assert len(transport.calls) == 2
+    assert memory._embed_endpoint_down_until == 0
+    assert memory._query_embed_disabled_until == 0
+    assert memory.embedding_status()["eligible_pending"] == 1
+    assert (
+        f"Embedding failed: the embedding endpoint refused this input (HTTP {status}, 36 characters); "
+        "other embeds continue"
+    ) in caplog.text
+    assert (
+        "Embedding catch-up pass: 1 embedded, 1 failed, stopped at scan_complete, "
+        "1 rows still pending for the configured model, 0 embeds deferred since the last pass. "
+        f"Failed rows: refused: the embedding endpoint refused this input (HTTP {status}, 36 characters)"
+    ) in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize("status,cause", [
+    (400, "the embedding endpoint refused this input (HTTP 400, 13 characters)"),
+    (503, "the embedding request failed (HTTP 503)"),
+])
+def test_a_failed_query_names_its_exact_cause_to_the_prompt(memory, monkeypatch, status, cause):
+    install_transport(monkeypatch, Reply({}, status))
+    assert asyncio.run(memory._embed_for_query("a query text.")) is None
+    assert memory.query_embedding_gap().endswith(f"because {cause}")
+
+
+def test_an_edit_during_the_request_is_named_as_an_edit(memory, monkeypatch):
+    insert(memory)
+
+    async def embed(text):
+        memory._db.execute("UPDATE vectors SET content='edited' WHERE id='fact'")
+        return np.array(vector(), dtype=np.float32)
+
+    monkeypatch.setattr(memory, "_embed", embed)
+    report = asyncio.run(memory.backfill_embeddings())
+    assert report["failures"] == ["fact: the row changed or was deleted during the request"]
+
+
+def test_catch_up_line_states_how_many_failed_rows_it_leaves_out(memory, monkeypatch, caplog):
+    from bot import DameCurieBot
+
+    for index in range(12):
+        insert(memory, f"row{index:02d}", f"synthetic row number {index}")
+
+    async def embed(text):
+        return None
+
+    monkeypatch.setattr(memory, "_embed", embed)
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    line = next(r.getMessage() for r in caplog.records if "catch-up pass" in r.getMessage())
+    assert line.count("no vector and no recorded cause") == 10
+    assert line.endswith("; and 2 more")

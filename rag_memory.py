@@ -52,6 +52,25 @@ SEARCH_ERRORS: ContextVar[list[str] | None] = ContextVar(
 )
 
 
+# The causes of failed embedding requests for one caller. A caller that needs
+# the exact cause sets a list; _embed appends one phrase per failure. A child
+# task (asyncio.wait_for) shares the list through its copy of the context.
+EMBED_FAILURES: ContextVar[list[str] | None] = ContextVar(
+    "dame_curie_embed_failures", default=None
+)
+
+# HTTP statuses that refuse one input, not the endpoint. Root, 2 November
+# 2026: one refused row must not pause the embeds of every other row.
+INPUT_REJECTION_STATUSES = frozenset({400, 413, 422})
+
+
+def _note_embed_failure(cause: str) -> None:
+    """Give the cause of a failed embedding to the caller that asked for it."""
+    sink = EMBED_FAILURES.get()
+    if sink is not None:
+        sink.append(cause)
+
+
 def _report_search_error(line: str) -> None:
     """Log a memory search failure and add it to the prompt-build list."""
     logger.warning("Memory search: %s", line)
@@ -1274,9 +1293,11 @@ class RAGMemoryManager:
         if not EMBEDDINGS_ENABLED:
             # ENABLE_RAG=false: no embedding calls at all. Retrieval falls
             # back to plain recent-history context and the bot keeps working.
+            _note_embed_failure("embeddings are off (ENABLE_RAG)")
             return None
         text = _embedding_projection(text)
         if not text:
+            _note_embed_failure("the text is empty after the embedding projection")
             return None
         # Long-content handling. qwen3-embedding:0.6b has a 32k-token
         # context window (≈128k chars). Past EMBED_MAX_CHARS we split into
@@ -1321,6 +1342,7 @@ class RAGMemoryManager:
         # served while the embedder is down.
         if time.monotonic() < self._embed_endpoint_down_until:
             self._embed_suppressed_failures += 1
+            _note_embed_failure(self._embed_pause_phrase())
             return None
 
         # ─── embed (single-chunk fast path vs multi-chunk mean-pool) ───
@@ -1334,7 +1356,11 @@ class RAGMemoryManager:
             try:
                 async with lane:
                     lane_wait = time.monotonic() - queued_at
-                    if not EMBEDDINGS_ENABLED or self._embed_endpoint_paused():
+                    if not EMBEDDINGS_ENABLED:
+                        _note_embed_failure("embeddings are off (ENABLE_RAG)")
+                        return None
+                    if self._embed_endpoint_paused():
+                        _note_embed_failure(self._embed_pause_phrase())
                         return None
                     missing = [
                         name
@@ -1361,6 +1387,14 @@ class RAGMemoryManager:
                                 timeout=aiohttp.ClientTimeout(total=EMBED_HTTP_TIMEOUT_SECONDS),
                                 allow_redirects=False,
                             ) as resp:
+                                if resp.status in INPUT_REJECTION_STATUSES:
+                                    cause = (
+                                        f"the embedding endpoint refused this input "
+                                        f"(HTTP {resp.status}, {len(chunk_text)} characters)"
+                                    )
+                                    logger.warning("Embedding failed: %s; other embeds continue", cause)
+                                    _note_embed_failure(cause)
+                                    return None
                                 if resp.status != 200:
                                     self._trip_embed_breaker(f"HTTP {resp.status}")
                                     return None
@@ -1437,10 +1471,16 @@ class RAGMemoryManager:
             return None
         except Exception as e:
             logger.warning("Embedding failed: %s", type(e).__name__)
+            _note_embed_failure(f"the embedding request failed ({type(e).__name__})")
             return None
+
+    def _embed_pause_phrase(self) -> str:
+        remaining = max(0.0, self._embed_endpoint_down_until - time.monotonic())
+        return f"the embedding endpoint is paused for {remaining:.0f}s after a failure"
 
     def _trip_embed_breaker(self, reason: str) -> None:
         """Open the embed circuit, logging once per outage rather than per call."""
+        _note_embed_failure(f"the embedding request failed ({str(reason)[:200]})")
         first = time.monotonic() >= self._embed_endpoint_down_until
         self._embed_endpoint_down_until = (
             time.monotonic() + EMBED_ENDPOINT_COOLDOWN_SECONDS
@@ -1533,6 +1573,8 @@ class RAGMemoryManager:
         now = time.monotonic()
         if now < self._query_embed_disabled_until:
             return None
+        failures: list[str] = []
+        token = EMBED_FAILURES.set(failures)
         try:
             vec = await asyncio.wait_for(
                 self._embed(query, query=True),
@@ -1552,8 +1594,12 @@ class RAGMemoryManager:
                 RAG_QUERY_FAILURE_COOLDOWN_SECONDS,
             )
             return None
+        finally:
+            EMBED_FAILURES.reset(token)
         if vec is None:
-            self._query_embed_pause_cause = "a query embedding returned no vector"
+            self._query_embed_pause_cause = (
+                failures[-1] if failures else "a query embedding returned no vector"
+            )
             self._query_embed_disabled_until = (
                 time.monotonic() + RAG_QUERY_FAILURE_COOLDOWN_SECONDS
             )
@@ -1593,11 +1639,13 @@ class RAGMemoryManager:
     async def _embed_and_store(self, row_id: str, text: str) -> bool:
         """Embed a stored text snapshot; an edit/delete during HTTP must win."""
         if not EMBEDDINGS_ENABLED:
+            _note_embed_failure("embeddings are off (ENABLE_RAG)")
             return False
         row = self._db.execute(
             "SELECT kind, content, metadata FROM vectors WHERE id=?", (row_id,)
         ).fetchone()
         if row is None or row["content"] != text:
+            _note_embed_failure("the row changed or was deleted before the request")
             return False
         stored = False
         try:
@@ -1620,8 +1668,12 @@ class RAGMemoryManager:
                     ),
                 )
                 stored = cursor.rowcount > 0
+                if not stored:
+                    _note_embed_failure("the row changed or was deleted during the request")
         except (ValueError, TypeError, sqlite3.Error) as exc:
-            logger.debug("Embedding row update failed: %s", type(exc).__name__)
+            cause = f"the row update failed ({type(exc).__name__}: {exc})"
+            logger.warning("Embedding of row %s: %s", row_id, cause)
+            _note_embed_failure(cause)
         return stored
 
     async def _embed_pending(self, kind: str):
@@ -1642,7 +1694,7 @@ class RAGMemoryManager:
         if not 0 < max_seconds <= 600:
             raise ValueError("max_seconds must be >0 and <=600")
         report = {
-            "attempted": 0, "embedded": 0, "failed": 0, "failed_ids": [], "skipped": 0,
+            "attempted": 0, "embedded": 0, "failed": 0, "failures": [], "skipped": 0,
             "cursor": 0, "scan_complete": False, "stopped": "disabled",
         }
         if EMBEDDINGS_ENABLED:
@@ -1704,10 +1756,16 @@ class RAGMemoryManager:
                     report["skipped"] += 1
                 else:
                     report["attempted"] += 1
-                    stored = await self._embed_and_store(row["id"], content)
+                    failures: list[str] = []
+                    token = EMBED_FAILURES.set(failures)
+                    try:
+                        stored = await self._embed_and_store(row["id"], content)
+                    finally:
+                        EMBED_FAILURES.reset(token)
                     report["embedded" if stored else "failed"] += 1
-                    if not stored and len(report["failed_ids"]) < 10:
-                        report["failed_ids"].append(str(row["id"]))
+                    if not stored and len(report["failures"]) < 10:
+                        cause = failures[-1] if failures else "no vector and no recorded cause"
+                        report["failures"].append(f"{row['id']}: {cause}")
                 report["cursor"] = row["position"]
                 self._db.execute(
                     "INSERT OR REPLACE INTO embed_backfill VALUES (?, ?, ?)",

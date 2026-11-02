@@ -9034,20 +9034,31 @@ class DameCurieBot(commands.Bot):
         try:
             report = await self.memory.backfill_embeddings(limit=10000, max_seconds=60)
         except Exception as e:
-            logger.error("Embedding catch-up pass failed: %s: %s", type(e).__name__, e)
+            logger.error(
+                "Embedding catch-up pass failed: %s: %s (%s embeds deferred since the last pass)",
+                type(e).__name__,
+                e,
+                deferred,
+            )
             return
         if report["attempted"] or deferred or report["stopped"] not in ("scan_complete", "disabled"):
+            failures = report["failures"]
+            detail = ""
+            if failures:
+                detail = ". Failed rows: " + "; ".join(failures)
+                if report["failed"] > len(failures):
+                    detail += f"; and {report['failed'] - len(failures)} more"
             log = logger.warning if report["failed"] else logger.info
             log(
-                "Embedding catch-up pass: %s embedded, %s failed%s, stopped at %s, "
+                "Embedding catch-up pass: %s embedded, %s failed, stopped at %s, "
                 "%s rows still pending for the configured model, %s embeds deferred "
-                "since the last pass",
+                "since the last pass%s",
                 report["embedded"],
                 report["failed"],
-                f" (rows {', '.join(report['failed_ids'])})" if report["failed_ids"] else "",
                 report["stopped"],
                 report["counts"]["eligible_pending"],
                 deferred,
+                detail,
             )
 
     async def _prune_idle_channel_state(self):
