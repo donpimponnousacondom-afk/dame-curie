@@ -1352,7 +1352,7 @@ class RAGMemoryManager:
         if time.monotonic() < self._embed_endpoint_down_until:
             self._embed_suppressed_failures += 1
             _note_embed_failure(
-                f"the embedding endpoint is paused after a failure ({self._embed_pause_reason})"
+                f"the embedding endpoint was paused after a failure ({self._embed_pause_reason})"
             )
             return None
 
@@ -1372,7 +1372,7 @@ class RAGMemoryManager:
                         return None
                     if self._embed_endpoint_paused():
                         _note_embed_failure(
-                            "the embedding endpoint is paused after a failure "
+                            "the embedding endpoint was paused after a failure "
                             f"({self._embed_pause_reason})"
                         )
                         return None
@@ -1499,8 +1499,8 @@ class RAGMemoryManager:
         self._refusal_streak += 1
         if self._refusal_streak >= MAX_CONSECUTIVE_REFUSALS:
             self._trip_embed_breaker(
-                f"the embedding endpoint refused {self._refusal_streak} inputs in a row "
-                f"(last: HTTP {status}), so the fault is not in one input"
+                f"the embedding endpoint refused {self._refusal_streak} inputs in a row; "
+                f"last: HTTP {status}; the fault is not in one input"
             )
 
     def _embed_pause_phrase(self) -> str:
@@ -1797,7 +1797,7 @@ class RAGMemoryManager:
                         EMBED_FAILURES.reset(token)
                     report["embedded" if stored else "failed"] += 1
                     if not stored and len(report["failures"]) < 10:
-                        cause = failures[-1] if failures else "no vector and no recorded cause"
+                        cause = "; then ".join(failures) or "no vector and no recorded cause"
                         report["failures"].append(f"{row['id']}: {cause}")
                 report["cursor"] = row["position"]
                 self._db.execute(

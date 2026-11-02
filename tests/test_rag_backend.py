@@ -1527,8 +1527,9 @@ def test_three_refusals_in_a_row_open_the_breaker_with_that_cause(memory, monkey
     assert "0 embedded, 3 failed, stopped at endpoint_paused, 6 rows still pending" in message
     assert "row0: the embedding endpoint refused this input (HTTP 400, 23 characters)" in message
     assert (
-        "row2: embedding failed (the embedding endpoint refused 3 inputs in a row "
-        "(last: HTTP 400), so the fault is not in one input)"
+        "row2: the embedding endpoint refused this input (HTTP 400, 23 characters); then "
+        "embedding failed (the embedding endpoint refused 3 inputs in a row; last: HTTP 400; "
+        "the fault is not in one input)"
     ) in message
 
 
@@ -1560,3 +1561,52 @@ def test_a_refused_piece_of_a_long_row_names_the_piece(memory, monkeypatch, capl
         f"the embedding endpoint refused this input (HTTP 413, piece 2 of 2, "
         f"{len(pieces[1])} of {len(rag._embedding_projection(text))} characters)"
     ]
+
+
+def test_refusals_on_write_query_and_backfill_count_together(memory, monkeypatch):
+    """The bound is process-wide: one refused write, query and backfill row open the breaker."""
+    insert(memory, "backfill-row", "a synthetic backfill row")
+    insert(memory, "write-row", "a synthetic written row")
+    install_transport(monkeypatch, *[Reply({}, 422) for _ in range(3)])
+    assert asyncio.run(memory._embed_and_store("write-row", "a synthetic written row")) is False
+    assert asyncio.run(memory._embed_for_query("a synthetic query")) is None
+    assert memory._embed_endpoint_down_until == 0
+    report = asyncio.run(memory.backfill_embeddings())
+    assert memory._embed_endpoint_down_until > 0
+    assert report["failures"][0].endswith(
+        "embedding failed (the embedding endpoint refused 3 inputs in a row; last: HTTP 422; "
+        "the fault is not in one input)"
+    )
+
+
+def test_a_refused_write_names_its_row_and_cause(memory, monkeypatch, caplog):
+    insert(memory, "write-row", "a synthetic written row")
+    install_transport(monkeypatch, Reply({}, 413))
+    failures: list[str] = []
+    token = rag.EMBED_FAILURES.set(failures)
+    try:
+        with caplog.at_level("WARNING"):
+            assert asyncio.run(memory._embed_and_store("write-row", "a synthetic written row")) is False
+    finally:
+        rag.EMBED_FAILURES.reset(token)
+    assert failures == ["the embedding endpoint refused this input (HTTP 413, 23 characters)"]
+    assert memory._embed_endpoint_down_until == 0
+    assert "Embedding failed: the embedding endpoint refused this input (HTTP 413, 23 characters)" in caplog.text
+
+
+def test_a_stored_query_cause_is_in_the_past_tense(memory, monkeypatch):
+    """The query pause can outlive the endpoint pause, so its cause must stay true."""
+    clock = [100.0]
+    monkeypatch.setattr(rag.time, "monotonic", lambda: clock[0])
+    install_transport(monkeypatch, Reply({}, 503))
+    assert asyncio.run(memory._embed("open the breaker")) is None
+    # The query arrives 5 s before the endpoint pause ends.
+    clock[0] = memory._embed_endpoint_down_until - 5
+    assert asyncio.run(memory._embed_for_query("a query while paused")) is None
+    # 1 s after the endpoint pause ends, the query pause still runs.
+    clock[0] += 6
+    assert memory._embed_endpoint_down_until < clock[0] < memory._query_embed_disabled_until
+    assert memory.query_embedding_gap() == (
+        f"query embedding is paused for {rag.RAG_QUERY_FAILURE_COOLDOWN_SECONDS - 6:.0f}s "
+        "because the embedding endpoint was paused after a failure (HTTP 503)"
+    )
