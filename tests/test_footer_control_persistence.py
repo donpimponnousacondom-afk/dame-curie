@@ -146,24 +146,21 @@ def test_footer_update_cannot_bypass_api_sidecar_lock(tmp_path, monkeypatch):
         assert path.read_text(encoding="utf-8") == original
 
 
+
 @pytest.mark.parametrize(
-    ("key", "value", "cause"),
-    [
-        ("short_turn_skip_enabled", "tru", "short_turn_skip_enabled must be true or false; it is 'tru'"),
-        ("short_turn_skip_enabled", 1, "short_turn_skip_enabled must be true or false; it is 1"),
-        ("short_turn_max_chars", "eighty", "short_turn_max_chars must be a positive integer; it is 'eighty'"),
-    ],
+    ("key", "value"),
+    [("short_turn_skip_enabled", "tru"), ("short_turn_skip_enabled", 1), ("short_turn_max_chars", "eighty")],
 )
-def test_a_bad_short_turn_setting_in_the_file_is_refused_with_its_cause(
-    tmp_path, caplog, key, value, cause
-):
-    """parse_bool would turn "tru" into the default; the loader refuses it first."""
+def test_a_bad_short_turn_setting_is_kept_as_written_and_the_rest_loads(tmp_path, key, value):
+    """parse_bool would turn "tru" into the default; the loader keeps the raw value.
+
+    The gate then names the bad value to her every turn. The other settings
+    load, and a later write of the control dict keeps the operator's text.
+    """
     bot = control_bot(tmp_path)
-    before = dict(bot._control)
-    _atomic_json_write_sync(tmp_path / "bot_control.json", {key: value})
-    caplog.set_level("ERROR", logger="bot")
+    _atomic_json_write_sync(tmp_path / "bot_control.json", {key: value, "footer_format": "new"})
 
     bot._load_control(force=True)
 
-    assert bot._control == before
-    assert f"Failed to load control settings: bot_control {cause}" in caplog.text
+    assert bot._control[key] == value
+    assert bot._control["footer_format"] == "new"

@@ -536,3 +536,12 @@ def test_no_source_file_hardcodes_a_time_zone():
         if pattern.search(text)
     ]
     assert offenders == []
+
+
+def test_a_bad_short_turn_setting_reaches_the_model_with_its_cause():
+    bot = _bot(_Memory(entity={"user_id": "456"}), {"short_turn_max_chars": "eighty"})
+    prompt = _prompt(bot)
+    assert (
+        "- the short-turn gate is off for this turn (bot_control short_turn_max_chars "
+        "must be a positive integer; it is 'eighty')"
+    ) in prompt

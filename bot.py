@@ -1581,23 +1581,20 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
+def _short_turn_settings_error(control: dict) -> str | None:
+    """Name the short-turn setting that has the wrong type, or return None.
 
-def _check_short_turn_settings(control: dict) -> None:
-    """Raise a named ValueError when a short-turn setting has the wrong type.
-
-    The control loader calls this on the raw file values, before parse_bool
-    turns an unreadable text into the default. The gate calls it every turn.
+    With a bad value the gate is off for the turn, and the prompt build shows
+    this text to her as a harness failure (root's rule of 1 November 2026).
     """
     enabled = control.get("short_turn_skip_enabled", False)
     if type(enabled) is not bool:
-        raise ValueError(
-            f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
-        )
+        return f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
     max_chars = control.get("short_turn_max_chars", 80)
     if type(max_chars) is not int or max_chars < 1:
-        raise ValueError(
-            f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
-        )
+        return f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
+    return None
+
 
 class DameCurieBot(commands.Bot):
     """AI-powered Discord bot."""
@@ -8306,13 +8303,14 @@ class DameCurieBot(commands.Bot):
                     loaded = json.load(f)
                 if not isinstance(loaded, dict):
                     loaded = {}
-            _check_short_turn_settings(loaded)
             control = dict(DEFAULT_CONTROL)
             control.update(loaded)
             for dead_key in DEAD_CONTROL_KEYS:
                 control.pop(dead_key, None)
             for key, default in DEFAULT_CONTROL.items():
-                if isinstance(default, bool):
+                # short_turn_skip_enabled keeps its raw value: parse_bool would
+                # turn an unreadable text into the default without a message.
+                if isinstance(default, bool) and key != "short_turn_skip_enabled":
                     control[key] = parse_bool(control.get(key), default)
             control["ai_concurrency"] = max(
                 1, min(_safe_int(control.get("ai_concurrency", 2) or 2, 2), 10)
@@ -13824,12 +13822,13 @@ class DameCurieBot(commands.Bot):
     def _is_short_live_turn(self, message, content: str | None = None) -> bool:
         """True when this turn skips memory recall and other prompt parts.
 
-        `short_turn_skip_enabled` switches the whole gate. Off, every turn
-        gets the full prompt. On, a watch follow-up, a turn during an active
+        `short_turn_skip_enabled` switches the whole gate. Off, or with a
+        short-turn setting of the wrong type, every turn gets the full prompt. On, a watch follow-up, a turn during an active
         conversation watch that does not address her, and a message shorter
         than `short_turn_max_chars` that does not address her are short.
         """
-        _check_short_turn_settings(self._control)
+        if _short_turn_settings_error(self._control) is not None:
+            return False
         if not self._control.get("short_turn_skip_enabled", False):
             return False
         text = str(
@@ -14597,6 +14596,10 @@ class DameCurieBot(commands.Bot):
         # model sees each one with its cause, so it does not guess why
         # something is missing and can tell root.
         memory_gaps: list[str] = []
+        settings_error = _short_turn_settings_error(self._control)
+        if settings_error is not None:
+            logger.warning("Short-turn gate off for this turn: %s", settings_error)
+            memory_gaps.append(f"the short-turn gate is off for this turn ({settings_error})")
         search_errors_token = SEARCH_ERRORS.set(memory_gaps)
 
         # Collect recent users from conversation for pinging support
