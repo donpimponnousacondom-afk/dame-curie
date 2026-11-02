@@ -102,7 +102,7 @@ def request_dimensions(environment: dict[str, str], dimension: int) -> int | Non
     raw = environment.get(REQUEST_DIMENSIONS_KEY, "").strip()
     if not raw:
         return None
-    if not raw.isdigit() or int(raw) != dimension:
+    if not (raw.isascii() and raw.isdigit()) or int(raw) != dimension:
         raise ConfigurationError(
             f"{REQUEST_DIMENSIONS_KEY}={raw!r} must be blank or the same whole number as "
             f"DAME_CURIE_EMBED_DIM ({dimension})"

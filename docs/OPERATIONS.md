@@ -71,7 +71,7 @@ A model change does not delete memory. The stored text stays. Each vector carrie
 1. Back up `dame-curie-rag.db`.
 2. Pre-warm: copy the database with the SQLite backup API. Run `rag_maintenance.py backfill --db <copy> --limit 10000 --batch-size 64 --max-seconds 600` with the new settings until `eligible_pending` is 0. The live bot keeps running.
 3. Calibrate the cut-offs on the two copies (method below).
-4. Stop the bot. Copy the `embed_cache` rows of the new model from the copy into the live database. Set the new values in `bot.env`. Run the backfill on the live database: cached rows need no request. Start the bot.
+4. Stop the bot. Delete the `embed_cache` rows of the old model in the live database: the cache holds at most 10,000 rows, and the oldest rows go first. Copy the `embed_cache` rows of the new model from the copy into the live database. Set the new values in `bot.env`. Run the backfill on the live database: cached rows need no request. Start the bot.
 5. Rollback: restore the old `bot.env` lines and the backup of step 1.
 
 The bot also runs a catch-up pass every 10 minutes. It embeds the rows that have no vector for the configured model, for at most 60 s. A write that finds `DAME_CURIE_MAX_BACKGROUND_EMBED_TASKS` (8) embeds in the queue stores its row without a vector and logs "Background embed deferred to the catch-up pass". On 2 November 2026, 1,495 of 3,079 long-term facts had no vector for this reason.

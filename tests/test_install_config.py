@@ -257,3 +257,33 @@ def test_default_cut_offs_are_the_qwen_values():
         config_module.Config.EMBED_REQUEST_DIMENSIONS,
     ) == (0.35, 0.40, 0.40, 0.85, None)
     assert (rag_memory.SIM_THRESHOLD, rag_memory.NEGATIVE_SIMILARITY) == (0.35, 0.85)
+
+
+def test_config_reads_the_documented_setting_names(tmp_path):
+    """A typo in a setting name would keep the default; read each name in a fresh process."""
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "DAME_CURIE_ENV_FILE": str(tmp_path / "absent.env"),
+        "DAME_CURIE_EMBED_DIM": "1536",
+        "DAME_CURIE_EMBED_REQUEST_DIMENSIONS": "1536",
+        "DAME_CURIE_RAG_FACT_MIN_SIMILARITY": "0.21",
+        "DAME_CURIE_RAG_MESSAGE_MIN_SIMILARITY": "0.22",
+        "DAME_CURIE_RAG_WEB_MIN_SIMILARITY": "0.23",
+        "DAME_CURIE_RAG_NEGATIVE_SIMILARITY": "0.74",
+    }
+    code = (
+        "from config import Config as C; print(C.EMBED_REQUEST_DIMENSIONS, "
+        "C.RAG_FACT_MIN_SIMILARITY, C.RAG_MESSAGE_MIN_SIMILARITY, "
+        "C.RAG_WEB_MIN_SIMILARITY, C.RAG_NEGATIVE_SIMILARITY)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code], cwd=Path(config_module.__file__).parent,
+        env=env, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.split() == ["1536", "0.21", "0.22", "0.23", "0.74"]
+
+
+def test_superscript_digits_are_refused_with_their_name(monkeypatch):
+    monkeypatch.setenv("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", "\u00b2")
+    with pytest.raises(ValueError, match="DAME_CURIE_EMBED_REQUEST_DIMENSIONS='\u00b2' must be blank"):
+        config_module._optional_dimensions_env("DAME_CURIE_EMBED_REQUEST_DIMENSIONS", 2)

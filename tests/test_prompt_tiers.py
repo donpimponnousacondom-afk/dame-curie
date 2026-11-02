@@ -571,6 +571,8 @@ def test_recall_cut_offs_come_from_configuration(monkeypatch, cut_off):
             self.web_kwargs = None
 
         async def rag_search(self, query, **kwargs):
+            # Like RAGMemoryManager.rag_search: the default cut-off is the
+            # fact cut-off that the module read at import (0.35).
             kind = (kwargs.get("kinds") or [""])[0]
             return [
                 {
@@ -579,6 +581,7 @@ def test_recall_cut_offs_come_from_configuration(monkeypatch, cut_off):
                     "timestamp": "2026-11-01T10:00:00+00:00",
                 }
                 for similarity in (0.30, 0.50)
+                if similarity >= kwargs.get("min_similarity", 0.35)
             ]
 
         async def recall_web_results(self, query, **kwargs):

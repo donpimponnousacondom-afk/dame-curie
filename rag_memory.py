@@ -829,6 +829,8 @@ class RAGMemoryManager:
         # in-flight embeds are silently dropped and rows stay embedding=NULL)
         # and so tests don't spam "coroutine ignored GeneratorExit".
         self._embed_tasks: set[asyncio.Task] = set()
+        # Embeds deferred by a full queue since the last catch-up pass.
+        self._deferred_embeds = 0
         # If the local embedder is unavailable or too slow, don't retry it for
         # every RAG search in the same turn (or every concurrent turn).
         self._query_embed_disabled_until = 0.0
@@ -843,6 +845,11 @@ class RAGMemoryManager:
         self._embed_endpoint_down_until = 0.0
         self._embed_suppressed_failures = 0
         self._init_db()
+
+    def pop_deferred_embeds(self) -> int:
+        """Return the count of embeds deferred since the last call, and reset it."""
+        count, self._deferred_embeds = self._deferred_embeds, 0
+        return count
 
     def _embed_endpoint_paused(self) -> bool:
         return time.monotonic() < self._embed_endpoint_down_until
@@ -859,10 +866,13 @@ class RAGMemoryManager:
             # safer than allowing a message burst to build an unbounded queue.
             with contextlib.suppress(Exception):
                 coro.close()
-            logger.info(
-                "Background embed deferred to the catch-up pass: %s tasks already queued",
-                MAX_BACKGROUND_EMBED_TASKS,
-            )
+            self._deferred_embeds += 1
+            if self._deferred_embeds == 1:
+                # One line per burst; the catch-up line states the count.
+                logger.info(
+                    "Background embed deferred to the catch-up pass: %s tasks already queued",
+                    MAX_BACKGROUND_EMBED_TASKS,
+                )
             return None
         task = asyncio.ensure_future(coro)
         self._embed_tasks.add(task)
@@ -1131,6 +1141,7 @@ class RAGMemoryManager:
         self._db.create_function(
             "embedding_valid", 1, lambda blob: embedding_blob_valid(blob, self.embed_dim)
         )
+        self._db.create_function("embedding_eligible", 3, embedding_eligible)
 
     def embedding_status(self) -> dict:
         """Counts for the configured vector space, not every non-NULL blob."""
@@ -1631,7 +1642,7 @@ class RAGMemoryManager:
         if not 0 < max_seconds <= 600:
             raise ValueError("max_seconds must be >0 and <=600")
         report = {
-            "attempted": 0, "embedded": 0, "failed": 0, "skipped": 0,
+            "attempted": 0, "embedded": 0, "failed": 0, "failed_ids": [], "skipped": 0,
             "cursor": 0, "scan_complete": False, "stopped": "disabled",
         }
         if EMBEDDINGS_ENABLED:
@@ -1653,6 +1664,10 @@ class RAGMemoryManager:
         ).fetchone()
         report["cursor"] = progress["cursor"] if progress else 0
         highwater = self._db.execute("SELECT COALESCE(MAX(rowid), 0) FROM vectors").fetchone()[0]
+        # Rows that are never embedded (bot_output, low-signal messages) are
+        # left out here, so a pass does not walk them again each time.
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(vectors)")}
+        source = "source" if "source" in columns else "'user'"
         remaining = limit
         report["stopped"] = "limit"
         while remaining:
@@ -1666,7 +1681,8 @@ class RAGMemoryManager:
                 "SELECT rowid AS position, * FROM vectors "
                 "WHERE rowid>? AND rowid<=? AND (?='' OR kind=?) AND "
                 "(embedding IS NULL OR COALESCE(embedding_backend, '') != ? "
-                "OR NOT embedding_valid(embedding)) ORDER BY rowid LIMIT ?",
+                f"OR NOT embedding_valid(embedding)) AND embedding_eligible(kind, {source}, content) "
+                "ORDER BY rowid LIMIT ?",
                 (report["cursor"], highwater, kind, kind, self.embedding_backend,
                  min(batch_size, remaining)),
             ).fetchall()
@@ -1690,6 +1706,8 @@ class RAGMemoryManager:
                     report["attempted"] += 1
                     stored = await self._embed_and_store(row["id"], content)
                     report["embedded" if stored else "failed"] += 1
+                    if not stored and len(report["failed_ids"]) < 10:
+                        report["failed_ids"].append(str(row["id"]))
                 report["cursor"] = row["position"]
                 self._db.execute(
                     "INSERT OR REPLACE INTO embed_backfill VALUES (?, ?, ?)",

@@ -8962,7 +8962,7 @@ class DameCurieBot(commands.Bot):
     async def _memory_cleanup_loop(self):
         # Do not stampede local Ollama on boot. Pending-row migration used
         # to POST batches of 50 into /api/embed and stall the whole box.
-        # Catch up lazily on search / new writes instead.
+        # The 10-minute catch-up pass below embeds pending rows in 60 s steps.
         if os.getenv("DAME_CURIE_EMBED_PENDING_ON_BOOT", "").strip().lower() in {
             "1",
             "true",
@@ -9025,24 +9025,29 @@ class DameCurieBot(commands.Bot):
         a vector, and memory search cannot find that row. On 2 November 2026,
         1,495 of 3,079 stored facts had no vector, because a summary writes
         more facts at one time than the queue holds. This pass embeds them.
-        One pass stops after 60 s, so it keeps the embedder free for queries.
+        One pass stops after 60 s. Queries have their own lane, but they use
+        the same embedding endpoint, so a pass can make a query wait.
+        Measured on 2 November 2026 with 10,123 rows: the count scan of one
+        pass took 0.072 s.
         """
-        if not hasattr(self.memory, "backfill_embeddings"):
-            return
+        deferred = self.memory.pop_deferred_embeds()
         try:
             report = await self.memory.backfill_embeddings(limit=10000, max_seconds=60)
         except Exception as e:
             logger.error("Embedding catch-up pass failed: %s: %s", type(e).__name__, e)
             return
-        if report["attempted"]:
+        if report["attempted"] or deferred or report["stopped"] not in ("scan_complete", "disabled"):
             log = logger.warning if report["failed"] else logger.info
             log(
-                "Embedding catch-up pass: %s embedded, %s failed, stopped at %s, "
-                "%s rows still without a vector",
+                "Embedding catch-up pass: %s embedded, %s failed%s, stopped at %s, "
+                "%s rows still pending for the configured model, %s embeds deferred "
+                "since the last pass",
                 report["embedded"],
                 report["failed"],
+                f" (rows {', '.join(report['failed_ids'])})" if report["failed_ids"] else "",
                 report["stopped"],
                 report["counts"]["eligible_pending"],
+                deferred,
             )
 
     async def _prune_idle_channel_state(self):
@@ -14873,6 +14878,7 @@ class DameCurieBot(commands.Bot):
                         kinds=["ltm"],
                         guild_id=str(getattr(message.guild, "id", "") or ""),
                         channel_id=str(getattr(message.channel, "id", "") or ""),
+                        min_similarity=Config.RAG_FACT_MIN_SIMILARITY,
                         apply_recency=False,
                         top_k=max(
                             5,
@@ -14905,6 +14911,7 @@ class DameCurieBot(commands.Bot):
                         guild_id=recall_guild,
                         channel_id=str(getattr(message.channel, "id", "") or ""),
                         exact_guild=bool(recall_guild),
+                        min_similarity=Config.RAG_MESSAGE_MIN_SIMILARITY,
                         apply_recency=True,
                         recency_tau_days=3.0,  # tight tau - recent chat
                         top_k=8,

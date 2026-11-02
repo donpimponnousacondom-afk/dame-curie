@@ -77,7 +77,7 @@ def _optional_dimensions_env(name: str, expected: int) -> int | None:
     raw = os.getenv(name, "").strip()
     if not raw:
         return None
-    if not raw.isdigit() or int(raw) != expected:
+    if not (raw.isascii() and raw.isdigit()) or int(raw) != expected:
         raise ValueError(
             f"{name}={raw!r} must be blank or the same whole number as "
             f"DAME_CURIE_EMBED_DIM ({expected})"

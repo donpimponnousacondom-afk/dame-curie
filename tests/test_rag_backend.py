@@ -708,12 +708,13 @@ def test_backfill_skips_low_signal_and_separates_kind_cursors(memory, monkeypatc
     insert(memory)
     embed = AsyncMock(return_value=np.array(vector(), dtype=np.float32))
     monkeypatch.setattr(memory, "_embed", embed)
+    # The low-signal row is never selected, so one row of budget embeds the next row.
     report = asyncio.run(memory.backfill_embeddings(kind="message", limit=1))
-    assert report["skipped"] == 1
-    assert embed.await_count == 0
+    assert (report["skipped"], report["embedded"]) == (0, 1)
+    assert embed.await_args_list == [(("synthetic message",),)]
     assert asyncio.run(memory.backfill_embeddings(kind="ltm"))["embedded"] == 1
     final = asyncio.run(memory.backfill_embeddings(kind="message"))
-    assert final["embedded"] == 1
+    assert (final["attempted"], final["stopped"]) == (0, "scan_complete")
     assert final["counts"]["pending"] == 1
     assert final["counts"]["excluded_pending"] == 1
     assert final["counts"]["eligible_pending"] == 0
@@ -1348,11 +1349,12 @@ def test_catch_up_pass_embeds_the_facts_a_full_queue_deferred(memory, monkeypatc
 
     with caplog.at_level("INFO"):
         asyncio.run(run())
-    assert "Background embed deferred to the catch-up pass: 1 tasks already queued" in caplog.text
+    assert caplog.text.count("Background embed deferred to the catch-up pass: 1 tasks already queued") == 1
     assert (
         "Embedding catch-up pass: 2 embedded, 0 failed, stopped at scan_complete, "
-        "0 rows still without a vector"
+        "0 rows still pending for the configured model, 2 embeds deferred since the last pass"
     ) in caplog.text
+    assert memory.pop_deferred_embeds() == 0
 
 
 def test_catch_up_pass_failures_are_warnings_with_their_count(memory, monkeypatch, caplog):
@@ -1364,22 +1366,26 @@ def test_catch_up_pass_failures_are_warnings_with_their_count(memory, monkeypatc
         asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
     record = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
     assert record.levelname == "WARNING"
-    assert "0 embedded, 1 failed, stopped at endpoint_paused, 1 rows still without a vector" in (
-        record.getMessage()
+    assert record.getMessage() == (
+        "Embedding catch-up pass: 0 embedded, 1 failed (rows fact), stopped at endpoint_paused, "
+        "1 rows still pending for the configured model, 0 embeds deferred since the last pass"
     )
 
 
 def test_catch_up_pass_names_an_unexpected_error(caplog):
     from bot import DameCurieBot
 
-    memory = SimpleNamespace(backfill_embeddings=AsyncMock(side_effect=RuntimeError("disk full")))
+    memory = SimpleNamespace(
+        backfill_embeddings=AsyncMock(side_effect=RuntimeError("disk full")),
+        pop_deferred_embeds=lambda: 0,
+    )
     with caplog.at_level("INFO"):
         asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
     memory.backfill_embeddings.assert_awaited_once_with(limit=10000, max_seconds=60)
     assert "Embedding catch-up pass failed: RuntimeError: disk full" in caplog.text
 
 
-def test_negative_cut_off_comes_from_configuration(memory, monkeypatch):
+def test_negative_exclusion_uses_negative_similarity(memory, monkeypatch):
     insert(memory, "candidate", "a durable synthetic fact")
     insert(memory, "negative", "a durable synthetic fact again", kind="negative")
     blob = np.array([0.8, 0.6] + [0.0] * 6, dtype=np.float32).tobytes()
@@ -1405,3 +1411,25 @@ def test_negative_cut_off_comes_from_configuration(memory, monkeypatch):
     assert search() == ["candidate"]
     monkeypatch.setattr(rag, "NEGATIVE_SIMILARITY", 0.75)
     assert search() == []
+
+
+def test_catch_up_pass_is_silent_when_nothing_is_pending(memory, caplog):
+    from bot import DameCurieBot
+
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    assert "catch-up pass" not in caplog.text
+
+
+def test_catch_up_pass_reports_a_pass_that_could_not_run(memory, caplog):
+    """A paused endpoint is reported each pass, also with no attempt."""
+    from bot import DameCurieBot
+
+    insert(memory)
+    memory._embed_endpoint_down_until = float("inf")
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    assert (
+        "Embedding catch-up pass: 0 embedded, 0 failed, stopped at endpoint_paused, "
+        "1 rows still pending for the configured model, 0 embeds deferred since the last pass"
+    ) in caplog.text
