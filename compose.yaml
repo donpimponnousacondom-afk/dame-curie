@@ -38,8 +38,9 @@ services:
     environment:
       TZ: ":/etc/dame-curie-localtime"
       OLLAMA_HOST: 127.0.0.1:11434
-      # Same reason as the ollama service below. A pull with this "1" works
-      # (measured on 2 November 2026: pull and show passed, 0 warnings).
+      # "1" stops the calls to ollama.com that Ollama 0.40 makes (see the
+      # ollama service below). A pull with this "1" works (measured on
+      # 2 November 2026: pull and show passed, 0 warnings).
       OLLAMA_NO_CLOUD: "1"
     entrypoint: ["/bin/sh", "-ec"]
     command:
