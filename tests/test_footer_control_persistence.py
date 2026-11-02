@@ -146,7 +146,6 @@ def test_footer_update_cannot_bypass_api_sidecar_lock(tmp_path, monkeypatch):
         assert path.read_text(encoding="utf-8") == original
 
 
-
 @pytest.mark.parametrize(
     ("key", "value"),
     [("short_turn_skip_enabled", "tru"), ("short_turn_skip_enabled", 1), ("short_turn_max_chars", "eighty")],

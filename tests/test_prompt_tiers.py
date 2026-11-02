@@ -538,10 +538,19 @@ def test_no_source_file_hardcodes_a_time_zone():
     assert offenders == []
 
 
-def test_a_bad_short_turn_setting_reaches_the_model_with_its_cause():
-    bot = _bot(_Memory(entity={"user_id": "456"}), {"short_turn_max_chars": "eighty"})
+@pytest.mark.parametrize(
+    ("control", "cause"),
+    [
+        ({"short_turn_max_chars": "eighty"},
+         "short_turn_max_chars must be a positive integer; it is 'eighty'"),
+        ({"short_turn_skip_enabled": "tru"},
+         "short_turn_skip_enabled must be true or false; it is 'tru'"),
+        ({"short_turn_skip_enabled": "x" * 500},
+         "short_turn_skip_enabled must be true or false; it is '" + "x" * 39),
+    ],
+)
+def test_a_bad_short_turn_setting_reaches_the_model_with_its_cause(control, cause):
+    bot = _bot(_Memory(entity={"user_id": "456"}), control)
     prompt = _prompt(bot)
-    assert (
-        "- the short-turn gate is off for this turn (bot_control short_turn_max_chars "
-        "must be a positive integer; it is 'eighty')"
-    ) in prompt
+    assert f"- the short-turn gate is off for this turn (bot_control {cause})" in prompt
+    assert "x" * 41 not in prompt

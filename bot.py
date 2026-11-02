@@ -1589,10 +1589,16 @@ def _short_turn_settings_error(control: dict) -> str | None:
     """
     enabled = control.get("short_turn_skip_enabled", False)
     if type(enabled) is not bool:
-        return f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
+        return (
+            "bot_control short_turn_skip_enabled must be true or false; "
+            f"it is {repr(enabled)[:40]}"
+        )
     max_chars = control.get("short_turn_max_chars", 80)
     if type(max_chars) is not int or max_chars < 1:
-        return f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
+        return (
+            "bot_control short_turn_max_chars must be a positive integer; "
+            f"it is {repr(max_chars)[:40]}"
+        )
     return None
 
 
@@ -13822,8 +13828,9 @@ class DameCurieBot(commands.Bot):
     def _is_short_live_turn(self, message, content: str | None = None) -> bool:
         """True when this turn skips memory recall and other prompt parts.
 
-        `short_turn_skip_enabled` switches the whole gate. Off, or with a
-        short-turn setting of the wrong type, every turn gets the full prompt. On, a watch follow-up, a turn during an active
+        `short_turn_skip_enabled` switches the whole gate. Off, or with
+        a short-turn setting of the wrong type, every turn gets the full
+        prompt. On, a watch follow-up, a turn during an active
         conversation watch that does not address her, and a message shorter
         than `short_turn_max_chars` that does not address her are short.
         """

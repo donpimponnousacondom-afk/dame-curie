@@ -8,7 +8,6 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-
 from bot import DameCurieBot, ToolCircuitBreaker
 from bot_tools import MoreToolsTool
 from rag_memory import RAGMemoryManager
