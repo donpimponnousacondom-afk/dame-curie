@@ -8,5 +8,5 @@ numpy>=2.5.1               # RAG vector math (cosine search)
 python-chess>=1.999        # chess_* tools: board state, legal moves, engine
 pillow>=10.0.0             # chess board PNG rendering (also used by HD image)
 tiktoken==0.14.0
-regex==2026.9.3
+regex==2026.9.29
 requests==2.34.2

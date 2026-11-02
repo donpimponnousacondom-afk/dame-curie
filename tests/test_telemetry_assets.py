@@ -19,7 +19,7 @@ def test_tokenizer_dependencies_are_pinned_for_host_and_image():
     image = (ROOT / "docker/requirements.lock").read_text().splitlines()
     for requirement in (
         "tiktoken==0.14.0",
-        "regex==2026.9.3",
+        "regex==2026.9.29",
         "requests==2.34.2",
     ):
         assert requirement in host

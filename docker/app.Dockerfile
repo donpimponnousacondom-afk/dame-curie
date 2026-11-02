@@ -1,10 +1,12 @@
-FROM python:3.14.4-slim-trixie AS app
+FROM python:3.14.10-slim-trixie AS app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# The upgrade installs Debian security fixes released after the base image.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     ca-certificates curl ffmpeg espeak-ng libopus0 libsodium23 \
     nodejs chromium stockfish fonts-dejavu-core acl \
     bind9-dnsutils bind9-host bzip2 g++ git iputils-ping jq make nano \

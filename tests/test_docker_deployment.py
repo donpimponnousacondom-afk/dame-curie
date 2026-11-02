@@ -60,7 +60,10 @@ def test_outer_container_privilege_boundary():
 
 def test_image_uses_allowlisted_source_and_locked_dependencies():
     dockerfile = (ROOT / "docker/app.Dockerfile").read_text()
-    assert "python:3.14.4-slim-trixie" in dockerfile
+    assert "python:3.14.10-slim-trixie" in dockerfile
+    # Debian security fixes newer than the base image (root, 2 November 2026:
+    # libraries up to date).
+    assert "apt-get upgrade -y --no-install-recommends" in dockerfile
     assert "COPY . " not in dockerfile
     assert "COPY *.py" not in dockerfile
     assert "--no-deps -r /opt/dame-curie/requirements.lock" in dockerfile
@@ -76,7 +79,7 @@ def test_image_uses_allowlisted_source_and_locked_dependencies():
     assert all("==" in line and ">" not in line for line in dependencies)
     assert "discord.py-self==2.1.0" in dependencies
     assert not any(line.startswith("discord.py==") for line in dependencies)
-    assert {"numpy==2.5.2", "setuptools==84.0.0"} <= set(dependencies)
+    assert {"numpy==2.5.4", "setuptools==84.2.1", "pillow==13.0.0", "aiohttp==3.14.5", "certifi==2026.10.23"} <= set(dependencies)
     assert "docker/shell-requirements.lock" in allowed
     assert "COPY docker/shell-requirements.lock /opt/dame-curie/shell-requirements.lock" in dockerfile
     assert (ROOT / "docker/shell-requirements.lock").read_text().splitlines() == [
@@ -88,15 +91,15 @@ def test_image_uses_allowlisted_source_and_locked_dependencies():
         "dukpy==0.6.0",
         "esprima==4.0.1",
         "lupa==2.8",
-        "numpy==2.5.3",
+        "numpy==2.5.4",
         "phply==1.2.6",
-        "pillow==12.3.0",
+        "pillow==13.0.0",
         "ply==3.11",
         "py-mini-racer==0.6.0",
-        "pycparser==3.0",
-        "pypdf==6.19.0",
+        "pycparser==3.12",
+        "pypdf==6.21.4",
         "qrcode==8.2",
-        "setuptools==78.1.1",
+        "setuptools==84.2.1",
         "tinycss2==1.5.1",
         "webencodings==0.6.1",
     ]
