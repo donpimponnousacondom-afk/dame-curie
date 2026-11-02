@@ -8725,9 +8725,11 @@ class DameCurieBot(commands.Bot):
             # One limit covers the slot wait, the provider setup and every
             # provider attempt. The provider gets the time that is left as its
             # attempt timeout. An answer that arrives inside the limit is not
-            # cut, and a fast failure still retries inside the limit. The outer
-            # guard waits 2 s more, so the provider's own timeout fires first
-            # and logs the attempt; the guard then stops the retry wait.
+            # cut, and a fast failure still retries inside the limit. The guard
+            # ends 2 s after the limit, so on the first attempt the provider's
+            # own timeout fires first and logs itself. A later attempt keeps
+            # the first timeout value, so the guard cuts it; the provider then
+            # records its earlier failures as cancelled.
             extract_timeout = max(
                 5,
                 min(
@@ -8751,15 +8753,15 @@ class DameCurieBot(commands.Bot):
                     f"no background model slot became free in {extract_timeout} s"
                 ) from e
             try:
-                context_provider = await self._get_aux_provider()
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"the slot wait and the provider setup used all of the "
-                        f"{extract_timeout} s watcher limit"
-                    )
                 try:
-                    async with asyncio.timeout(remaining + 2) as guard:
+                    async with asyncio.timeout_at(deadline + 2) as guard:
+                        context_provider = await self._get_aux_provider()
+                        remaining = deadline - loop.time()
+                        if remaining < 1:
+                            raise TimeoutError(
+                                f"the slot wait and the provider setup left less "
+                                f"than 1 s of the {extract_timeout} s watcher limit"
+                            )
                         raw = await context_provider.generate_response(
                             [
                                 {"role": "system", "content": prompt},
@@ -8771,8 +8773,8 @@ class DameCurieBot(commands.Bot):
                     if not guard.expired():
                         raise
                     raise TimeoutError(
-                        f"the provider call did not finish in the {remaining:.1f} s "
-                        f"left of the {extract_timeout} s watcher limit"
+                        f"the provider setup and call did not finish in the "
+                        f"{extract_timeout} s watcher limit and its 2 s guard"
                     ) from e
             finally:
                 await self._release_ai_slot()

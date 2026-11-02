@@ -109,8 +109,10 @@ def test_context_watcher_limit_covers_slow_provider_with_one_request(shared_bot,
     bot.ai_provider.generate_response.assert_awaited_once()
     assert 4 < bot.ai_provider.generate_response.await_args.kwargs["timeout"] <= 5
     bot._release_ai_slot.assert_awaited_once()
-    assert "Context extraction error: TimeoutError: the provider call did not finish in the " in caplog.text
-    assert " s left of the 5 s watcher limit" in caplog.text
+    assert (
+        "Context extraction error: TimeoutError: the provider setup and call did not "
+        "finish in the 5 s watcher limit and its 2 s guard"
+    ) in caplog.text
     assert "reason=error" in caplog.text
 
 
@@ -138,7 +140,7 @@ def test_context_watcher_limit_used_before_the_provider_call(shared_bot, caplog)
     bot._control = {"cross_context_extract_timeout_seconds": 5}
 
     async def late_provider():
-        await asyncio.sleep(5.2)
+        await asyncio.sleep(4.5)
         return bot.ai_provider
 
     bot._get_aux_provider = late_provider
@@ -150,7 +152,7 @@ def test_context_watcher_limit_used_before_the_provider_call(shared_bot, caplog)
     bot._release_ai_slot.assert_awaited_once()
     assert (
         "Context extraction error: TimeoutError: the slot wait and the provider "
-        "setup used all of the 5 s watcher limit"
+        "setup left less than 1 s of the 5 s watcher limit"
     ) in caplog.text
 
 

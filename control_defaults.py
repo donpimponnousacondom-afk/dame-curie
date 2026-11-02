@@ -45,7 +45,8 @@ DEFAULT_CONTROL = {
     "cross_context_min_importance": 5,
     "cross_context_dm_to_global_admin_only": True,
     # Total time limit for one context-watcher run: the wait for the one
-    # background model slot plus every provider attempt. The provider gets
+    # background model slot, the provider setup and every provider attempt.
+    # A guard ends the run at most 2 s after the limit. The provider gets
     # the time that is left, so an answer inside the limit is not cut.
     # Measured on 2 November 2026: 17 watcher calls took 1.5 s to 54 s
     # (median 8.4 s). With 60 s for each attempt, 2 attempts were cut at
