@@ -110,7 +110,7 @@ def test_context_watcher_limit_covers_slow_provider_with_one_request(shared_bot,
     assert 4 < bot.ai_provider.generate_response.await_args.kwargs["timeout"] <= 5
     bot._release_ai_slot.assert_awaited_once()
     assert (
-        "Context extraction error: TimeoutError: the provider setup and call did not "
+        "Context extraction error: TimeoutError: the provider call did not "
         "finish in the 5 s watcher limit and its 2 s guard"
     ) in caplog.text
     assert "reason=error" in caplog.text
@@ -135,25 +135,33 @@ def test_context_watcher_lets_the_provider_timeout_fire_first(shared_bot, caplog
     bot._release_ai_slot.assert_awaited_once()
 
 
-def test_context_watcher_limit_used_before_the_provider_call(shared_bot, caplog):
+@pytest.mark.parametrize(
+    "setup_seconds, cause",
+    [
+        (4.5, "the slot wait and the provider setup left less than 1 s of the 5 s watcher limit"),
+        (30, "the provider setup did not finish in the 5 s watcher limit and its 2 s guard"),
+    ],
+    ids=["less-than-1-s-left", "setup-cut-by-guard"],
+)
+def test_context_watcher_limit_used_before_the_provider_call(
+    shared_bot, caplog, setup_seconds, cause
+):
     bot = shared_bot
     bot._control = {"cross_context_extract_timeout_seconds": 5}
 
     async def late_provider():
-        await asyncio.sleep(4.5)
+        await asyncio.sleep(setup_seconds)
         return bot.ai_provider
 
     bot._get_aux_provider = late_provider
     caplog.set_level("INFO", logger="bot")
 
-    asyncio.run(bot._extract_shared_context_fact(_watcher_message()))
+    elapsed = asyncio.run(_timed(bot._extract_shared_context_fact(_watcher_message())))
 
+    assert elapsed < 9
     bot.ai_provider.generate_response.assert_not_awaited()
     bot._release_ai_slot.assert_awaited_once()
-    assert (
-        "Context extraction error: TimeoutError: the slot wait and the provider "
-        "setup left less than 1 s of the 5 s watcher limit"
-    ) in caplog.text
+    assert f"Context extraction error: TimeoutError: {cause}" in caplog.text
 
 
 def test_context_watcher_slot_wait_failure_names_its_cause(shared_bot, caplog):

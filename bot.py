@@ -8754,8 +8754,10 @@ class DameCurieBot(commands.Bot):
                 ) from e
             try:
                 try:
+                    step = "provider setup"
                     async with asyncio.timeout_at(deadline + 2) as guard:
                         context_provider = await self._get_aux_provider()
+                        step = "provider call"
                         remaining = deadline - loop.time()
                         if remaining < 1:
                             raise TimeoutError(
@@ -8773,7 +8775,7 @@ class DameCurieBot(commands.Bot):
                     if not guard.expired():
                         raise
                     raise TimeoutError(
-                        f"the provider setup and call did not finish in the "
+                        f"the {step} did not finish in the "
                         f"{extract_timeout} s watcher limit and its 2 s guard"
                     ) from e
             finally:
