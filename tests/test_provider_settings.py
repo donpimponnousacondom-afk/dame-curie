@@ -79,7 +79,7 @@ def test_absent_optional_fields_take_the_startup_defaults():
     settings = parse()
     for name in ("OPENAI_MAX_TOKENS", "OPENAI_TEMPERATURE", "OPENAI_TOP_P", "OPENAI_TOP_K"):
         assert settings[name] is None
-    assert settings["OPENAI_RETRY_ATTEMPTS"] == 5
+    assert settings["OPENAI_RETRY_ATTEMPTS"] == 3
     assert settings["OPENAI_EMPTY_RESPONSE_RETRIES"] == 2
     assert settings["OPENAI_EXTRA_BODY"] == {}
     assert settings["OPENAI_EXTRA_HEADERS"] == {}

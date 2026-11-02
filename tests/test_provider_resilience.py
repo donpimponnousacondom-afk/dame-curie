@@ -254,7 +254,7 @@ def test_explicit_upstream_error_preserved_without_native_tool_retry(
         )
     assert len(session.payloads) == 2
     assert all(payload["tools"] == tools for payload in session.payloads)
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5]
     assert "status=200" in caplog.text
     assert f"format={response_format}" in caplog.text
     assert "private-secret" not in caplog.text
@@ -273,17 +273,18 @@ def test_http200_unsupported_content_type_does_not_dump_body(caplog):
 
 
 def test_retry_defaults_match_config_and_template():
-    assert OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6).retry_attempts == 5
+    assert OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6).retry_attempts == 3
     root = Path(__file__).resolve().parents[1]
     settings = parse_provider_settings({"OPENAI_BASE_URL": "http://example.test", "OPENAI_MODEL": "model"})
-    assert settings["OPENAI_RETRY_ATTEMPTS"] == 5
-    assert "OPENAI_RETRY_ATTEMPTS=5\n" in (root / ".env.example").read_text()
+    assert settings["OPENAI_RETRY_ATTEMPTS"] == 3
+    assert "OPENAI_RETRY_ATTEMPTS=3\n" in (root / ".env.example").read_text()
 
 
 @pytest.mark.parametrize(
-    "retry_attempts, expected", [(None, [10, 20, 30, 40]), (1, []), (3, [10, 20])]
+    "retry_attempts, expected",
+    [(None, [5, 20]), (1, []), (3, [5, 20]), (6, [5, 20, 60, 60, 60])],
 )
-def test_transient_attempt_budget_and_exact_linear_delays(
+def test_transient_attempt_budget_and_exact_backoff_delays(
     retry_attempts, expected, retry_sleep
 ):
     options = {} if retry_attempts is None else {"retry_attempts": retry_attempts}
@@ -298,7 +299,7 @@ def test_transient_attempt_budget_and_exact_linear_delays(
 
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
-def test_transient_failover_also_uses_linear_backoff(status, retry_sleep):
+def test_transient_failover_also_uses_backoff(status, retry_sleep):
     provider = OpenAICompatibleProvider(
         "http://primary.test",
         "model",
@@ -311,7 +312,7 @@ def test_transient_failover_also_uses_linear_backoff(status, retry_sleep):
     )
     provider._session = session
     assert asyncio.run(provider.generate_response([])) == "ok"
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5]
     assert session.urls == ["http://primary.test/chat/completions"] * 2
     assert session.payloads[0] == session.payloads[1]
 
@@ -355,7 +356,7 @@ def test_sse_content_type_overrides_nonstreaming_recovery(retry_sleep):
     assert "stream" not in session.payloads[1]
     assert session.payloads[0] == session.payloads[1]
     assert streamed.json_calls == 0
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10]
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5]
 
 
 @pytest.mark.parametrize(
@@ -405,9 +406,9 @@ def test_empty_content_recovery_never_extends_attempt_budget(attempts, retry_sle
         asyncio.run(provider.generate_response([]))
     expected_attempts = min(attempts, 1 + provider.empty_response_retries)
     assert len(session.payloads) == expected_attempts
-    assert [call.args[0] for call in retry_sleep.await_args_list] == list(
-        range(10, expected_attempts * 10, 10)
-    )
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5, 20][
+        : expected_attempts - 1
+    ]
     assert all(payload == session.payloads[0] for payload in session.payloads)
     assert "stream" not in session.payloads[0]
 
@@ -486,7 +487,7 @@ def test_requested_json_ignores_mismatched_mime_validation(content_type, retry_s
 
 
 @pytest.mark.parametrize("status", [500, 502, 503, 504])
-def test_retryable_http_status_uses_five_attempts_without_body_dumps(
+def test_retryable_http_status_uses_default_attempts_without_body_dumps(
     status, retry_sleep, caplog
 ):
     provider = OpenAICompatibleProvider("http://example.test", "model", 8192, 0.6)
@@ -495,8 +496,8 @@ def test_retryable_http_status_uses_five_attempts_without_body_dumps(
     provider._session = session
     with pytest.raises(RuntimeError, match=f"Provider API error: {status}") as exc:
         asyncio.run(provider.generate_response([]))
-    assert len(session.payloads) == 5
-    assert [call.args[0] for call in retry_sleep.await_args_list] == [10, 20, 30, 40]
+    assert len(session.payloads) == 3
+    assert [call.args[0] for call in retry_sleep.await_args_list] == [5, 20]
     assert "private-response-secret" in str(exc.value)
     assert all(payload == session.payloads[0] for payload in session.payloads)
     assert "private-response-secret" not in caplog.text

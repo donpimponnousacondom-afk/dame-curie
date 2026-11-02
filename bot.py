@@ -8722,35 +8722,48 @@ class DameCurieBot(commands.Bot):
                 f"Message:\n{text[:2500]}{attachment_note}{embed_note}\n\n"
                 'Extract a fact or return {"should_store": false}.'
             )
-            # Both the AI-slot acquisition and the provider call share one
-            # configurable timeout. 20s was too tight for cold-start
-            # 1M-context models - the call would time out, retry, fall
-            # back to a smaller model, and flood the provider log. Operators
-            # who want a stricter cap can lower the runtime control.
+            # One total limit covers the slot wait and all provider attempts.
+            # The provider gets the time that is left as its attempt timeout,
+            # so it retries a fast failure but does not cut a slow answer.
             extract_timeout = max(
                 5,
                 min(
                     _safe_int(
-                        self._control.get("cross_context_extract_timeout_seconds", 60)
-                        or 60,
-                        60,
+                        self._control.get("cross_context_extract_timeout_seconds", 120)
+                        or 120,
+                        120,
                     ),
                     600,
                 ),
             )
-            await self._acquire_ai_slot(
-                timeout=extract_timeout,
-                key=f"extract:{getattr(getattr(message, 'channel', None), 'id', '') or ''}",
-            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + extract_timeout
+            try:
+                await self._acquire_ai_slot(
+                    timeout=extract_timeout,
+                    key=f"extract:{getattr(getattr(message, 'channel', None), 'id', '') or ''}",
+                )
+            except TimeoutError as e:
+                raise TimeoutError(
+                    f"no background model slot became free in {extract_timeout} s"
+                ) from e
             try:
                 context_provider = await self._get_aux_provider()
-                raw = await context_provider.generate_response(
-                    [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": user},
-                    ],
-                    timeout=extract_timeout,
-                )
+                remaining = max(1.0, deadline - loop.time())
+                try:
+                    async with asyncio.timeout(remaining):
+                        raw = await context_provider.generate_response(
+                            [
+                                {"role": "system", "content": prompt},
+                                {"role": "user", "content": user},
+                            ],
+                            timeout=remaining,
+                        )
+                except TimeoutError as e:
+                    raise TimeoutError(
+                        f"the provider gave no answer in the {remaining:.0f} s left "
+                        f"of the {extract_timeout} s watcher limit"
+                    ) from e
             finally:
                 await self._release_ai_slot()
             data = self._json_object_from_text(raw)
@@ -8778,7 +8791,7 @@ class DameCurieBot(commands.Bot):
             await self._mirror_fact_to_entity(message, entry)
             self._ingest_graph_triples(message, data)
         except Exception as e:
-            logger.warning(f"Context extraction error: {e}")
+            logger.warning("Context extraction error: %s: %s", type(e).__name__, e)
             logger.info(
                 "Context watcher result score=%s stored=False reason=error", score_text
             )

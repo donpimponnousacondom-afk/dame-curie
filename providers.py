@@ -634,6 +634,13 @@ _SSE_LENGTH_DRAIN_BYTES = 64 * 1024
 _SSE_LENGTH_DRAIN_SECONDS = 1.0
 _MAX_PARTIAL_CONTENT_CHARS = 16 * 1024
 _MAX_VALID_PROVIDER_TOKEN_COUNT = 2**53 - 1
+# Wait before retry N is 5 s * 4**(N-1), capped at 60 s: 5 s, 20 s, 60 s, 60 s.
+# A short first wait covers a dropped connection. A longer second wait gives
+# an overloaded provider time to recover. The old linear 10 s steps waited
+# 100 s over 5 attempts.
+_RETRY_BACKOFF_FIRST_SECONDS = 5
+_RETRY_BACKOFF_FACTOR = 4
+_RETRY_BACKOFF_MAX_SECONDS = 60
 
 
 def _explicit_output_tokens(response: dict) -> int | None:
@@ -1767,7 +1774,7 @@ class OpenAICompatibleProvider:
         max_tokens: int | None = None,
         temperature: float | None = None,
         api_key: str = "",
-        retry_attempts: int = 5,
+        retry_attempts: int = 3,
         enable_audio_input: bool = False,
         empty_response_retries: int = 2,
         top_p: float | None = None,
@@ -2460,7 +2467,10 @@ class OpenAICompatibleProvider:
         max_attempts = max_attempts or self.retry_attempts
         if attempt >= max_attempts:
             return False
-        wait = 10 * attempt
+        wait = min(
+            _RETRY_BACKOFF_MAX_SECONDS,
+            _RETRY_BACKOFF_FIRST_SECONDS * _RETRY_BACKOFF_FACTOR ** (attempt - 1),
+        )
         logger.warning(
             "%s (attempt %s/%s), retrying in %ss...",
             reason, attempt, max_attempts, wait,
