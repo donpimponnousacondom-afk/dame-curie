@@ -3935,6 +3935,8 @@ class AutonomyEngine:
             "author": author_name,
             "author_id": str(getattr(bot_user, "id", "")),
             "author_is_bot": True,
+            # Server-wide recall matches the guild exactly (#39, #44).
+            "guild_id": str(getattr(getattr(channel, "guild", None), "id", "") or ""),
             "content": _render_discord_context_text(
                 sent_message,
                 content,

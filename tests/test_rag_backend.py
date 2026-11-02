@@ -1635,3 +1635,16 @@ def test_a_stored_query_cause_is_in_the_past_tense(memory, monkeypatch):
         f"query embedding is paused for {rag.RAG_QUERY_FAILURE_COOLDOWN_SECONDS - 6:.0f}s "
         "because the embedding endpoint was paused after a failure (HTTP 503)"
     )
+
+
+def test_a_tool_record_with_an_old_vector_is_never_a_search_result(memory, monkeypatch):
+    """Tool records from before #31 can hold vectors; search must not return them."""
+    blob = np.array(vector(), dtype=np.float32).tobytes()
+    insert(memory, "tool", "Called shell with {} -> output text", kind="bot_output",
+           blob=blob, backend=memory.embedding_backend)
+    insert(memory, "hers", "her reply in another channel", kind="bot_output",
+           blob=blob, backend=memory.embedding_backend)
+    memory._db.execute("UPDATE vectors SET author_id='1545541390392369165' WHERE id='hers'")
+    install_transport(monkeypatch, Reply({"embeddings": [vector()]}))
+    rows = asyncio.run(memory.rag_search("a query", kinds=["message", "bot_output"]))
+    assert [row["id"] for row in rows] == ["hers"]

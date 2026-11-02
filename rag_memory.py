@@ -3406,7 +3406,13 @@ class RAGMemoryManager:
                 return _score_with_recency(1.0, ts_str)  # just the multiplier
 
         # ─── build SQL ───────────────────────────────────────────────
-        where_parts = ["embedding IS NOT NULL", "embedding_backend=?"]
+        # A tool record (bot_output without an author id) is never a search
+        # result, also when it holds a vector from an older backend.
+        where_parts = [
+            "embedding IS NOT NULL",
+            "embedding_backend=?",
+            "NOT (kind='bot_output' AND COALESCE(author_id, '')='')",
+        ]
         params: list = [self.embedding_backend]
         if kinds:
             placeholders = ",".join("?" * len(kinds))
