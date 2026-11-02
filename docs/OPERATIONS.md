@@ -91,6 +91,8 @@ Calibration of 2 November 2026, `qwen3-embedding:0.6b` to `text-embedding-3-larg
 
 Median pair score for facts: 0.382 with Qwen, 0.183 with 3-large. The "% match" label in her prompt shows the new scale. The labelled pairs: 47; 47 pass the Qwen cut-off, 46 pass the new one. The facts and messages cut-offs pass most pairs in both spaces, so the `top_k` cap of each search selects the rows.
 
+Live state since 2 November 2026: OpenAI `text-embedding-3-large` at 1536, cut-offs 0.15, 0.29, 0.21 and 0.74, and `DAME_CURIE_EMBED_MODE=external` in `deploy.env`. The local Ollama container is stopped, not removed; [TODO.md](../TODO.md) has the removal item.
+
 ### Benchmark, 2 November 2026
 
 Recall at 1 and 10 (R@1 / R@10). Queries: SciFact 300 (public set), her web searches 93, her memory facts 45.
