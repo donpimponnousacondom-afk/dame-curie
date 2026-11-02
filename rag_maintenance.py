@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     return (
         2
         if result.get("failed")
-        or result.get("stopped") in {"deadline", "endpoint_paused"}
+        or result.get("stopped") in {"deadline", "endpoint_paused", "consecutive_refusals"}
         else 0
     )
 

@@ -62,6 +62,11 @@ EMBED_FAILURES: ContextVar[list[str] | None] = ContextVar(
 # HTTP statuses that refuse one input, not the endpoint. Root, 2 November
 # 2026: one refused row must not pause the embeds of every other row.
 INPUT_REJECTION_STATUSES = frozenset({400, 413, 422})
+REFUSAL_CAUSE = "the embedding endpoint refused this input"
+# A backfill pass stops after this many refused rows in a row. An endpoint
+# that refuses every input (for example a wrong model setting) then costs
+# a few requests per pass, not one request per pending row.
+MAX_CONSECUTIVE_REFUSALS = 3
 
 
 def _note_embed_failure(cause: str) -> None:
@@ -1391,7 +1396,7 @@ class RAGMemoryManager:
                             ) as resp:
                                 if resp.status in INPUT_REJECTION_STATUSES:
                                     cause = (
-                                        f"the embedding endpoint refused this input "
+                                        f"{REFUSAL_CAUSE} "
                                         f"(HTTP {resp.status}, {len(chunk_text)} characters)"
                                     )
                                     logger.warning("Embedding failed: %s; other embeds continue", cause)
@@ -1725,6 +1730,7 @@ class RAGMemoryManager:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(vectors)")}
         source = "source" if "source" in columns else "'user'"
         remaining = limit
+        refusals = 0
         report["stopped"] = "limit"
         while remaining:
             if time.monotonic() >= deadline:
@@ -1767,15 +1773,20 @@ class RAGMemoryManager:
                     finally:
                         EMBED_FAILURES.reset(token)
                     report["embedded" if stored else "failed"] += 1
+                    cause = failures[-1] if failures else "no vector and no recorded cause"
                     if not stored and len(report["failures"]) < 10:
-                        cause = failures[-1] if failures else "no vector and no recorded cause"
                         report["failures"].append(f"{row['id']}: {cause}")
+                    refused = not stored and cause.startswith(REFUSAL_CAUSE)
+                    refusals = refusals + 1 if refused else 0
                 report["cursor"] = row["position"]
                 self._db.execute(
                     "INSERT OR REPLACE INTO embed_backfill VALUES (?, ?, ?)",
                     (*key, report["cursor"]),
                 )
                 remaining -= 1
+                if refusals >= MAX_CONSECUTIVE_REFUSALS:
+                    report["stopped"] = "consecutive_refusals"
+                    return
 
     # ─── channel memory (short-term) ──────────────────────────────
 

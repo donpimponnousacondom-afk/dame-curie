@@ -1507,3 +1507,20 @@ def test_catch_up_line_states_how_many_failed_rows_it_leaves_out(memory, monkeyp
     line = next(r.getMessage() for r in caplog.records if "catch-up pass" in r.getMessage())
     assert line.count("no vector and no recorded cause") == 10
     assert line.endswith("; and 2 more")
+
+
+def test_backfill_stops_after_three_refused_rows_in_a_row(memory, monkeypatch, caplog):
+    """An endpoint that refuses every input costs 3 requests per pass, not one per row."""
+    from bot import DameCurieBot
+
+    for index in range(6):
+        insert(memory, f"row{index}", f"synthetic refused row {index}")
+    transport = install_transport(monkeypatch, *[Reply({}, 400) for _ in range(6)])
+    with caplog.at_level("INFO"):
+        asyncio.run(DameCurieBot._catch_up_embeddings(SimpleNamespace(memory=memory)))
+    assert len(transport.calls) == 3
+    assert memory._embed_endpoint_down_until == 0
+    line = next(r for r in caplog.records if "catch-up pass" in r.getMessage())
+    assert line.levelname == "WARNING"
+    assert "0 embedded, 3 failed, stopped at consecutive_refusals, 6 rows still pending" in line.getMessage()
+    assert "row2: the embedding endpoint refused this input (HTTP 400, 23 characters)" in line.getMessage()
