@@ -303,7 +303,7 @@ def test_message_recall_spans_the_server_and_names_the_other_channel(in_server):
             self.message_search = None
 
         async def rag_search(self, query, **kwargs):
-            if kwargs.get("kinds") == ["message"]:
+            if "message" in (kwargs.get("kinds") or []):
                 self.message_search = kwargs
                 return [{
                     "author": "bob", "channel_id": "555", "content": "staging deploys on friday",
@@ -398,7 +398,7 @@ def test_a_warm_turn_builds_its_prompt_without_waiting_for_the_embedder():
         return "\n".join(str(m.get("content") or "") for m in messages)
 
     prompt = asyncio.run(run())
-    assert [name for name, _ in memory.searches] == ["entity", ("ltm",), ("message",), "web"]
+    assert [name for name, _ in memory.searches] == ["entity", ("ltm",), ("message", "bot_output"), "web"]
     assert all(vector is warm_vector for _, vector in memory.searches)
     # Only the background refresh asked the embedder.
     assert memory.embedder_calls == 1
@@ -612,9 +612,10 @@ def test_recall_cut_offs_come_from_configuration(monkeypatch, cut_off):
 @pytest.mark.parametrize(
     ("row", "label"),
     [
-        ({"author": "Red Queen", "author_id": "1545541390392369165", "author_is_bot": True}, "you"),
+        ({"author": "Red Queen", "author_id": "1545541390392369165", "author_is_bot": True},
+         "you/Dame Curie(1545541390392369165)"),
         ({"author": "curie", "author_id": "1546469985340231800", "author_is_bot": True},
-         "curie(1546469985340231800), a bot"),
+         "curie(1546469985340231800) [bot]"),
         ({"author": "SirRooT", "author_id": "1482143139828596916"}, "SirRooT(1482143139828596916)"),
         ({"author": "bob"}, "bob"),
     ],
@@ -623,4 +624,4 @@ def test_recalled_lines_name_their_author_by_id(row, label):
     """Root, 2 November 2026: a bot named "curie" was taken for her in recalled lines."""
     from bot import _recalled_author_label
 
-    assert _recalled_author_label(row, "1545541390392369165") == label
+    assert _recalled_author_label(row, "1545541390392369165", "Dame Curie") == label

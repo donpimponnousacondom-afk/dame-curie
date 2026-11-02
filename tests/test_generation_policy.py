@@ -280,10 +280,10 @@ def test_watcher_prompt_names_who_a_reply_to_another_bot_speaks_to(shared_bot):
     system, user = [m["content"] for m in bot.ai_provider.generate_response.await_args.args[0]]
     assert "Author: SirRooT (1482143139828596916)\n" in user
     assert (
-        'Replying to: _LOKI_(1548576826778194011), a bot. That message said: '
+        'Replying to: _LOKI_(1548576826778194011) [bot]. That message said: '
         '"ah THAT. locked in the iron vault"'
     ) in user
-    assert "Mentions: _LOKI_(1548576826778194011), a bot" in user
+    assert "Mentions: _LOKI_(1548576826778194011) [bot]" in user
     assert "Addressed to dame_curie: no" in user
     assert "They mean dame_curie only when 'Addressed to dame_curie' is yes." in system
     assert "never write 'you', 'I' or 'me'" in system

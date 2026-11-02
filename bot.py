@@ -1581,18 +1581,20 @@ class DiscordMessageSnapshot(SimpleNamespace):
         return getattr(self.__dict__.get("_delivery_message"), name)
 
 
-def _recalled_author_label(row: dict, own_id: str) -> str:
-    """Who wrote a recalled message: "you", "Name(id), a bot" or "Name(id)".
+def _recalled_author_label(row: dict, own_id: str, own_name: str) -> str:
+    """Who wrote a recalled message, in the labels of her history.
 
-    Root, 2 November 2026: another bot here is named "curie", and recalled
-    lines showed only display names, so she took its words for her own.
+    Her own message: "you/<name>(id)", as in the reply notes. Another
+    author: "Name(id)", with " [bot]" for a bot account (the APP tag in
+    Discord), as in the transcript. Root, 2 November 2026: a bot here is
+    named "curie", and recalled lines showed only display names.
     """
     author_id = str(row.get("author_id") or "")
     if own_id and author_id == own_id:
-        return "you"
+        return f"you/{own_name}({own_id})"
     name = str(row.get("author") or "anon")
     label = f"{name}({author_id})" if author_id else name
-    return f"{label}, a bot" if row.get("author_is_bot") else label
+    return f"{label} [bot]" if row.get("author_is_bot") else label
 
 
 def _short_turn_settings_error(control: dict) -> str | None:
@@ -8712,7 +8714,7 @@ class DameCurieBot(commands.Bot):
         def who(name: str, user_id: str, is_bot: bool) -> str:
             if own_id and user_id == own_id:
                 return f"{self.bot_name}({user_id})"
-            return f"{name}({user_id})" + (", a bot" if is_bot else "")
+            return f"{name}({user_id})" + (" [bot]" if is_bot else "")
 
         lines = []
         reply = self._reply_meta_from_message(message)
@@ -8803,13 +8805,12 @@ class DameCurieBot(commands.Bot):
                 "message speaks to. 'you' and 'your' in the message mean them. They "
                 f"mean {self.bot_name} only when 'Addressed to {self.bot_name}' is yes. "
                 "When it is not stated, do not decide who 'you' is; skip a fact that "
-                f"depends on it. Other bots are not {self.bot_name}, also when a name "
-                f"looks like {self.bot_name}. In the summary, name each person or bot "
-                "with the name and id from these lines; never write 'you', 'I' or 'me'."
+                "depends on it. In the summary, name each person or bot with the name "
+                "and id from these lines; never write 'you', 'I' or 'me'."
             )
             user = (
                 f"Author: {message.author.display_name} ({message.author.id})"
-                f"{', a bot' if getattr(message.author, 'bot', False) else ''}\n"
+                f"{' [bot]' if getattr(message.author, 'bot', False) else ''}\n"
                 f"Admin author: {'yes' if is_admin else 'no'}\n"
                 f"{self._watcher_addressing(message)}\n"
                 f"Source: {self._context_source_kind(message)} channel={channel_id} guild={guild_id or 'none'}\n"
@@ -15072,7 +15073,9 @@ class DameCurieBot(commands.Bot):
                                 when, f"a recalled message from {r.get('author', 'anon')}", memory_gaps
                             )
                             who = _recalled_author_label(
-                                r, str(getattr(getattr(self, "user", None), "id", "") or "")
+                                r,
+                                str(getattr(getattr(self, "user", None), "id", "") or ""),
+                                self.bot_name,
                             )
                             sim_pct = int(r.get("similarity", 0) * 100)
                             row_channel = str(r.get("channel_id") or "")
