@@ -1468,14 +1468,16 @@ def test_a_refused_input_does_not_pause_other_embeds(memory, monkeypatch, caplog
     assert "private" not in caplog.text
 
 
-@pytest.mark.parametrize("status,cause", [
-    (400, "the embedding endpoint refused this input (HTTP 400, 13 characters)"),
-    (503, "the embedding request failed (HTTP 503)"),
+@pytest.mark.parametrize("status,gap", [
+    (400, "query embedding is paused for 15s because the embedding endpoint refused this "
+          "input (HTTP 400, 13 characters)"),
+    (503, "the embedding endpoint is paused for 30s after a failure (HTTP 503)"),
 ])
-def test_a_failed_query_names_its_exact_cause_to_the_prompt(memory, monkeypatch, status, cause):
+def test_a_failed_query_names_its_exact_cause_to_the_prompt(memory, monkeypatch, status, gap):
+    monkeypatch.setattr(rag.time, "monotonic", lambda: 100.0)
     install_transport(monkeypatch, Reply({}, status))
     assert asyncio.run(memory._embed_for_query("a query text.")) is None
-    assert memory.query_embedding_gap().endswith(f"because {cause}")
+    assert memory.query_embedding_gap() == gap
 
 
 def test_an_edit_during_the_request_is_named_as_an_edit(memory, monkeypatch):

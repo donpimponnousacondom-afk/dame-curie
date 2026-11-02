@@ -862,6 +862,8 @@ class RAGMemoryManager:
         # window returns None immediately, with one summary line at the end
         # instead of a flood.
         self._embed_endpoint_down_until = 0.0
+        # The cause of the failure that opened the breaker.
+        self._embed_pause_reason = ""
         self._embed_suppressed_failures = 0
         self._init_db()
 
@@ -1475,12 +1477,17 @@ class RAGMemoryManager:
             return None
 
     def _embed_pause_phrase(self) -> str:
+        """Why embeds are paused now, with the cause of the failure that paused them."""
         remaining = max(0.0, self._embed_endpoint_down_until - time.monotonic())
-        return f"the embedding endpoint is paused for {remaining:.0f}s after a failure"
+        return (
+            f"the embedding endpoint is paused for {remaining:.0f}s after a failure "
+            f"({self._embed_pause_reason})"
+        )
 
     def _trip_embed_breaker(self, reason: str) -> None:
         """Open the embed circuit, logging once per outage rather than per call."""
-        _note_embed_failure(f"the embedding request failed ({str(reason)[:200]})")
+        self._embed_pause_reason = str(reason)[:200]
+        _note_embed_failure(f"the embedding request failed ({self._embed_pause_reason})")
         first = time.monotonic() >= self._embed_endpoint_down_until
         self._embed_endpoint_down_until = (
             time.monotonic() + EMBED_ENDPOINT_COOLDOWN_SECONDS
@@ -1509,10 +1516,7 @@ class RAGMemoryManager:
         if not EMBEDDINGS_ENABLED:
             return "embeddings are off (ENABLE_RAG)"
         if now < self._embed_endpoint_down_until:
-            return (
-                "the embedding endpoint is paused for "
-                f"{self._embed_endpoint_down_until - now:.0f}s after a failure"
-            )
+            return self._embed_pause_phrase()
         if now < self._query_embed_disabled_until:
             return (
                 "query embedding is paused for "
