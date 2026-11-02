@@ -20,6 +20,7 @@ Each test here pins a bug that was live in the tree at 9b6755c:
 import asyncio
 
 import numpy as np
+import pytest
 
 import rag_memory
 from bot import _web_result_snippet
@@ -376,6 +377,7 @@ def test_server_message_recall_spans_channels_and_never_returns_a_dm(tmp_path, m
     rows = [
         ("other-channel", "g1", "c1"),
         ("this-channel", "g1", "c2"),
+        ("this-channel-no-guild", "", "c2"),
         ("dm", "", "d1"),
         ("other-server", "g2", "c3"),
     ]
@@ -391,6 +393,10 @@ def test_server_message_recall_spans_channels_and_never_returns_a_dm(tmp_path, m
         results = _run(mgr.rag_search(text, kinds=["message"], source="user", top_k=8, **kwargs))
         return sorted(r["id"] for r in results)
 
-    assert found(guild_id="g1", channel_id="", exact_guild=True) == ["other-channel", "this-channel"]
+    assert found(guild_id="g1", channel_id="c2", exact_guild=True) == [
+        "other-channel", "this-channel", "this-channel-no-guild",
+    ]
     assert "dm" in found(guild_id="g1", channel_id=""), "the default filter adds rows without a guild"
     assert found(guild_id="", channel_id="d1") == ["dm"]
+    with pytest.raises(ValueError, match="needs a guild_id"):
+        found(guild_id="", channel_id="d1", exact_guild=True)

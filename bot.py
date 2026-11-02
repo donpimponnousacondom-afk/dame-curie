@@ -13810,7 +13810,12 @@ class DameCurieBot(commands.Bot):
         conversation watch that does not address her, and a message shorter
         than `short_turn_max_chars` that does not address her are short.
         """
-        if not self._control.get("short_turn_skip_enabled", False):
+        enabled = self._control.get("short_turn_skip_enabled", False)
+        if type(enabled) is not bool:
+            raise ValueError(
+                f"bot_control short_turn_skip_enabled must be true or false; it is {enabled!r}"
+            )
+        if not enabled:
             return False
         text = str(
             content if content is not None else getattr(message, "content", "") or ""
@@ -13821,7 +13826,11 @@ class DameCurieBot(commands.Bot):
             getattr(getattr(message, "channel", None), "id", "")
         ) and not self._directly_addressed(message):
             return True
-        max_chars = _safe_int(self._control.get("short_turn_max_chars", 80), 80)
+        max_chars = self._control.get("short_turn_max_chars", 80)
+        if type(max_chars) is not int or max_chars < 1:
+            raise ValueError(
+                f"bot_control short_turn_max_chars must be a positive integer; it is {max_chars!r}"
+            )
         return len(text.strip()) < max_chars and not self._directly_addressed(message)
 
     def _build_openai_tools(
@@ -14224,9 +14233,8 @@ class DameCurieBot(commands.Bot):
         disabled: set[str] = set()
         short_turn = self._is_short_live_turn(message, user_message)
         if not control.get("long_term_memory_enabled", True) or short_turn:
-            # A short ambient turn deliberately skips RAG (see the transcript
-            # comment below) - its budget belongs to the transcript, not to a
-            # tier that will not render.
+            # With the short-turn gate on, a short turn skips RAG; its budget
+            # goes to the transcript, not to a tier that will not render.
             disabled.add("ltm")
             disabled.add("web")
         if not control.get("cross_context_enabled", True) or short_turn:
@@ -14842,9 +14850,7 @@ class DameCurieBot(commands.Bot):
                         kinds=["message"],
                         source="user",
                         guild_id=recall_guild,
-                        channel_id="" if recall_guild else str(
-                            getattr(message.channel, "id", "") or ""
-                        ),
+                        channel_id=str(getattr(message.channel, "id", "") or ""),
                         exact_guild=bool(recall_guild),
                         apply_recency=True,
                         recency_tau_days=3.0,  # tight tau - recent chat
@@ -15220,9 +15226,8 @@ class DameCurieBot(commands.Bot):
                 ),
             )
             if self._is_short_live_turn(message, user_message):
-                # Watch/ambient turns still need the current thread. 20 lines
-                # cuts off the exchange and he riffs on the last 'lol'. Keep
-                # this-channel transcript; skip RAG/cross-context instead.
+                # With the short-turn gate on, a short turn keeps 40 lines of
+                # this channel's transcript and skips RAG and cross-context.
                 count = min(count, 40)
             current_message_id = getattr(message, "id", None)
             # Slide the history window in BLOCKS, not one message per turn.

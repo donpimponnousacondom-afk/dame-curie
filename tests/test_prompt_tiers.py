@@ -103,9 +103,9 @@ def _message():
     )
 
 
-# A turn under ~80 chars that does not address the bot reads as ambient, and
-# the lookup tiers are deliberately skipped for those (see
-# _is_short_live_turn). Anything testing those tiers has to be a real turn.
+# With the short-turn gate on (short_turn_skip_enabled), a turn under
+# short_turn_max_chars that does not address the bot skips the lookup tiers.
+# The tests below use a long turn, so they hold with the gate on or off.
 LONG_TURN = (
     "hey curie, do you remember what we agreed about the deploy schedule "
     "for the staging cluster last week? I want to double-check before friday."
@@ -327,7 +327,7 @@ def test_message_recall_spans_the_server_and_names_the_other_channel(in_server):
 
     search = memory.message_search
     if in_server:
-        assert (search["guild_id"], search["channel_id"], search["exact_guild"]) == ("9", "", True)
+        assert (search["guild_id"], search["channel_id"], search["exact_guild"]) == ("9", "123", True)
     else:
         assert (search["guild_id"], search["channel_id"], search["exact_guild"]) == ("", "123", False)
     assert "- [bob in <#555>" in prompt
@@ -443,8 +443,6 @@ class _FailingMemory(_Memory):
                 raise KeyError("node")
 
         return _Graph()
-
-
 
 
 @pytest.mark.parametrize(

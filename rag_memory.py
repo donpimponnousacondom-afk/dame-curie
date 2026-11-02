@@ -3242,9 +3242,9 @@ class RAGMemoryManager:
             over_fetch: NEW - internally pull top_k*over_fetch candidates
                         from cosine before applying recency/rerank/dedup
                         (gives room for filtering without starving the limit)
-            exact_guild: match guild_id exactly, without the rows that
-                        have no guild. Rows without a guild are DMs and
-                        global rows; a server search must not return a DM.
+            exact_guild: search every channel of guild_id. A row without a
+                        guild matches only when it is in channel_id, so a
+                        DM row never enters a server search. Needs guild_id.
 
         Returns list of dicts with: id, kind, content, author, channel_id,
             guild_id, timestamp, similarity, score (recency-decayed),
@@ -3283,12 +3283,18 @@ class RAGMemoryManager:
             placeholders = ",".join("?" * len(kinds))
             where_parts.append(f"kind IN ({placeholders})")
             params.extend(kinds)
-        if channel_id:
-            where_parts.append("(channel_id=? OR channel_id='')")
-            params.append(str(channel_id))
-        if guild_id:
-            where_parts.append("guild_id=?" if exact_guild else "(guild_id=? OR guild_id='')")
-            params.append(str(guild_id))
+        if exact_guild:
+            if not guild_id:
+                raise ValueError("rag_search(exact_guild=True) needs a guild_id")
+            where_parts.append("(guild_id=? OR (guild_id='' AND channel_id=?))")
+            params.extend([str(guild_id), str(channel_id)])
+        else:
+            if channel_id:
+                where_parts.append("(channel_id=? OR channel_id='')")
+                params.append(str(channel_id))
+            if guild_id:
+                where_parts.append("(guild_id=? OR guild_id='')")
+                params.append(str(guild_id))
         if source:
             src = [source] if isinstance(source, str) else list(source)
             placeholders = ",".join("?" * len(src))

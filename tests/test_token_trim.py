@@ -6,6 +6,8 @@ The core catalog stays visible; specialized groups expand through more_tools.
 import asyncio
 import time
 from types import SimpleNamespace
+
+import pytest
 from unittest.mock import AsyncMock
 
 from bot import DameCurieBot, ToolCircuitBreaker
@@ -194,6 +196,10 @@ def test_short_live_turn_for_watch_followup_not_hard_ping():
 
 def test_short_turn_gate_is_off_by_default_and_has_a_length_setting():
     """Root, 2 November 2026: the gate is off; on, its length limit is a setting."""
+    from control_defaults import DEFAULT_CONTROL
+
+    assert DEFAULT_CONTROL["short_turn_skip_enabled"] is False
+    assert DEFAULT_CONTROL["short_turn_max_chars"] == 80
     bot = _live_bot()
     watch = _msg("dont be like him max", watch_followup=True)
     plain = _msg("ok sure")
@@ -205,6 +211,16 @@ def test_short_turn_gate_is_off_by_default_and_has_a_length_setting():
     bot._control["short_turn_max_chars"] = 3
     assert DameCurieBot._is_short_live_turn(bot, plain, "ok sure") is False
     assert DameCurieBot._is_short_live_turn(bot, _msg(":D"), ":D") is True
+
+    for bad in ("80", 0, True, 2.5):
+        bot._control["short_turn_max_chars"] = bad
+        with pytest.raises(ValueError, match="short_turn_max_chars must be a positive integer"):
+            DameCurieBot._is_short_live_turn(bot, plain, "ok sure")
+    bot._control["short_turn_max_chars"] = 80
+    for bad in ("tru", 1, None):
+        bot._control["short_turn_skip_enabled"] = bad
+        with pytest.raises(ValueError, match="short_turn_skip_enabled must be true or false"):
+            DameCurieBot._is_short_live_turn(bot, plain, "ok sure")
 
 
 def test_emoji_grid_skipped_unless_asked():
