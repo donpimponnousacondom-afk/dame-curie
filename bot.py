@@ -322,7 +322,6 @@ from provider_reload import (
 from provider_settings import PROVIDER_FIELDS
 from image_media import image_mime  # noqa: E402
 from error_reporting import (  # noqa: E402
-    PUBLIC_ERROR_TEXT,
     IncidentLoggingHandler,
     capture_incident,
     configure_incident_store,
@@ -3684,15 +3683,15 @@ class DameCurieBot(commands.Bot):
             await self.autonomy_engine.start()
         else:
             logger.info("Autonomy engine not started (ENABLE_AUTONOMY=false)")
-        # Optional Dirac smoke runtime. Unset means inert: nothing is imported
+        # Optional smoke runtime. Unset means inert: nothing is imported
         # and nothing changes. An operator who opted in gets a loud failure
         # rather than a session that looks like it ran the smoke check.
-        if os.getenv("DAME_CURIE_DIRAC_SMOKE_CONFIG", "").strip():
-            import dirac_runtime  # lazy: only when the operator opted in
+        if os.getenv("DAME_CURIE_SMOKE_CONFIG", "").strip():
+            import smoke_runtime  # lazy: only when the operator opted in
 
-            smoke = dirac_runtime.DiracSmokeRuntime(self, dirac_runtime.SmokeSettings.from_env())
+            smoke = smoke_runtime.SmokeRuntime(self, smoke_runtime.SmokeSettings.from_env())
             await smoke.start()
-            self._dirac_smoke = smoke
+            self._smoke_runtime = smoke
         logger.info("Bot setup complete")
 
     async def on_error(self, event, *args, **kwargs):
@@ -3862,14 +3861,7 @@ class DameCurieBot(commands.Bot):
         listeners = getattr(pm, "_listeners", None)
         if not listeners or event not in listeners or not listeners[event]:
             return
-        spawn = getattr(self, "_spawn_detached", None)
-        if callable(spawn):
-            spawn(pm.dispatch_event(event, *args, **kwargs))
-        else:
-            try:
-                asyncio.create_task(pm.dispatch_event(event, *args, **kwargs))
-            except RuntimeError:
-                pass
+        self._spawn_detached(pm.dispatch_event(event, *args, **kwargs))
 
     async def _watermark_save_loop(self):
         """Persist read positions periodically.
@@ -4934,12 +4926,7 @@ class DameCurieBot(commands.Bot):
             return
 
         payloads = iter_message_payloads(message)
-        has_content = any(
-            str(getattr(src, "content", "") or "").strip() for src in payloads
-        )
-        has_attachment = any(getattr(src, "attachments", None) for src in payloads)
         has_embed = any(getattr(src, "embeds", None) for src in payloads)
-        has_sticker = any(getattr(src, "stickers", None) for src in payloads)
 
         try:
             cooldown = float(self._control.get("per_user_cooldown_seconds", 0.0) or 0)
@@ -6509,7 +6496,7 @@ class DameCurieBot(commands.Bot):
                     capture_incident("discord.vc", "Voice connection does not support receive/listen")
                     await send_public_error(self, message.channel)
                     return
-            except (RuntimeError, TypeError, discord.ClientException) as e:
+            except (RuntimeError, TypeError, discord.ClientException):
                 logger.exception("Voice channel join failed")
                 await send_public_error(self, message.channel)
                 return
@@ -6520,7 +6507,7 @@ class DameCurieBot(commands.Bot):
                 await message.channel.send(
                     f"joined **{getattr(target_channel, 'name', target_channel.id)}** | listening: **{listening}**"
                 )
-            except Exception as e:
+            except Exception:
                 logger.exception("Voice listening start failed")
                 await send_public_error(self, message.channel)
             return
@@ -6560,7 +6547,7 @@ class DameCurieBot(commands.Bot):
                 await message.channel.send(
                     "listening enabled" if listening else "already listening"
                 )
-            except Exception as e:
+            except Exception:
                 logger.exception("Voice listen failed")
                 await send_public_error(self, message.channel)
             return
@@ -14642,12 +14629,16 @@ class DameCurieBot(commands.Bot):
             item = out[index]
             text = str(item.get("content") or "")
             if item.get("role") == "system" and (
-                text.startswith("## Tool contract")
-                or text.startswith("## Tools")
-                or text.startswith("## Available tools\n")
-                or text.startswith("Custom tool protocol:")
-                or text.startswith("Server-specific instructions:")
-                or text.startswith("The stored server prompt was omitted because it exceeds")
+                text.startswith(
+                    (
+                        "## Tool contract",
+                        "## Tools",
+                        "## Available tools\n",
+                        "Custom tool protocol:",
+                        "Server-specific instructions:",
+                        "The stored server prompt was omitted because it exceeds",
+                    )
+                )
             ):
                 protected_messages.add(id(item))
         if live_input is not None:
@@ -15823,13 +15814,13 @@ async def main():
             bot._watermarks.save()
         # Stop the smoke runtime while turns can still deliver, before the queue
         # closes under them.
-        smoke = getattr(bot, "_dirac_smoke", None)
+        smoke = getattr(bot, "_smoke_runtime", None)
         if smoke is not None:
-            bot._dirac_smoke = None
+            bot._smoke_runtime = None
             try:
                 await smoke.stop()
             except Exception:
-                logger.exception("Dirac smoke runtime failed to stop")
+                logger.exception("Smoke runtime failed to stop")
         with contextlib.suppress(Exception):
             await bot._reply_queue.close()
         await bot.bg_jobs.close()

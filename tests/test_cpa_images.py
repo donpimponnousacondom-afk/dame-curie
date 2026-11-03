@@ -133,7 +133,7 @@ def test_native_missing_base_never_uses_chat_configuration(native_image, base):
     if base is None:
         delattr(case.tool.bot.config, "IMAGE_GEN_BASE_URL")
     else:
-        setattr(case.tool.bot.config, "IMAGE_GEN_BASE_URL", base)
+        case.tool.bot.config.IMAGE_GEN_BASE_URL = base
     result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
     assert result.startswith("Error:")
     assert "IMAGE_GEN_BASE_URL" in result
@@ -147,7 +147,7 @@ def test_native_keyless_endpoint_never_borrows_chat_or_other_image_key(native_im
     if key is None:
         delattr(case.tool.bot.config, "IMAGE_GEN_API_KEY")
     else:
-        setattr(case.tool.bot.config, "IMAGE_GEN_API_KEY", key)
+        case.tool.bot.config.IMAGE_GEN_API_KEY = key
     result = asyncio.run(case.tool.execute(case.message, auto_send=True, prompt="a red fox"))
     assert not result.startswith("Error")
     assert case.session.post.call_args.kwargs["headers"] == {"Content-Type": "application/json"}
@@ -422,7 +422,7 @@ def test_real_native_transport_accepts_configured_loopback_endpoint(native_image
         server = await asyncio.start_server(respond, "127.0.0.1", 0)
         async with server:
             port = server.sockets[0].getsockname()[1]
-            setattr(case.tool.bot.config, "IMAGE_GEN_BASE_URL", f"http://127.0.0.1:{port}/v1?region=private")
+            case.tool.bot.config.IMAGE_GEN_BASE_URL = f"http://127.0.0.1:{port}/v1?region=private"
             result = await case.tool.execute(case.message, auto_send=True, prompt="synthetic local image")
         await close_shared_session()
         return result

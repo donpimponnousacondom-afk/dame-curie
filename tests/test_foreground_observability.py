@@ -13,7 +13,7 @@ import pytest
 from bot import DameCurieBot, TokenBudgetTracker
 from bot_tools import MoreToolsTool, SendFileTool, SendMessageTool
 from control_defaults import DEFAULT_CONTROL
-from dirac_runtime import _NoticeInput
+from smoke_runtime import _NoticeInput
 from provider_telemetry import CallMetrics
 from providers import OpenAICompatibleProvider, ProviderIncompleteResponseError, ProviderResult
 from turn_budget import TurnBudgetExceeded, current_foreground_turn

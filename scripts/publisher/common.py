@@ -24,9 +24,9 @@ class RemoteFailure(PublisherError):
 
 def eligible(name: str, *, top_level: bool = True, marker_namespace: str = "dame-curie") -> bool:
     return not (
-        name in EXCLUDED or name.startswith(".dame-curie-publisher-claim-")
+        name in EXCLUDED
         or name == f".{marker_namespace}-publisher-owner"
-        or name.startswith(f".{marker_namespace}-publisher-claim-")
+        or name.startswith((".dame-curie-publisher-claim-", f".{marker_namespace}-publisher-claim-"))
         or top_level and name.startswith(".")
     )
 

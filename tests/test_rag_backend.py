@@ -1524,7 +1524,7 @@ def test_catch_up_line_states_how_many_failed_rows_it_leaves_out(memory, monkeyp
 
     async def embed(text):
         rag._note_embed_failure(f"synthetic cause for {text[-2:].strip()}")
-        return None
+        return
 
     monkeypatch.setattr(memory, "_embed", embed)
     with caplog.at_level("INFO"):

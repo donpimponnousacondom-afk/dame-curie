@@ -8,12 +8,12 @@ import pytest
 
 import bot as bot_module
 from bot import DameCurieBot
-from dirac_runtime import _TurnObserver
+from smoke_runtime import _TurnObserver
 from message_pipeline import ReplyQueue
 from provider_reload import providers_idle
 from providers import ProviderResult
 from response_observability import TURN_INPUT
-from test_foreground_observability import Message, foreground_bot, tool_call
+from test_foreground_observability import Message, foreground_bot, tool_call  # noqa: F401 - pytest fixture, used by name
 from tool_progress import ToolProgress
 
 

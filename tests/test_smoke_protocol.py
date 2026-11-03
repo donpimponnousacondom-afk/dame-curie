@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from scripts.dirac_smoke import main
+from scripts.smoke import main
 from smoke_protocol import (
     SmokeProtocolError,
     SmokeSettings,
@@ -69,7 +69,7 @@ def test_missing_result_and_unavailable_health_are_unknown(tmp_path, capsys, mon
 
     withdrawn = request_path(settings, request.request_id)
     withdrawn.unlink()
-    monkeypatch.setattr("scripts.dirac_smoke.request_files", Mock(return_value=[withdrawn]))
+    monkeypatch.setattr("scripts.smoke.request_files", Mock(return_value=[withdrawn]))
     assert main(["--config", str(settings.config_path), "pending"]) == 0
     assert json.loads(capsys.readouterr().out) == []
 

@@ -1,2 +1,2 @@
 #!/bin/bash
-exec "$(git rev-parse --show-toplevel)/scripts/check_dashes.sh" --staged
+exec "$(git rev-parse --show-toplevel)/scripts/lint.sh" --staged

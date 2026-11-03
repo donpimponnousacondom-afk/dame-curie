@@ -656,17 +656,19 @@ def _render_message_annotations(message: Any, raw_content: str = "") -> str:
         except Exception as e:
             logger.debug("Interaction annotation failed: %s", e)
 
-    for extra in (
-        _system_event_annotation(message),
-        _thread_annotation(message),
-        _call_annotation(message),
-        _message_invite_activity_annotation(message),
-        _role_subscription_annotation(message),
-        _purchase_annotation(message),
-        _message_flags_annotation(message),
-    ):
-        if extra:
-            parts.append(extra)
+    parts.extend(
+        extra
+        for extra in (
+            _system_event_annotation(message),
+            _thread_annotation(message),
+            _call_annotation(message),
+            _message_invite_activity_annotation(message),
+            _role_subscription_annotation(message),
+            _purchase_annotation(message),
+            _message_flags_annotation(message),
+        )
+        if extra
+    )
 
     embeds = list(getattr(message, "embeds", []) or [])
     for e in embeds[:3]:

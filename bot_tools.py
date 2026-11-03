@@ -15,7 +15,6 @@ import random
 import re
 import signal
 import shutil
-import socket
 import sys
 import tempfile
 import time
@@ -7077,9 +7076,8 @@ class TtsTool(Tool):
             filename = os.path.join(temp_dir, f"tts_{token}.wav")
             voice_filename = os.path.join(temp_dir, f"tts_{token}.ogg")
 
-            tts_source = filename
             if engine == "fish":
-                tts_source = await _synthesize_fish_tts(
+                await _synthesize_fish_tts(
                     text, filename, api_key=cfg.FISH_API_KEY,
                     model=cfg.TTS_FISH_MODEL, reference_id=cfg.TTS_FISH_REFERENCE_ID,
                     fmt=cfg.TTS_FISH_FORMAT,

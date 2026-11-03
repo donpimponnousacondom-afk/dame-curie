@@ -1,6 +1,6 @@
 """Operator smoke protocol: settings, immutable requests, one result record.
 
-A Dirac smoke run is one authorized operator instruction delivered to the live bot
+A smoke run is one authorized operator instruction delivered to the live bot
 as a real Discord message, plus a durable record of what the bot did with it. This
 module owns what the host CLI and the bot container must agree on: where the files
 live, what a request looks like, how the single record is written. It imports
@@ -9,7 +9,7 @@ nothing from the bot, from Discord, or from the network.
 One config file, a read-only ``requests`` directory the operator writes, and a
 writable status directory the bot owns. Both directories resolve against the
 config file's own directory, so one config works at
-``/srv/dame-curie/dirac/smoke/config.json`` on the host and ``/smoke/config.json``
+``/srv/dame-curie/smoke/config.json`` on the host and ``/smoke/config.json``
 in the container.
 """
 
@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-SMOKE_CONFIG_ENV = "DAME_CURIE_DIRAC_SMOKE_CONFIG"
+SMOKE_CONFIG_ENV = "DAME_CURIE_SMOKE_CONFIG"
 
 # Discord's message limit, and the most the visible notice header may take.
 NOTICE_LIMIT = 2000
@@ -95,7 +95,7 @@ class SmokeSettings:
 
     @classmethod
     def from_env(cls) -> SmokeSettings:
-        """Load the config named by ``DAME_CURIE_DIRAC_SMOKE_CONFIG``."""
+        """Load the config named by ``DAME_CURIE_SMOKE_CONFIG``."""
         raw = os.environ.get(SMOKE_CONFIG_ENV, "").strip()
         if not raw:
             raise SmokeProtocolError(f"{SMOKE_CONFIG_ENV} is not set")

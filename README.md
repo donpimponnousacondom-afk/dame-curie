@@ -1,30 +1,23 @@
 # dame-curie
 
-Discord-only V2, Python **3.14**. Protected V1 remains separate.
+Dame Curie is a Discord bot in Python 3.14. She runs as account `dame-curie` in a private rootless Docker engine. Generation uses a configured OpenAI-compatible endpoint. Memory embeddings use a configured external embedding endpoint. An independent publisher mirrors locally authored sites to a remote host.
 
-**Round two is closed internally; corrected source `89fb851` is live on temporary Dirac.** Isolated QA, independent review and one bounded smoke passed; original controls were restored. [Status](docs/STATUS.md) and the [closure receipt](audit/20260924T210402Z-audit/09-CLOSURE.md) separate source, artifact and runtime proof. [TODO](TODO.md) records completed work and held decisions. Canonical/V1 and publisher/remote changes remain held. The coordinator's exercised temporary-release delegation is not a standing grant for future agents.
-
-## Current documentation
+## Documentation
 
 | Read | Purpose |
 | --- | --- |
-| [Status](docs/STATUS.md) | Source/QA milestones, actual runtime and release disposition |
-| [Operations](docs/OPERATIONS.md) | Account/engine verification, temporary lifecycle, smoke and rollback |
-| [Architecture](docs/ARCHITECTURE.md) | Components, tool/prompt/turn contracts and trust limits |
-| [Development](docs/DEVELOPMENT.md) | Python, dependency and isolated-validation boundaries |
-| [Images](docs/IMAGE_GENERATION.md) | Native generation/editing, configuration and delivery |
-| [Server prompts](docs/LONGPROMPT.md) | Commands, byte limits, omission and exact export |
-| [Provider reload](docs/PROVIDER_RELOAD.md) | Idle-boundary settings changes versus image identity |
-| [Publishing](docs/PUBLISHING.md) | Existing independent publisher; no operating grant |
-| [Dead-code review](docs/DEAD_CODE.md) | Report-only static analysis, not deletion authority |
-| [Agent contract](AGENTS.md) / [Security](SECURITY.md) | Permissions, collaboration and private-state boundaries |
+| [AGENTS.md](AGENTS.md) | Rules for every agent and human: identities, hard rules, writing, code, change flow |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Runbook: identity, deploy, rollback, smoke tests, embeddings, backups, diagnostics |
+| [docs/REVIEW.md](docs/REVIEW.md) | Pull request and review protocol |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Environments, quality gate, isolated QA, dead-code audit |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Source contract: components, budgets, commands |
+| [docs/STATUS.md](docs/STATUS.md) | Behaviour change log per merged PR, and known open items |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | Site authoring and the publisher |
+| [docs/IMAGE_GENERATION.md](docs/IMAGE_GENERATION.md) | Image generation and editing |
+| [docs/LONGPROMPT.md](docs/LONGPROMPT.md) | Server prompt commands and limits |
+| [docs/PROVIDER_RELOAD.md](docs/PROVIDER_RELOAD.md) | Provider settings reload at idle |
+| [docs/HISTORY.md](docs/HISTORY.md) | Dated milestones and recovery references |
+| [TODO.md](TODO.md) | Open items |
+| [SECURITY.md](SECURITY.md) | Security boundary |
 
-## Source contract
-
-- Compose retains `bot`, `ollama`, `ollama-pull`, with no published ports. Dashboard/API/web hosting, nested shell, X/Telegram and companion/GF are removed. No replacement server or PM2 deployment.
-- Shell runs as the bot UID inside its outer container. `/home/dame-curie` points to `/state/shell`; this is **not** isolation from bot-readable secrets or bot-writable controls. Admin/allowlist authority and this trust boundary are explicit in Architecture.
-- Preserve Discord administration, autonomy, games/plugins, voice/media, inbox and functional RAG/REM/graph memory. Local authoring, image archives/sidecars and the independent publisher remain; the model does not administer remote publication.
-- Generation uses explicitly configured OpenAI-compatible `OPENAI_*` settings, not an assumed vendor account. Local Ollama provides embeddings; ordinary shared embedding compute with separate profile storage is permitted.
-- Default commands use **`!`**; an instance may configure `?`. Canonical staging defaults to validated **no-op** `up`/`start`/`restart`, not activation. Lifecycle/build scripts are actuators, not discovery commands.
-
-The root-authorized `legacy/` archive removal and phase-note retirement do not authorize runtime changes. Surviving contracts live above; immutable recovery references and retained audit evidence live in Status and the closure ledger. Do not restore old instructions or inspect another checkout to fill gaps.
+Agent skills are in `.agents/skills/<name>/SKILL.md`.

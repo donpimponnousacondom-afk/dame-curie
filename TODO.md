@@ -1,69 +1,42 @@
-# Open items - 2 November 2026
+# Open items
 
-- [ ] Remove the local Ollama embedding service when root says so. The date is not decided.
-  - Root, 2 November 2026: "Turn it off, but don't delete it just yet, just unplug the wire from the whole harness and leave it as side note to remove in the future".
-  - Live state since 2 November 2026, 19:17 UTC: `DAME_CURIE_EMBED_MODE=external` in `/srv/dame-curie/deploy.env`. With this value, `scripts/instance.py` adds the overlay `docker/compose.embeddings-external.yaml`.
-  - The bot embeds with OpenAI `text-embedding-3-large` (#42).
-  - The `dame-curie-ollama-1` container is stopped, not removed.
-  - Kept: the image `ollama/ollama:0.40.13`, the volume `dame-curie_ollama-models`, and the `ollama` and `ollama-pull` services in `compose.yaml`.
-  - Removal, part 1 (host): delete the stopped Ollama containers, the volume and the image.
-  - Removal, part 2 (one PR, first change): remove the two services and the `embeddings` and `model-download` networks from `compose.yaml`.
-  - Removal, part 2 (same PR, second change): fold the external overlay into the base `bot` service. Remove its `depends_on`, the local mode, the local base URL and the `embeddings` network. Then update the modes in `scripts/instance.py` (`EMBED_MODES`, `owned_config_files`) and their tests.
-  - To plug Ollama back in, step 1: set `DAME_CURIE_EMBED_MODE=local` in `/srv/dame-curie/deploy.env`. The mode is not read from `bot.env`.
-  - Step 2, in `/srv/dame-curie/config/bot.env`: `DAME_CURIE_EMBED_BASE_URL="http://ollama:11434"`, `DAME_CURIE_EMBED_MODEL="qwen3-embedding:0.6b"`, `DAME_CURIE_EMBED_DIM="1024"`, and blank `DAME_CURIE_EMBED_API_KEY` and `DAME_CURIE_EMBED_REQUEST_DIMENSIONS`.
-  - Step 3, in the same file: set the four `DAME_CURIE_RAG_*_SIMILARITY` cut-offs blank. Blank gives the Qwen values 0.35, 0.40, 0.40 and 0.85.
-  - Step 4: run `instance.py dame-curie up`.
-  - Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Search reads only vectors of the configured backend, so recall finds no row until that row has a Qwen vector.
-  - The catch-up pass embeds for at most 60 s every 10 minutes, on the CPU. A manual `rag_maintenance.py backfill` runs without the 10-minute gaps. Its time on Qwen: not measured. On OpenAI, 6,247 row attempts took 24.5 minutes (#42).
+## Dirac retirement, left for root
 
-# Current completion state - 2026-10-03
+- [ ] Revoke the Dirac bot token, or delete the Dirac application, in the Discord developer portal. Deleting its config file on the host did not revoke the token.
+- [ ] Check whether the Dirac publisher left site copies on a remote host. Not verified.
 
-- [x] Repair and deploy the background publisher at 19:14Z. It restored missing
-  `hammered-wallet` without `--once`; all 18 files matched local hashes, with zero
-  service restarts. Remote reconciliation, replacement claims, specific errors and
-  durable failed-deletion retries are included. See the current publisher repair in
-  [STATUS](docs/STATUS.md) for review and validation limits.
-- [x] Replace repeated per-site rsync with one metadata-cached remote inventory at
-  19:44Z. First inventory: 31 targets, zero differences. Later 65-second observation:
-  two SSH commands and no rsync processes. Independent final source review completed;
-  tests remain deferred, and 50,000-site capacity remains unmeasured.
-- [ ] Integrate the publisher repair and inventory update into PR3. The earlier PR
-  readiness statement below does not cover these new patches.
+## Remove the local Ollama embedding service when root says so
 
-- [x] Publish the current source in [PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3). Root retains merge authority.
-- [x] Repair site publication and preserve both source trees. Recover root's later remote-directory deletion with the existing publisher. Confirm matching identity, ownership marker, HTML and nine image hashes.
-- [x] Remove exactly 12 unsupported live fields under root's approval. Preserve all other fields and a private backup.
-- [x] Correct the image permission failure and blank-role resolver defect. At `17:55:02Z`, confirm canonical Dame login on source `306b413`, running with restart count `0`. No startup, auxiliary-profile or context-extraction errors appeared in the inspected last 600 log records. This was passive observation, not a test.
+- Root, 2 November 2026: "Turn it off, but don't delete it just yet, just unplug the wire from the whole harness and leave it as side note to remove in the future".
+- Live state since 2 November 2026, 19:17 UTC: `DAME_CURIE_EMBED_MODE=external` in `/srv/dame-curie/deploy.env`. With this value, `scripts/instance.py` adds the overlay `docker/compose.embeddings-external.yaml`.
+- The bot embeds with OpenAI `text-embedding-3-large` at 1536 dimensions (#42).
+- The `dame-curie-ollama-1` container is stopped, not removed.
+- Kept: the image `ollama/ollama:0.40.13`, the volume `dame-curie_ollama-models`, and the `ollama` and `ollama-pull` services in `compose.yaml`.
+- [ ] Removal, part 1 (host): delete the stopped Ollama containers, the volume and the image.
+- [ ] Removal, part 2 (one PR, first change): remove the two services and the `embeddings` and `model-download` networks from `compose.yaml`.
+- [ ] Removal, part 2 (same PR, second change): fold the external overlay into the base `bot` service. Remove its `depends_on`, the local mode, the local base URL and the `embeddings` network. Then update the modes in `scripts/instance.py` (`EMBED_MODES`, `owned_config_files`) and their tests.
+- To plug Ollama back in, step 1: set `DAME_CURIE_EMBED_MODE=local` in `/srv/dame-curie/deploy.env`. The mode is not read from `bot.env`.
+- Step 2, in `/srv/dame-curie/config/bot.env`: `DAME_CURIE_EMBED_BASE_URL="http://ollama:11434"`, `DAME_CURIE_EMBED_MODEL="qwen3-embedding:0.6b"`, `DAME_CURIE_EMBED_DIM="1024"`, and blank `DAME_CURIE_EMBED_API_KEY` and `DAME_CURIE_EMBED_REQUEST_DIMENSIONS`.
+- Step 3, in the same file: set the four `DAME_CURIE_RAG_*_SIMILARITY` cut-offs blank. Blank gives the Qwen values 0.35, 0.40, 0.40 and 0.85.
+- Step 4: run `instance.py dame-curie up`.
+- Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Search reads only vectors of the configured backend, so recall finds no row until that row has a Qwen vector. If Qwen returns, add its query instruction; see the note in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+- The catch-up pass embeds for at most 60 s every 10 minutes. A manual `rag_maintenance.py backfill` runs without the 10-minute gaps. Its time on Qwen: not measured. On OpenAI, 6,247 row attempts took 24.5 minutes (#42).
 
-[Current status](docs/STATUS.md) records the exact source, image, container, failed-first-deployment history, and validation limits. Canonical Dame is the live target, not temporary Dirac. Root deferred tests; none ran for the final source or deployment. Earlier source had two failed tests. Independent final-delta review does not establish complete base-to-head acceptance.
+## Behaviour
 
-## Two open issues
+- [ ] Partial batch results. When one native call in a batch fails, mark the calls that succeeded, so she does not run a live call twice. Dame Curie asked for this on 1 November 2026.
+- [ ] Tool-call batching, remaining part: the Codex and Claude Code partition (read-only calls in parallel, mutating calls serial in order). Today every call in a batch starts at once, but `shell` takes one bot-wide class lock, so batched shells run serially and one long shell blocks shells in every channel.
+- [ ] Recall can duplicate rows that are already in the current-channel transcript.
+- [ ] The automatic web search runs on the smoke-task preamble text and stores junk web results.
+- [ ] Word triggers that remain: 9 places act on words in her output and 13 on words in user input (inventory of 1 November 2026). Root decides each one. The list is in the known open items of [docs/STATUS.md](docs/STATUS.md).
 
-- [ ] Resolve the complete distinct-role AUX/autonomy profile contract. The deployed all-empty selector correction does not resolve this broader contract.
-- [ ] Obtain a decision on the legacy `curie` publisher-marker protection gap. No policy change or remote-exposure claim is made.
+## Repository
 
-The P3 generated-image wording issue is deferred. Do not expand this completion task. PR3 is ready for human review, not merged.
+- [ ] Old `compose.yaml` Ollama tuning comments go with the Ollama removal above.
 
-## Historical round-two closure - 2026-09-25
+## Held by root, not tasks
 
-**Everything below records the completed temporary Dirac assignment. It is preserved as history, not current runtime state or current authority.**
-
-**No assigned correction or documentation-retirement item remains open.** Corrected source`89fb851` is live on temporary Dirac under the coordinator's exercised delegation. [Status](docs/STATUS.md) and the [final receipt](audit/20260924T210402Z-audit/09-CLOSURE.md) distinguish source, artifact and runtime proof. This is not standing permission for future runtime/private operations.
-
-- [x] Preserve the original external verdict/reports and root's confirmed shorter audit path.
-- [x] Correct section5, adapt existing cases and independently review source: `c2d6b0e` +`89fb851`.
-- [x] Final isolated QA:3993passed+28subtests; failed/intermediate snapshots and exact receipts retained.
-- [x] Fresh independent diff-focused source closure: Sol`a6b627d2` pass, not original external-auditor sign-off.
-- [x] Build/verify actual candidate:56copied inputs, provenance and existing guarded constructor; offline inherited dependencies explicitly disclosed.
-- [x] Consolidate nine durable guides; physically retire39phase files and28accepted internal notes; preserve contracts/recovery and16byte-identical original reports. Commit`f815857`.
-- [x] Recheck stored prompt bytes, profile/disable controls, identity and rollback readiness without exposing private content.
-- [x] One bounded current-image smoke passed in7seconds; restore original controls/channels, pin accepted image and verify final identity/readiness. Operator restart-after-stop mistake and corrected replacement retained in the ledger.
-- [x] Leave coordinated response/validation/closure and current source/runtime handoff; preserve unrelated work.
-
-## Held decisions - not automatic follow-up tasks
-
-Canonical/V1 activation and canonical native-image reconciliation remain held. Publisher/remote/shared-service lifecycle work, host viewer rollout, worktree/ref pruning and broader live-feature/load/replica acceptance require separate assignments. Reasoning-only fallback and mandatory tool-reasoning policy remain unchanged pending root. Existing same-UID trust and fail-closed viewer policy stay explicit.
-
-C09 dotenv deferral is accepted; P08/I05 permanently unattributable provenance is quarantined. Neither is a new redesign, forensic or cache-cleanup task. All existing refs/worktrees/caches and unrelated ignored audit/reports/skill work remain untouched.
-
-Verbatim prior grant: `git show eb188ac:phase-II_v2/SESSION_LOG.md`. Retired internal notes: Git tree`89fb851`, original audit directory. Current guidance: README plus the nine guides; historical records are evidence, not renewed authority.
+- Reasoning-only terminal responses stay terminal without automatic fallback.
+- The mandatory tool `explanation` argument stays.
+- Same-UID shell trust stays explicit; separating the control files is root's decision.
+- Four filters are reserved for root: `_should_skip_plaintext_after_send`, `_prepare_tool_params`, `_TOOL_ALIASES` and `_extract_stickers_from_text`.

@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
-from scripts.publisher.common import RemoteFailure, ScanIncomplete
+from scripts.publisher.common import ScanIncomplete
 from scripts.publisher.config import Config
 from scripts.publisher.mirror import Mirror
 from scripts.publisher.service import Pending, Publisher

@@ -1,6 +1,6 @@
-"""Live Dirac smoke runtime: one authorized operator input per poll.
+"""Live smoke runtime: one authorized operator input per poll.
 
-Installed by ``bot.setup_hook`` only when ``DAME_CURIE_DIRAC_SMOKE_CONFIG`` is set
+Installed by ``bot.setup_hook`` only when ``DAME_CURIE_SMOKE_CONFIG`` is set
 and inert when that config says ``enabled: false``. It invents no bot policy: the
 injected input goes through ``bot._on_message_impl``, so the allowlist, blacklist,
 ``bot_enabled`` and sleep windows stay where they already live. An input those
@@ -240,7 +240,7 @@ class _NoticeInput:
         return getattr(self._message, name)
 
 
-class DiracSmokeRuntime:
+class SmokeRuntime:
     """One pending request per poll, delivered to the real bot, recorded once."""
 
     def __init__(self, bot: DameCurieBot, settings: SmokeSettings) -> None:
@@ -273,7 +273,7 @@ class DiracSmokeRuntime:
         somewhere ephemeral that disappears with the container.
         """
         if not self.settings.enabled:
-            logger.info("Dirac smoke runtime disabled in %s", self.settings.config_path)
+            logger.info("Smoke runtime disabled in %s", self.settings.config_path)
             return
         self._stop_requested = False
         for name, directory in (
@@ -294,12 +294,12 @@ class DiracSmokeRuntime:
             raise
         self._observer_original = getattr(self.bot, "_turn_observer", None)
         self.bot._turn_observer = self._observer
-        self._poll = asyncio.create_task(self._poll_loop(), name="dirac-smoke-poll")
+        self._poll = asyncio.create_task(self._poll_loop(), name="smoke-poll")
         self._poll.add_done_callback(self._poll_stopped)
         self._started = True
         self._record_runtime_state("running")
         logger.info(
-            "Dirac smoke runtime armed: requests %s, status %s, channel %s",
+            "Smoke runtime armed: requests %s, status %s, channel %s",
             self.settings.requests_dir,
             self.settings.status_dir,
             self.settings.channel_id,
@@ -410,7 +410,7 @@ class DiracSmokeRuntime:
                 "it was never re-run"
             )
             record.write(path)
-            logger.warning("Dirac smoke request %s interrupted", path.stem)
+            logger.warning("Smoke request %s interrupted", path.stem)
 
     def _observe_sends(self) -> None:
         """Report every real create, whatever path made it.
@@ -487,7 +487,7 @@ class DiracSmokeRuntime:
             write_json_atomic(runtime_state_path(self.settings), payload)
         except OSError as exc:
             logger.error(
-                "Dirac smoke runtime health unavailable (%s)", type(exc).__name__
+                "Smoke runtime health unavailable (%s)", type(exc).__name__
             )
 
     def _poll_stopped(self, task: asyncio.Task) -> None:
@@ -496,7 +496,7 @@ class DiracSmokeRuntime:
             failure = task.exception()
             if failure is not None:
                 logger.error(
-                    "Dirac smoke poll cleanup escaped (%s)", type(failure).__name__
+                    "Smoke poll cleanup escaped (%s)", type(failure).__name__
                 )
 
     async def _poll_failed(self, exc: Exception) -> None:
@@ -504,7 +504,7 @@ class DiracSmokeRuntime:
         self._poll_failure = type(exc).__name__
         if self._poll is asyncio.current_task():
             self._poll = None
-        logger.error("Dirac smoke poll failed (%s); runtime unavailable", self._poll_failure)
+        logger.error("Smoke poll failed (%s); runtime unavailable", self._poll_failure)
         self._record_runtime_state("failed", self._poll_failure)
         inputs_settled = await self._cleanup_owned_inputs()
         self._stop_requested = True
@@ -681,7 +681,7 @@ class DiracSmokeRuntime:
                 if cancelled:
                     raise
                 logger.error(
-                    "Dirac smoke request %s was recorded before a readback error (%s)",
+                    "Smoke request %s was recorded before a readback error (%s)",
                     request_id, type(exc).__name__,
                 )
                 return
@@ -750,7 +750,7 @@ class DiracSmokeRuntime:
                 elif task is None:
                     self._stop_requested = True
                     logger.error(
-                        "Dirac smoke request %s stopped polling: its owned input "
+                        "Smoke request %s stopped polling: its owned input "
                         "settlement is unconfirmed and there was no registered task "
                         "to settle (%s)",
                         request_id,
@@ -764,9 +764,9 @@ class DiracSmokeRuntime:
             if cancelled:
                 raise
             if isinstance(exc, TimeoutError) and not expired:
-                logger.error("Dirac smoke request %s failed during an upstream timeout", request_id)
+                logger.error("Smoke request %s failed during an upstream timeout", request_id)
             elif not isinstance(exc, SmokeProtocolError):
-                logger.error("Dirac smoke request %s failed (%s)", request_id, type(exc).__name__)
+                logger.error("Smoke request %s failed (%s)", request_id, type(exc).__name__)
 
     # ---- one request ------------------------------------------------------
 
@@ -839,7 +839,7 @@ class DiracSmokeRuntime:
             return True
         self._stuck = task
         logger.warning(
-            "Dirac smoke: a cancelled task had not stopped after %gs",
+            "Smoke runtime: a cancelled task had not stopped after %gs",
             CLEANUP_SECONDS,
         )
         return False

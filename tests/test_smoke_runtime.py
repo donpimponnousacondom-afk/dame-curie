@@ -1,4 +1,4 @@
-"""The Dirac smoke protocol against fakes that keep the real shapes.
+"""The smoke protocol against fakes that keep the real shapes.
 
 No Discord, no bot process, no provider and no network: the fake client's
 ``send_message`` returns the raw payload dict the SDK's own HTTP client returns,
@@ -25,11 +25,11 @@ from uuid import uuid4
 import discord
 import pytest
 
-import dirac_runtime
+import smoke_runtime
 from bot import DameCurieBot
 from providers import ProviderResult
 from tool_progress import ToolProgress
-from dirac_runtime import DiracSmokeRuntime, _TurnObserver, sent_message_id
+from smoke_runtime import SmokeRuntime, _TurnObserver, sent_message_id
 from message_pipeline import ReplyQueue
 from rag_memory import _detect_source
 from response_observability import TURN_INPUT, notice_send, record_delivery
@@ -201,7 +201,7 @@ class _FakeBot:
                 assert self._reply_queue.active(message.channel.id)
                 assert self._turn_observer._turns[str(message.id)].task is None
             elif self.dispatch_failure == "after_partial":
-                while len(message.channel.sent) < 2:
+                while len(message.channel.sent) < 2:  # noqa: ASYNC110 - the fake pumps the loop
                     await asyncio.sleep(0)
             if self.dispatch_failure == "upstream_timeout":
                 raise TimeoutError("synthetic private request and config contents")
@@ -270,7 +270,7 @@ async def _ready(tmp_path, *, enabled=True, make_requests=True, make_status=True
         make_status=make_status,
     )
     bot = _FakeBot(settings)
-    runtime = DiracSmokeRuntime(bot, settings)
+    runtime = SmokeRuntime(bot, settings)
     await runtime.start()
     return settings, bot, runtime
 
@@ -527,7 +527,7 @@ def test_stop_restores_the_original_generation_method(tmp_path, instance_overrid
         original = bot._generate_response
         if instance_override:
             bot._generate_response = original
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         assert bot._generate_response is not original
         await runtime.stop()
@@ -829,7 +829,7 @@ def test_a_silent_turn_is_a_failure_not_a_pass(tmp_path, case):
                     pass
             else:
                 await message.channel.send("uncertain reply")
-        return None
+        return
 
     async def scenario():
         settings, bot, runtime, request, record = await _one(tmp_path, body=silent)
@@ -923,7 +923,7 @@ def test_a_direct_message_channel_is_rejected_and_nothing_is_injected(tmp_path):
 def test_thread_scope_is_enforced(tmp_path, monkeypatch, case):
     async def scenario():
         settings, bot, runtime = await _ready(tmp_path)
-        monkeypatch.setattr(dirac_runtime.discord, "Thread", _FakeThread)
+        monkeypatch.setattr(smoke_runtime.discord, "Thread", _FakeThread)
         parent = str(settings.channel_id)
         if case == "not_a_thread":
             bot.use_channel(_FakeChannel(bot, "9001"))
@@ -945,7 +945,7 @@ def test_thread_scope_is_enforced(tmp_path, monkeypatch, case):
 def test_a_bot_owned_thread_in_the_approved_channel_runs(tmp_path, monkeypatch):
     async def scenario():
         settings, bot, runtime = await _ready(tmp_path)
-        monkeypatch.setattr(dirac_runtime.discord, "Thread", _FakeThread)
+        monkeypatch.setattr(smoke_runtime.discord, "Thread", _FakeThread)
         thread = bot.use_channel(
             _FakeThread(
                 bot, "9001", parent_id=str(settings.channel_id), owner_id=bot.user.id
@@ -972,7 +972,7 @@ def test_a_bot_owned_thread_in_the_approved_channel_runs(tmp_path, monkeypatch):
 def test_start_fails_when_the_request_mount_is_missing(tmp_path):
     async def scenario():
         settings = _settings(tmp_path, make_requests=False)
-        runtime = DiracSmokeRuntime(_FakeBot(settings), settings)
+        runtime = SmokeRuntime(_FakeBot(settings), settings)
         with pytest.raises(SmokeProtocolError):
             await runtime.start()
 
@@ -984,7 +984,7 @@ def test_start_fails_when_the_status_mount_is_missing(tmp_path):
 
     async def scenario():
         settings = _settings(tmp_path, make_status=False)
-        runtime = DiracSmokeRuntime(_FakeBot(settings), settings)
+        runtime = SmokeRuntime(_FakeBot(settings), settings)
         with pytest.raises(SmokeProtocolError):
             await runtime.start()
         assert not settings.status_dir.exists()
@@ -996,7 +996,7 @@ def test_start_fails_when_the_status_mount_cannot_be_a_directory(tmp_path):
     async def scenario():
         settings = _settings(tmp_path, make_status=False)
         settings.status_dir.write_text("a file, not a mount", encoding="utf-8")
-        runtime = DiracSmokeRuntime(_FakeBot(settings), settings)
+        runtime = SmokeRuntime(_FakeBot(settings), settings)
         with pytest.raises(SmokeProtocolError):
             await runtime.start()
 
@@ -1009,7 +1009,7 @@ def test_start_unhooks_http_after_generation_observation_fails(tmp_path):
         bot = _FakeBot(settings)
         original_send = bot.http.send_message
         bot._generate_response = None
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
 
         with pytest.raises(SmokeProtocolError):
             await runtime.start()
@@ -1028,7 +1028,7 @@ def test_a_disabled_config_does_nothing_at_all(tmp_path):
     async def scenario():
         settings = _settings(tmp_path, enabled=False)
         bot = _FakeBot(settings)
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         assert bot._turn_observer is None
         assert runtime._poll is None
@@ -1047,7 +1047,7 @@ def test_a_nonterminal_record_is_interrupted_and_never_rerun(tmp_path):
         )
         stale.write(status_path(settings, request.request_id))
         bot = _FakeBot(settings)
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         record = _record_of(settings, request.request_id)
         assert record.status == "interrupted"
@@ -1072,7 +1072,7 @@ def test_the_oldest_pending_request_is_chosen_by_clock_not_by_id(tmp_path):
         # Deliberately not started: this is the choice the poll makes, and a
         # running poll could pick a request before the clocks are set.
         settings = _settings(tmp_path)
-        runtime = DiracSmokeRuntime(_FakeBot(settings), settings)
+        runtime = SmokeRuntime(_FakeBot(settings), settings)
         older = build_request(request_id="ff" * 16, task="older")
         newer = build_request(request_id="00" * 16, task="newer")
         for request in (older, newer):
@@ -1105,7 +1105,7 @@ def test_more_than_300_completed_requests_are_never_replayed(tmp_path):
             done.write(status_path(settings, request.request_id))
             finished.append(request.request_id)
         bot = _FakeBot(settings)
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         before = {rid: status_path(settings, rid).read_bytes() for rid in finished}
         fresh = _submit(settings)
@@ -1142,7 +1142,7 @@ def test_a_request_deleted_before_it_is_read_is_withdrawn_without_a_record(tmp_p
 
 def test_a_vanished_request_does_not_stop_the_poll_loop(tmp_path, monkeypatch):
     """The next request still runs, before and after the withdrawn one."""
-    real_listing = dirac_runtime.request_files
+    real_listing = smoke_runtime.request_files
 
     async def scenario():
         settings, bot, runtime = await _ready(tmp_path)
@@ -1156,7 +1156,7 @@ def test_a_vanished_request_does_not_stop_the_poll_loop(tmp_path, monkeypatch):
                 return [phantom]
             return real_listing(settings_)
 
-        monkeypatch.setattr(dirac_runtime, "request_files", with_phantom_once)
+        monkeypatch.setattr(smoke_runtime, "request_files", with_phantom_once)
         record = await _wait_for_record(settings, real.request_id)
         assert len(listings) > 1  # the loop polled again after the phantom
         assert record.status == "completed"
@@ -1180,7 +1180,7 @@ def test_a_malformed_request_is_recorded_and_does_not_stop_polling(tmp_path):
         os.utime(malformed_path, (stamp - 10, stamp - 10))
         os.utime(request_path(settings, valid.request_id), (stamp, stamp))
         bot = _FakeBot(settings)
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
 
         malformed = await _wait_for_record(settings, malformed_id)
@@ -1373,7 +1373,7 @@ def test_concurrent_stops_wait_for_the_same_poll_without_recancelling(tmp_path):
                 cancellation_seen.set()
                 await release.wait()
 
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         runtime._poll_loop = slow_poll
         await runtime.start()
         await poll_started.wait()
@@ -1397,7 +1397,7 @@ def test_concurrent_stops_wait_for_the_same_poll_without_recancelling(tmp_path):
 
 def test_unconfirmed_poll_stop_is_not_reported_as_stopped(tmp_path, monkeypatch):
     async def scenario():
-        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.01)
+        monkeypatch.setattr(smoke_runtime, "CLEANUP_SECONDS", 0.01)
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
         cancellation_seen = asyncio.Event()
@@ -1415,7 +1415,7 @@ def test_unconfirmed_poll_stop_is_not_reported_as_stopped(tmp_path, monkeypatch)
                 cancellation_seen.set()
                 await release.wait()
 
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         runtime._poll_loop = slow_poll
         await runtime.start()
         poll = runtime._poll
@@ -1447,10 +1447,10 @@ def test_unconfirmed_stop_cannot_resume_into_notice_or_injection(
     tmp_path, monkeypatch, stage
 ):
     async def scenario():
-        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.01)
+        monkeypatch.setattr(smoke_runtime, "CLEANUP_SECONDS", 0.01)
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         owner = bot.channels[int(settings.channel_id)] if stage == "notice" else bot if stage == "injection" else runtime
         method = {"target": "_target_channel", "operator": "_operator", "notice": "send", "injection": "_on_message_impl"}[stage]
@@ -1502,7 +1502,7 @@ def test_stop_interrupts_the_request_in_flight(tmp_path):
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
         unwrapped = bot.http.send_message  # the baseline, before the wrapper
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         assert bot.http.send_message is not unwrapped  # the wrapper is installed
 
@@ -1554,7 +1554,7 @@ def test_the_deadline_covers_the_notice_not_only_the_turn(tmp_path, stage):
             bot.fetch_channel = stalled_fetch
         else:
             channel.send = stalled_fetch
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         request = _submit(settings, deadline_seconds=1.0)
         record = await _wait_for_record(settings, request.request_id)
@@ -1599,7 +1599,7 @@ def test_an_upstream_timeout_is_not_the_request_deadline(tmp_path, stage):
         else:
             bot.dispatch_failure = "upstream_timeout"
 
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         request = _submit(settings, deadline_seconds=30.0)
         record = await _wait_for_record(settings, request.request_id)
@@ -1639,7 +1639,7 @@ def test_fatal_poll_io_cleans_only_owned_inputs_and_restores_hooks(
             await bot.release.wait()
 
         bot.turn = blocking_turn
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         channel_id = str(settings.channel_id)
         turn = runtime._observer.open("777", channel_id)
@@ -1700,7 +1700,7 @@ def test_fatal_poll_with_missing_status_storage_reports_unavailable(
     async def scenario():
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         runtime_state_path(settings).unlink()
         settings.status_dir.rmdir()
@@ -1726,7 +1726,7 @@ def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch, f
     """An unsettled turn cannot overlap a later smoke, even after partial delivery."""
 
     async def scenario():
-        monkeypatch.setattr(dirac_runtime, "CLEANUP_SECONDS", 0.5 if failure == "stop_during_cleanup" else 0.05)
+        monkeypatch.setattr(smoke_runtime, "CLEANUP_SECONDS", 0.5 if failure == "stop_during_cleanup" else 0.05)
         settings = _settings(tmp_path)
         bot = _FakeBot(settings)
 
@@ -1740,7 +1740,7 @@ def test_a_stuck_owned_task_holds_back_the_next_request(tmp_path, monkeypatch, f
 
         bot.turn = stubborn
         bot.dispatch_failure = "after_partial" if failure != "deadline" else ""
-        runtime = DiracSmokeRuntime(bot, settings)
+        runtime = SmokeRuntime(bot, settings)
         await runtime.start()
         first = _submit(settings, deadline_seconds=30.0 if failure != "deadline" else 1.0)
         record = await _wait_for_record(settings, first.request_id)
@@ -1788,7 +1788,7 @@ def test_a_stalled_readback_cannot_downgrade_a_completed_turn(tmp_path, monkeypa
     """The outcome is written first; the readback is optional and bounded."""
 
     async def scenario():
-        monkeypatch.setattr(dirac_runtime, "READBACK_SECONDS", 0.05)
+        monkeypatch.setattr(smoke_runtime, "READBACK_SECONDS", 0.05)
         settings, bot, runtime = await _ready(tmp_path)
 
         async def direct_post(message, content):

@@ -47,7 +47,9 @@ _INCIDENT_TEXT_LIMIT = 256 * 1024
 _configuration_lock = threading.RLock()
 _secrets: tuple[str, ...] = ()
 _store: IncidentStore | None = None
-_context: ContextVar[dict[str, str]] = ContextVar("incident_context", default={})
+_context: ContextVar[Mapping[str, str]] = ContextVar(
+    "incident_context", default=MappingProxyType({})
+)
 _capturing: ContextVar[bool] = ContextVar("incident_capture_active", default=False)
 
 

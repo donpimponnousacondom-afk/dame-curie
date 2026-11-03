@@ -255,7 +255,7 @@ class Config:
     IMAGE_GEN_BASE_URL = os.getenv("IMAGE_GEN_BASE_URL", "")
     IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "")
     IMAGE_GEN_CONFIG_ERROR = ""
-    IMAGE_GEN_EXTRA_BODY = {}
+    IMAGE_GEN_EXTRA_BODY: ClassVar[dict] = {}
     try:
         IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
         IMAGE_GEN_EXTRA_BODY = _json_env("IMAGE_GEN_EXTRA_BODY", strict=True)

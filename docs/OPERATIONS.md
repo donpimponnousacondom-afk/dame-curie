@@ -1,84 +1,85 @@
-# Dirac operations and recovery
+# Operations runbook
 
-## Scope and authority
+Canonical Dame Curie V2 on account `dame-curie`. Every command here reads or changes the live system. Run one only under an explicit operator assignment. A source task never runs them.
 
-This is the concise operating contract for the temporary Dirac instance. It is not an activation grant, deployment receipt, or assertion that current runtime state has been re-observed. The coordinator owns any authorized private/runtime checks and decides whether or when temporary normal use may resume, only after the required checks and review. The previous bounded acceptance grant remains distinct: it authorized one labelled test request, not general use. Normal release, canonical Dame/V1 activation, publisher/remote changes and general private inspection are not authorized here.
+## Identity and paths
 
-Use [STATUS.md](STATUS.md) and its linked validation ledger for source checkpoints, QA, and release disposition. Source QA/build status does not establish installed or deployed state. This checkout's current worktree/source checkpoint is recorded there; do not infer it from an older runtime image label. Do not make a fresh runtime claim from the historical receipt below.
+- Account `dame-curie`, UID 1005. Private rootless engine socket `unix:///run/user/1005/docker.sock`. Re-resolve the UID and the socket before a runtime action. On a mismatch, stop and report. Never use the default daemon, a rootful daemon or another account's engine.
+- Docker command form: `D="sudo -n runuser -u dame-curie -- env XDG_RUNTIME_DIR=/run/user/1005 docker --host unix:///run/user/1005/docker.sock"`.
+- Operator command form: `I="sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/instance.py dame-curie"`.
+- `/opt/dame-curie` is root-owned. It is an exact export of the tracked tree of the deployed commit; `scripts/deploy.sh` syncs it. `/opt/dame-curie/.venv` is the root-owned operator venv (Python 3.14, `python-dotenv==1.2.3`); it is separate from the image and the sync keeps it. The deployed Compose file is `/opt/dame-curie/compose.yaml`, mode 0644.
+- Private root `/srv/dame-curie`: `deploy.env` (`APP_IMAGE`, `DAME_CURIE_EMBED_MODE`), `config/bot.env` (settings and secrets), `data/` (`dame-curie-rag.db`, `bot_control.json`), `sites/`, `shell/`, `smoke/`, `smoke-status/`. Directories are mode 0700; `bot.env` and `deploy.env` are mode 0600. Never print their contents.
+- Container mounts: `/state/data`, `/state/sites`, `/state/shell`, `/config` (read-only), `/smoke` (read-only), `/smoke-status`. `HOME=/home/dame-curie` is a symlink to `/state/shell`; `/home/maxwell` points there too, for authored-path compatibility. Files outside these mounts vanish when the container is recreated.
+- She shows as "Red Queen" on Discord. `!version` reports the frozen `/app/build_provenance.json` of the running image. Compare it with the container label `org.opencontainers.image.revision`.
+- The staged Compose overlay (`docker/compose.staging.yaml`) makes `up`, `start` and `restart` no-ops. With `DAME_CURIE_EMBED_MODE=external`, `instance.py` adds `docker/compose.embeddings-external.yaml`, which keeps the local Ollama services out of the startup set.
 
-## Identity, interpreter, and private roots
+## Deploy
 
-Temporary service identity: account `dame-curie`, UID 1005; private rootless engine ID `12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`; explicit socket `unix:///run/user/1005/docker.sock`. These are known identity references, not proof the account, socket, or engine still resolves to those values. Before any newly authorized runtime action, re-resolve the account UID and verify the socket is a real socket owned by that account, then verify the rootless engine through that explicit socket. Never fall back to the caller's/default/rootful or another account's engine; on mismatch, missing socket, or permission failure, stop and report.
+1. Merge the PR (see [REVIEW.md](REVIEW.md)). Check out `main` at the merged commit with a clean tree.
+2. Build: `scripts/build_for_human.sh` builds `dame-curie-app:<7-character sha>` from a Git archive of HEAD.
+3. Run `scripts/deploy.sh <app-tag>` inside Screen session `dame_curie`, window `throne-ops`, with the output tee'd to a log file.
+4. The script: prints the user messages and provider calls of the last 60 s (deploy when both are 0); checks the image; backs up `compose.yaml`, `instance.py`, `deploy.env`, `bot.env` and `bot_control.json` to `/var/backups/dame-curie-v2-recovery/deploy-<UTC>`; syncs `/opt/dame-curie` to the image's source commit, read from its `org.opencontainers.image.revision` label (`git archive`, then `rsync --delete`, `.venv` kept); sets `APP_IMAGE` in `deploy.env`; runs `instance.py dame-curie up`; waits 25 s; prints the revision, restart count, error count and login lines.
+5. Configuration edits for a release (`bot.env`, `bot_control.json`) are separate one-off steps before `up`, each with its own backup and a verification line. `bot_control.json` overrides `control_defaults.py`.
+6. After the deploy, read the log viewer for errors. When the change touches her prompt or tools, ask her in the test channel how it behaves.
+7. Image housekeeping: keep the live app image, the previous one for rollback and the QA image. Remove older app images after each deploy (root, 2 November 2026).
 
-The operator entrypoint is the root-owned, service-user-non-writable installation `/opt/dame-curie`; resolve and verify its ancestors, interpreter symlink targets and venv metadata remain root-owned and non-writable by the service user before use. The isolated Python 3.14 operator interpreter is `/opt/dame-curie/.venv/bin/python`; it requires the pinned `python-dotenv==1.2.3`. This host venv is separate from the image; the image lock (`docker/requirements.lock`) has 1.2.4 since #41. Do not substitute host Python, activate the project environment, or install packages during operation. Use isolated mode and suppress bytecode:
+Screen rules from root: send commands with `screen -S dame_curie -p throne-ops -X stuff '...'`. Check `screen -S dame_curie -Q windows` first. If `throne-ops` is missing, recreate it with `screen -S dame_curie -X screen -t throne-ops bash`, then run `screen -S dame_curie -X select logs` at once, because a new window switches root's attached view. Do not create windows for other reasons. Never run a lifecycle action in a hidden shell. If the session is gone: `screen -dmS dame_curie -t logs bash`, add `throne-ops`, select `logs`, and restart the log viewer in `logs`.
+
+## Rollback
+
+`scripts/rollback.sh <backup-dir>` first keeps the current files in a new `rollback-<UTC>` directory. It then restores what the backup directory holds (`compose.yaml`, `instance.py`, `deploy.env`, `bot.env`, `bot_control.json`, and a database file if present) and runs `up`. Rows written after the backup exist only in the kept copy. To revert one merged PR by source, see the revert steps in [STATUS.md](STATUS.md).
+
+## Backups and offload
+
+- Every deploy and every one-off change writes its backup directory under `/var/backups/dame-curie-v2-recovery/` first (root-owned, mode 0700).
+- The server disk is small. Large backups (database copies, exports) go to the storage box `u390720@u390720.your-storagebox.de`, SSH port 23, directory `archive/dame-curie/`. The box has a restricted shell with no pipes.
+- `scripts/offload_backups.sh [--dry-run]` packs old recovery directories, uploads them with `rsync -e "ssh -p 23"`, verifies each SHA-256 on the box with `sha256sum` over ssh, deletes the local copies only when every hash matches, and keeps the 2 newest deploy directories local. Receipts go to `~/dame-curie-offload-receipts/`.
+- Never verify through the sshfs mount `/opt/remote-backup`; it is very slow. Measured upload speed on 2 November 2026: about 87 MB/s.
+- A database backup uses the SQLite backup API, then `PRAGMA integrity_check` on the copy, saved owner-only with mode 0600.
+
+## Smoke tests
+
+Root approved automated tests on canonical Dame Curie on 31 October 2026, in development mode, with her own credentials. Test channel `1566164090039304285` in server `1545673830960340992`; permission actor root `1482143139828596916`.
+
+- `compose.yaml` mounts `${INSTANCE_DIR}/smoke` read-only at `/smoke` and `${INSTANCE_DIR}/smoke-status` at `/smoke-status`, and sets `DAME_CURIE_SMOKE_CONFIG=/smoke/config.json`. `instance.py` refuses `up`, `start` and `restart` when either host directory is missing or a symlink. `config.json` holds `enabled`, `channel_id`, `operator_id`, `requests_dir` and `status_dir`. `"enabled": false` stops the worker.
+- `smoke_runtime.py` injects one request per poll as a bot-authored notice with root as the permission actor. All normal gates apply. A request is immutable and its record is the ledger: deleting records makes old requests runnable again, so keep each request with its receipt.
+- Submit on the host; the container sees the request mount read-only:
 
 ```sh
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac.py status
+S="sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/smoke.py --config /srv/dame-curie/smoke/config.json"
+$S submit --task 'TASK TEXT'
+$S result REQUEST_ID
+$S pending
+$S health
 ```
 
-Dirac state is under `/srv/dame-curie/dirac`, separate from canonical `/srv/dame-curie/config` and protected V1 state. Private directories are service-owned mode 0700; `bot.env` and the optional image selector are mode 0600. The application config bind is read-only; only the nested prompts bind is writable. Do not read or print private file contents. Runtime-path checks reject unsafe ownership/modes, symlinked runtime paths, and untrusted inputs; do not work around a refusal by weakening modes or redirecting paths. `/opt/dame-curie` and all writable ancestors/import targets must remain root-owned and not service-user-writable.
-
-## Safe operation and lifecycle commands
-
-Only a separately scoped coordinator runtime grant permits these commands. Re-resolve identity/engine first and inspect current state; a source/documentation task never authorizes them. Forms below are examples of the operator interface, not instructions to execute now:
-
-```sh
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac.py status
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac.py logs [--no-keys] [--fresh]
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac.py stop
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac.py start [--image REF] [--replace] \
-  [--smoke-root /srv/dame-curie/dirac/smoke] \
-  [--smoke-status /srv/dame-curie/dirac/smoke-status]
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac.py restart
-```
-
-`status` is not metadata-only: while RAG is enabled, it performs the configured embedding readiness probe in the container. It does not establish Discord READY or identity. A skipped probe is not readiness. The container uses the reviewed ordinary `python bot.py` entrypoint, `--restart no`, no Docker socket, no additional mount/capability, and immutable local-image resolution with `--pull never`; a missing image fails rather than pulling. Do not add autorestart, pull, or use canonical `instance.py` for Dirac.
-
-`start` refuses an existing owned container unless replacement is explicit. Before any authorized replacement, preserve/inspect evidence with logs and status; replacement emits bounded previous-state metadata to stderr before removing the old container. A stopped container's evidence is retained by `stop`; do not remove it casually or use replacement to hide log history. `restart` accepts **only a running owned container** and retains its Docker log history. It deliberately refuses an exited/stopped container; after preserving its evidence, use an explicitly authorized `start --replace`, not `stop` followed by `restart`. The Dirac lifecycle mutations (`start`, `stop`, `restart`, `--replace`) and canonical `instance.py` operations share `/srv/dame-curie/.operations.lock`; never take an outer lock around these commands or run a second operation concurrently. A stopped or ambiguous target is not a reason to bypass the lock/ownership checks.
-
-The supplied minimum precheck context is low reasoning, 12,345 output cap, REM off, autonomy off, RAG on, and image quality high. The stored server prompt was measured as 1,939 UTF-8 bytes without disclosing its contents. These are not a fresh runtime verification or permission to edit controls. Before any release decision, recheck the current high-detail/image-generator disable controls and prompt byte size; never print prompt text. The prior acceptance changed only a temporary allowed-channel scope and restored original control bytes; it did not grant a broader profile change.
-
-## Derived configuration and shared embeddings
-
-The derived `/srv/dame-curie/dirac/config/bot.env` must retain these structural values:
-
-```text
-DATA_DIR=/state/data
-DAME_CURIE_SITE_DIR=/state/sites
-DAME_CURIE_PROMPTS_DIR=/config/prompts
-```
-
-If set, `DAME_CURIE_CONTAINER_MODE=true` and `DAME_CURIE_INSTANCE_ID=dame-curie-dirac` are required. The operator injects structural process variables including `DAME_CURIE_EMBED_MODE=external`, `DAME_CURIE_ENV_FILE=/config/bot.env`, `HOME=/home/dame-curie`, and `TZ=:/etc/dame-curie-localtime`; the derived file is passed through unchanged. With RAG enabled, its effective `DAME_CURIE_EMBED_BASE_URL` must exactly match the current outbound bridge gateway at port 11434. Never guess or reuse a stale gateway address: the operator derives and validates it. `DAME_CURIE_SHELL_DIR` retains its own `/state/shell` default. Readiness is fail-closed and exposes selected endpoint/status metadata, not credentials or an unfiltered configuration dump.
-
-Dirac uses the existing shared Ollama embedding service; it does not run its own Ollama/model-pull. The relay forwards only `POST /api/embed`, `POST /api/embeddings`, and `POST /v1/embeddings`; other paths/methods are rejected locally. This is an endpoint/method boundary, not independent same-UID or model-resource isolation: permitted embedding arguments remain client-controlled and no body-size quota was added. No canonical/V1/shared service mutation, model administration, publisher, remote destination, or activation follows from this contract.
+- `submit` prints the request id more than once; take the first match.
+- Root's rule for task text: begin every task with "Automated test from the coordinator agent (Claude), not from a human. It applies only to this test channel; do not store it as facts about this server or its people." Never pose as a human.
+- Ground truth for memory tests: deterministic shell outputs, for example the SHA-256 of a fixed string. `llm_traces.json` holds explanations, not tool results.
+- A smoke turn writes to her memory like any other turn in that channel. Delete your test files in her container home after the test.
+- `completed` means: the turn returned, its own model call produced usable output, and a non-notice message reached the channel. It does not certify that the task goal was met; `reply_verified` stays false. `health`, `pending` and a missing receipt are advisory only.
 
 ## Embedding model and recall cut-offs
 
-`bot.env` selects the embedding model. A value in `bot.env` wins over the compose default (`http://ollama:11434`). The settings are:
+`bot.env` selects the embedding model. A value in `bot.env` wins over the Compose default. The settings are:
 
 - `DAME_CURIE_EMBED_BASE_URL`, `DAME_CURIE_EMBED_MODEL`, `DAME_CURIE_EMBED_API_KEY` and `DAME_CURIE_EMBED_DIM` (vector length).
-- `DAME_CURIE_EMBED_REQUEST_DIMENSIONS`: the `dimensions` request field. Blank sends no field. A value must equal `DAME_CURIE_EMBED_DIM`, or the readiness gate and the bot stop with that cause.
+- `DAME_CURIE_EMBED_REQUEST_DIMENSIONS`: the `dimensions` request field. Blank sends no field. A value must equal `DAME_CURIE_EMBED_DIM`, or the readiness gate (`docker/check_embeddings.py`) and the bot stop with that cause.
 - `DAME_CURIE_RAG_FACT_MIN_SIMILARITY`, `DAME_CURIE_RAG_MESSAGE_MIN_SIMILARITY`, `DAME_CURIE_RAG_WEB_MIN_SIMILARITY` and `DAME_CURIE_RAG_NEGATIVE_SIMILARITY`: the recall cut-offs. Each model has its own score range. Blank keeps the `qwen3-embedding:0.6b` values: 0.35, 0.40, 0.40 and 0.85. A value outside 0 to 1 stops startup.
+
+Live state since 2 November 2026: OpenAI `text-embedding-3-large` at 1536, cut-offs 0.15, 0.29, 0.21 and 0.74, and `DAME_CURIE_EMBED_MODE=external` in `deploy.env`. The local Ollama container is stopped, not removed; [TODO.md](../TODO.md) has the removal item and the steps to plug it back in.
 
 A model change does not delete memory. The stored text stays. Each vector carries the identity of its model (`embedding_backend`), and search reads only the vectors of the configured model. To change the model:
 
 1. Back up `dame-curie-rag.db`.
-2. Pre-warm: copy the database with the SQLite backup API. Run `rag_maintenance.py backfill --db <copy> --limit 10000 --batch-size 64 --max-seconds 600` with the new settings until `eligible_pending` is 0. The live bot keeps running.
-3. Calibrate the cut-offs on the two copies (method below).
+2. Pre-warm: Put a copy of the database (made with the SQLite backup API) and `embed.env` with the new `DAME_CURIE_EMBED_*` settings in a work directory. Then `scripts/embed_eval/prewarm.sh <app-tag> <workdir>` runs `rag_maintenance.py backfill` on the copy in passes of up to 600 s until `eligible_pending` is 0. The live bot keeps running.
+3. Calibrate the cut-offs on the two copies: `scripts/embed_eval/calibrate.py <old db> <old backend id> <new db> <new backend id>`. It needs numpy; run it as `dame-curie` with any Python 3.14 venv that has numpy, on read-only database copies. Method: equal pass volume. For each search, the fraction of (query, row) pairs that pass the old cut-off in the old space gives the new cut-off that passes the same fraction in the new space. Labelled pairs (a message and the fact extracted from it) check that the new cut-off keeps the true matches. Queries are real user messages.
 4. Stop the bot. Delete the `embed_cache` rows of the old model in the live database: the cache holds at most 10,000 rows, and the oldest rows go first. Copy the `embed_cache` rows of the new model from the copy into the live database. Set the new values in `bot.env`. Run the backfill on the live database: cached rows need no request. Start the bot.
 5. Rollback: restore the old `bot.env` lines and the backup of step 1.
 
 The bot also runs a catch-up pass every 10 minutes. It embeds the rows that have no vector for the configured model, for at most 60 s. A write that finds `DAME_CURIE_MAX_BACKGROUND_EMBED_TASKS` (8) embeds in the queue stores its row without a vector and logs "Background embed deferred to the catch-up pass". On 2 November 2026, 1,495 of 3,079 long-term facts had no vector for this reason.
 
-An HTTP 400, 413 or 422 refuses one input. It does not pause the other embeds. The log says "Embedding failed: the embedding endpoint refused this input (HTTP <status>, <n> characters)"; for a long row it names the piece ("piece 2 of 3, 6000 of 14000 characters"). After 3 refused inputs in a row (writes, queries and the catch-up pass together), the fault is not in one input: the breaker opens with the cause "the embedding endpoint refused 3 inputs in a row". A success resets the count. A refused query pauses query embedding for `DAME_CURIE_RAG_QUERY_FAILURE_COOLDOWN_SECONDS` (15 s), and her prompt states that cause. Other failures (timeouts, connection errors, redirects, other HTTP statuses, invalid vectors) pause all embeds for `DAME_CURIE_EMBED_ENDPOINT_COOLDOWN_SECONDS` (30 s), and her prompt names the failure. The catch-up line names up to 10 failed rows with their causes and counts the rest. A run of N refused rows next to each other in rowid order takes ceil(N/3) catch-up passes: each pass gets 3 refusals, opens the breaker, pauses all embeds for 30 s and stops; the next pass starts after those rows. Rows after the run wait for these passes.
-
-Calibration method (equal pass volume): real user messages are the queries. For each search, find the fraction of (query, row) pairs that pass the old cut-off in the old space. The new cut-off passes the same fraction in the new space. Labelled pairs (a message and the fact extracted from it) check that the new cut-off keeps the true matches.
+An HTTP 400, 413 or 422 refuses one input. It does not pause the other embeds. The log says "Embedding failed: the embedding endpoint refused this input (HTTP <status>, <n> characters)"; for a long row it names the piece ("piece 2 of 3, 6000 of 14000 characters"). After 3 refused inputs in a row (writes, queries and the catch-up pass together), the breaker opens with the cause "the embedding endpoint refused 3 inputs in a row". A success resets the count. A refused query pauses query embedding for `DAME_CURIE_RAG_QUERY_FAILURE_COOLDOWN_SECONDS` (15 s), and her prompt states that cause. Other failures (timeouts, connection errors, redirects, other HTTP statuses, invalid vectors) pause all embeds for `DAME_CURIE_EMBED_ENDPOINT_COOLDOWN_SECONDS` (30 s), and her prompt names the failure. The catch-up line names up to 10 failed rows with their causes and counts the rest. A run of N refused rows next to each other in rowid order takes ceil(N/3) catch-up passes.
 
 Calibration of 2 November 2026, `qwen3-embedding:0.6b` to `text-embedding-3-large` at 1536. Queries: her last 600 user messages. Values in `bot.env` are rounded toward more recall.
 
@@ -91,11 +92,9 @@ Calibration of 2 November 2026, `qwen3-embedding:0.6b` to `text-embedding-3-larg
 
 Median pair score for facts: 0.382 with Qwen, 0.183 with 3-large. The "% match" label in her prompt shows the new scale. The labelled pairs: 47; 47 pass the Qwen cut-off, 46 pass the new one. The facts and messages cut-offs pass most pairs in both spaces, so the `top_k` cap of each search selects the rows.
 
-Live state since 2 November 2026: OpenAI `text-embedding-3-large` at 1536, cut-offs 0.15, 0.29, 0.21 and 0.74, and `DAME_CURIE_EMBED_MODE=external` in `deploy.env`. The local Ollama container is stopped, not removed; [TODO.md](../TODO.md) has the removal item.
-
 ### Benchmark, 2 November 2026
 
-Recall at 1 and 10 (R@1 / R@10). Queries: SciFact 300 (public set), her web searches 93, her memory facts 45.
+Recall at 1 and 10 (R@1 / R@10). Queries: SciFact 300 (public set), her web searches 93, her memory facts 45. The benchmark script is not in the repository; these are its measured results.
 
 | Model | SciFact | Web searches | Memory facts |
 |---|---|---|---|
@@ -118,11 +117,11 @@ Query: <the message>
 
 The bot sends no instruction today. With the instruction, the web searches went from R@1 0.247 to 0.344 and SciFact from 0.737 to 0.750. The memory facts went from R@10 0.889 to 0.867 (45 queries; one query is 2 points). The change is in code, not in `bot.env`: put the instruction on the query text of `rag_search` only. Stored rows keep their vectors, because a stored document has no instruction. Test the instruction text on her memory facts before release.
 
-## V2 shell tools and authored-path compatibility
+## Shell tools in the container
 
-The image retains the measured shell CLI packages, including ordinary Debian Git and its approved normal Perl dependencies, with `--no-install-recommends`. It builds the exact `docker/shell-requirements.lock` packages into `/opt/dame-curie/shell-wheelhouse`, without installing them into app Python or changing `docker/requirements.lock`. Shell tools and the app use NumPy 2.5.4 and setuptools 84.2.1 (#41). setuptools 84 has no `pkg_resources`; `py-mini-racer` 0.6.0 falls back to its module folder when that import fails. Measured on 2 November 2026: in a shell venv built from the wheelhouse, `MiniRacer().eval("6*7")` returned 42. `phply` is a Python parser, not a PHP interpreter or hosting service. No removed hosting features or model-facing tool menu is restored.
+The image installs the shell CLI packages, including Debian Git and its Perl dependencies, with `--no-install-recommends`. It builds the exact `docker/shell-requirements.lock` packages into `/opt/dame-curie/shell-wheelhouse` inside the image, without installing them into app Python. Shell tools and the app use NumPy 2.5.4 and setuptools 84.2.1 (#41). setuptools 84 has no `pkg_resources`; `py-mini-racer` 0.6.0 falls back to its module folder. Measured on 2 November 2026: in a shell venv built from the wheelhouse, `MiniRacer().eval("6*7")` returned 42. `phply` is a Python parser, not a PHP interpreter.
 
-The coordinator prepares a fresh persistent shell venv inside the verified V2 image, with only the shell mount, no credentials/data mounts, network disabled and the bot entrypoint overridden. This is explicit preparation, not an image startup bootstrap:
+The persistent shell venv is prepared inside the image with only the shell mount, no credential or data mounts, network disabled and the bot entrypoint overridden:
 
 ```sh
 /usr/local/bin/python3.14 -m venv --copies --system-site-packages /home/dame-curie/.venv
@@ -130,63 +129,16 @@ The coordinator prepares a fresh persistent shell venv inside the verified V2 im
   --find-links /opt/dame-curie/shell-wheelhouse -r /opt/dame-curie/shell-requirements.lock
 ```
 
-Only shell-command subprocesses prepend `/home/dame-curie/.venv/bin` to their existing minimal PATH; the app interpreter, CMD and environment remain unchanged. This explicitly approved shell venv shares app site-packages while its pinned tools take precedence. Copies avoid the old absolute interpreter symlink rejected by restore. Do not transplant the old empty `.venv`, `.ssh`, Ubuntu `/usr` or incidental vendor/platform packages. The coordinator must verify native wheels, offline installation and backup/restore admissibility; source changes alone establish none of those results.
+Only shell-command subprocesses prepend `/home/dame-curie/.venv/bin` to their minimal PATH; the app interpreter and environment are unchanged. Preserve authored scripts and documents byte for byte. Use `/home/dame-curie` paths for attachments.
 
-Preserve authored scripts/docs byte-for-byte: image-internal `/home/maxwell` and `/home/dame-curie` both point to `/state/shell`. The former is authored-path compatibility with V2 shell state, not alternate data ownership, an old environment alias or a V1/host mount. File-tool confinement is unchanged; use canonical `/home/dame-curie` paths for attachments.
+## Logs and diagnostics
 
-## Smoke requests and receipts
+- Follow logs in the Screen `logs` window: `$I logs --format screen [--no-keys]`. Append mode keeps Screen scrollback; `q` or Ctrl-C exits the viewer, not the bot; `--no-keys` is safer when pasting. Other formats: `console`, `auto`, `plain`, `jsonl`. Do not add `-I` to this invocation: the logs branch imports `log_filter` from the script directory. An oversized record switches evidence off until the viewer restarts; restart the viewer after a continuity notice. The viewer does not follow a recreated container by itself.
+- Raw history: `$D logs --timestamps --since <UTC> --until <UTC> dame-curie-bot-1`. Report counts and selected fields. Never paste raw buffers or credentials into chat.
+- Latency lines, read these first when root asks about slowness: `AI slot wait Ns priority=... {capacity, active, active_background, waiting}` (a caller waited 1 s or more for an inference slot; human priority is `user`, extraction is `background key=extract:<id>`); `Prompt build cpu=..s wall=..s: section=cpu/wall ...` (a build cost 0.2 s or more of event-loop CPU; sections `channel_memory`, `entity_profile`, `rag_ltm`, `rag_recent`, `web_results`, `shared_context`, `inbox`, `history`, `budget`); `event loop lag` (watchdog, 0.5 s or more); `Query embedding took ...`; `Memory recall: cold / warm / cached`; provider lines with `input=`, `input_source=` and `cached=` (prompt-cache hits). Context extraction is about 85% of provider calls; root keeps its volume as it is.
+- Maintenance commands run inside the container: `$D exec -w /app dame-curie-bot-1 python -B rag_maintenance.py <command> --db /state/data/dame-curie-rag.db` (not `-I`). Commands: `status`, `backfill`, `dedupe-self-copies [--apply]`. `--apply` makes an owner-only backup first.
+- Private incidents: root uses `!error N` (0 to 9) in a one-to-one DM.
 
-The smoke harness is opt-in and scoped to the approved test channel or a bot-owned thread within it. The bot-authored notice names the test, says no human typed the request, mentions the bot and makes clear that permission actor and text author differ. Injection uses the configured real SDK user as permission actor; notice author remains the bot and is preserved as provenance. Normal bot enable/blacklist/allowlist/sleep gates still apply. Never impersonate a human gateway message or describe a smoke task as a human request.
+## Jobs and limits
 
-Submit requests on the host because the request mount is read-only in the container. The CLI forms are:
-
-```sh
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/dirac/smoke/config.json submit --task 'LABELLED TEST TASK'
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/dirac/smoke/config.json result REQUEST_ID
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/dirac/smoke/config.json pending
-sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B \
-  /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/dirac/smoke/config.json health
-```
-
-A request is immutable and exclusively created; its terminal receipt belongs with that request. Keep both request and receipt together: deleting receipts alone can make old requests eligible to run again. A deadline covers resolution, notice, injection and turn. On expiry, only that input is cancelled. A known registered task that fails to stop blocks the next request until that exact task exits. When no owned task exists and stop cannot be confirmed, the worker stops polling and publishes `stop_unconfirmed`; it cannot wait on an invented task or silently resume. Do not call either outcome settled or launch another request around it.
-
-`health`, `pending`, and a missing `result` receipt are advisory only. The snapshot can be stale/unavailable; `worker_liveness` is always `unknown`; `no_record` does not prove a request never ran or that a worker is healthy. A terminal `completed` record requires returned turn, usable output from its own model call, and a non-notice delivery to the target channel. It does not certify that the task goal was met; `reply_verified` remains false. Do not clear status storage to recover service or replay requests.
-
-### Smoke harness on canonical Dame Curie
-
-Root approved automated tests on canonical Dame Curie on 2026-10-31, in development mode, with her own V2 credentials. Dirac is not used. The test channel is `1566164090039304285` in server `1545673830960340992`. The permission actor is root, `1482143139828596916`.
-
-`compose.yaml` mounts `${INSTANCE_DIR}/smoke` read-only at `/smoke` and `${INSTANCE_DIR}/smoke-status` writable at `/smoke-status`. It sets `DAME_CURIE_DIRAC_SMOKE_CONFIG=/smoke/config.json`. Create both host directories owned by `dame-curie`, mode 0700. `instance.py` refuses `up`, `start` and `restart` when either is missing or a symlink; other actions still run. `config.json` must state `enabled`, `channel_id`, `operator_id`, `requests_dir` and `status_dir`. Set `"enabled": false` to stop the worker.
-
-```sh
-S="sudo -n -H -u dame-curie -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-curie/scripts/dirac_smoke.py --config /srv/dame-curie/smoke/config.json"
-$S submit --task 'LABELLED TEST TASK'
-$S result REQUEST_ID
-```
-
-A smoke turn writes to her memory like any other turn in that channel.
-
-## Logs and viewer recovery
-
-Dirac's `dirac.py logs` uses append-only `screen` mode; it has no `--format` option. The separate canonical `instance.py logs` interface selects `screen`/`console`/`auto`/`plain`/`jsonl` with `--format`; canonical operation remains held. Append mode preserves Screen scrollback without repainting or alternate-screen entry; `--no-keys` disables its keyboard controls. Do not apply append-mode keys to the interactive console. In append mode, `q`/Ctrl-C exits the viewer/follower, not the bot; unmarked pasted ASCII can trigger keys, so choose `--no-keys` where paste safety matters.
-
-**Retained policy: an oversized record latches evidence off until viewer restart**, not merely until its newline. The record is discarded with an omission notice; lost redaction continuity means all subsequent records are omitted. This fail-closed behavior also applies to the affected canonical interactive viewer paths, not only Dirac's append viewer. Incomplete terminal-control input disables keyboard dispatch until viewer restart; Ctrl-C still exits. Dirac's `--fresh` requests tail zero to avoid replaying retained poisoned history (it is not a canonical `instance.py` option); it does not delete logs, repair the redaction chain, or clear the evidence latch in an already-running viewer. Restart the viewer after continuity loss and use `--fresh` when replaying old records is unsafe. A new viewer can tail a replacement container; old logs need authorized private preservation before replacement. The viewer does not automatically follow a recreated container, and history is not proof of successful operation.
-
-When using persistent GNU Screen, Screen must own an interactive Bash; run the logger as a foreground command inside Bash, not as Screen's sole process. This keeps a shell available after viewer exit. Canonical variants, viewer event details and source limits are summarized in [STATUS.md](STATUS.md); current log/viewer source is not evidence of installation or runtime acceptance. The host viewer was not installed or exercised in the current round; do not claim otherwise.
-
-## Jobs and intentional limits
-
-Background jobs persist metadata, but unfinished workers are cancelled on bot restart; they do not resume. A provider-file warm reload waits for active jobs to finish. Parent allowance and explicit parent block both gate sibling progress-thread creation; refusal or thread-creation failure leaves job output in the allowed origin thread, and the job can continue. A missing progress thread is not itself proof the job failed. No broader job-resumption guarantee exists.
-
-Separate account/engine identity is only one boundary. It does not prove isolation of same-UID state, host resources, remote credentials, or shared embedding resource residency. Smoke delivery/readback, readiness, focused QA, and dated identity receipts each establish only their stated scope. Do not infer full feature, sustained-load, voice, media, replica, or whole-repository acceptance. See [STATUS.md](STATUS.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for current status and boundaries.
-
-## Dated runtime and rollback reference - historical, not current
-
-Last specified old-runtime observation: container `495331359e7d6fcc0ad736eecebdd5c8ee27dbde922dd91cb9e5e5b1ff2f8f46`, image `sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f`, source label `6859025`, started `2026-09-25T12:30:41Z`. Account `dame-curie` UID 1005, socket `/run/user/1005/docker.sock`, engine `12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`. Temporary Discord identity `1504398705539944560`; canonical Dame identity `1545541390392369165`; root identity `1482143139828596916`; smoke channel `1550960386939817984`; temporary command prefix `?`. This is a dated recorded observation, not a fresh inventory, current release assertion, or activation instruction. Current source checkpoint, QA and completed temporary-only release decision are linked in [STATUS.md](STATUS.md).
-
-The earlier private rollback root `/var/backups/dame-curie-dirac/audit-acceptance-20260925T121644Z/` is retained. Current round-two rollback evidence is `/var/backups/dame-curie-dirac/round2-release-20260925T163646Z/`, with opaque original controls/selector and stopped-container logs. The accepted image is now running on temporary Dirac with its original controls; current container, identity, selector and smoke result are in STATUS/09-CLOSURE, not the old-runtime snapshot above. Preserve it and do not print/read private contents or restore stale controls. Rollback is coordinator-only, image-only unless specifically authorized otherwise; do not casually overlay historical state. Keep each smoke receipt with its request.
-
-Temporary historical operating contracts were retired after their unique contracts were migrated. For source recovery only, `git show eb188ac:phase-II_v2/<name>` retrieves an older dated file; that historical content is evidence, not current state or operating authority. `git show eb188ac:phase-II_v2/SESSION_LOG.md` recovers the verbatim prior human grant; later delegation is quoted in [AGENTS.md](../AGENTS.md). External publishing remains outside this runbook; see [PUBLISHING.md](PUBLISHING.md).
+Background jobs persist metadata, but unfinished workers are cancelled on restart; they do not resume. A provider-file reload waits for active jobs. A missing progress thread is not proof that a job failed. A separate account and engine do not prove isolation of same-UID state, host resources or remote credentials.

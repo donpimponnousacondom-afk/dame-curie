@@ -19,11 +19,10 @@ def _format_value(value: str) -> str:
     """
     needs_quotes = (
         not value
-        or value.startswith(" ")
+        or value.startswith((" ", "#"))
         or value.endswith(" ")
         or "\t" in value
         or " #" in value
-        or value.startswith("#")
         or '"' in value
         or "'" in value
         or "\\" in value

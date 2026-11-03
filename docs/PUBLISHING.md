@@ -4,7 +4,7 @@ How local authored files become remote static files. The publisher is an indepen
 process that mirrors a local directory tree outward over SSH/rsync. It is not a
 deployment mechanism, not a runtime sync, and not something the model administers.
 
-This is the durable guide for both instances, **not a publisher/private/remote operating grant**. Source handoff support is not proof of migrated state or activated services. The old phase record is recoverable through `git show eb188ac:phase-II_v2/DIRAC_PUBLISHING.md`; the protected template's historical citation is left unchanged, not treated as a live documentation link.
+This guide is not a publisher, private-state or remote operating grant.
 
 ## Authoring
 
@@ -93,8 +93,12 @@ produce an error; publication does not bypass those filesystem protections.
 ## Configuration
 
 One TOML file per instance, passed with `--config`. It must be mode 0600, owned by the
-running user, and must not sit inside `source`, `staging` or `state`. Templates:
-`scripts/publisher/config.example.toml` and `scripts/publisher/config.dirac.example.toml`.
+running user, and must not sit inside `source`, `staging` or `state`. Template:
+`scripts/publisher/config.example.toml`. Service unit: `scripts/publisher/dame-curie-publisher.service`
+(`dame-curie-publisher.service` on the host). The entry point is
+`python -B -m scripts.publisher --config <private TOML>`; `--once` reconciles once,
+otherwise it watches and rescans. A reused SSH key must be a private regular copy owned
+by the process user, mode 0600, link count 1; a symlink or hardlink is refused.
 
 | Key | Must be |
 | --- | --- |
@@ -136,46 +140,10 @@ The isolation between instances is not uniform, and the difference matters:
   name that does not already exist. Names it never claimed are never removed by it, but
   they will be served.
 
-## Historical claim-preserving V1 handoff - coordinator only
+## Remote inventory
 
-This section records the original migration procedure. The source-authoritative repair
-above supersedes its refusal of stale remote identities and markers. It does not authorize
-starting or changing V1.
-
-For the Queen's existing remote claims, set `marker_namespace = "curie"` explicitly.
-This selects `.curie-publisher-owner` and `.curie-publisher-claim-<token>` without
-renaming, replacing, chowning or adopting remote markers. There is no namespace search
-or fallback. Default V2 exclusions remain; the selected namespace's internal owner/claim
-names are also excluded locally and its owner marker is protected during rsync deletion.
-SSH host-key verification, remote UID/mode/link checks, token bytes, directory identity
-checks and atomic claim/removal rules are unchanged. Local service UIDs do not determine
-the remote SSH UID.
-
-Keep both publishers quiesced while preparing the complete new local source tree and
-preserving the old installed publisher/config/state for recovery. The coordinator must
-verify the unchanged Queen SSH tuple/trust material, distinct destinations, remote root
-and site identities, and existing marker ownership/token bindings before activation.
-Privately project the Queen's saved state, changing only `source`, its verified
-`source_identity`, and explicit `marker_namespace = "curie"`; retain version, target,
-remote roots, every site's identity/token/deleting flag, and all other state. Do not
-clear state, borrow Dirac state, or reset tokens. Local private files/directories still
-need the new process user's existing required ownership/modes; this is not permission
-to alter remote ownership or broaden access.
-
-A state file without `marker_namespace` means `"dame-curie"`, preserving existing V2
-behavior; it cannot silently enter legacy mode. The explicit projection is required
-for V1 state, not automatic rebinding. Source preparation, parent-run isolated tests,
-remote verification and bounded publication acceptance are separate gates; this guide
-is not an execution or activation receipt.
-
-## Dirac-specific layout and retained limits
-
-The template is `scripts/publisher/config.dirac.example.toml`; the separate unit is `scripts/publisher/dirac-publisher.service`. Its intended account is `dame-curie`, working directory `/opt/dame-curie`, source `/srv/dame-curie/dirac/sites`, and private configuration/staging/state under `/srv/dame-curie/dirac/publisher/{config,staging,state}`. This is layout, not fresh service/destination verification. Real host, user, key and remote roots must never be guessed from the placeholders or copied wholesale from another instance.
-
-An explicitly authorized existing-key reuse needs a private regular copy owned by the process user, mode0600, link count1; symlink/hardlink reuse is refused. The publisher entry is `python -B -m scripts.publisher --config <private TOML>`; `--once` reconciles once, otherwise it watches/rescans. These are interfaces, not commands authorized by this page.
-
-The 2026-10-03 repair resolves the service-mode remote-deletion gap. The later inventory
-update removes the initial repair's repeated per-site rsync calls.
+The repair of 3 October 2026 resolved the service-mode remote-deletion gap. The later inventory
+update removed the repair's repeated per-site rsync calls.
 
 - Local edits use inotify with the configured settling delay (production: 0.3 seconds).
 - Each periodic check uses one short-lived remote Python process over SSH. JSON goes
@@ -210,7 +178,7 @@ capacity and possibly bounded/resumable batches before such a deployment.
 
 ## Verifying a publication - separate grant required
 
-These examples access service/private state or the remote host. They are not permitted by the current source/Dirac-remediation assignment. Under a suitable publisher grant, local checks include:
+These examples read service state or the remote host; they need a publisher grant. Local checks:
 
 ```sh
 systemctl status dame-curie-publisher.service

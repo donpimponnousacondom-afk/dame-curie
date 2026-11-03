@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import discord
 
 from bot import DameCurieBot
-from dirac_runtime import _NoticeInput
+from smoke_runtime import _NoticeInput
 
 
 class _Memory:

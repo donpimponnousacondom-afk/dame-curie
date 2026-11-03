@@ -426,7 +426,7 @@ class BackgroundJobManager:
             if directory:
                 os.makedirs(directory, exist_ok=True)
             payload = {
-                jid: {k: v for k, v in asdict(job).items()}
+                jid: asdict(job)
                 for jid, job in self._jobs.items()
             }
             tmp = f"{self.data_path}.tmp"
