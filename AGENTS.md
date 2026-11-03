@@ -36,7 +36,7 @@ Skills live in `.agents/skills/<name>/SKILL.md`. Any harness reads them there. R
 - Preserve the difference between an unset and an explicitly blank setting. Preserve coupled selectors, credentials and storage consumers.
 - No compatibility fallback may reconnect V2 to V1.
 - Do not change the persona or model, invent real endpoints, or rename `max()` or `max_tokens` as a naming shortcut.
-- Default commands use `!`.
+- Default commands use `!`. Help text uses the prefix that the instance configures.
 
 ## Writing
 

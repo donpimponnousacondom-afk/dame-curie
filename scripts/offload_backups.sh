@@ -17,7 +17,7 @@ base=/var/backups/dame-curie-v2-recovery
 work=/var/tmp/dame-curie-offload-$stamp
 zstd_level=(-19 --long=31 -T6)
 log() { echo "$(date -u +%FT%TZ) $*"; }
-trap 'log "FAIL: line $LINENO: $BASH_COMMAND (exit $?); local copies kept; work folder $work"' ERR
+trap 'log "FAIL: line $LINENO: $BASH_COMMAND (exit $?); work folder $work"' ERR
 
 listing=$(sudo -n find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n')
 mapfile -t all < <(sort -rn <<<"$listing" | cut -d' ' -f2- | sed '/^$/d')
@@ -79,10 +79,11 @@ while read -r sum name; do
 done < SHA256SUMS
 [[ $fail == 0 ]] || { log "FAIL: local copies kept; work folder $work"; exit 1; }
 
-# 5. Delete the moved folders and the work folder.
-for d in "${moved[@]}"; do sudo -n rm -rf -- "${base:?}/$d"; done
+# 5. Keep the receipts, then delete the moved folders and the work folder.
 receipts="$HOME/dame-curie-offload-receipts/$stamp"
 mkdir -p "$receipts" && cp SHA256SUMS README.txt sizes-before.txt "$receipts/"
+log "remote copies verified; deleting the local copies"
+for d in "${moved[@]}"; do sudo -n rm -rf -- "${base:?}/$d"; done
 cd / && rm -rf -- "${work:?}"
 log "remote folder: $rdir; receipts: $receipts"
 df -h / | tail -1
