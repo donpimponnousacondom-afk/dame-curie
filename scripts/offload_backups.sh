@@ -17,8 +17,10 @@ base=/var/backups/dame-curie-v2-recovery
 work=/var/tmp/dame-curie-offload-$stamp
 zstd_level=(-19 --long=31 -T6)
 log() { echo "$(date -u +%FT%TZ) $*"; }
+trap 'log "FAIL: line $LINENO: $BASH_COMMAND (exit $?); local copies kept; work folder $work"' ERR
 
-mapfile -t all < <(sudo -n find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | sort -rn | cut -d' ' -f2-)
+listing=$(sudo -n find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n')
+mapfile -t all < <(sort -rn <<<"$listing" | cut -d' ' -f2- | sed '/^$/d')
 kept=("${all[@]:0:$keep}")
 moved=("${all[@]:$keep}")
 log "kept local: ${kept[*]:-none}"

@@ -33,9 +33,9 @@ Screen rules from root: send commands with `screen -S dame_curie -p throne-ops -
 
 - Every deploy and every one-off change writes its backup directory under `/var/backups/dame-curie-v2-recovery/` first (root-owned, mode 0700).
 - The server disk is small. Large backups (database copies, exports) go to the storage box `u390720@u390720.your-storagebox.de`, SSH port 23, directory `archive/dame-curie/`. The box has a restricted shell with no pipes.
-- `scripts/offload_backups.sh [--dry-run]` packs old recovery directories, uploads them with `rsync -e "ssh -p 23"`, verifies each SHA-256 on the box with `sha256sum` over ssh, deletes the local copies only when every hash matches, and keeps the 2 newest deploy directories local. Receipts go to `~/dame-curie-offload-receipts/`.
+- `scripts/offload_backups.sh [--dry-run]` packs old recovery directories, uploads them with `rsync -e "ssh -p 23"`, verifies each SHA-256 on the box with `sha256sum` over ssh, deletes the local copies only when every hash matches, and keeps the 2 newest backup folders local (`KEEP=<n>` changes the number). Receipts go to `~/dame-curie-offload-receipts/`.
 - Never verify through the sshfs mount `/opt/remote-backup`; it is very slow. Measured upload speed on 2 November 2026: about 87 MB/s.
-- A database backup uses the SQLite backup API, then `PRAGMA integrity_check` on the copy, saved owner-only with mode 0600.
+- Make a database backup with the SQLite backup API. Then run `PRAGMA integrity_check` on the copy. Keep it owner-only, mode 0600.
 
 ## Smoke tests
 
@@ -121,7 +121,7 @@ The bot sends no instruction today. With the instruction, the web searches went 
 
 The image installs the shell CLI packages, including Debian Git and its Perl dependencies, with `--no-install-recommends`. It builds the exact `docker/shell-requirements.lock` packages into `/opt/dame-curie/shell-wheelhouse` inside the image, without installing them into app Python. Shell tools and the app use NumPy 2.5.4 and setuptools 84.2.1 (#41). setuptools 84 has no `pkg_resources`; `py-mini-racer` 0.6.0 falls back to its module folder. Measured on 2 November 2026: in a shell venv built from the wheelhouse, `MiniRacer().eval("6*7")` returned 42. `phply` is a Python parser, not a PHP interpreter.
 
-The persistent shell venv is prepared inside the image with only the shell mount, no credential or data mounts, network disabled and the bot entrypoint overridden:
+The image does not create the persistent shell venv. The operator prepares it once, in a throwaway container of the app image with only the shell mount, no credential or data mounts, network disabled and the bot entrypoint overridden:
 
 ```sh
 /usr/local/bin/python3.14 -m venv --copies --system-site-packages /home/dame-curie/.venv

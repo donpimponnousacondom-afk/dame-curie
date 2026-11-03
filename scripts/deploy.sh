@@ -20,8 +20,13 @@ rev=$("${D[@]}" image inspect "$image" --format '{{index .Config.Labels "org.ope
 git -C "$repo" cat-file -e "$rev^{commit}" 2>/dev/null || { echo "STOP: image revision $rev is not a commit in $repo" >&2; exit 1; }
 echo "image source commit: $rev"
 
-recent=$("${D[@]}" logs --since 60s "$account-bot-1" 2>&1)
-echo "last 60 s: $(grep -c 'MSG from user' <<<"$recent") user messages, $(grep -c 'Provider timing start' <<<"$recent") provider calls"
+state=$("${D[@]}" ps -a --filter "name=^$account-bot-1$" --format '{{.State}}') || exit 1
+if [[ "$state" == running ]]; then
+  recent=$("${D[@]}" logs --since 60s "$account-bot-1" 2>&1) || { echo "STOP: cannot read the bot logs: $recent" >&2; exit 1; }
+  echo "last 60 s: $(grep -c 'MSG from user' <<<"$recent") user messages, $(grep -c 'Provider timing start' <<<"$recent") provider calls"
+else
+  echo "bot container state: ${state:-absent}; no activity check"
+fi
 
 backup=/var/backups/dame-curie-v2-recovery/deploy-$(date -u +%Y%m%dT%H%M%SZ)
 sudo -n install -d -m 0700 "$backup" || exit 1
@@ -38,11 +43,14 @@ echo "/opt/dame-curie synced to $rev"
 
 sudo -n -u "$account" sed -i "s|^APP_IMAGE=.*|APP_IMAGE=$image|" /srv/dame-curie/deploy.env || exit 1
 sudo -n -u "$account" grep '^APP_IMAGE=' /srv/dame-curie/deploy.env
-"${I[@]}" up 2>&1 | tail -3
+up=$("${I[@]}" up 2>&1)
+code=$?
+tail -3 <<<"$up"
+[[ $code == 0 ]] || { echo "STOP: instance.py up failed with exit $code; rollback: $repo/scripts/rollback.sh $backup" >&2; exit 1; }
 sleep 25
 "${D[@]}" inspect "$account-bot-1" \
   --format 'rev={{index .Config.Labels "org.opencontainers.image.revision"}} started={{.State.StartedAt}} restarts={{.RestartCount}} status={{.State.Status}}'
-started=$("${D[@]}" logs --since 40s "$account-bot-1" 2>&1)
+started=$("${D[@]}" logs --since 40s "$account-bot-1" 2>&1) || { echo "STOP: cannot read the bot logs: $started" >&2; exit 1; }
 echo "errors and tracebacks since start: $(grep -cE 'Traceback|ERROR' <<<"$started")"
 grep -E 'Logged in|setup complete|smoke runtime|Smoke runtime' <<<"$started" | tail -3 | cut -c1-200
 echo "=== done; rollback: $repo/scripts/rollback.sh $backup"

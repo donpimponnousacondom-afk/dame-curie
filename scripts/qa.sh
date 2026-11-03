@@ -13,7 +13,8 @@ fi
 tree=$1
 out=$2
 shift 2
-selection=${*:-tests}
+if [[ $# -eq 0 ]]; then set -- tests; fi
+selection=$(printf '%q ' "$@")
 account=dame-curie
 uid=$(id -u "$account") || exit 1
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 1

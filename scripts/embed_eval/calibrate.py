@@ -4,8 +4,8 @@ Method: equal pass volume. For each search, the old cut-off passes a fraction p
 of all (query, row) pairs in the Qwen space. The new cut-off is the value that
 passes the same fraction p in the new space. Queries are real user messages;
 each row has a vector in both spaces, so no API call is needed.
-Check: labelled pairs (a message and the fact extracted from it) must pass the
-new cut-off at least as often as the old one.
+Report: how often labelled pairs (a message and the fact extracted from it) pass the
+old cut-off in the old space and the new cut-off in the new space.
 Usage: python calibrate.py <old db> <old backend id> <new db> <new backend id>
 Run it as dame-curie with a Python 3.14 venv that has numpy. It opens both databases read-only.
 OLD holds the cut-offs of the old model (the Qwen defaults); edit it when the old model differs.

@@ -14,7 +14,7 @@ Python 3.14 is mandatory. The project standard is `[tool.ruff]` in `pyproject.to
 | Check | Scope | Result |
 | --- | --- | --- |
 | Dash check (`scripts/check_dashes.sh`) | Every tracked file except `audit/` | Em or en dash refuses the commit |
-| `ruff check` | Whole tree | Any finding refuses the commit |
+| `ruff check` | Whole tree in CI; staged `.py` files in the hook (their working-tree copies) | Any finding refuses the commit |
 | `ruff format --check` | Added `.py` files only | An unformatted new file refuses the commit |
 
 Legacy files are never reformatted by the gate. Do not run `ruff format` or `ruff check --fix` on files you did not change. Mypy is not run and has no configuration. Vulture is report-only; its workflow is in `docs/DEVELOPMENT.md`.

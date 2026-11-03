@@ -6,7 +6,7 @@
 # Usage: scripts/embed_eval/prewarm.sh <app-tag> <workdir>
 set -uo pipefail
 tag=${1:?usage: $0 <app-tag> <workdir>}
-work=${2:?usage: $0 <app-tag> <workdir>}
+work=$(realpath -e "${2:?usage: $0 <app-tag> <workdir>}") || exit 1
 account=dame-curie
 uid=$(id -u "$account") || exit 1
 D=(sudo -n runuser -u "$account" -- env XDG_RUNTIME_DIR="/run/user/$uid" docker --host "unix:///run/user/$uid/docker.sock")
@@ -20,7 +20,7 @@ for pass in $(seq 1 20); do
   last=$(tail -1 <<<"$out")
   tail -3 <<<"$out" | cut -c1-600
   echo "exit=$code"
-  pending=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["counts"]["eligible_pending"])' "$last") ||
+  pending=$(python3 -I -c 'import json, sys; print(json.loads(sys.argv[1])["counts"]["eligible_pending"])' "$last") ||
     { echo "=== stop: the last output line is not a backfill report"; exit 1; }
   echo "eligible_pending=$pending"
   [[ "$pending" == "0" ]] && { echo "=== done"; exit 0; }

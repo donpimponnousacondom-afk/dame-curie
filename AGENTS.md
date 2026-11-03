@@ -29,6 +29,15 @@ Skills live in `.agents/skills/<name>/SKILL.md`. Any harness reads them there. R
 - **Security policy belongs to root.** Ask before you add, widen, remove or replace a content filter, credential detection, redaction, publication refusal, path exclusion or access restriction. The publisher content-based credential filter stays removed.
 - **Profiles.** A blank `AUX_*` or `AUTONOMY_*` key falls back to the main profile.
 
+## Naming and configuration
+
+- Use `dame-curie` externally and `DAME_CURIE_*` for environment names. Root's short URL segment `dame` is intentional.
+- Generation uses the configured OpenAI-compatible `OPENAI_*` settings, not an assumed OpenAI account. No `OLLAMA_*` aliases exist.
+- Preserve the difference between an unset and an explicitly blank setting. Preserve coupled selectors, credentials and storage consumers.
+- No compatibility fallback may reconnect V2 to V1.
+- Do not change the persona or model, invent real endpoints, or rename `max()` or `max_tokens` as a naming shortcut.
+- Default commands use `!`.
+
 ## Writing
 
 - Write comments, documentation, commit messages and reports in ASD-STE100 Simplified Technical English. One statement per sentence. At most 20 words per instruction, 25 per description.
@@ -57,4 +66,5 @@ Skills live in `.agents/skills/<name>/SKILL.md`. Any harness reads them there. R
 - A source or documentation task permits inspection only: no application import, test run, build, lifecycle command, migration, login or deletion. Do not run lifecycle scripts for discovery or `--help`.
 - Do not read production or backup files, real environment files, databases, raw logs, credentials or process environments without an explicit grant. Never dump inspect, environment or label collections.
 - Reviewers are read-only. They do not edit the shared checkout.
+- Delegated agents work locally: no fetch, push, PR or remote research unless the task says so. Do not amend others' history or prune refs, worktrees or caches.
 - Do not stage, edit or mention untracked material that is not yours, such as root's `reports/`.

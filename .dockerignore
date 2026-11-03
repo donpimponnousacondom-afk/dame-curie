@@ -19,3 +19,10 @@ tests/
 *.sqlite*
 *.pem
 *.key
+*cookies*
+*credentials*
+secrets.*
+local.env
+avatar.b64
+backups/
+instances/

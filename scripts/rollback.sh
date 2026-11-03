@@ -14,7 +14,10 @@ I=(sudo -n -H -u "$account" -- /opt/dame-curie/.venv/bin/python -I -B /opt/dame-
 sudo -n test -f "$backup/deploy.env" || { echo "STOP: $backup/deploy.env is missing" >&2; exit 1; }
 echo "=== $(date -u +%FT%TZ) rollback from $backup"
 db=$(sudo -n find "$backup" -maxdepth 1 -name 'dame-curie-rag*.db' -printf '%f\n' | head -1)
-"${I[@]}" stop 2>&1 | tail -2
+stop=$("${I[@]}" stop 2>&1)
+code=$?
+tail -2 <<<"$stop"
+[[ $code == 0 ]] || { echo "STOP: instance.py stop failed with exit $code; nothing was restored" >&2; exit 1; }
 keep=/var/backups/dame-curie-v2-recovery/rollback-$(date -u +%Y%m%dT%H%M%SZ)
 sudo -n install -d -m 0700 "$keep" || exit 1
 sudo -n cp -a /opt/dame-curie/compose.yaml /opt/dame-curie/scripts/instance.py /srv/dame-curie/deploy.env \
@@ -37,7 +40,10 @@ if [[ -n "$db" ]]; then
   restore "$db" /srv/dame-curie/data/dame-curie-rag.db "$account" 0600 || exit 1
 fi
 sudo -n -u "$account" grep '^APP_IMAGE=' /srv/dame-curie/deploy.env
-"${I[@]}" up 2>&1 | tail -3
+up=$("${I[@]}" up 2>&1)
+code=$?
+tail -3 <<<"$up"
+[[ $code == 0 ]] || { echo "STOP: instance.py up failed with exit $code; the files are restored, the bot is not running" >&2; exit 1; }
 sleep 25
 "${D[@]}" inspect "$account-bot-1" --format 'rev={{index .Config.Labels "org.opencontainers.image.revision"}} restarts={{.RestartCount}} status={{.State.Status}}'
 echo "=== rollback done; the state from before the rollback is in $keep"

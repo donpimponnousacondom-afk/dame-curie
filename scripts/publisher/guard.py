@@ -164,7 +164,7 @@ def claim(root, request):
             prepare_marker(prepared, token, namespace)
             value = os.stat(hidden, dir_fd=root, follow_symlinks=False)
             if [value.st_dev, value.st_ino] != identity(prepared):
-                raise Refused() from None
+                raise Refused()  # noqa: B904 - not caused by the missing directory; keep the context
             try:
                 rename_noreplace(root, hidden, name)
             except FileExistsError:

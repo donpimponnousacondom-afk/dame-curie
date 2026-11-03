@@ -33,6 +33,9 @@ select = [
     "RUF019",   # redundant key check before dict access
     "SIM115",   # open() without a context manager (fd leak)
     "TRY203",   # except that immediately re-raises
+    # TRY004 is not selected. Its 7 hits raise ValueError for a wrong JSON type on
+    # outside input (configuration JSON, model tool-call arguments, a backup record),
+    # like the value checks next to them, so one `except ValueError` covers each validator.
 ]
 ignore = [
     # os.path / pathlib calls inside async def. Stat-level calls on local disk
@@ -45,10 +48,6 @@ ignore = [
     # zip() strict=: correct default is version-dependent behaviour change, so
     # it is opted into per call site rather than enforced tree-wide.
     "B905",
-    # ValueError for a wrong JSON type. Each hit validates outside input (configuration
-    # JSON, model tool-call arguments, a backup record) and raises ValueError like the
-    # value checks next to it, so one `except ValueError` covers the whole validator.
-    "TRY004",
 ]
 
 [tool.ruff.lint.per-file-ignores]
