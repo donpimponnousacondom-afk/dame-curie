@@ -96,7 +96,7 @@ class Mirror:
         if self.state.roots != roots:
             self.state.roots = roots
             self.state.save()
-        for name in sorted(tuple(self.state.sites)):
+        for name in sorted(self.state.sites):
             site = self.state.sites[name]
             if site.deleting or name not in snapshot.present:
                 self.remove_site(name, site)

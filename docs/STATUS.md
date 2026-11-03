@@ -1,17 +1,17 @@
 # dame-curie status
 
-The first section was written on 1 November 2026. The sections after it
-are older. Their headings give their dates where they have one.
+One row per merge to `main`, from 31 October 2026. Older history and
+recovery references are in [HISTORY.md](HISTORY.md).
 
-## Behaviour changes, 31 October to 1 November 2026
+## Behaviour changes
 
 Each row is one merge to `main`, in merge order, except row #4. It also holds
 PR #6, which merged into the #4 branch 33 seconds before #4 merged to
-`main`. Use this list when a behaviour changes in the next days.
+`main`. Use this list when a behaviour changes.
 
 These facts come from the session record, not from the repository:
 - Root made the coordinator director of dame-curie on 31 October 2026.
-- The coordinator deployed each merge to throne-v2.
+- The coordinator deployed each merge to the live V2 seat.
 - Sonnet and Haiku reviewed each PR. The repository holds review
   digests as PR comments for #4 to #12, and as commit or PR text for
   #13, #15 to #18, #20, #22 and #23.
@@ -28,8 +28,7 @@ How to revert one change:
    - #4, #7, #27 and #28 changed `compose.yaml`. Install the reverted file as the
      deployed copy.
    - The deployed copy is `/opt/dame-curie/compose.yaml`, next to the
-     deployed `scripts/instance.py`. Source: the coordinator's deploy
-     script (session record).
+     deployed `scripts/instance.py`. `scripts/deploy.sh` installs both.
    - #7 renamed `DAME_CURIE_PUBLIC_BASE_URL` to
      `DAME_CURIE_IMAGE_PUBLIC_BASE_URL` in `docker/bot.env.example`. The
      operator's `bot.env` got the same rename at deploy (session record).
@@ -75,6 +74,7 @@ How to revert one change:
 | #42 | `git log --grep '(#42)'` (the squash commit does not exist before the merge) | Her memory moves to OpenAI `text-embedding-3-large` at 1536 dimensions (root, 2 November 2026). The change is in `bot.env`; this PR adds the settings. `DAME_CURIE_EMBED_REQUEST_DIMENSIONS` sends the `dimensions` request field; blank sends none, and a value that is not `DAME_CURIE_EMBED_DIM` stops startup. The bot, `doctor.py` and the readiness gate send the same field. The four recall cut-offs are `bot.env` settings now; blank keeps the Qwen values. Both prompt searches pass their cut-off to `rag_search` (before, the message search cut at the fact value first). A 10-minute catch-up pass embeds rows without a vector for the configured model, for at most 60 s. Measured on 2 November 2026 (live database, counts only): 1,495 of 3,079 long-term facts had no vector, because a summary writes more facts at one time than the queue of 8 background embeds holds, and no pass retried them. The backfill select now leaves out rows that are never embedded. Benchmark, calibration and the change procedure: `docs/OPERATIONS.md`. One pass count scan on 10,123 rows: 0.072 s. Pre-warm of 8,431 rows on a copy: the second run took 24.5 minutes for 6,247 row attempts; the first run stopped at one HTTP 502, and the row succeeded on retry. | "Embedding catch-up pass" lines; recall finds facts that had no vector before. |
 | #43 | `git log --grep '(#43)'` (the squash commit does not exist before the merge) | Follow-ups from the #42 review. An HTTP 400, 413 or 422 refuses one input and no longer pauses every embed for 30 s; before, one refused row in the catch-up pass paused recall for everyone once per pass. 3 refused inputs in a row (all paths together) open the breaker with the cause "refused 3 inputs in a row", so an endpoint that refuses every input gets 3 requests per cooldown. The cost: 3 refused inputs in a row pause all embeds for 30 s, and a run of N refused rows next to each other takes ceil(N/3) catch-up passes. A success resets the count. Redirects, other statuses, timeouts and connection errors still pause the endpoint. Each failure has one stated cause: the catch-up line names up to 10 failed rows with their causes ("<row>: embedding failed (HTTP 503)") and states how many it leaves out; a refused piece of a long row is named; an edit during the request is named as an edit; a failed row update logs a warning (was debug). Her prompt names the failure that paused the endpoint, for example "the embedding endpoint is paused for 30s after a failure (HTTP 503)". The error line of a failed pass keeps the deferred count. Measured before #43, on image `e3f73dc` (#42) (live log, 17:49 to 18:14 UTC, 2 November 2026): no embedding failure. In the same window one burst deferred 6 embeds (17:54 UTC), and the next catch-up pass (17:59 UTC) embedded all 6. | "refused this input" warnings; "Failed rows:" in catch-up lines. |
 | #44 | `git log --grep '(#44)'` (the squash commit does not exist before the merge) | Root, 2 November 2026. (1) Bot messages are embedded again and message recall reads them: her own messages and the messages of the other bots, in every channel of the server (reverses the embedding part of #31; the OpenAI embedder has no CPU cost). Tool records have no author id and stay unembedded; no search reads them. A recalled line names its author with the labels of her history: `Name(id)` for a person, `Name(id) [bot]` for a bot account (the APP tag in Discord), and `you/Dame Curie(id)` for her own message. Before, a recalled line showed only the display name, and another bot here is named "curie". Her prompt gets no other text about bots. Measured on 2 November 2026 (live database): the test channel held 138 rows, all from her account (the harness posts its tasks from her account), so cross-channel recall found none of them; the server held 264 rows from other bots, also not recalled. (2) The context watcher gets who a message speaks to: its reply target with a short quote, its mentions and "Addressed to Dame Curie: yes / no / not stated", from Discord data. A private DM is addressed to her; a reply target that Discord cannot load is named as such. Its rule: "you" means those people; it means Dame Curie only when the verdict is yes; a summary names people and bots with name and id. Before, the watcher saw only the message text, and it read "your cot" in a reply to _LOKI_ as words to her (19:18 CET, 2 November 2026). | Recalled lines from other channels with `[bot]` and `you/Dame Curie(...)` labels; the watcher's user prompt in the provider log. |
+| #46 | `git log --grep '(#46)'` (the squash commit does not exist before the merge) | Documentation and Dirac clean-up. `AGENTS.md` holds rules only; dated decisions and recovery references moved to `docs/HISTORY.md`; the review protocol is `docs/REVIEW.md`; `docs/DEAD_CODE.md` is folded into `docs/DEVELOPMENT.md`. The Dirac operator, relay, publisher template, service units, their tests, `mimo.py` and the unused live-provider harnesses `deep_test_harness.py` and `tests/custom_harness.py` are deleted. The smoke harness is renamed: `smoke_runtime.py` (class `SmokeRuntime`), `scripts/smoke.py`, `tests/test_smoke_runtime.py` and the env name `DAME_CURIE_SMOKE_CONFIG`. `scripts/lint.sh` (dash check, `ruff check` on the whole tree, `ruff format --check` on added files) runs in the commit hook and in CI `quality.yml`, which replaces `no-dashes.yml`; `ruff==0.17.3` is pinned; of the 46 open ruff findings, 31 are fixed, 4 went with the deleted `tests/custom_harness.py`, `TRY004` (7) is not selected and `pyproject.toml` gives the reason, and 4 lines carry a `noqa` with the reason; `[tool.mypy]` is removed. The QA, QA image, deploy, rollback, backup offload and embedding evaluation scripts move into `scripts/`. The skills are `pr-review`, `readonly-debug`, `implement-tyranny` and `implement-sanity`. | The smoke runtime stays off if the deployed `compose.yaml` still sets the old env name (`scripts/deploy.sh` installs the new one); CI `quality` failing on a new `.py` file that is not formatted. |
 
 ### Known open items
 
@@ -119,155 +119,11 @@ How to revert one change:
   The progress update writes no memory row now. A Discord send error stops
   it with the cause from #26. An error in its text formatting still
   propagates and stops the turn.
-- **The embedding error log names only the exception class**
-  ("Embedding failed: <class>", `_embed` in `rag_memory.py`). AGENTS.md
-  says an error message names what failed and why.
-- **Embedding cost.** One 6,000-character piece takes about 7 s on the
-  CPU embedder (measured live on 1 November 2026, not in the
-  repository). `_split_embed_chunks` makes pieces of up to 6,000
+- **Embedding volume.** `_split_embed_chunks` makes pieces of up to 6,000
   characters with a 200-character overlap. A fetched web result of up to
-  12,000 characters is three pieces, about 21 s (estimated from the one 7 s measurement; not measured as a whole). A user message row
-  embeds up to 8,000 characters (`add_to_channel_memory` in
-  `rag_memory.py`): two pieces. Since #44, her messages and the messages
-  of other bots are embedded again. Tool records (`bot_output` rows without
-  an author id) are not embedded, and search never returns them.
-
-## Publisher inventory update - 2026-10-03, 19:44Z
-
-The initial repair below restored publication but continuously ran rsync across all
-sites. The follow-up replaces that loop with one short-lived remote inventory command.
-It compares cached metadata first, verifies changed content only when needed, and queues
-only differences. Local edits still use inotify. Unchanged checks no longer emit per-site
-success messages. See [Publishing](PUBLISHING.md) for the algorithm and scale limits.
-
-Installed at **19:44:53Z**, service PID **676081**. Its first normal background inventory
-reported **31 targets, 31 cold content checks, zero repairs**. A subsequent **65-second
-read-only process observation** saw **two SSH commands, 30.6 seconds apart, and zero
-rsync processes**. No synthetic source edits or remote deletions were used.
-
-Independent `gpt-6-astra` reviewed the implementation and the final correction. Its two
-liveness findings (one unstable site blocking every audit; dirty work starving remote
-repairs) were fixed before deployment. Council source inspection supplied the short-lived
-receiver/stdin protocol precedent; its full-file hashing and incompatible publication
-policies were not copied. Remote Python is 3.12.3; local operator Python remains 3.14.4.
-Syntax/diff checks passed. No tests ran. This is not measured 50,000-site acceptance;
-request size, full metadata traversal and whole-audit timeout limits remain explicit.
-
-Private previous-source/state backup:
-`/var/backups/dame-curie-v2-recovery/publisher-inventory-20261003T194453Z`.
-This update is deployed locally, not yet integrated into PR3.
-
-## Publisher repair - 2026-10-03, 19:14Z
-
-The publisher was in a restart loop. Read-only remote inspection found
-`hammered-wallet` missing; both remote roots and the other 29 saved site markers/identities
-matched. Service-mode synchronization skipped claim when a saved site identity existed.
-The resulting transfer failure stopped the whole publisher.
-
-The focused repair is installed in `/opt/dame-curie/scripts/publisher/{guard,mirror,service,transport}.py`.
-Root explicitly confirmed local-to-remote authority, including empty recreated remote
-roots and stale remote replacements. The service now refreshes destination identities,
-reclaims each transferred site, reconciles remote state on periodic scans, and retains
-failed transfer/deletion work without stopping other sites. Errors identify the operation,
-site, exit code and available guard/transport cause. Filesystem and SSH checks remain.
-
-At deployment, **19:14:11Z**, service PID **643148** started. Subsequent read-only comparison
-confirmed **18 local files and 18 remote files in `hammered-wallet`, all SHA-256 hashes equal,
-with no missing or extra files**. Recovery was performed by the background service, not
-`--once`. The service remained active with **zero restarts**; later sites also completed.
-
-Independent `gpt-6-astra` source review found a missed-deletion retry bug in the first
-patch; it was fixed before deployment. Final source review found no remaining blocker.
-Syntax/diff checks passed. No tests, synthetic file edits, remote deletion drills, V1
-startup or bot deployment ran. Full remote-root destruction recovery is source-reviewed,
-not exercised. This repair is local and deployed; it is not yet included in PR3.
-
-Private pre-repair source/state backup:
-`/var/backups/dame-curie-v2-recovery/publisher-repair-20261003T191411Z`.
-
-## Earlier production state
-
-At **17:55:02Z**, the coordinator confirmed canonical Dame login **1545541390392369165** on the image below. Temporary Dirac is not the current production target. These are coordinator-supplied facts; the publication worker did not access private state.
-
-- Source: `306b4138540c0dd40b5de8c145b1c61337255405`.
-- Image: `sha256:778f5dc420c46de0e2d21b42410bca6a571b15896d64ffe99ac5b3cc3155f618`.
-- Container: `01ce0313bac814cdae84b5b6dbc93ada5cefd1101bc1c0f920619e1348f8f6a0`.
-- Started: `17:52:44.365556213Z`. Running, restart count `0`. Actual login observed.
-- No startup traceback, auxiliary-profile error, or context-extraction error in the inspected last 600 log records.
-- Saved deadline: `1800` seconds. Attempt-limit key absent.
-
-This is passive production observation, not a new test or proof of every feature.
-
-The first deployment failed because `/app/build_provenance.json` had mode `0600`. The coordinator rebuilt with `COPY --chmod=0644`. Source `eb16880` then logged in but failed context extraction. The narrow blank-role resolver correction is included in current source `306b413`; it does not resolve complete distinct-role support.
-
-The coordinator preserved both 13-file site trees and corrected the original publication. Root later deleted the remote `hammered-wallet` directory. The existing publisher `--once` recovered it. Saved and remote identity `[2314,17193851138]` and the ownership marker match. The HTML and nine known image hashes match the retained source. Publisher service is active, PID `559306`, restart count `0`. No new refresh tool was implemented.
-
-Root approved removal of exactly 12 unsupported live settings. The coordinator removed those at `17:36:45Z`, preserved all other fields, and retained a private backup.
-
-## Publication and validation limits
-
-[PR3](https://github.com/donpimponnousacondom-afk/dame-curie/pull/3) contains the source and later documentation-only corrections. Independent Luna/max and Sol/high reviewed the final source deltas. Full base-to-head coverage remains incomplete. The pull request is ready for human review, not merged; root owns merge.
-
-Root deferred tests. No tests or synthetic messages were run for this deployment. Earlier source `23f0560` had **4,334 passed, 48 subtests passed, and two failures**. That is not a passing result for the deployed source. The observed startup and login do not establish full feature acceptance. GitHub has no checks; absence is not a pass.
-
-Two issues remain open:
-
-1. Complete distinct-role AUX/autonomy profiles remain restricted. The all-empty selector correction is deployed, but it does not resolve that role contract.
-2. The publisher's legacy `curie` marker namespace is not covered by `static.htaccess`. This remains a separate policy question. No restriction was changed; remote exposure is unverified.
-
-The P3 image-guidance wording issue is deferred. Generated-image URLs remain valid. No new image behavior was added.
-
-## Historical record - 2026-09-25
-
-**Everything below records the earlier temporary Dirac release. It is preserved as history, not current runtime state or current authority.**
-
-## Closure and release state
-
-**Round-two corrections and documentation retirement are complete. Corrected source `89fb851` is live on temporary Dirac.** The coordinator exercised root's delegated temporary-only decision after source/QA/artifact checks and one bounded smoke case. Canonical/V1 activation, publisher/shared-service lifecycle changes and remote operations remain held. This is not standing permission for future agents to repeat runtime operations.
-
-Start with the [closure receipt](../audit/20260924T210402Z-audit/09-CLOSURE.md). [AGENTS](../AGENTS.md) preserves authority/boundaries; [Operations](OPERATIONS.md) covers recovery; [TODO](../TODO.md) distinguishes completed work from held decisions. Internal independent closure is not a replacement sign-off by the original external auditor; its conditional verdict and originals remain unchanged.
-
-## Source and QA
-
-| Checkpoint | Evidence |
-| --- | --- |
-| `eb188ac` | External round-two verdict/five follow-ups preserved verbatim |
-| `c2d6b0e` | Provider reservation/incident, autonomy actor/logging and taskless-smoke corrections; QA70:345 focused passes |
-| `89fb851` | Prompt/catalog/native-call/media/follow-up/readback corrections and existing-case adaptation; final QA source/test blobs match |
-| QA75/76 tree`511a355fabe792cc6ae844d26004de7c55c104b4` |92focused passes and selected Ruff F821/F822/F823; **3993passed+28subtests** in the full safe suite |
-| `f815857` | Consolidated guides, root-confirmed audit rename,39phase and28internal-note retirements; only Python edits are two operator-docstring pointers |
-
-QA used Python3.14.4, synthetic configuration/state, network-none and no private mounts. The safe suite excludes `tests/test_streaming.py` and `tests/test_streaming_primary.py`; it is not unrestricted/live-provider testing. Counts overlap, do not sum. The catalog-loop case uses padded synthetic descriptions and fake dispatch/initial assembly while exercising real expansion/loop/budget logic, not production schema-size or full transport acceptance.
-
-Exact commands, failures, corrections and immutable evidence refs: [validation](../audit/20260924T210402Z-audit/validation.md). Finding dispositions: [response](../audit/20260924T210402Z-audit/05-IMPLEMENTER-RESPONSE.md). Original conditional verdict: [round two](../audit/20260924T210402Z-audit/08-ROUND2-REPORT.md).
-
-## Verified and deployed artifact
-
-Image **`sha256:a466208179d1cccd2cb4c1ef93486f6c5d408d4e5d812becf725a39479a070cc`**, local tag`dame-curie-app:89fb851`, source revision`89fb851144dbd9c0bd661a67c5937161d1b58b52`.
-
-QA77 built an explicit offline source overlay onto previously verified `be28b85` image`sha256:3136eef90508aa395217b8d21dc8deafda55354f00585071776fffb7ca6f6214`, because the local Python-base tag was absent. No pull/install; normal recipe and dependency lock unchanged, dependency layers inherited, **not freshly rebuilt**. QA78 matched all56copied inputs to the committed archive and checked baked commit/branch/dirty plus OCI revision. The existing guarded constructor passed in the actual image without network/private state/login. Later documentation commits do not change its application inputs.
-
-## Current temporary runtime - checked16:47:48Z
-
-- Account`dame-curie`, UID1005; rootless engine`12fb714d-4e16-45ad-bb31-a86fb1a5ee8d`, socket`/run/user/1005/docker.sock`.
-- Container **`ef618129341ed4b2b83dceebd2a92e3e0e3437585e53f96c488381a3ca23e2d5`**, running the immutable image above; started**16:46:31.285765518Z**. Durable image selector matches.
-- Fresh startup evidence verified Discord identity**1504398705539944560** at**16:46:35.602714316Z**. Embedding readiness passed; pending smoke list empty. Docker status alone was not used as identity proof.
-- Request**`857116de560f4054b261202d7272dcab`** completed in **7seconds**, one delivery, exact21-character marker body plus configured29-character footer, zero readback failures. It ran on the immediately prior smoke-scoped container using the **same immutable image**, not on the final recreated container. No second inference was submitted. This is happy-path acceptance, not a failure/feature matrix.
-- Original controls restored **byte-exact**, including all three allowed channels. Low reasoning/output12345/REMoff/autonomy-control-off/RAGon and image qualityhigh preserved; neither image alias disabled. Profile, REM, prompt and smoke-config fingerprints unchanged. One stored server prompt1939UTF-8 bytes, none over16KiB; external prompt mount verified, base personality uninspected.
-- Coordinator mistakenly requested `restart` after stopping the smoke candidate; the operator correctly refused, exit1. Evidence was preserved privately, then approved `start --replace` recreated it with original controls. This invocation error remains in the ledger; no source bypass or repeated smoke was used.
-
-Rollback: retained old image`sha256:5e3ed07db29a275263c7454fb75510142264cb269db3563a591a6085137dc51f` (source6859025), root-only evidence`/var/backups/dame-curie-dirac/round2-release-20260925T163646Z/`. Future rollback is image-only under a compatible grant; do not overlay these dated controls on later human edits. Keep each smoke request with its terminal receipt. Host viewer/Screen were **not** updated/exercised; installed operators still match reviewed89fb851 logic, not later docstring edits.
-
-## Retained decisions and limits
-
-Reasoning-only terminal/fallback and mandatory tool-reasoning policies remain unchanged pending root. Shell remains admin-or-allowlisted with same-UID writable-control trust explicit. Viewer oversized-record/redaction-continuity loss stays fail-closed until viewer restart, including affected canonical interactive paths; source is not host-installation evidence.
-
-C09 import-time dotenv redesign is an accepted deferral, not an open task. P08/I05 historical provenance is permanently unattributable and quarantined, with no cache cleanup. Canonical native-image reconciliation remains held; its private profile was not inspected. Voice, exhaustive media/admin/plugin/provider combinations, replicas, sustained load and publisher remote-deletion recovery remain unverified. Jobs do not resume workers after restart; runtime footer markers are not authentication. Ordinary shared embedding requests are permitted and occurred; no shared-service lifecycle/configuration change followed.
-
-## Documentation and history
-
-Current guidance is README/AGENTS/SECURITY/TODO plus the nine guides. `f815857` retired39unchanged phase files and28unchanged internal notes after migration/recovery preservation. All16external originals remain byte-identical to `eb188ac` in root's renamed audit directory; response/validation/closure, quarantine/process companion, QA recipe and failed-QA evidence remain.
-
-`git show eb188ac:phase-II_v2/SESSION_LOG.md` recovers the verbatim prior grant; that revision retains all phase files. Internal notes remain in`89fb851` under the original audit path; list its Git tree to recover them. These are historical evidence, not renewed operating instructions. Earlier status is recoverable at`ab64853:docs/STATUS.md`.
-
-All existing refs/worktrees/caches remain. Historical inventory26worktrees/25branches/22checkpoint refs and86commits (54equivalent/32non-equivalent across13families) is dated mapping, not current counts/cleanliness proof. Five new QA evidence refs preserve intermediate/final trees. Root's unrelated ignored audit material, `reports/` and skill work remain untouched.
+  12,000 characters is three pieces. A user message row embeds up to
+  8,000 characters (`add_to_channel_memory` in `rag_memory.py`): two
+  pieces. Since #44, her messages and the messages of other bots are
+  embedded again. Tool records (`bot_output` rows without an author id)
+  are not embedded, and search never returns them. The 7 s per piece
+  measured on 1 November 2026 was the local CPU embedder, before #42.

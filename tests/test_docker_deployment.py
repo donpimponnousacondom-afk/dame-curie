@@ -24,7 +24,7 @@ def test_bot_uses_whole_private_state():
         assert "read_only" not in mounts["/smoke-status"]
         assert all(not item["bind"]["create_host_path"] for item in mounts.values())
         assert service["environment"]["DAME_CURIE_ENV_FILE"] == "/config/bot.env"
-        assert service["environment"]["DAME_CURIE_DIRAC_SMOKE_CONFIG"] == "/smoke/config.json"
+        assert service["environment"]["DAME_CURIE_SMOKE_CONFIG"] == "/smoke/config.json"
         assert "env_file" not in service
         assert "ports" not in service
         assert "container_name" not in service

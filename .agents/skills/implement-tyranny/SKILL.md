@@ -1,140 +1,39 @@
 ---
 name: implement-tyranny
-description: Hardening Python projects with strict linting, formatting, and banning rules. Use when setting up or enforcing project quality standards - ruff config, banned patterns, type checking gates, pre-commit hooks, and structural enforcement.
+description: Rules and the enforced quality gate for new or rewritten Python in dame-curie. Use when writing Python, before a commit, or when a lint or format check fails.
 ---
 
-# Implement Tyranny - Python Project Hardening
+# Implement Tyranny - Python rules for dame-curie
 
-## Purpose
-Enforce strict quality standards on Python projects. No mercy, no exceptions.
+Python 3.14 is mandatory. The project standard is `[tool.ruff]` in `pyproject.toml`. This skill does not change that configuration and does not authorize application imports, test runs or runtime access.
 
-## What this skill covers
-- Ruff configuration (rules, bans, formatting)
-- Banned patterns and anti-patterns
-- Type checking enforcement (mypy/pyright)
-- Pre-commit hooks
-- Project structure enforcement
-- Import restrictions
-- Naming conventions
+## The enforced gate
 
-## Scope and use
+`scripts/lint.sh` runs in the commit hook (`scripts/lint.sh --staged`) and in CI (`.github/workflows/quality.yml`). It needs `ruff==0.17.3` from `requirements-dev.txt`; a missing or different version is an error that names the cause.
 
-Python **3.14** is mandatory for dame-curie. Apply strict standards to authorized new or deliberately rewritten Python, not as a whole-repository conversion. Use `implement-sanity` to review the actual diff without turning untouched legacy size/style into another assignment. Host project work uses an isolated 3.14 venv or uv-managed environment, never the system package tree.
+| Check | Scope | Result |
+| --- | --- | --- |
+| Dash check (`scripts/check_dashes.sh`) | Every tracked file except `audit/` | Em or en dash refuses the commit |
+| `ruff check` | Whole tree in CI; staged `.py` files in the hook (their working-tree copies) | Any finding refuses the commit |
+| `ruff format --check` | Added `.py` files only | An unformatted new file refuses the commit |
 
-1. Establish the authorized file/change scope and the installed tool versions first.
-2. Treat the configuration below as a reference, not permission to overwrite the project's existing settings, formatter width or dependency pins.
-3. Change quality configuration or install hooks only when explicitly assigned. Select verified Python 3.14-capable tools with exact versions; do not invent pins or fetch tooling during a source-only task.
-4. Run checks or scoped auto-fixes only when validation is authorized, and only on the assigned files. Never run a blanket `ruff check --fix` or reformat the legacy tree by loading this skill.
-5. Report remaining violations and validation limits. This skill does not authorize application imports, tests, runtime access or new tests.
+Legacy files are never reformatted by the gate. Do not run `ruff format` or `ruff check --fix` on files you did not change. Mypy is not run and has no configuration. Vulture is report-only; its workflow is in `docs/DEVELOPMENT.md`.
 
-## Dead-code audit - report before pruning
+## Rules for new Python
 
-Vulture **2.16** is the project's pinned Python 3.14-compatible static dead-code tool. Follow the repository-root `docs/DEAD_CODE.md` workflow when an audit is authorized: explicit tracked-source selection, isolated interpreter, no application imports or test execution. The first-pass evidence is in `phase-II_v2/DEAD_CODE_PASS.md`.
+1. Full type annotations on every function you add: parameters and return.
+2. A docstring on every function, including private helpers. The docstring of a private helper states why it exists.
+3. No helper under five lines that only hides logic. Write the logic inline.
+4. No `except Exception` and no bare `except`. Catch the exception you handle, and handle it visibly. An error names what failed and why.
+5. No `# type: ignore` and no `# noqa` without a reason on the same line.
+6. No commented-out code. No `print()` for logging.
+7. No new guard, retry, fallback or logging that the task did not ask for.
+8. No fixed time zone, offset or `ZoneInfo` literal.
+9. Use the process local time zone, the configured values and the existing modules. Do not grow `bot.py` or `bot_tools.py` for a new subsystem; put it in its own module.
+10. Keep strict dependency pins. Do not add a package without a pin and an entry in the matching lock file.
 
-Start with the project configuration's 60% report and inspect the 100% view separately. Confidence is not safe-deletion proof: unused callback parameters may be required, framework/serializer consumers can be implicit, and name collisions can hide unused code. Classify findings before removing anything. Do not turn a soft report into a mandatory clean-tree gate, install hooks, generate blanket whitelists, change signatures, or add dummy references/suppressions to make counts disappear. Exit 3 means findings; syntax/input/tool failures must remain visible.
+## Before you commit
 
-A later authorized pruning slice should record its baseline, actual caller/registration evidence and remaining unknowns. Retain shared infrastructure and root's manual compatibility patches unless that exact behavior is assigned. No new tests or runtime access are granted by this audit rule.
-
-## Template: ruff.toml / pyproject.toml [tool.ruff]
-
-```toml
-[tool.ruff]
-target-version = "py314"
-line-length = 120
-fix = true
-
-[tool.ruff.lint]
-select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort
-    "N",    # pep8-naming
-    "UP",   # pyupgrade
-    "B",    # flake8-bugbear
-    "A",    # flake8-builtins
-    "C4",   # flake8-comprehensions
-    "DTZ",  # flake8-datetimez
-    "T10",  # flake8-debugger
-    "EXE",  # flake8-executable
-    "ISC",  # implicit-string-concatenation
-    "ICN",  # import-conventions
-    "PIE",  # flake8-pie
-    "PT",   # flake8-pytest-style
-    "RSE",  # flake8-raise
-    "RET",  # flake8-return
-    "SLF",  # flake8-self
-    "SLOT", # flake8-slots
-    "SIM",  # flake8-simplify
-    "TID",  # flake8-tidy-imports
-    "TCH",  # flake8-type-checking
-    "ARG",  # flake8-unused-arguments
-    "PTH",  # flake8-use-pathlib
-    "TD",   # flake8-todos
-    "FIX",  # flake8-fixme
-    "ERA",  # eradicate (commented-out code)
-    "RUF",  # ruff-specific rules
-]
-
-ignore = [
-    "E501",   # line-too-long (formatter handles this)
-]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["SLF001", "ARG001", "ARG002", "PT011"]
-
-[tool.ruff.lint.isort]
-known-first-party = []
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-```
-
-## Banned Patterns
-
-(to be filled - waiting for user's specific ban list)
-
-### Template bans to add to ruff config:
-
-```toml
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = []
-
-[tool.ruff.lint.flake8-builtins]
-builtins-ignorelist = []
-
-[tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"
-```
-
-## Enforcement hooks
-
-Hook installation is a separately scoped implementation step. Preserve existing exact project pins. The inherited hook-version template is intentionally omitted rather than presented as a verified Python 3.14 toolchain; no replacement versions have been selected or installed.
-
-When hooks are explicitly requested, verify the selected tools' Python 3.14 support and configure only the agreed checks. A hook must not import the application, read private configuration, call providers or deploy/restart anything as an incidental effect of committing.
-
-## Type checking enforcement
-
-```toml
-[tool.mypy]
-python_version = "3.14"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-```
-
-## Project structure enforcement
-
-- All public functions must have type annotations
-- All public functions must have docstrings
-- Private helpers (`_name`) must not exceed 20 lines
-- No bare `except:` - always specify exception type
-- No `# type: ignore` without explanation comment
-- No commented-out code (ERA rules catch this)
+1. `scripts/lint.sh --staged` passes.
+2. Every behaviour change has a regression test that fails on the old code. Run tests only with `scripts/qa.sh`.
+3. Load `implement-sanity` and review your own diff with its checklist.

@@ -1,42 +1,54 @@
-# Development and isolated validation
+# Development and validation
 
 ## Python and environments
 
-**Python3.14 is mandatory.** Never replace system Python, install project packages into its package tree or use a system-package bypass. Select the interpreter explicitly before creating an environment. `.venv/` is an interpreter/dependency environment; `.env`, `bot.env` and `deploy.env` are configuration files and may contain secrets.
+Python 3.14 is mandatory. Never replace system Python, install into its package tree or use a system-package bypass. `.venv/` is an environment; `.env`, `bot.env` and `deploy.env` are configuration files and may hold secrets.
 
-The app recipe selects Python 3.14.10. Shell runs inside that outer container, not host Python or a nested image. Its prepared persistent `/home/dame-curie/.venv` uses interpreter copies and the image's app packages plus separately pinned shell tools; it does not change the app interpreter or app pins. See [shell preparation](OPERATIONS.md#v2-shell-tools-and-authored-path-compatibility). `/opt/dame-curie/.venv` is a separate trusted **operator-only** environment, not the application's installation. A host project venv must also use an explicitly selected3.14 interpreter. No project uv workflow has been verified; do not assume one exists or search unrelated environments.
-
-Under an explicit environment-creation assignment, for a new intended checkout environment:
+New checkout environment:
 
 ```sh
 python3.14 -m venv .venv
 .venv/bin/python --version
+.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-For checkout/operator environments, do not use `--clear`, `--system-site-packages`, an unrelated existing environment or generic `python3`. The persistent container shell environment is a distinct deployment case: `--copies --system-site-packages` deliberately shares the matching image's pinned app dependencies while keeping conflicting shell pins in its own writable environment. Invoke the selected interpreter/pip explicitly. Installation needs a compatible grant and reviewed pinned requirements; do not relax pins, upgrade packages automatically or install full application/dev requirements for a report-only tool task.
+Do not use `--system-site-packages`, `--clear` or a generic `python3`. `install.sh` (also through `setup.sh`) installs host dependencies and the app requirements; it does not deploy. The image uses `docker/requirements.lock`; the shell venv inside the container uses `docker/shell-requirements.lock` (see [OPERATIONS.md](OPERATIONS.md)). `/opt/dame-curie/.venv` is the root-owned operator venv, not a development environment.
 
-## Source review versus execution
+Known pin conflict: `discord-ext-voice-recv==0.5.2a179` declares `discord-py` while the lock supplies `discord.py-self==2.1.0`; `pip check` reports it. Do not install the competing distribution or weaken pins. Voice is unverified.
 
-A source-only assignment permits **no application import, test collection/execution, build or runtime probe**. Loading a skill does not expand that authority. Apply `implement-tyranny` to authorized new Python and `implement-sanity` to the actual diff, not as a whole-repository formatting/refactoring campaign. Preserve valid3.14 syntax, strict pins and real typing; avoid unrequested helpers, blanket catches, guards and logging. Type annotations do not validate external input.
+## Quality gate
 
-**C09 is an accepted deferral:** `config.py` retains import-time dotenv loading with `override=True`. No lazy-loading/import-isolation redesign is pending. A synthetic `DAME_CURIE_ENV_FILE` redirect alone is **not** private-read isolation. Effective structural configuration may override injected deployment values and must be reconciled only under an explicit private/runtime grant.
+`scripts/lint.sh [--staged]` is the gate. The commit hook (`.githooks/pre-commit`) runs it with `--staged`; CI (`.github/workflows/quality.yml`) runs it on the tree. Enable the hook once per clone: `git config core.hooksPath .githooks`.
 
-Root's closure assignment permits the coordinator to run the established frozen credential-free QA image with **synthetic configuration/state, no private mounts, no real Discord credentials and network-none**. Other source workers have no execution grant. Loopback sockets and subprocesses used by relay tests remain inside that container. No host/live-environment suite. Exact image, commands, source trees, failures and counts belong in the [validation ledger](../audit/20260924T210402Z-audit/validation.md), not this durable policy.
+- Dash check (`scripts/check_dashes.sh`): no em or en dash in tracked files; `audit/` is excluded.
+- `ruff check`: the whole tree, or the staged `.py` files in the hook. Zero findings is the standard. Suppress one line only with `# noqa: CODE` and a reason on the same line.
+- `ruff format --check`: added `.py` files only. The gate never reformats legacy files. Do not reformat code you did not change.
+- The tool is `ruff==0.17.3` from `requirements-dev.txt`. The script stops with the cause when ruff is missing or has another version.
+- Configuration: `[tool.ruff]` in `pyproject.toml` (line length 88, target `py314`, a curated rule set). Mypy is not run and has no configuration.
 
-**No new test files/functions:** adapt existing cases/parameterization. Never run the historical dotenv/live-provider version of `tests/test_tool_progress.py::test_streaming_tick_inserts_space_between_glued_deltas`; only its inspected synthetic SSE/fake-channel replacement is admitted to isolated QA. `tests/test_streaming.py` and `tests/test_streaming_primary.py` remain excluded. Do not sum overlapping passing counts or call the safe selection unrestricted coverage.
+## Tests and isolated QA
 
-Guarded constructor probes may import the **actual candidate image** only inside the same no-network/no-private-state envelope. Source QA, copied-input/provenance checks, image construction, Discord identity, model delivery and broader feature acceptance are distinct gates. A baked source label alone does not prove image contents; a successful constructor is not a login or live-feature test.
+New tests are allowed and wanted. Each fix gets a regression test that fails on the old code. Tests run only in an isolated container. Never import the application or collect tests on the host.
 
-## Independent PR review and monitoring
+- `scripts/build_qa_image.sh <app-tag>` builds `dame-curie-qa:<app-tag>` from `docker/qa.Dockerfile`: the app image plus `docker/qa-requirements.lock` (pytest pins), `git`, `rsync` and `openssh-client`. Rebuild it when a lock file changes; otherwise tests run on stale libraries.
+- `QA_IMAGE=dame-curie-qa:<app-tag> scripts/qa.sh <tree-ish> <outfile> [pytest args]` runs the suite from a Git archive of `<tree-ish>` with network none, a read-only root, no private mounts and a synthetic environment. `QA_IMAGE` is required. The script excludes `tests/test_streaming.py` and `tests/test_streaming_primary.py`. It writes the pytest output and `exit=<rc>` to `<outfile>`. `<tree-ish>` is a commit or a tree. To test the staged index before a commit, pass `$(git write-tree)`.
+- Never run the historical live-provider version of `tests/test_tool_progress.py::test_streaming_tick_inserts_space_between_glued_deltas`; only its synthetic replacement is in the suite.
+- Run a negative control: the new test fails on `main` and passes on the branch. Record both outputs in the PR.
+- `pytest.ini` sets `pythonpath = .`, `testpaths = tests` and ignores `DeprecationWarning`.
 
-Every implementation PR uses the project-local [PR babysitter skill](../.agents/skills/council-pr-babysitter/SKILL.md): independent `gpt-6-luna` at `max` and `gpt-6.1-sol` at `high`, through verified DSH routes. Give both the same pinned base/head, scope and measured evidence; keep initial findings independent. The coordinator validates findings, fixes routine defects, owns commits/publication and requests both final-head reviews. Reviewers do not edit the shared checkout or gain private/runtime authority.
+## Dead-code audit, report only
 
-Read complete current-head CI status, including distinct push and pull-request runs, and unresolved review threads before readiness. Publish the authorized SHA-bound digest; do not present a comment as independent GitHub approval or claim a completed agent still watches. Without a published PR, record that only local review occurred. Preserve push/merge and security-policy boundaries; bring root only an actual need for human intervention or a reserved decision.
+Vulture 2.16 (`requirements-dev.txt`) parses with `ast` and does not import the application. Its findings are leads, not deletion authority: callbacks, serializers and dynamic registration give false positives, and repeated names hide dead code. There is no gate and no whitelist.
 
-## Builds and dependency limits
+```bash
+sources=()
+git ls-files -z -- '*.py' ':(exclude)tests/**' ':(exclude)assets/**' > .venv/vulture-sources.nul &&
+mapfile -d '' sources < .venv/vulture-sources.nul &&
+.venv/bin/python -I -B -m vulture --config pyproject.toml "${sources[@]}"
+```
 
-`scripts/build_for_human.sh` is an app-image build actuator using a committed Git archive and selected V2 private engine. It does not deploy, but still requires build/runtime authority. `install.sh` installs checkout dependencies/configuration; it neither provisions nor activates the bot and supplies no host-Python/PM2 deployment permission. Do not execute either for discovery or `--help` during source-only work.
+Exit 0: no findings. Exit 3: findings. Exit 1: invalid input. Exit 2: CLI error. Do not add `|| true`. For the 100% view add `--min-confidence 100`; it mostly lists required callback signatures. Before pruning: read the whole block, check decorators, string registration, serializers and tests, then record candidate, retain with evidence, or unresolved. No mass whitelists, dummy references or renames to make the report green. The first-pass baseline is `git show eb188ac:phase-II_v2/VULTURE_BASELINE.txt`.
 
-The historical app `pip check` reported `discord-ext-voice-recv==0.5.2a179` declaring `discord-py` while the lock intentionally supplies `discord.py-self==2.1.0` in the shared `discord` namespace. Do not install the competing distribution or weaken pins to silence that metadata conflict. Constructor/chat smoke acceptance does not resolve the voice compatibility or packaging caveat; voice remains unverified. Retired site/web-image checks do not validate the current topology.
+## Builds
 
-The Vulture report-only workflow, source selection, exit codes and immutable baseline recovery are in [DEAD_CODE.md](DEAD_CODE.md). Findings are not deletion authority. Runtime/account/private boundaries remain in [OPERATIONS.md](OPERATIONS.md) and [AGENTS.md](../AGENTS.md).
+`scripts/build_for_human.sh` builds `dame-curie-app:<sha>` from a committed Git archive with the V2 engine; it does not deploy. Do not run build or lifecycle scripts for discovery or `--help` in a source task.

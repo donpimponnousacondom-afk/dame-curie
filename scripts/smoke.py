@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit and read Dirac smoke requests.
+"""Submit and read smoke requests.
 
 Submit on the host: the container sees the request mount read-only, so writing a
 request is a host operation, while ``result`` and ``pending`` read the same two
@@ -40,13 +40,13 @@ from smoke_protocol import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="dirac_smoke",
-        description="Operator smoke requests for the live Dirac bot.",
+        prog="smoke",
+        description="Operator smoke requests for the live bot.",
     )
     parser.add_argument(
         "--config",
         default="",
-        help="smoke config JSON (default: $DAME_CURIE_DIRAC_SMOKE_CONFIG)",
+        help="smoke config JSON (default: $DAME_CURIE_SMOKE_CONFIG)",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     submit = commands.add_parser("submit", help="publish one operator request")

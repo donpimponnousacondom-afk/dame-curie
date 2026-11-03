@@ -64,7 +64,7 @@ class FakeThread:
                 {"role": "assistant", "content": "FOREIGN_ROUND"},
                 {"role": "user", "content": "FOREIGN_TOOL_RESULT"},
             ]
-        return None
+        return
 
 
 class FakeChannel:
@@ -76,7 +76,7 @@ class FakeChannel:
 
     async def send(self, text):
         self.sent.append(text)
-        return None
+        return
 
 
 class FakeGuild:
@@ -129,7 +129,7 @@ class FakeThreadChannel:
 
     async def send(self, text):
         self.sent.append(text)
-        return None
+        return
 
 
 class GateMessage:

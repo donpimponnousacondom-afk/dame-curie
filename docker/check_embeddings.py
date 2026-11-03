@@ -46,7 +46,7 @@ class NoRedirectHandler(HTTPRedirectHandler):
         self, req: Request, fp: object, code: int, msg: str, headers: object, newurl: str,
     ) -> None:
         """Keep a readiness response from selecting another endpoint or method."""
-        return None
+        return
 
 
 def effective_environment(path: str) -> dict[str, str]:

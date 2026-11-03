@@ -90,7 +90,7 @@ def fake_bot(**kwargs):
 
 
 class RecordingObserver:
-    """Stands in for the optional Dirac smoke observer."""
+    """Stands in for the optional smoke observer."""
 
     def __init__(self):
         self.token = object()

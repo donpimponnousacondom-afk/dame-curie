@@ -43,7 +43,7 @@ class Channel:
 
     async def history(self, *, limit, before):
         self.history_calls.append((limit, before.id))
-        for message in sorted(list(self.messages), key=lambda item: item.id, reverse=True):
+        for message in sorted(self.messages, key=lambda item: item.id, reverse=True):
             if message.id < before.id:
                 yield message
 

@@ -1,4 +1,6 @@
-# Dev/test dependencies
-pytest>=8.3.5
+# Development tools. Install them into the project venv: pip install -r requirements-dev.txt
+# Keep pytest equal to docker/qa-requirements.lock.
+pytest==9.0.2
 PyYAML==6.0.3
+ruff==0.17.3
 vulture==2.16

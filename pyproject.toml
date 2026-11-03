@@ -8,16 +8,6 @@
 # cosmetic churn.
 line-length = 88
 target-version = "py314"
-extend-exclude = [
-    "legacy",
-    "bot.py.bak",
-    ".pi-lens",
-    ".pi-subagents",
-    "shelldocker",
-    "temp",
-    "data",
-    "data_gf",
-]
 
 [tool.ruff.lint]
 # Curated for signal over volume. The full E/W/S/TRY/ARG/PTH set reports >5k
@@ -42,8 +32,10 @@ select = [
     "RUF015",   # allocating a whole list to grab the first element
     "RUF019",   # redundant key check before dict access
     "SIM115",   # open() without a context manager (fd leak)
-    "TRY004",   # wrong exception type for a type check
     "TRY203",   # except that immediately re-raises
+    # TRY004 is not selected. Its 7 hits raise ValueError for a wrong JSON type on
+    # outside input (configuration JSON, model tool-call arguments, a backup record),
+    # like the value checks next to them, so one `except ValueError` covers each validator.
 ]
 ignore = [
     # os.path / pathlib calls inside async def. Stat-level calls on local disk
@@ -68,17 +60,6 @@ ignore = [
 [tool.ruff.lint.flake8-bugbear]
 # discord.py and aiohttp decorators legitimately take call-expression defaults.
 extend-immutable-calls = ["discord.app_commands.describe"]
-
-[tool.mypy]
-python_version = "3.14"
-# The tree is large and largely unannotated; a strict gate would produce
-# thousands of errors and get ignored. This checks what is annotated and stays
-# quiet about what is not, so new annotations are actually worth adding.
-ignore_missing_imports = true
-warn_redundant_casts = true
-warn_unused_ignores = false
-check_untyped_defs = false
-exclude = "(bot\\.py\\.bak|shelldocker|\\.pi-lens|\\.pi-subagents|temp|(^|/)legacy/)"
 
 [tool.vulture]
 min_confidence = 60

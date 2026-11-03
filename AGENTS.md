@@ -1,116 +1,70 @@
 # dame-curie - agent contract
 
-Root's current instructions override repository guidance. This is the Discord-only V2 workstream; protected V1 is functional, not an assumed incident to repair.
+Skills live in `.agents/skills/<name>/SKILL.md`. Any harness reads them there. Root's current instruction overrides this file.
 
 ## Read first
 
-Read `docs/STATUS.md` for source/artifact/runtime facts, `TODO.md` for remaining work, `docs/OPERATIONS.md` for account/engine and recovery boundaries, and `docs/DEVELOPMENT.md` / `docs/ARCHITECTURE.md` for validation and source contracts. README is the small current documentation index. Never inspect another checkout or upstream project to fill gaps.
+- [README.md](README.md) is the documentation index.
+- Read [docs/OPERATIONS.md](docs/OPERATIONS.md) before any runtime action.
+- Read [docs/REVIEW.md](docs/REVIEW.md) before any pull request.
+- Dated decisions and recovery references are in [docs/HISTORY.md](docs/HISTORY.md).
+- Do not inspect another checkout or an upstream project to fill gaps.
 
-## Current assignment - final production transition, 2026-10-02
+## Identities and protected resources
 
-Root delegated completion of the Queen's V1-to-V2 transition, isolated automated testing and bounded real inference, necessary source/worktree integration, production cutover and reviewed repository PRs. This is the final release, not another Phase-II scout. The coordinator makes ordinary engineering decisions and resolves defects; ask root only for genuinely necessary human intervention or a reserved policy decision. This current grant supersedes the earlier temporary-only hold, not the security-policy boundary below.
+- V2 is account `dame-curie` with its private rootless Docker engine. Root calls the live V2 seat "throne-v2".
+- V1 is account `maxwell-curie`. Never start V1, its shell or its stack, also not for rollback. V1 is out of scope.
+- Discord IDs: Dame Curie `1545541390392369165`; root `1482143139828596916`; test channel `1566164090039304285` in server `1545673830960340992`. Do not infer trust from other IDs.
+- The independent publisher (`scripts/publisher/`) mirrors local sites outward. The model never administers remote publication.
+- Removed V1 features stay removed: dashboard, API, web hosting, nested shell, X, Telegram, companion, SMTP/IMAP tools and the web-read confirmation gate. Do not restore one to answer a review finding.
+- REM (`rem.py`) is off. Root replaces it later. Do not test, flag or optimize REM paths.
 
-- **Never start V1, its old shell or its old stack, including for rollback.** Keep the stopped source and recovery state until V2 operation and isolated restore checks pass. Recover/retry V2 without reviving V1.
-- Isolate Queen memory/context from Dirac and live test writes. Dirac is disposable and may be used only as an isolated temporary acceptance identity. Do not migrate its persona, memories, credentials or remote destinations to the Queen.
-- Prepare and verify V2 without the Queen's Discord auth. Install that auth **only at the final cutover step**, after source, artifact, migration, provider and recovery gates. Preserve the Queen's supported shell tools and authored state, including classified state outside the old HOME mount.
-- Coordinator authority includes required private state projection, rootless build/lifecycle, embedding model transfer and publisher handoff, followed by narrowly scoped retirement only after success and verified recovery. It does not authorize secret disclosure, broad permissions, unrelated services, new publication policy or restarting V1.
-- Source children receive bounded files/worktrees and no private/runtime access unless separately and explicitly delegated a compliant envelope. Keep Python3.14, existing-test adaptation and isolated QA rules below.
-- Root authorized preparing/publishing task-branch PRs to the verified Dame Curie repository. Never force-push, push to main or merge without a separate explicit grant. Preserve unrelated `reports/` and `root-review-reports` work.
-- Standing PR protocol: use [.agents/skills/council-pr-babysitter/SKILL.md](.agents/skills/council-pr-babysitter/SKILL.md). The coordinator owns fixes/publication; independent **Luna/max and Sol/high** review each pinned PR head and monitor complete current-head CI. Both review final deltas; neither races edits or treats CI alone as correctness. This project-local skill was imported from root's explicitly authorized Codex skill folder; its Council observations are historical, not runtime authority here.
+## Hard rules from root
 
-## Closed assignment and authority - 2026-09-25
-
-Root authorized complete local audit remediation, independent review, coherent local commits, credential-free isolated QA and bounded automated acceptance in the prepared **temporary Dirac** channel. The later assignment narrowed corrections to `audit/20260924T210402Z-audit/08-ROUND2-REPORT.md` section5 and requires actual documentation consolidation/retirement this round. Root renamed the audit directory; preserve original report contents rather than rewriting them to match the new path.
-
-Root: “we defer the decision to you about doing this live or not, yet or not yet.” On documentation: “make sure you do that at the end of this round because it's massive.” The current coordinator therefore decides whether/when this corrected candidate enters temporary normal use **after** required checks/review. Bounded acceptance alone is not that release decision. Before release, reverify identity/rollback readiness and minimum image/disable controls; measure stored server-prompt UTF-8 sizes without exposing text. Preserve low reasoning, output cap12,345 and REMoff unless an expressly documented acceptance case requires a reversible temporary-only override.
-
-This grants no canonical/V1 activation, publisher/shared-service lifecycle change, remote Git operation, general private inspection, general chat injection or unbounded inference. Ordinary configured embedding requests are permitted: shared compute with separate profile stores is not itself an isolation blocker. Reasoning-only terminal/fallback and mandatory tool-reasoning policies remain unchanged pending root.
-
-Source children have **no execution, runtime or private-read authority**. Coordinator-only exceptions above are not inherited by a new source task. Use existing response/validation ledgers; children return scoped chat findings, not a new report each. Preserve originals, failures, retractions, quarantine and unresolved evidence. Local commits and source review never independently authorize rollout.
-
-**Outcome:** correction source`c2d6b0e`/`89fb851`, documentation retirement`f815857` and temporary-only promotion are recorded in`audit/20260924T210402Z-audit/09-CLOSURE.md`. Original controls were restored, the accepted image pinned, and final identity/readiness verified. The assignment is closed; the dated grant above is **not recurring permission** for later runtime/private operations. Future source tasks retain the defaults below.
-
-## Approved design and protected resources
-
-The consolidated design is in `docs/ARCHITECTURE.md`: remove dashboard/API/web hosting, nested shell, X/Telegram and companion/GF; run shell inside the outer bot container; retain Discord administration, autonomy, games/plugins, media/inbox and functional memory. The independent publisher, local authoring/image paths and remote mirroring remain protected. No replacement API/server, PM2 deployment or model-driven remote administration. Other feature cuts require root's assignment.
-
-Root confirmed on 2026-10-03 that the web-read/shell confirmation gate and built-in SMTP/IMAP email tools remain removed. Root then clarified: “Choom one thing, there is not "restore" anything from V1, what we removed stay removed”. Fix supported V2 behavior; do not resurrect retired features, gates or old documentation to answer a review finding. This current decision does not retrospectively verify earlier author-written approval claims. V2-only recovery remains required; V1 must never be started.
-
-Root clarified container tools on 2026-10-02: keep lean defaults, not a blanket language/install ban. Python3.14 is the preferred baseline; install needed tools such as Git/Bash and their normal dependencies. Do not preinstall gratuitous options or add model-facing prompts/catalog entries that encourage a particular runtime, especially local execution of PHP authored for the remote service. The bot may manage its own container dependencies and cleanup within existing permissions. This does not restore removed hosting features, expand privileges or authorize host package changes.
-
-- V2 account: **`dame-curie`**, with its designated private rootless engine. Protected V1 account: **`maxwell-curie`**. Never substitute another account, a default/rootful engine or a guessed socket after failure. Re-resolve account/socket/engine before newly authorized runtime work.
-- Canonical Dame: **1545541390392369165**; temporary Dirac: **1504398705539944560**; root/.normal.man: **1482143139828596916**. Do not infer trust from other inherited IDs.
-- Separate users/engines do not prove separate mounts, credentials, data, ports or remote destinations. Multi-instance replication remains unaccepted. Same-UID shell access to writable controls is admin-equivalent where ordinary permissions allow it, not a separate sandbox.
-- Canonical staging defaults to validated no-op `up`/`start`/`restart`. Final activation requires the current assignment's artifact, profile, data and recovery gates; an old temporary receipt does not clear them.
-
-## Security-policy decisions belong to root
-
-Ask root **before** introducing, expanding, removing or replacing security policy unless the current assignment explicitly authorizes that exact change. This includes content filters, credential-pattern detection, redaction, publication refusals, path exclusions and access restrictions. Explain the concrete behavior and operational impact; do not silently decide what root may publish or execute. Existing code is not proof that root approved its policy: flag inherited restrictions during relevant review and ask rather than automatically preserving, strengthening or removing them. Unapproved security-policy changes are subject to rejection and reversion.
-
-The 2026-09-30 publisher incident is the regression example: harmless API documentation containing `Authorization: Bearer $OPENROUTER_API_KEY` triggered an inherited credential regexp and repeatedly stopped publication. Root explicitly authorized removing publisher content-based credential detection, not weakening SSH verification, destination ownership or filesystem protections. Keep that content filter removed; do not reintroduce it under another name or heuristic without root's explicit approval. Separate path/privacy redaction is not blanket permission for content filtering. V1 is out of scope for further work unless root explicitly reauthorizes it.
-
-## Default boundaries
-
-A source/documentation assignment permits inspection, **not** application imports, test collection/execution, installation, builds/pulls, provisioning, lifecycle changes, migrations, real login or deletion/pruning. Do not execute lifecycle/build scripts even for discovery or `--help`. Do not operate GNU Screen or activate `curie-readonly-debug` for this closure.
-
-Do not read production/backup files, real environment files, databases, raw logs, credentials, process environments or mount contents without a specific compatible grant. Docker metadata permission is not private-content permission. Never dump raw inspect/environment/label collections. The current coordinator's narrowly scoped metadata/count/acceptance exceptions do not open broader access.
-
-Work locally: no automatic fetch/push/PR or remote research. Do not amend others' history, prune refs/worktrees/caches, overwrite unrelated work, or stage root's `reports/` and `.agents/skills/root-review-reports/` material. Accepted history mapping does not prove physical cleanliness or ownership.
-
-## AI request parameters - configuration is sacred
-
-Root's standing rule, 2026-10-03: **configuration and explicit operator commands are the only authority for AI request parameters.** Transport is not a second configuration system. This overrides inherited provider behavior and the rejected Mimo-specific workaround; it is a required contract, not a claim that the current implementation already complies.
-
-- Never silently add, strip, normalize or override configured generation, reasoning or routing parameters. No model-specific compatibility patches, operation-specific reasoning-off paths, learned sampling/output adjustments or retry-time parameter repairs. Optional inference parameters absent from operator configuration must remain absent on the wire; Python parser/constructor defaults are not an explicit operator choice.
-- Preserve configured provider selection and fallback restrictions through every request path. Never drop `provider.only`, relax `allow_fallbacks` or widen paid routing to make a request succeed. An upstream rejection must remain visible, not trigger a hidden change of settings.
-- Apply this to all AI HTTP paths: foreground/background/auxiliary calls, tool continuations, retries/fallbacks, image/audio generation and embeddings. Dynamic conversation/input/tool data is distinct from operator configuration and does not authorize overriding configured parameters.
-- Test the actual outgoing JSON/form/query at the HTTP boundary, not only stored configuration. Preserve explicit values and the original configuration object. Surface conflicts with budgets or other constraints instead of silently rewriting parameters or increasing spending.
-- Root further clarified: commenting out a provider parameter must remove it upstream; there are not two provider configurations. Do not relocate forbidden overrides into job-owned constructors or `bot_control.json`. The unconfigured legacy aggregate output-token cap must be removed, not used to invent or shrink `max_tokens`. Local deadline/attempt guards are separate workflow limits and must never synthesize request fields.
-- New operational exceptions require root's explicit request. Do not silently rewrite the real configuration to disguise a transport fix, expose credentials/prompts for observability, or change existing security/redaction policy under this rule.
-
-## Failures stay visible - root's absolute rule, 2026-10-04
-
-This rule is final. It applies to every agent and every future change.
-
-- Do not hide a defect. Do not strip, filter, rewrite or drop model output to make a symptom go away. A leak in Discord is a signal. Root uses it to find the cause.
-- Do not add a regex that removes `<think>`, `<reasoning>` or similar blocks from visible text, stored memory or context. Root removed these filters. Do not add them again.
-- Fix the cause: the prompt, the tool schema, the request or the provider configuration.
-- An error must stop the operation and state one exact cause. Do not continue in a degraded mode. Do not replace an error with a warning.
-- An error message names what failed and why. "An error occurred" is not acceptable. "The schema or the provider is wrong" is not acceptable.
-- Code can handle an error and continue only when the handling is correct and visible. Handling is not hiding.
-- Code that hides a failure is rejected and removed. Add a regression test that fails if the hiding comes back.
-
-## Writing - ASD-STE100, 2026-10-04
-
-Write comments, documentation, commit messages and reports in the style of ASD-STE100 Simplified Technical English. Target: 80% conformance.
-
-- One statement in one sentence. Maximum 20 words for an instruction, 25 words for a description.
-- State one fact. Do not write "A or B" or "A and/or B" for a result. Find which one is true, then write it.
-- A check passed or it failed. A feature works or it does not. Do not write "almost", "mostly" or "should".
-- Report what you measured. If you did not measure it, write "not measured".
-- Use the active voice and the same word for the same thing.
-- Delete text that gives no fact and no instruction.
-- Do not use em dashes or en dashes. Use `-` or `;`. `scripts/check_dashes.sh` refuses them in the commit hook, in the GitHub workflow and in the image build. `audit/` is excluded because it holds preserved originals.
-- Enable the commit hook in each clone: `git config core.hooksPath .githooks`.
+- **Configuration is sacred.** Operator configuration and explicit operator commands are the only authority for AI request parameters. Never add, strip, normalize or override generation, reasoning or routing parameters in any request path: foreground, background, retries, fallbacks, jobs, images or embeddings. A parameter absent from configuration stays absent on the wire. Never relax `provider.only` or `allow_fallbacks`. Test the outgoing JSON at the HTTP boundary.
+- **Failures stay visible.** Do not strip, filter or rewrite model output to hide a symptom. Never add a regex that removes `<think>` or similar blocks. An error stops the operation and names what failed and why. Do not continue in a degraded mode. Do not replace an error with a warning. Code that hides a failure is removed, with a regression test.
+- **Errors are visible to the model.** When the harness fails while her prompt is built, add one line with the exact cause to her prompt or the tool result. Log it too. For an optional setting whose default is the safe state, use the default and state the cause in her prompt.
+- **No word triggers.** Never add keyword or regex detection on model output or user input that changes behaviour. The model declares intent with an argument or a tool. Flag existing word triggers when you find them.
+- **Container time zone.** Use the process local zone, for example `datetime.now().astimezone()`. Never write a fixed offset, a zone name or a `ZoneInfo` literal in code.
+- **Security policy belongs to root.** Ask before you add, widen, remove or replace a content filter, credential detection, redaction, publication refusal, path exclusion or access restriction. The publisher content-based credential filter stays removed.
+- **Profiles.** A blank `AUX_*` or `AUTONOMY_*` key falls back to the main profile.
 
 ## Naming and configuration
 
-Use **dame-curie** externally and `DAME_CURIE_*` for environment identifiers. Root's short URL segment **dame** is intentional. Neutral `.env`, `bot.env`, `.venv` retain their distinct roles; default commands use `!`, while instance-specific help uses its configured prefix.
+- Use `dame-curie` externally and `DAME_CURIE_*` for environment names. Root's short URL segment `dame` is intentional.
+- Generation uses the configured OpenAI-compatible `OPENAI_*` settings, not an assumed OpenAI account. No `OLLAMA_*` aliases exist.
+- Preserve the difference between an unset and an explicitly blank setting. Preserve coupled selectors, credentials and storage consumers.
+- No compatibility fallback may reconnect V2 to V1.
+- Do not change the persona or model, invent real endpoints, or rename `max()` or `max_tokens` as a naming shortcut.
+- Default commands use `!`. Help text uses the prefix that the instance configures.
 
-Remote generation is explicitly configured OpenAI-compatible `OPENAI_*` / `OpenAICompatibleProvider`, not an assumed OpenAI account or local generation. Local Ollama serves embeddings; preserve its distinct service/model-pull names and settings. No old remote `OLLAMA_*` aliases exist. Preserve unset versus explicitly blank configuration, coupled selectors, credentials and storage consumers; no compatibility fallback may reconnect V2 to V1. Do not change persona/model, invent real endpoints or rename ordinary `max()`/`max_tokens` as a naming shortcut.
+## Writing
 
-## Python, QA and review
+- Write comments, documentation, commit messages and reports in ASD-STE100 Simplified Technical English. One statement per sentence. At most 20 words per instruction, 25 per description.
+- A check passed or it failed. Report what you measured. Otherwise write "not measured".
+- No em dashes or en dashes. `scripts/lint.sh` refuses them in the commit hook and in CI. `audit/` is excluded.
+- Dates in prose are day-first: "3 October 2026". ISO dates are allowed in commit messages and logs.
+- Enable the hook once per clone: `git config core.hooksPath .githooks`.
 
-Python **3.14** is mandatory. Never replace system Python or install project packages into its tree; operator and application interpreters have distinct roles. Preserve strict pins. Load `implement-tyranny` for authorized new Python and `implement-sanity` for actual-diff review, not wholesale legacy conversion. No unrequested helpers, broad exception handling, type escapes, guards or logging; legacy size is not an unrelated refactoring assignment.
+## Code and tests
 
-**No new test files/functions.** Adapt existing cases/parameterization under this assignment. No host application import/collection or live-environment suite. Coordinator QA uses the recorded frozen credential-free image, synthetic configuration/state, no private mounts and network-none; real-image constructor probes have the same private/network boundary. `DAME_CURIE_ENV_FILE` redirection alone is not isolation: import-time dotenv behavior remains an accepted deferral, not a pending lazy-loading project.
+- Python 3.14 only. Never replace system Python or install into its package tree. Keep strict pins.
+- New tests are allowed and wanted. Each fix gets a regression test that fails on the old code.
+- Quality gate: `scripts/lint.sh` runs the dash check, `ruff check` on the whole tree and `ruff format --check` on added files. Do not reformat untouched code. Details: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+- Tests run only in the isolated container through `scripts/qa.sh`. No host application import. No live suite. `tests/test_streaming.py` and `tests/test_streaming_primary.py` stay excluded.
+- Load `implement-tyranny` for new Python and `implement-sanity` for the diff review. No unrequested helpers, broad `except`, type escapes, guards or logging.
 
-Never run the historical live-provider version of `tests/test_tool_progress.py::test_streaming_tick_inserts_space_between_glued_deltas`. Only its reviewed synthetic replacement is admitted to isolated QA. `tests/test_streaming.py` and `tests/test_streaming_primary.py` remain excluded. Historical passing counts do not establish current acceptance or every provider/feature combination.
+## Change flow
 
-Use `read`/`glob`/`grep` for inspection. Verify complete control flow, distinguish observed facts from source intent and reports, and challenge the coordinator as well as children. Discover current routes before delegation; give bounded ownership, preserve concurrent edits and rotate author/reviewer roles. Commit reviewed coherent slices promptly with explicit paths and checked diffs.
+- Every change is a pull request to `main` from a `pr/*`, `hotfix/*` or `dev/*` branch. One active branch at a time.
+- Never push to `main`. Never force-push. Merge only after both reviewers say READY on the current head and CI is green. Protocol: [docs/REVIEW.md](docs/REVIEW.md).
+- Deploy after merge with `scripts/deploy.sh`, inside GNU Screen session `dame_curie`, window `throne-ops`. Runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md).
+- Delete your test artefacts after a live test. Leave no large backups on the host; see the backup section of the runbook.
 
-## Retired documentation and recovery
+## Boundaries for delegated agents
 
-Root authorized `legacy/` removal and accepted phase/internal-note retirement after surviving contracts were consolidated. Current guidance is the root index plus `docs/`; older notes are evidence, not operating authority. Before any phase deletion, preserve these immutable recovery references: `git show eb188ac:phase-II_v2/SESSION_LOG.md` retains the **verbatim prior human grant**, and the same revision retains `REDESIGN_PLAN.md`, `PROVISIONING.md`, `DOCKER_INVENTORY.md` and the other phase files. Later delegation is quoted above. Do not restore the old tree or follow its obsolete instructions.
-
-C09 dotenv deferral is accepted. P08/I05 historical provenance is permanently unattributable; retain the quarantine, not an open cache-investigation task. Keep external originals and round-two evidence unchanged in the renamed audit bundle. Exact failed/passing QA snapshots and retirement destinations belong in its validation/closure records, not a new forest of agent notes.
+- A source or documentation task permits inspection only: no application import, test run, build, lifecycle command, migration, login or deletion. Do not run lifecycle scripts for discovery or `--help`.
+- Do not read production or backup files, real environment files, databases, raw logs, credentials or process environments without an explicit grant. Never dump inspect, environment or label collections.
+- Reviewers are read-only. They do not edit the shared checkout.
+- Delegated agents work locally: no fetch, push, PR or remote research unless the task says so. Do not amend others' history or prune refs, worktrees or caches.
+- Do not stage, edit or mention untracked material that is not yours, such as root's `reports/`.

@@ -1,6 +1,6 @@
 # Server prompts
 
-The remediation contract below is not a claim that the running temporary bot has been replaced. Use your configured prefix; examples use the repository convention `!`.
+Examples use the default prefix `!`.
 
 - **`!prompt TEXT`:** replace the server prompt and receive a short acknowledgement, not an echo of its body.
 - **`!prompt` alone:** show a small prompt inline; above 1,800 UTF-8 bytes, return `prompt.txt` instead of flooding the channel with chunks.

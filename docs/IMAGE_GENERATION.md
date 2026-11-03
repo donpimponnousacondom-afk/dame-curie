@@ -44,7 +44,7 @@ These illustrate arguments, not verified provider quality values or readable loc
 - Local paths resolve symlinks before enforcing the existing generated-image/`temp` path restrictions; a symlink escaping those roots is refused. This changes neither local authoring nor the independent publisher. HTTP(S) inputs retain the existing behavior, including private-host acceptance and refusal to follow image-input redirects.
 - Network/local reference reads retain the existing 20 MiB limit. The inherited inline-data-URI path does not enforce that same byte limit; consolidation does not claim to fix it.
 
-Incoming-attachment controls, image-reference limits and outgoing upload limits are separate. SDK attachment reads may buffer before actual-byte checks; these checks are not a hard transfer/RSS bound or proof of Discord's account/channel allowance. Raising a media-size setting does not add archive extraction/support. The historical root-selected20MiB incoming override and detailed earlier inventory remain recoverable at `eb188ac:phase-II_v2/DIRAC_ATTACHMENT_LIMITS.md`; that old inventory includes superseded behavior and is not the current source contract.
+Incoming-attachment controls, image-reference limits and outgoing upload limits are separate. SDK attachment reads may buffer before actual-byte checks; these checks are not a hard transfer/RSS bound or proof of Discord's account/channel allowance. Raising a media-size setting does not add archive extraction/support.
 
 ## Delivery and failures
 
@@ -53,11 +53,3 @@ Incoming-attachment controls, image-reference limits and outgoing upload limits 
 `auto_send=true` posts once. `__IMAGE_SENT__` means it was already delivered; do not resend it. If save-only persistence fails, the tool does not silently upload instead. Generation failures, ambiguous responses and delivery failures do not trigger an automatic second generation request.
 
 Submitted prompts, existing image sidecars, request-log correlation and media concurrency handling are retained. Website public URL settings do not redefine the separate image archive URL mapping. Publisher behavior is unchanged.
-
-## Migration
-
-Before canonical activation, the coordinator must reconcile that instance's private effective `IMAGE_GEN_*` settings and `ENABLE_IMAGE_GEN` with this native-only contract. The historical profile migration for the temporary instance does not establish canonical settings. Replace split profiles with one `IMAGE_GEN_*` block and a configured model map; remove retired image-profile settings from the target instance while preserving all unrelated settings and credentials. Keep the working endpoint/key, use provider-advertised exact model IDs, and make previous per-profile quality choices explicit through the optional tool argument when needed. Do not copy an entire other instance's environment file. Disabled image generation is safe for unrelated startup, not proof the migration is complete.
-
-The last recorded temporary runtime used quality `high` with a 600-second timeout; that is dated runtime evidence, not a fresh observation or the new source default. An explicit private quality setting is preserved; an omitted setting uses the new `low` default after restart. Verify that choice during the authorized migration/acceptance rather than assuming an unchanged default.
-
-`hd_image` remains a compatibility alias, resolved only after checking exact built-in/eligible-plugin precedence. It must not bypass platform, disabled-tool or admin gates; the coordinator must check private `disabled_tools` for both names before acceptance. The canonical image-profile hold remains: inspect that instance's effective profile and migration readiness before canonical activation. A temporary-only activation decision belongs to the coordinator; it is not a canonical grant. Deployment and actual provider acceptance must be recorded separately in [STATUS.md](STATUS.md); a model-catalog lookup is not an image-generation/edit acceptance test.

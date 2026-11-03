@@ -527,7 +527,7 @@ def test_cleanup_failure_keeps_full_cancellation_chain(tmp_path, explicit_cause)
         except asyncio.CancelledError as cancellation:
             if explicit_cause:
                 raise RuntimeError("synthetic cleanup failure") from cancellation
-            raise RuntimeError("synthetic cleanup failure")
+            raise RuntimeError("synthetic cleanup failure")  # noqa: B904 - the case needs an implicit context
     except RuntimeError as exception:
         first = capture_incident("cleanup", "cleanup actually failed", exception=exception)
         logger.warning("cleanup failed without exc_info")
