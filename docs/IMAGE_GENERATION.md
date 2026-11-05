@@ -55,7 +55,7 @@ Submitted prompts, existing image sidecars, request-log correlation and media co
 
 ## GPT Image 2.6
 
-Root, 5 November 2026: she picks the format, and GIF and SVG have the same publication policy as PNG and JPEG.
+Root, 5 November 2026: she picks the format, and GIF and SVG have the same publication policy as PNG and JPEG. The features apply when `bot.env` has an entry for the model. The activation steps are in [TODO.md](../TODO.md).
 
 `IMAGE_GEN_FEATURES` is a JSON object. It maps an exact model ID in `IMAGE_GEN_MODELS` to a list of features: `gif`, `svg` and `markup`. Only the entry of `IMAGE_GEN_MODEL` is used. Without an entry, the tool schema and the request body do not change. An invalid value disables image generation, and `IMAGE_GEN_CONFIG_ERROR` names the setting.
 
