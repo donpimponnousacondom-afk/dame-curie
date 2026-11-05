@@ -1079,13 +1079,18 @@ _IMAGE_DATA_URI_RE = re.compile(
 )
 
 
+# image_mime does not accept a DOCTYPE before the root, because the renderer refuses one.
+_SVG_DOCTYPE_RE = re.compile(
+    rb"(?:\xef\xbb\xbf)?\s*(?:<\?.*?\?>\s*|<!--.*?-->\s*)*+<!doctype\s+svg\b", re.I | re.S,
+)
+
+
 def _decode_image_response(data: dict) -> tuple[bytes, str]:
     """Decode a native Images response and infer its file extension."""
     image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
     if not image_bytes:
         raise ValueError("empty image data")
-    # The declared image type lets image_mime accept an SVG that starts with a DOCTYPE.
-    if image_mime(image_bytes, "image/png") == "image/svg+xml":
+    if image_mime(image_bytes) == "image/svg+xml" or _SVG_DOCTYPE_RE.match(image_bytes):
         return image_bytes, "svg"
     ext = _sniff_image_mime(image_bytes).removeprefix("image/")
     return image_bytes, "jpg" if ext == "jpeg" else ext

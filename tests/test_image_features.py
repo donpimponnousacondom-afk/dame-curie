@@ -218,6 +218,16 @@ def test_svg_with_a_doctype_is_not_saved_as_png():
 
 
 @pytest.mark.parametrize(
+    "raw", [b"<!DOCTYPE html><html></html>", b"<html><body>error</body></html>"]
+)
+def test_html_body_is_not_accepted_as_a_requested_svg(image_tool, raw):
+    image_tool.respond(raw)
+    result = _call(image_tool, output_format="svg")
+    assert "asked for svg" in result
+    image_tool.persist.assert_not_called()
+
+
+@pytest.mark.parametrize(
     ("requested", "raw", "returned"),
     [("gif", PNG, "png"), ("svg", PNG, "png"), ("gif", SVG, "svg")],
 )
