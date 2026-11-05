@@ -74,7 +74,7 @@ IMAGE_GEN_FEATURES='{"provider/gpt-image-2.6-sunburst":["gif","svg","markup"]}'
 - The API checks the ranges. The code does not clamp or change a value.
 - When the bytes returned are not the format that was asked for, the tool returns an error with both formats and does not save the result. The request is not retried.
 - `IMAGE_GEN_EXTRA_BODY` stays the operator's channel for `complexity` (`low`, `medium`, `high`; the API default is `high`) and `size`. These apply to every request, and the model cannot change them. Do not put an `output_format` there: a different tool argument then stops with the conflict error. Do not put frame fields there: they are for GIF requests only.
-- An SVG is saved under `_images` as `.svg`, with no public URL. `scripts/publisher/scan.py` does not mirror `.svg`, and a change to that list is root's decision. Discord shows an `.svg` as a file, not as an image. `see_image` renders it to PNG, but it refuses an SVG with a DOCTYPE and names the cause.
+- An SVG is saved under `_images` as `.svg`, with no public URL. `scripts/publisher/scan.py` does not mirror `.svg`, and a change to that list is root's decision. Discord shows an `.svg` as a file, not as an image. `see_image` renders it to PNG. It does not render an SVG with a DOCTYPE and returns an error.
 
 ### What OpenAI documents
 
