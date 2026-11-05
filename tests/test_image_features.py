@@ -121,6 +121,37 @@ def test_no_feature_argument_sends_the_same_payload_as_before(image_tool):
     assert _sent(image_tool) == {"model": NEW, "prompt": "a lantern", "quality": "low"}
 
 
+def test_model_without_an_entry_sends_the_same_payload_as_before(image_tool):
+    image_tool.respond(PNG)
+    image_tool.tool.bot.config.IMAGE_GEN_MODEL = OLD
+    assert not _call(image_tool).startswith("Error")
+    assert _sent(image_tool) == {"model": OLD, "prompt": "a lantern", "quality": "low"}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "field"),
+    [
+        ({"frame_count": 9}, "frame_count"),
+        ({"output_format": "svg", "frame_duration_ms": 200}, "frame_duration_ms"),
+    ],
+)
+def test_disabled_frame_fields_name_the_setting(image_tool, arguments, field):
+    image_tool.tool.bot.config.IMAGE_GEN_FEATURES = {NEW: ["svg"]}
+    result = _call(image_tool, **arguments)
+    assert f"{field} is not enabled" in result and "IMAGE_GEN_FEATURES" in result
+    image_tool.session.post.assert_not_called()
+
+
+def test_disabled_markup_stops_before_the_input_image_is_fetched(image_tool):
+    image_tool.tool.bot.config.IMAGE_GEN_FEATURES = {NEW: ["gif"]}
+    result = _edit(
+        image_tool, image="https://images.example.invalid/in.png", markup=OVERLAY_URI
+    )
+    assert "markup is not enabled" in result and "IMAGE_GEN_FEATURES" in result
+    image_tool.session.get.assert_not_called()
+    image_tool.session.post.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("arguments", "field"),
     [
@@ -178,6 +209,12 @@ def test_svg_request_saves_svg_and_promises_no_public_url(image_tool):
 def test_svg_response_is_not_saved_as_png():
     data = {"data": [{"b64_json": base64.b64encode(SVG).decode()}]}
     assert _decode_image_response(data) == (SVG, "svg")
+
+
+def test_svg_with_a_doctype_is_not_saved_as_png():
+    raw = b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd"><svg></svg>'
+    data = {"data": [{"b64_json": base64.b64encode(raw).decode()}]}
+    assert _decode_image_response(data) == (raw, "svg")
 
 
 @pytest.mark.parametrize(

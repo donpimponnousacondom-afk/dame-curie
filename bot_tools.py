@@ -1084,7 +1084,8 @@ def _decode_image_response(data: dict) -> tuple[bytes, str]:
     image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
     if not image_bytes:
         raise ValueError("empty image data")
-    if image_mime(image_bytes) == "image/svg+xml":
+    # The declared image type lets image_mime accept an SVG that starts with a DOCTYPE.
+    if image_mime(image_bytes, "image/png") == "image/svg+xml":
         return image_bytes, "svg"
     ext = _sniff_image_mime(image_bytes).removeprefix("image/")
     return image_bytes, "jpg" if ext == "jpeg" else ext
@@ -1392,7 +1393,8 @@ class ImageGeneratorTool(Tool):
         return (default_model if not model_error else ""), model_error
 
     def _feature_fields(
-        self, selected_model: str, output_format: str | None, frame_count: object, frame_duration_ms: object,
+        self, selected_model: str, output_format: str | None, frame_count: object,
+        frame_duration_ms: object, markup: str | None,
     ) -> tuple[dict, str]:
         """Check feature arguments against IMAGE_GEN_FEATURES of the selected model."""
         features = image_features(self.bot.config)
@@ -1401,22 +1403,24 @@ class ImageGeneratorTool(Tool):
             for key, value in (("frame_count", frame_count), ("frame_duration_ms", frame_duration_ms))
             if value is not None
         }
+        disabled = ""
         if output_format is not None and output_format not in features & {"gif", "svg"}:
+            disabled = f"output_format {output_format}"
+        elif frames and "gif" not in features:
+            disabled = ", ".join(frames)
+        elif markup is not None and "markup" not in features:
+            disabled = "markup"
+        if disabled:
             return {}, (
-                f"Error: output_format {output_format} is not enabled for image model {selected_model}. "
+                f"Error: {disabled} is not enabled for image model {selected_model}. "
                 "The operator enables it in IMAGE_GEN_FEATURES."
             )
         if frames and output_format != "gif":
             return {}, f"Error: {', '.join(frames)} needs output_format gif"
         return ({"output_format": output_format} if output_format else {}) | frames, ""
 
-    async def _markup_field(self, selected_model: str, markup: str, images: list[str]) -> tuple[dict, str]:
+    async def _markup_field(self, markup: str, images: list[str]) -> tuple[dict, str]:
         """Load the annotation layer of a markup-guided edit."""
-        if "markup" not in image_features(self.bot.config):
-            return {}, (
-                f"Error: markup is not enabled for image model {selected_model}. "
-                "The operator enables it in IMAGE_GEN_FEATURES."
-            )
         if not images:
             return {}, "Error: markup needs an input image to annotate"
         raw, error = await self._load_one(markup)
@@ -1464,14 +1468,14 @@ class ImageGeneratorTool(Tool):
         feature_fields: dict = {}
         if not error:
             feature_fields, error = self._feature_fields(
-                selected_model, output_format, frame_count, frame_duration_ms,
+                selected_model, output_format, frame_count, frame_duration_ms, markup,
             )
         if not error:
             images, input_error = await self._resolve_image_references(message, image)
             if input_error:
                 error = f"Error: {input_error}"
         if not error and markup is not None:
-            markup_field, error = await self._markup_field(selected_model, markup, images)
+            markup_field, error = await self._markup_field(markup, images)
             feature_fields |= markup_field
         if error:
             return error

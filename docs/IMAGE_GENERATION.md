@@ -78,12 +78,13 @@ IMAGE_GEN_FEATURES='{"provider/gpt-image-2.6-sunburst":["gif","svg","markup"]}'
 
 ### What OpenAI documents
 
-Read on 5 November 2026 from the [image generation guide](https://developers.openai.com/api/docs/guides/image-generation) and the Images API reference.
+Read on 5 November 2026 from the [image generation guide](https://developers.openai.com/api/docs/guides/image-generation), the [Images API reference](https://developers.openai.com/api/reference/resources/images/methods/generate) and the model cards ([Sunburst](https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst), [Flare](https://developers.openai.com/api/docs/models/gpt-image-2.6-flare)).
 
-- Models: `gpt-image-2.6-sunburst` (detailed work) and `gpt-image-2.6-flare` (fast iteration). Both support the Image API only. Chat Completions and Responses are not supported.
-- Price per 1M tokens: text input $5, image input $8, image output $30. For SVG, the price also includes the tokens of an authoring model.
-- SVG: `n` must be 1. There is no streaming, partial images, `output_compression` or `prompt_rewriter`. The edit endpoint does not make an SVG and does not accept one as input. The document is static, with no scripts, external resources or embedded raster images. `quality` controls the reference image that the API makes first.
-- GIF: `frame_count` default 9, `frame_duration_ms` default 200, rounded to 10 ms. `size` is the size of each frame, `auto` or `WIDTHxHEIGHT` in multiples of 16. Frames, size and `n` must fit the pixel budget of the request. There is no streaming, partial images, custom `output_compression` or `prompt_rewriter`.
+- Models: `gpt-image-2.6-sunburst` (detailed work) and `gpt-image-2.6-flare` (fast iteration). The model cards list `v1/images/generations` and `v1/images/edits` as supported, and Chat Completions and Responses as not supported.
+- Price per 1M tokens, from the model cards: text input $5, image input $8, image output $30. For SVG, the price also includes the tokens of an authoring model.
+- SVG: `n` must be 1. There is no streaming, partial images, `output_compression` or `prompt_rewriter`. The edit endpoint does not make an SVG and does not accept one as input. The document is static, with no scripts, external resources or embedded raster images. The API makes a reference image first.
+- The reference also lists an optional `svg` request object (`model`, `reasoning`). It needs access to SVG model selection, and the request omits it otherwise. The tool does not send it.
+- GIF: `frame_count` default 9, `frame_duration_ms` default 200 and minimum 20, rounded to 10 ms. `size` is the size of each frame, `auto` or `WIDTHxHEIGHT` in multiples of 16. Frames, size and `n` must fit the pixel budget of the request. There is no streaming, partial images, custom `output_compression` or `prompt_rewriter`.
 - Markup: a transparent PNG with the same width and height as the first input image, at most 16,777,216 pixels and 50 MB. Do not combine it with `mask` or `prompt_rewriter`.
 
 The OpenAI pages do not agree on these points. Test each one when the model is available.
@@ -91,9 +92,10 @@ The OpenAI pages do not agree on these points. Test each one when the model is a
 | Point | Guide | API reference |
 |---|---|---|
 | `frame_count` range | 2 to 64 | 2 to 16 |
-| `frame_duration_ms` maximum | 2000 | none stated |
+| `frame_duration_ms` maximum | 2000 | caps the encoded delay at 655,350 |
 | GIF on the edit endpoint | not supported | listed in `output_format` |
 | `quality` `xhigh` and `max` on 2.6 | listed | only for 2.5 |
+| What controls the SVG reference image | `quality` | `complexity` |
 
 Not measured: GIF cost, GIF duration against `IMAGE_GEN_TIMEOUT`, and whether the local proxy passes these fields.
 

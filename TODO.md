@@ -6,7 +6,7 @@ Root, 5 November 2026: leave it parked and keep 2.5 as the default. The code is 
 
 - [ ] Confirm the exact model ID on the local proxy.
 - [ ] Back up `bot.env`. Add the 2.6 ID to `IMAGE_GEN_MODELS`, set `IMAGE_GEN_MODEL` to it, and set `IMAGE_GEN_FEATURES`. Restart the bot.
-- [ ] Test one PNG, one GIF, one SVG and one markup edit in the test channel. Check the four points where the OpenAI pages disagree.
+- [ ] Test one PNG, one GIF, one SVG and one markup edit in the test channel. Check the five points where the OpenAI pages disagree.
 - [ ] Decide if the publisher mirrors `.svg` (root). Today an SVG stays local.
 
 ## Dirac retirement, left for root
