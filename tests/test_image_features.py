@@ -196,13 +196,12 @@ def test_gif_request_sends_exact_fields_and_saves_gif(image_tool):
     assert "Permanent URL" in result
 
 
-def test_svg_request_saves_svg_and_promises_no_public_url(image_tool):
+def test_svg_request_saves_svg_with_the_same_public_url_as_any_image(image_tool):
     image_tool.respond(SVG)
     result = _call(image_tool, output_format="svg")
     assert _sent(image_tool)["output_format"] == "svg"
     assert image_tool.persist.call_args.kwargs["ext"] == ".svg"
-    assert "Permanent URL" not in result
-    assert "does not mirror .svg" in result
+    assert "Permanent URL" in result
     assert "Local path: /synthetic/image.bin" in result
 
 

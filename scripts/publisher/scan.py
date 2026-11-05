@@ -13,7 +13,7 @@ from .common import (
 )
 
 
-IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"})
 CHUNK_SIZE = 1024 * 1024
 
 

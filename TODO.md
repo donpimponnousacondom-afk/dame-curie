@@ -1,13 +1,13 @@
 # Open items
 
-## Activate GPT Image 2.6 when it reaches the account
+## Activate GPT Image 2.6 on the live bot
 
-Root, 5 November 2026: leave it parked and keep 2.5 as the default. The code is in place. See [docs/IMAGE_GENERATION.md](docs/IMAGE_GENERATION.md).
+Root, 5 November 2026: 2.6 is on the proxy, she picks the format, and the test can run. See [docs/IMAGE_GENERATION.md](docs/IMAGE_GENERATION.md).
 
-- [ ] Confirm the exact model ID on the local proxy.
+- [x] Confirm the exact model ID on the local proxy: `/v1/models` lists `gpt-image-2.6-sunburst` and `gpt-image-2.6-flare` with the namespace of the 2.5 models.
 - [ ] Back up `bot.env`. Add the 2.6 ID to `IMAGE_GEN_MODELS`, set `IMAGE_GEN_MODEL` to it, and set `IMAGE_GEN_FEATURES`. Restart the bot.
 - [ ] Test one PNG, one GIF, one SVG and one markup edit in the test channel. Check the five points where the OpenAI pages disagree.
-- [ ] Decide if the publisher mirrors `.svg` (root). Today an SVG stays local.
+- [ ] Restart the publisher. Check that one SVG and one GIF reach their public URLs.
 
 ## Dirac retirement, left for root
 

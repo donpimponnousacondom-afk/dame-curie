@@ -1516,9 +1516,6 @@ class ImageGeneratorTool(Tool):
             prefix="image",
             submitted_prompt=prompt,
         )
-        if ext == "svg":
-            # scripts/publisher/scan.py IMAGE_SUFFIXES has no .svg, so this URL would stay a 404.
-            perm_url = None
         operation = "edited" if loaded else "generated"
         if not auto_send and not local_path:
             return (
@@ -1570,8 +1567,6 @@ class ImageGeneratorTool(Tool):
                 f"\nLocal path: {local_path} "
                 "(use shell to copy it into locally authored files)"
             )
-        if ext == "svg":
-            result += "\nNo public URL: the publisher does not mirror .svg files."
         result += (
             "\nAlready sent; do not resend the image or its URL. No commentary needed unless another task requires it."
             if auto_send else

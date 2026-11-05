@@ -51,11 +51,11 @@ Incoming-attachment controls, image-reference limits and outgoing upload limits 
 
 `auto_send=true` posts once. `__IMAGE_SENT__` means it was already delivered; do not resend it. If save-only persistence fails, the tool does not silently upload instead. Generation failures, ambiguous responses and delivery failures do not trigger an automatic second generation request.
 
-Submitted prompts, existing image sidecars, request-log correlation and media concurrency handling are retained. Website public URL settings do not redefine the separate image archive URL mapping. Publisher behavior is unchanged.
+Submitted prompts, existing image sidecars, request-log correlation and media concurrency handling are retained. Website public URL settings do not redefine the separate image archive URL mapping.
 
-## GPT Image 2.6 (parked)
+## GPT Image 2.6
 
-Root, 5 November 2026: the code is ready, the live default stays on GPT Image 2.5, and 2.6 is not yet on the local proxy. No 2.6 request has run. The activation steps are in [TODO.md](../TODO.md).
+Root, 5 November 2026: she picks the format, and GIF and SVG have the same publication policy as PNG and JPEG. The features apply when `bot.env` has an entry for the model. The activation steps are in [TODO.md](../TODO.md).
 
 `IMAGE_GEN_FEATURES` is a JSON object. It maps an exact model ID in `IMAGE_GEN_MODELS` to a list of features: `gif`, `svg` and `markup`. Only the entry of `IMAGE_GEN_MODEL` is used. Without an entry, the tool schema and the request body do not change. An invalid value disables image generation, and `IMAGE_GEN_CONFIG_ERROR` names the setting.
 
@@ -74,7 +74,7 @@ IMAGE_GEN_FEATURES='{"provider/gpt-image-2.6-sunburst":["gif","svg","markup"]}'
 - The API checks the ranges. The code does not clamp or change a value.
 - When the bytes returned are not the format that was asked for, the tool returns an error with both formats and does not save the result. The request is not retried.
 - `IMAGE_GEN_EXTRA_BODY` stays the operator's channel for `complexity` (`low`, `medium`, `high`; the API default is `high`) and `size`. These apply to every request, and the model cannot change them. Do not put an `output_format` there: a different tool argument then stops with the conflict error. Do not put frame fields there: they are for GIF requests only.
-- An SVG is saved under `_images` as `.svg`, with no public URL. `scripts/publisher/scan.py` does not mirror `.svg`, and a change to that list is root's decision. Discord shows an `.svg` as a file, not as an image. `see_image` renders it to PNG. It does not render an SVG with a DOCTYPE and returns an error.
+- GIF and SVG are saved under `_images`, and the publisher mirrors them with their prompt sidecars like any other image. Discord shows an `.svg` as a file, not as an image. `see_image` renders it to PNG. It does not render an SVG with a DOCTYPE and returns an error.
 
 ### What OpenAI documents
 
