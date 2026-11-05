@@ -45,6 +45,15 @@ class PublisherScanTests(unittest.TestCase):
         self.assertFalse((self.staging.tree / "_images/orphan.txt").exists())
         self.assertFalse((self.staging.tree / "_images/nested").exists())
 
+    def test_image_archive_mirrors_gif_and_svg_with_their_prompts(self):
+        names = ("_images/a.gif", "_images/a.txt", "_images/b.svg", "_images/b.txt")
+        for name in names:
+            self.put(name, name.encode())
+        self.put("_images/c.html")
+        snapshot = self.scanner.scan()
+        self.staging.materialize(snapshot)
+        self.assertEqual({str(path) for path in snapshot.files}, set(names))
+
     def test_exclusions_do_not_open_private_or_special_entries(self):
         self.put("site/index.html")
         files = (".env", ".dame-curie-publisher-owner", ".publisher-link")

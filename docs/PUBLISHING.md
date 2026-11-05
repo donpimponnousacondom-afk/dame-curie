@@ -40,7 +40,7 @@ image with a publishable suffix exists.
 | Local | Remote | Deletion |
 | --- | --- | --- |
 | `<root>/<site>/**` | `site_root/<site>/**` | `rsync --delete-delay`, ownership marker and top-level hidden folders protected |
-| `<root>/_images/*.{png,jpg,jpeg,gif,webp}` and matching `.txt` | `image_root/*` (flat) | **never deleted** |
+| `<root>/_images/*.{png,jpg,jpeg,gif,webp,svg}` and matching `.txt` | `image_root/*` (flat) | **never deleted** |
 
 Only **first-level directories** of the authoring root become sites. A loose file at the
 top level is skipped entirely.
