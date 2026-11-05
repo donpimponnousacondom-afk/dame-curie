@@ -134,7 +134,12 @@ def _first_env(*names: str, default: str = "") -> str:
     return default
 
 
-def _image_config_error(protocol: str, base_url: str, models: dict, model: str) -> str:
+IMAGE_FEATURE_NAMES = frozenset({"gif", "svg", "markup"})
+
+
+def _image_config_error(
+    protocol: str, base_url: str, models: dict, model: str, features: dict | None = None,
+) -> str:
     """Name unusable image settings without disclosing configured values."""
     error = ""
     if protocol != "images":
@@ -154,6 +159,13 @@ def _image_config_error(protocol: str, base_url: str, models: dict, model: str) 
         error = "IMAGE_GEN_MODELS must map exact non-empty model IDs to non-empty descriptions"
     elif model not in models:
         error = "IMAGE_GEN_MODEL must exactly match an ID in IMAGE_GEN_MODELS"
+    elif any(
+        model_id not in models
+        or not isinstance(names, list)
+        or not all(isinstance(name, str) and name in IMAGE_FEATURE_NAMES for name in names)
+        for model_id, names in (features or {}).items()
+    ):
+        error = "IMAGE_GEN_FEATURES must map IDs in IMAGE_GEN_MODELS to lists of gif, svg and markup"
     return error
 
 
@@ -256,9 +268,11 @@ class Config:
     IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "")
     IMAGE_GEN_CONFIG_ERROR = ""
     IMAGE_GEN_EXTRA_BODY: ClassVar[dict] = {}
+    IMAGE_GEN_FEATURES: ClassVar[dict] = {}
     try:
         IMAGE_GEN_MODELS = _json_env("IMAGE_GEN_MODELS", strict=True)
         IMAGE_GEN_EXTRA_BODY = _json_env("IMAGE_GEN_EXTRA_BODY", strict=True)
+        IMAGE_GEN_FEATURES = _json_env("IMAGE_GEN_FEATURES", strict=True)
     except ValueError as error:
         IMAGE_GEN_MODELS = {}
         IMAGE_GEN_CONFIG_ERROR = str(error)
@@ -268,7 +282,8 @@ class Config:
         "IMAGE_GEN_TIMEOUT", 300, min_value=30, max_value=900
     )
     IMAGE_GEN_CONFIG_ERROR = IMAGE_GEN_CONFIG_ERROR or _image_config_error(
-        IMAGE_GEN_PROTOCOL, IMAGE_GEN_BASE_URL, IMAGE_GEN_MODELS, IMAGE_GEN_MODEL
+        IMAGE_GEN_PROTOCOL, IMAGE_GEN_BASE_URL, IMAGE_GEN_MODELS, IMAGE_GEN_MODEL,
+        IMAGE_GEN_FEATURES,
     )
 
     # No external dependency - pure code paths, on by default.

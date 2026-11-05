@@ -794,6 +794,41 @@ EXPLANATION_PARAM: dict[str, Any] = {
 }
 
 
+def image_features(config: Any) -> frozenset[str]:
+    """The IMAGE_GEN_FEATURES entries of the configured default image model."""
+    table = getattr(config, "IMAGE_GEN_FEATURES", None)
+    names = table.get(getattr(config, "IMAGE_GEN_MODEL", "")) if isinstance(table, dict) else None
+    return frozenset(names) if isinstance(names, list) else frozenset()
+
+
+def _image_feature_properties(features: frozenset[str]) -> dict[str, Any]:
+    """Tool arguments for the enabled features. No feature adds no argument."""
+    properties: dict[str, Any] = {}
+    formats = sorted(features & {"gif", "svg"})
+    if formats:
+        properties["output_format"] = _str(
+            "Omit for the configured default. gif: an animation; describe the subject, the motion "
+            "and the loop in the prompt. svg: a static vector graphic. Both are generation only: "
+            "pass image as an empty string.",
+            enum=formats,
+        )
+    if "gif" in features:
+        properties["frame_count"] = {
+            "type": "integer",
+            "description": "GIF frames. Only with output_format gif. Omit for the API default.",
+        }
+        properties["frame_duration_ms"] = {
+            "type": "integer",
+            "description": "Delay per GIF frame in ms. Only with output_format gif. Omit for the API default.",
+        }
+    if "markup" in features:
+        properties["markup"] = _str(
+            "Edit only: a local path or URL of a transparent PNG annotation layer for the first "
+            "input image. It must have the same width and height as that image."
+        )
+    return properties
+
+
 def build_openai_tools(
     tools: dict[str, Any],
     *,
@@ -851,6 +886,9 @@ def build_openai_tools(
         params = dict(declared)
         raw_props = params.get("properties")
         props = dict(raw_props) if isinstance(raw_props, dict) else {}
+        if name == "image_generator":
+            config = getattr(getattr(tool, "bot", None), "config", None)
+            props.update(_image_feature_properties(image_features(config)))
         # `explanation` is the first property and the first required name.
         # The prompt tells the model to write it first; the schema must agree.
         props = {"explanation": props.pop("explanation", EXPLANATION_PARAM), **props}

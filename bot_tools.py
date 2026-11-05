@@ -33,7 +33,7 @@ import uuid
 import discord
 from discord import Activity, File, Message, Status
 from tool_policy import tool_authorized
-from tool_schemas import TOOL_DISCOVERY_GROUPS
+from tool_schemas import TOOL_DISCOVERY_GROUPS, image_features
 from turn_budget import current_tool_groups
 from tools import Tool
 from error_reporting import PUBLIC_ERROR_TEXT, capture_incident, redact_sensitive_text, register_secrets
@@ -1084,6 +1084,8 @@ def _decode_image_response(data: dict) -> tuple[bytes, str]:
     image_bytes = base64.b64decode(data["data"][0]["b64_json"], validate=True)
     if not image_bytes:
         raise ValueError("empty image data")
+    if image_mime(image_bytes) == "image/svg+xml":
+        return image_bytes, "svg"
     ext = _sniff_image_mime(image_bytes).removeprefix("image/")
     return image_bytes, "jpg" if ext == "jpeg" else ext
 
@@ -1109,10 +1111,12 @@ async def _image_generation_request(
         tool="image_generator", protocol="images",
         operation="edits" if input_images else "generations", endpoint=api_url,
         model=context["model"], prompt=payload["prompt"], quality=payload.get("quality"),
+        output_format=payload.get("output_format"),
         input_images=input_images, auto_send=auto_send, timeout_s=timeout_s,
     )
     context["image_request_id"] = observation.context["request_id"]
     status, outcome, error_type, stage = None, "error", None, "request"
+    requested_format = payload.get("output_format")
     try:
         session = await _get_shared_session()
         async with session.post(
@@ -1147,6 +1151,16 @@ async def _image_generation_request(
                 return b"", ext, error
         stage = "decode"
         image_bytes, ext = _decode_image_response(data)
+        if requested_format in {"gif", "svg"} and ext != requested_format:
+            outcome = "format_mismatch"
+            error = tool_failure(
+                "tool.image_request",
+                f"Error: the image request asked for {requested_format}, but the endpoint returned {ext}. "
+                "The result was not saved." + no_retry,
+                context=context,
+            )
+            image_bytes = b""
+            return image_bytes, ext, error
         outcome = "success"
     except asyncio.TimeoutError as exc:
         outcome, error_type = "timeout", type(exc).__name__
@@ -1182,6 +1196,7 @@ async def _native_image_request(
     base: str, api_key: str, model: str, prompt: str, *, quality: str | None,
     timeout_s: int, images: tuple[str, ...] | list[str] = (),
     auto_send: bool = False, extra_body: dict | None = None,
+    feature_fields: dict | None = None,
 ) -> tuple[bytes, str, str]:
     """Select the generation/edit action and build its native payload."""
     parts = urlsplit(base)
@@ -1192,6 +1207,7 @@ async def _native_image_request(
         payload["quality"] = quality
     if images:
         payload["images"] = [{"image_url": image} for image in images]
+    payload.update(feature_fields or {})
     options = dict(extra_body or {})
     conflicts = [key for key in payload if key in options and options[key] != payload[key]]
     if conflicts:
@@ -1375,6 +1391,41 @@ class ImageGeneratorTool(Tool):
         )
         return (default_model if not model_error else ""), model_error
 
+    def _feature_fields(
+        self, selected_model: str, output_format: str | None, frame_count: object, frame_duration_ms: object,
+    ) -> tuple[dict, str]:
+        """Check feature arguments against IMAGE_GEN_FEATURES of the selected model."""
+        features = image_features(self.bot.config)
+        frames = {
+            key: value
+            for key, value in (("frame_count", frame_count), ("frame_duration_ms", frame_duration_ms))
+            if value is not None
+        }
+        if output_format is not None and output_format not in features & {"gif", "svg"}:
+            return {}, (
+                f"Error: output_format {output_format} is not enabled for image model {selected_model}. "
+                "The operator enables it in IMAGE_GEN_FEATURES."
+            )
+        if frames and output_format != "gif":
+            return {}, f"Error: {', '.join(frames)} needs output_format gif"
+        return ({"output_format": output_format} if output_format else {}) | frames, ""
+
+    async def _markup_field(self, selected_model: str, markup: str, images: list[str]) -> tuple[dict, str]:
+        """Load the annotation layer of a markup-guided edit."""
+        if "markup" not in image_features(self.bot.config):
+            return {}, (
+                f"Error: markup is not enabled for image model {selected_model}. "
+                "The operator enables it in IMAGE_GEN_FEATURES."
+            )
+        if not images:
+            return {}, "Error: markup needs an input image to annotate"
+        raw, error = await self._load_one(markup)
+        if raw is None:
+            return {}, f"Error: {error}"
+        if image_mime(raw) != "image/png":
+            return {}, "Error: markup must be a PNG file"
+        return {"markup": {"image_url": f"data:image/png;base64,{base64.b64encode(raw).decode()}"}}, ""
+
     async def execute(
         self,
         message: Message,
@@ -1383,6 +1434,10 @@ class ImageGeneratorTool(Tool):
         model: str | None = None,
         quality: str | None = None,
         auto_send: bool = False,
+        output_format: str | None = None,
+        frame_count: int | None = None,
+        frame_duration_ms: int | None = None,
+        markup: str | None = None,
         **kwargs: object,
     ) -> str:
         """Generate or edit one image through the configured native endpoint."""
@@ -1406,10 +1461,18 @@ class ImageGeneratorTool(Tool):
             error = "Error: quality must match the operator-configured image profile"
         if not error and not base.strip().rstrip("/"):
             error = "Error: image generation is not configured (set IMAGE_GEN_BASE_URL explicitly)"
+        feature_fields: dict = {}
+        if not error:
+            feature_fields, error = self._feature_fields(
+                selected_model, output_format, frame_count, frame_duration_ms,
+            )
         if not error:
             images, input_error = await self._resolve_image_references(message, image)
             if input_error:
                 error = f"Error: {input_error}"
+        if not error and markup is not None:
+            markup_field, error = await self._markup_field(selected_model, markup, images)
+            feature_fields |= markup_field
         if error:
             return error
 
@@ -1423,6 +1486,7 @@ class ImageGeneratorTool(Tool):
             images=images,
             auto_send=auto_send,
             extra_body=extra_body,
+            feature_fields=feature_fields,
         )
         result = error
         if not error:
@@ -1443,6 +1507,9 @@ class ImageGeneratorTool(Tool):
             prefix="image",
             submitted_prompt=prompt,
         )
+        if ext == "svg":
+            # scripts/publisher/scan.py IMAGE_SUFFIXES has no .svg, so this URL would stay a 404.
+            perm_url = None
         operation = "edited" if loaded else "generated"
         if not auto_send and not local_path:
             return (
@@ -1494,6 +1561,8 @@ class ImageGeneratorTool(Tool):
                 f"\nLocal path: {local_path} "
                 "(use shell to copy it into locally authored files)"
             )
+        if ext == "svg":
+            result += "\nNo public URL: the publisher does not mirror .svg files."
         result += (
             "\nAlready sent; do not resend the image or its URL. No commentary needed unless another task requires it."
             if auto_send else
