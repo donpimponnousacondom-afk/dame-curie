@@ -1,13 +1,12 @@
 # Open items
 
-## Activate GPT Image 2.6 on the live bot
+## GPT Image 2.6 is parked
 
-Root, 5 November 2026: 2.6 is on the proxy, she picks the format, and the test can run. See [docs/IMAGE_GENERATION.md](docs/IMAGE_GENERATION.md).
+Root, 6 November 2026: she stays on 2.5 Sunburst as the only image model, because the routing of 2.6 is not trusted yet. The code stays. See [docs/IMAGE_GENERATION.md](docs/IMAGE_GENERATION.md).
 
-- [x] Confirm the exact model ID on the local proxy: `/v1/models` lists `gpt-image-2.6-sunburst` and `gpt-image-2.6-flare` with the namespace of the 2.5 models.
-- [ ] Back up `bot.env`. Add the 2.6 ID to `IMAGE_GEN_MODELS`, set `IMAGE_GEN_MODEL` to it, and set `IMAGE_GEN_FEATURES`. Restart the bot.
-- [ ] Test one PNG, one GIF, one SVG and one markup edit in the test channel. Check the five points where the OpenAI pages disagree.
-- [ ] Restart the publisher. Check that one SVG and one GIF reach their public URLs.
+- Measured on 5 November 2026 through the local proxy: PNG and an edit returned 200. GIF returned 400 "GIF output is not enabled for this request". An SVG request returned a PNG, and the response said `output_format: png`.
+- [ ] When root says: back up `bot.env`, add the 2.6 ID to `IMAGE_GEN_MODELS`, set `IMAGE_GEN_MODEL` and `IMAGE_GEN_FEATURES`, and run `instance.py dame-curie restart`.
+- [ ] Test one PNG, one GIF, one SVG and one markup edit in the test channel. Check the five points where the OpenAI pages disagree. Check that one SVG and one GIF reach their public URLs.
 
 ## Dirac retirement, left for root
 

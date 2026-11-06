@@ -12915,6 +12915,10 @@ class DameCurieBot(commands.Bot):
             if name in disabled:
                 result_text = "Error - tool is disabled"
             elif name not in compatible and not plugin_allowed:
+                logger.warning(
+                    "Tool call refused, not available on this platform: %r (original: %r)",
+                    name, raw_name,
+                )
                 result_text = "Error - tool is not available on this platform"
             elif name not in self.tools and not plugin_allowed:
                 logger.warning("Unknown tool called: %r (original: %r)", name, raw_name)
