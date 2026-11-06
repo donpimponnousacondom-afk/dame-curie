@@ -57,7 +57,7 @@ Skills live in `.agents/skills/<name>/SKILL.md`. Any harness reads them there. R
 ## Change flow
 
 - Every change is a pull request to `main` from a `pr/*`, `hotfix/*` or `dev/*` branch. One active branch at a time.
-- Never push to `main`. Never force-push. Merge only after both reviewers say READY on the current head and CI is green. Protocol: [docs/REVIEW.md](docs/REVIEW.md).
+- Never push to `main`. Never force-push. Merge only after all three council members say READY on the current head and CI is green. Protocol: [docs/REVIEW.md](docs/REVIEW.md).
 - Deploy after merge with `scripts/deploy.sh`, inside GNU Screen session `dame_curie`, window `throne-ops`. Runbook: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 - Delete your test artefacts after a live test. Leave no large backups on the host; see the backup section of the runbook.
 
