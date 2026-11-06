@@ -26,6 +26,19 @@ def test_protocols_forbid_burst_replies():
         assert "spam" in text
 
 
+def test_protocols_let_a_request_for_several_messages_override_the_default():
+    for text in (TOOL_PROTOCOL.lower(), LEAN_TOOL_PROTOCOL.lower()):
+        assert "normally" in text
+        assert "overrides this default" in text
+        assert "asked for before the work" in text
+        assert "most common complaint" not in text
+
+
+def test_full_protocol_says_an_unlisted_tool_does_not_exist():
+    assert "not listed does not exist here" in TOOL_PROTOCOL.lower()
+    assert "do not invent one" in TOOL_PROTOCOL.lower()
+
+
 def test_protocols_offer_silence_as_the_alternative():
     for text in (TOOL_PROTOCOL.lower(), LEAN_TOOL_PROTOCOL.lower()):
         assert "no_response" in text

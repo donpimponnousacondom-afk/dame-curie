@@ -422,6 +422,27 @@ def test_dispatch_native_rejects_platform_incompatible_tool():
     assert react.calls == []
 
 
+def test_dispatch_native_logs_a_refused_tool_name(caplog):
+    bot = _native_bot({"react": FakeTool("Reacted")}, native_tool_calls=True)
+    bot._native_tools_enabled = DameCurieBot._native_tools_enabled.__get__(bot)
+    bot._message_tool_platform = lambda _message: "synthetic"
+    bot._compatible_tool_names = lambda _platform: {"react"}
+    message = SimpleNamespace(
+        guild=None, channel=SimpleNamespace(id=123), tool_platform="synthetic"
+    )
+    raw = [_native_call("invented.tool", {})]
+
+    with caplog.at_level("WARNING"):
+        _, tool_results = asyncio.run(
+            DameCurieBot._dispatch_tool_calls(bot, message, "", native_tool_calls=raw)
+        )
+
+    assert tool_results == [
+        "Tool invented.tool: Error - tool is not available on this platform"
+    ]
+    assert "not available on this platform: 'invented.tool'" in caplog.text
+
+
 def test_dispatch_native_skips_no_response_after_send_message():
     """send_message + no_response is contradictory (we already sent a
     reply; staying silent is meaningless). The send_message fires; the
