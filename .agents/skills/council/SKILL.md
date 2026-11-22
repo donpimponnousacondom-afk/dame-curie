@@ -22,7 +22,7 @@ Root names the members. Use these exact targets, at high effort:
 | Member | `providerInstanceId` | `model` | `options` |
 |---|---|---|---|
 | Claude Opus | `claudeAgent` | `claude-opus-5-5` | `{"effort":"high"}` |
-| GPT Sol | `codex` | `gpt-6.1-sol` | `{"reasoningEffort":"high"}` |
+| GPT Sol | `codex` | `gpt-6.2-sol` | `{"reasoningEffort":"high"}` |
 | Muse Wonder Full | `muse` | `muse-wonder-full-1.0` | `{"reasoningEffort":"high"}` |
 
 - `muse-wonder-1.0` is a different model. So are the `-contributor` models and the `CLIProxyAPI/muse/...` models under the OpenCode provider. Do not use them.
@@ -70,7 +70,7 @@ Rounds: 2
 | Delegate | Round 1 | Round 2 |
 | --- | --- | --- |
 | Claude Opus 5.5 | 7/10 | 9/10 |
-| GPT Sol 6.1 | 8/10 | 10/10 |
+| GPT Sol 6.2 | 8/10 | 10/10 |
 | Muse Wonder Full 1.0 | 7/10 | 9/10 |
 ```
 
