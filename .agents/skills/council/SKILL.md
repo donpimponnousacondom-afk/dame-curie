@@ -43,7 +43,17 @@ Give each member the same text. Do not give it your verdict or another member's 
 >
 > Trace changed behaviour and its failure paths: permissions and state isolation, ordering, configuration parameters on the wire, data correctness. Check the hard rules in `AGENTS.md`: configuration is sacred, failures stay visible, no word triggers, container time zone. A green check and this summary do not prove correctness.
 >
-> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and its consequence breaks the acceptance or a hard rule of `AGENTS.md`. These are out of scope unless the acceptance names them, the changed code breaks a hard rule (for example it hides the failure), or the case crosses a permission or isolation boundary: a file system, disk, mount or kernel that fails; a name, file or collision that the model or a user causes and that harms only their own work; the time that an operation takes; corrupt files that only our own code writes; races that need a change inside the milliseconds of one call. Review your scope to the end in this pass and report everything in it now. Do not consider the whole world of things that could go wrong.
+> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and it breaks one of these: the acceptance, a rule of `AGENTS.md`, a permission or isolation boundary, or behaviour that worked before this diff.
+>
+> These cases are out of scope, also when they touch an acceptance item in general words. The exceptions: the acceptance names the case, the changed code breaks a rule (for example it hides the failure), or the case crosses a permission or isolation boundary.
+>
+> - A file system, disk, mount or kernel that fails.
+> - A name, file or collision that the model or a user causes and that harms only their own work.
+> - The time that an operation takes.
+> - Corrupt files that only our own code writes.
+> - A race that needs a change inside the milliseconds of one call.
+>
+> Review your scope to the end in this pass and report everything in it now. Do not consider the whole world of things that could go wrong.
 >
 > Report each actionable regression with severity, file and line, a reachable trigger, the consequence and the evidence. Separate pre-existing issues, optional polish and uncertainty. A clean review is valid; there is no finding quota.
 >
@@ -67,9 +77,9 @@ GPT Sol 6.2 leaves the scope: it reports new edge cases in each round that it di
 - The scope paragraph in the brief applies to all members from round 1.
 - From round 3 on, compare each Sol finding with the earlier heads. When Sol reports a finding in code that it reviewed before and did not report in round 1 or 2, put this text at the top of the next brief for Sol. It is the only exception to the rule that all members get the same text:
 
-> You reviewed this code in rounds [numbers] and did not report these findings: [list]. That costs a full round for each small case. Your scope is the diff and the acceptance list below, and nothing else. Review that scope thoroughly, once, and report everything in it now. Do not consider the whole world of things that could go wrong. For each finding, name the acceptance item or hard rule that it breaks and a trigger that can happen in the described deployment. Without both, it is not a finding and it is not a reason for NOT READY.
+> You reviewed this code in rounds [numbers] and did not report these findings: [list]. That costs a full round for each small case. Your scope is the diff and the acceptance list below, and nothing else. Review that scope thoroughly, once, and report everything in it now. Do not consider the whole world of things that could go wrong. For each finding, name the acceptance item, rule, boundary or earlier behaviour that it breaks, and a trigger that can happen in the described deployment. Without both, it is not a finding and it is not a reason for NOT READY.
 
-- A real defect inside the scope or a hard rule violation stays a finding in any round. Verify it as always.
+- A real defect inside the scope, a regression of earlier behaviour or a rule violation stays a finding in any round. Verify it as always.
 - Do not fix an out-of-scope finding to get a verdict. When the other two say READY and only such findings remain, stop and bring them to root, one line each. Root decides.
 
 ## Results
