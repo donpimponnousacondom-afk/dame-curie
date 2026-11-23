@@ -106,6 +106,8 @@ class Publisher:
         elif active.result():
             print(f"publisher: site={name!r}: changes synchronized", file=sys.stderr)
             self.status.synced(name, self.job_started)
+            # The transfer ends an earlier failure, so its retry is not needed.
+            self.retry.discard(name)
         self.status.write()
         # The only watchdog report. It needs the main loop, the worker and the scheduler:
         # when one of them hangs, no job ends and systemd restarts the service. A failed

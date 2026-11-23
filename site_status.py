@@ -8,6 +8,7 @@ reads local files only: it makes no request and starts nothing.
 import asyncio
 import json
 import os
+import stat
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,11 +24,11 @@ READ_TIMEOUT_SECONDS = 5
 SILENT_PUBLISHER_SECONDS = 30 * 60
 # The kernel stamps files with a coarse clock that can lag the clock of the publisher.
 CLOCK_MARGIN_SECONDS = 0.05
-# Folders of the authoring root that are not sites: images and the publisher exclusions.
-UNPUBLISHED_NAMES = frozenset({"_images", "_data", "_build"})
+# The publisher never publishes these names (EXCLUDED in scripts/publisher/common.py).
+NEVER_PUBLISHED = frozenset({"_data", "_build", ".env", ".git", ".publisher-link"})
 NOT_CHECKED = (
     "Not part of this check: hidden folders at the top of the site. Never published: "
-    "symlinks, and files or folders named _data, _build, .env or .git."
+    f"symlinks, and files or folders named {', '.join(sorted(NEVER_PUBLISHED))}."
 )
 
 
@@ -50,8 +51,12 @@ def newest_change(folder: Path, deadline: float) -> float:
     """
     newest = folder.stat().st_ctime
     for parent, directories, files in os.walk(folder, onerror=raise_error):
-        if Path(parent) == folder:
-            directories[:] = [name for name in directories if not name.startswith(".")]
+        top = Path(parent) == folder
+        directories[:] = [
+            name
+            for name in directories
+            if name not in NEVER_PUBLISHED and not (top and name.startswith("."))
+        ]
         for name in (*directories, *files):
             if time.monotonic() > deadline:
                 raise TimeoutError(f"no answer in {READ_TIMEOUT_SECONDS} seconds")
@@ -84,7 +89,7 @@ def publisher_notes(status: dict, site: dict) -> list[str]:
 def waiting_text(name: str, link: str) -> str:
     """Return the answer for every site that is not known to be synced."""
     return (
-        f"{name}: syncing in progress. The site is created. Give the user the URL now. "
+        f"Site {name}: syncing in progress. It is created. Give the user the URL now. "
         f"It goes live by itself. Do not wait for it, test it or ask again. {link}"
     )
 
@@ -99,7 +104,13 @@ def site_report(
 ) -> str:
     """Return the sync state of one site as text for the model."""
     folder = root / name
-    if folder.is_symlink() or not folder.is_dir():
+    try:
+        is_site = stat.S_ISDIR(folder.lstat().st_mode)
+    except FileNotFoundError:
+        is_site = False
+    except OSError as error:
+        return unknown_text(name, link, f"{type(error).__name__}: {error}")
+    if not is_site:
         return f"Error: there is no folder {name!r} in the authoring root {root}."
     if not status_file:
         return unknown_text(name, link, "DAME_CURIE_PUBLISHER_STATUS is not set")
@@ -110,16 +121,29 @@ def site_report(
         notes = publisher_notes(status, site)
         synced = site.get("synced", 0.0)
         if synced and newest_change(folder, deadline) < synced - CLOCK_MARGIN_SECONDS:
-            lines = [f"{name}: synced at {local_time(synced)}. {link}", NOT_CHECKED]
+            lines = [
+                f"Site {name}: synced at {local_time(synced)}. {link}",
+                NOT_CHECKED,
+            ]
         else:
             lines = [waiting_text(name, link)]
-    except (OSError, ValueError, LookupError, TypeError, AttributeError) as error:
+    except (
+        OSError,
+        ValueError,
+        LookupError,
+        TypeError,
+        AttributeError,
+        OverflowError,
+    ) as error:
         lines = [unknown_text(name, link, f"{type(error).__name__}: {error}")]
     return "\n".join([*lines, *notes])
 
 
 class SiteStatusTool(Tool):
     """Tell the model the URL of a site and whether the publisher has synced it."""
+
+    # "site" in the name would give it the small budget of the removed site tools.
+    concurrency_class = "default"
 
     def get_description(self) -> str:
         """Return the tool description that the model reads."""
@@ -137,7 +161,7 @@ class SiteStatusTool(Tool):
             not name
             or Path(name).name != name
             or name.startswith(".")
-            or name in UNPUBLISHED_NAMES
+            or name in NEVER_PUBLISHED | {"_images"}
         ):
             return (
                 "Error: site must be the name of one site folder in the authoring root."
