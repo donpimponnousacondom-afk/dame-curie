@@ -28,7 +28,8 @@ CLOCK_MARGIN_SECONDS = 0.05
 NEVER_PUBLISHED = frozenset({"_data", "_build", ".env", ".git", ".publisher-link"})
 NOT_CHECKED = (
     "Not part of this check: hidden folders at the top of the site. Never published: "
-    f"symlinks, and files or folders named {', '.join(sorted(NEVER_PUBLISHED))}."
+    "symlinks, special files, publisher marker files, and files or folders named "
+    f"{', '.join(sorted(NEVER_PUBLISHED))}."
 )
 
 
@@ -44,12 +45,19 @@ def raise_error(error: OSError) -> None:
     raise error
 
 
+def check_deadline(deadline: float) -> None:
+    """Stop a walk that takes too long, also after the reply was sent."""
+    if time.monotonic() > deadline:
+        raise TimeoutError(f"no answer in {READ_TIMEOUT_SECONDS} seconds")
+
+
 def newest_change(folder: Path, deadline: float) -> float:
     """Return the time of the newest change in a site, deletions included.
 
     The top-level hidden folders are not read: no remote check reads them either.
     """
     newest = 0.0
+    folders = {}
     for parent, directories, files in os.walk(folder, onerror=raise_error):
         top = Path(parent) == folder
         directories[:] = [
@@ -57,12 +65,20 @@ def newest_change(folder: Path, deadline: float) -> float:
             for name in directories
             if name not in NEVER_PUBLISHED and not (top and name.startswith("."))
         ]
-        # "." is read after the listing, so a deletion before the listing is seen.
-        for name in (".", *directories, *files):
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"no answer in {READ_TIMEOUT_SECONDS} seconds")
+        # Read after the listing, so a deletion before the listing is seen.
+        value = os.lstat(parent)
+        folders[parent] = (value.st_ino, value.st_ctime_ns)
+        newest = max(newest, value.st_ctime)
+        for name in (*directories, *files):
+            check_deadline(deadline)
             if name not in NEVER_PUBLISHED:
                 newest = max(newest, os.lstat(os.path.join(parent, name)).st_ctime)
+    # A folder that was replaced or changed during the walk is a change that happens now.
+    for parent, before in folders.items():
+        check_deadline(deadline)
+        value = os.lstat(parent)
+        if (value.st_ino, value.st_ctime_ns) != before:
+            return time.time()
     return newest
 
 
@@ -102,9 +118,17 @@ def unknown_text(name: str, link: str, cause: str) -> str:
 
 
 def site_report(
-    name: str, root: Path, link: str, status_file: str, deadline: float
+    name: str,
+    root: Path,
+    link: str,
+    status_file: str,
+    deadline: float,
+    notes: list[str],
 ) -> str:
-    """Return the sync state of one site as text for the model."""
+    """Return the sync state of one site as text for the model.
+
+    The caller gives `notes`, so what was read before a timeout is not lost.
+    """
     folder = root / name
     try:
         is_site = stat.S_ISDIR(folder.lstat().st_mode)
@@ -116,11 +140,10 @@ def site_report(
         return f"Error: there is no folder {name!r} in the authoring root {root}."
     if not status_file:
         return unknown_text(name, link, "DAME_CURIE_PUBLISHER_STATUS is not set")
-    notes: list[str] = []
     try:
         status = json.loads(Path(status_file).read_text(encoding="utf-8"))
         site = status["sites"].get(name, {})
-        notes = publisher_notes(status, site)
+        notes.extend(publisher_notes(status, site))
         synced = site.get("synced", 0.0)
         changed = newest_change(folder, deadline)
         if not notes and changed < synced - CLOCK_MARGIN_SECONDS:
@@ -178,18 +201,20 @@ class SiteStatusTool(Tool):
         )
         # The executor can start the walk late. The deadline counts from the call.
         deadline = time.monotonic() + READ_TIMEOUT_SECONDS
+        notes: list[str] = []
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(
                     site_report,
                     name,
-                    Path(config.DAME_CURIE_SITE_DIR),
+                    Path(config.DAME_CURIE_SITE_DIR or "public/bot"),
                     link,
                     config.DAME_CURIE_PUBLISHER_STATUS,
                     deadline,
+                    notes,
                 ),
                 READ_TIMEOUT_SECONDS,
             )
         except TimeoutError:
             cause = f"no answer in {READ_TIMEOUT_SECONDS} seconds"
-            return unknown_text(name, link, cause)
+            return "\n".join([unknown_text(name, link, cause), *notes])

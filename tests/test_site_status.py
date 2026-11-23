@@ -297,6 +297,30 @@ def test_no_site_name_makes_an_answer_look_like_an_error(harness: Harness) -> No
     assert harness.ask("ErrorPages").startswith("Site ErrorPages: syncing in progress.")
 
 
+def test_a_folder_replaced_during_the_walk_is_a_change(harness: Harness) -> None:
+    harness.put("page/assets/a.txt")
+    harness.put("page/zz/b.txt")
+    harness.put("other/a.txt")
+    harness.job("page")
+    time.sleep(0.1)
+    original = os.scandir
+    other = harness.sites / "other"
+    walked: list[Path] = []
+
+    def scandir(path: object) -> object:
+        # When the walk lists its second subfolder, it has read the first one.
+        if str(path) != str(harness.sites / "page"):
+            walked.append(Path(str(path)))
+        if len(walked) == 2 and other.exists():
+            walked[0].rename(harness.sites / "old")
+            other.rename(walked[0])
+        return original(path)
+
+    with patch.object(os, "scandir", side_effect=scandir):
+        assert harness.ask("page").startswith("Site page: syncing in progress.")
+    assert not other.exists()
+
+
 def test_a_deletion_before_the_listing_is_seen(harness: Harness) -> None:
     page = harness.put("page/index.html")
     harness.job("page")
@@ -348,6 +372,29 @@ def test_the_url_is_quoted_and_a_leading_underscore_is_a_site(harness: Harness) 
     harness.put("_demo/index.html")
     assert f"URL: {BASE}/demo%232/" in harness.ask("demo#2")
     assert f"URL: {BASE}/_demo/" in harness.ask("_demo")
+
+
+def test_the_outer_timeout_keeps_what_was_read(harness: Harness) -> None:
+    harness.put("page/index.html")
+    harness.transport.fail_action = "site"
+    harness.job("page")
+
+    def slow(*_: object) -> float:
+        time.sleep(0.6)
+        return 0.0
+
+    with (
+        patch.object(site_status, "READ_TIMEOUT_SECONDS", 0.2),
+        patch.object(site_status, "newest_change", side_effect=slow),
+    ):
+        text = harness.ask("page")
+    assert "The sync state is unknown: no answer in 0.2 seconds." in text
+    assert "synthetic remote interruption" in text
+
+
+def test_a_blank_site_folder_is_the_default_of_the_shell(harness: Harness) -> None:
+    harness.config.DAME_CURIE_SITE_DIR = ""
+    assert "in the authoring root public/bot." in harness.ask("page")
 
 
 def test_a_slow_walk_still_names_a_failed_sync(harness: Harness) -> None:

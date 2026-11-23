@@ -226,7 +226,7 @@ Root, 23 November 2026: the model may query the sync. It can never force it or w
   publisher is silent. Any other site is "syncing in progress", with its URL.
 - A remote check does not read the top-level hidden folders of a site. The answer says so,
   and names what is never published. A failed transfer stays visible until a transfer
-  succeeds.
+  succeeds. A restart of the publisher forgets it.
 - The answer also names a failed sync, a failed remote check, and a publisher that has not
   reported for 30 minutes. An unreadable status file is named, and the URL is still given.
 - A failed write of the status file stops the publisher with its cause.
