@@ -224,8 +224,8 @@ Root, 23 November 2026: the model may query the sync. It can never force it or w
   change and confirmed the remote. A job without a transfer confirms nothing. A site with a
   queued repair or retry is not synced. Any other site is "syncing in progress", with its
   URL.
-- A remote check does not read the top-level hidden folders of a site. The answer names
-  them as not part of the check. A failed transfer of one stays visible until a transfer
+- A remote check does not read the top-level hidden folders of a site. The answer says so,
+  and names what is never published. A failed transfer stays visible until a transfer
   succeeds.
 - The answer also names a failed sync, a failed remote check, and a publisher that has not
   reported for 30 minutes. An unreadable status file is named, and the URL is still given.

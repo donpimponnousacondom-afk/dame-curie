@@ -84,11 +84,10 @@ class Publisher:
                 self.audit_status = f"remote check FAILED at {local_time()}; last success: {self.audit_success}"
             else:
                 repairs = active.result()
-                queued = repairs | self.retry
-                self.force.update(queued)
-                self.pending.rescan(queued)
+                self.force.update(repairs | self.retry)
+                self.pending.rescan(repairs | self.retry)
                 self.retry.clear()
-                self.record_check(queued)
+                self.record_check()
                 for site, failure in self.mirror.inventory_errors.items():
                     print(f"publisher: site={site!r}: local scan: {failure}; retry on next scan", file=sys.stderr)
                 if not self.audit_reported or repairs or self.mirror.inventory_hashed:
@@ -113,18 +112,19 @@ class Publisher:
         # job counts, because its cause is in the journal and it is retried.
         notify(f"WATCHDOG=1\nSTATUS={self.audit_status}")
 
-    def record_check(self, queued: set[str]) -> None:
+    def record_check(self) -> None:
         """Record which sites a finished remote check verified.
 
-        A site that still has a repair or a retry in the queue is not verified. The check
-        does not read the top-level hidden folders, so it cannot end their failure.
+        `force` holds each repair and retry that has not started, also from earlier checks.
+        Such a site is not verified: the check does not read the top-level hidden folders,
+        so it cannot end their failure.
         """
         self.status.check_error = ""
         for name in self.status.sites.keys() - self.mirror.expected.keys():
             del self.status.sites[name]
-        for name in self.mirror.expected.keys() - queued - self.mirror.inventory_errors.keys():
+        for name in self.mirror.expected.keys() - self.force - self.mirror.inventory_errors.keys():
             self.status.synced(name, self.job_started)
-        for name in queued:
+        for name in self.force:
             self.status.different(name)
         for name, failure in self.mirror.inventory_errors.items():
             self.status.failed(name, failure)

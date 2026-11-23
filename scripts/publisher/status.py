@@ -29,8 +29,8 @@ class StatusFile:
             self.sites[name].pop("synced", None)
 
     def failed(self, name: str, error: str) -> None:
-        """Record the cause of a failed attempt. The last successful sync stays."""
-        self.sites.setdefault(name, {}).update(failed=time.time(), error=error)
+        """Record the cause of a failed attempt. The site is no longer synced."""
+        self.sites[name] = {"failed": time.time(), "error": error}
 
     def write(self) -> None:
         """Replace the file. A failed write stops the publisher with its cause."""

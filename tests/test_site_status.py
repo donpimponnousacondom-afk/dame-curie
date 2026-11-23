@@ -76,6 +76,9 @@ class Harness:
         """Run one job of the publisher to its end. No name means a remote check."""
         time.sleep(0.1)
         self.publisher.job_started = time.time()
+        if name is not None:
+            # The scheduler takes a forced job out of the queue when it starts it.
+            self.publisher.force.discard(name)
         future: Future = Future()
         try:
             if name is None:
@@ -177,7 +180,27 @@ def test_a_file_that_disappears_during_the_walk_is_a_change(harness: Harness) ->
     harness.put("page/index.html")
     harness.job("page")
     with patch.object(site_status.os, "lstat", side_effect=FileNotFoundError):
-        assert harness.ask("page").startswith("page: syncing in progress.")
+        text = harness.ask("page")
+    assert text.startswith("page: syncing in progress.")
+    assert f"URL: {BASE}/page/" in text
+    assert "The sync state is unknown: FileNotFoundError" in text
+
+
+def test_a_folder_that_cannot_be_read_is_named(harness: Harness) -> None:
+    harness.put("page/assets/a.txt")
+    harness.job("page")
+    original = os.scandir
+
+    def scandir(path: str) -> object:
+        if str(path).endswith("assets"):
+            raise PermissionError(13, "synthetic refusal")
+        return original(path)
+
+    with patch.object(os, "scandir", side_effect=scandir):
+        text = harness.ask("page")
+    assert text.startswith("page: syncing in progress.")
+    assert f"URL: {BASE}/page/" in text
+    assert "The sync state is unknown: PermissionError" in text
 
 
 def test_a_failed_sync_names_its_cause_and_does_not_hide_the_url(
@@ -200,12 +223,15 @@ def test_a_failed_hidden_folder_is_not_synced_by_a_clean_check(
 ) -> None:
     """The check skips top-level hidden folders, so only a transfer ends the failure."""
     harness.put("page/index.html")
-    harness.job("page")
     harness.put("page/.data/x")
+    harness.job("page")
+    harness.put("page/.data/x", "changed inside a folder that the walk skips")
     harness.transport.fail_action = "site"
     harness.job("page")
-    for _ in range(2):
-        harness.job()
+    assert harness.ask("page").startswith("page: syncing in progress.")
+    for checks in (1, 2, 3):
+        for _ in range(checks):
+            harness.job()
         text = harness.ask("page")
         assert text.startswith("page: syncing in progress.")
         assert "synthetic remote interruption" in text
@@ -214,7 +240,11 @@ def test_a_failed_hidden_folder_is_not_synced_by_a_clean_check(
     harness.job("page")
     text = harness.ask("page")
     assert text.startswith("page: synced at ")
-    assert "Not part of this check: .data." in text
+    assert "Not part of this check: hidden folders at the top of the site." in text
+    harness.job()  # it queues the retry of the last failure once more
+    harness.job("page")
+    harness.job()
+    assert harness.ask("page").startswith("page: synced at ")
 
 
 def test_a_job_without_a_transfer_is_not_a_confirmation(harness: Harness) -> None:
@@ -240,11 +270,32 @@ def test_a_symlink_is_not_a_site(harness: Harness) -> None:
     assert harness.ask("page").startswith("Error: there is no folder 'page'")
 
 
+def test_a_folder_name_is_exact(harness: Harness) -> None:
+    harness.put("page/index.html")
+    harness.put("page /index.html")
+    harness.job("page")
+    assert harness.ask("page").startswith("page: synced at ")
+    assert harness.ask("page ").startswith("page : syncing in progress.")
+    assert f"URL: {BASE}/page%20/" in harness.ask("page ")
+
+
 def test_the_url_is_quoted_and_a_leading_underscore_is_a_site(harness: Harness) -> None:
     harness.put("demo#2/index.html")
     harness.put("_demo/index.html")
     assert f"URL: {BASE}/demo%232/" in harness.ask("demo#2")
     assert f"URL: {BASE}/_demo/" in harness.ask("_demo")
+
+
+def test_a_slow_walk_still_names_a_failed_sync(harness: Harness) -> None:
+    harness.put("page/index.html")
+    harness.job("page")
+    data = json.loads(harness.file.read_text())
+    data["check_error"] = "synthetic check failure"
+    harness.file.write_text(json.dumps(data))
+    with patch.object(site_status, "newest_change", side_effect=TimeoutError("late")):
+        text = harness.ask("page")
+    assert "The sync state is unknown: TimeoutError: late." in text
+    assert "synthetic check failure" in text
 
 
 def test_a_large_tree_stops_its_own_walk(harness: Harness) -> None:
@@ -297,7 +348,10 @@ def test_a_removed_site_leaves_the_status(harness: Harness) -> None:
     assert harness.ask("page").startswith("Error: there is no folder 'page'")
 
 
-@pytest.mark.parametrize("missing", ["unset", "absent", "invalid", "shape", "list"])
+@pytest.mark.parametrize(
+    "missing",
+    ["unset", "absent", "invalid", "shape", "list", "text", "no-time"],
+)
 def test_an_unreadable_status_still_gives_the_url_and_names_the_cause(
     harness: Harness, missing: str
 ) -> None:
@@ -305,7 +359,10 @@ def test_an_unreadable_status_still_gives_the_url_and_names_the_cause(
     if missing == "unset":
         harness.config.DAME_CURIE_PUBLISHER_STATUS = ""
     elif missing != "absent":
-        content = {"invalid": "{", "shape": "{}", "list": "[]"}[missing]
+        page = {"text": {"synced": "x"}, "no-time": {"error": "x"}}.get(missing)
+        status = {"written": time.time(), "check_error": "", "sites": {"page": page}}
+        content = {"invalid": "{", "shape": "{}", "list": "[]"}.get(missing)
+        content = content or json.dumps(status)
         harness.file.write_text(content)
     text = harness.ask("page")
     assert text.startswith("page: syncing in progress.")
@@ -341,7 +398,7 @@ def test_a_slow_read_does_not_hold_the_reply(harness: Harness) -> None:
     assert elapsed < 0.8
     assert text.startswith("page: syncing in progress.")
     assert f"URL: {BASE}/page/" in text
-    assert "the local files were not read in 0.1 seconds" in text
+    assert "The sync state is unknown: no answer in 0.1 seconds." in text
 
 
 def test_the_tool_changes_no_file_and_makes_no_request(harness: Harness) -> None:
