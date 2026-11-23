@@ -27,8 +27,8 @@ CLOCK_MARGIN_SECONDS = 0.05
 # The publisher never publishes these names (EXCLUDED in scripts/publisher/common.py).
 NEVER_PUBLISHED = frozenset({"_data", "_build", ".env", ".git", ".publisher-link"})
 NOT_CHECKED = (
-    "Not part of this check: hidden folders at the top of the site. Never published: "
-    "symlinks, special files, publisher marker files, and files or folders named "
+    "Never synced: hidden folders (they belong to the remote), symlinks, special files, "
+    "publisher marker files, and files or folders named "
     f"{', '.join(sorted(NEVER_PUBLISHED))}."
 )
 
@@ -54,16 +54,15 @@ def check_deadline(deadline: float) -> None:
 def newest_change(folder: Path, deadline: float) -> float:
     """Return the time of the newest change in a site, deletions included.
 
-    The top-level hidden folders are not read: no remote check reads them either.
+    Hidden folders are not read: they belong to the remote and are never synced.
     """
     newest = 0.0
     folders = {}
     for parent, directories, files in os.walk(folder, onerror=raise_error):
-        top = Path(parent) == folder
         directories[:] = [
             name
             for name in directories
-            if name not in NEVER_PUBLISHED and not (top and name.startswith("."))
+            if name not in NEVER_PUBLISHED and not name.startswith(".")
         ]
         # Read after the listing, so a deletion before the listing is seen.
         value = os.lstat(parent)

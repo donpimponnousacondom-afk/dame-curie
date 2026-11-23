@@ -19,7 +19,12 @@ import pytest
 import site_status
 from concurrency_safety import classify_tool
 from control_defaults import KNOWN_TOOLS
-from scripts.publisher.common import EXCLUDED, MARKER, PublisherError
+from scripts.publisher.common import (
+    EXCLUDED,
+    MARKER,
+    PublisherError,
+    RemoteFailure,
+)
 from scripts.publisher.config import Config, load_config
 from scripts.publisher.mirror import Mirror
 from scripts.publisher.service import Publisher
@@ -226,15 +231,14 @@ def test_a_failed_sync_names_its_cause_and_does_not_hide_the_url(
     assert "failed" not in harness.ask("page")
 
 
-def test_a_failed_hidden_folder_is_not_synced_by_a_clean_check(
-    harness: Harness,
-) -> None:
-    """The check skips top-level hidden folders, so only a transfer ends the failure."""
+def test_a_failed_transfer_is_not_synced_by_a_clean_check(harness: Harness) -> None:
+    """The remote can be equal after a failed transfer. Only its retry ends the failure."""
+
+    def late_failure() -> None:
+        raise RemoteFailure("synthetic late failure")
+
     harness.put("page/index.html")
-    harness.put("page/.data/x")
-    harness.job("page")
-    harness.put("page/.data/x", "changed inside a folder that the walk skips")
-    harness.transport.fail_action = "site"
+    harness.transport.after_transfer = late_failure
     harness.job("page")
     assert harness.ask("page").startswith("Site page: syncing in progress.")
     for checks in (1, 2, 3):
@@ -242,15 +246,35 @@ def test_a_failed_hidden_folder_is_not_synced_by_a_clean_check(
             harness.job()
         text = harness.ask("page")
         assert text.startswith("Site page: syncing in progress.")
-        assert "synthetic remote interruption" in text
+        assert "synthetic late failure" in text
         harness.job("page")
-    harness.transport.fail_action = ""
+    harness.transport.after_transfer = lambda: None
     harness.job("page")
-    text = harness.ask("page")
-    assert text.startswith("Site page: synced at ")
-    assert "Not part of this check: hidden folders at the top of the site." in text
+    assert harness.ask("page").startswith("Site page: synced at ")
     harness.job()
     assert harness.ask("page").startswith("Site page: synced at ")
+
+
+def test_a_failure_ends_the_synced_state(harness: Harness) -> None:
+    harness.put("page/index.html")
+    harness.job("page")
+    harness.transport.fail_action = "site"
+    harness.job("page")
+    assert harness.ask("page").startswith("Site page: syncing in progress.")
+
+
+def test_a_hidden_folder_does_not_hold_a_site(harness: Harness) -> None:
+    harness.put("page/.data/x")
+    harness.put("page/sub/.deep/x")
+    harness.put("page/index.html")
+    harness.job("page")
+    time.sleep(0.1)
+    harness.put("page/.data/x", "changed")
+    harness.put("page/sub/.deep/x", "changed")
+    text = harness.ask("page")
+    assert text.startswith("Site page: synced at ")
+    assert "Never synced: hidden folders (they belong to the remote)" in text
+    assert not (Path(harness.mirror.config.site_root) / "page/.data").exists()
 
 
 def test_a_job_without_a_transfer_is_not_a_confirmation(harness: Harness) -> None:

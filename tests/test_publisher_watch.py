@@ -104,6 +104,26 @@ class PublisherWatchTests(unittest.TestCase):
         self.watcher.rebuild()
         self.assertIn(Path("site/after-snapshot.txt"), self.scanner.scan().files)
 
+    def test_hidden_folders_are_not_watched_and_queue_no_sync(self):
+        site = self.config.source / "site"
+        (site / "sub").mkdir(parents=True)
+        self.watcher.rebuild()
+        self.watcher.wait(0)
+        self.watcher.take_changes()
+        self.watcher.topology = False  # rebuild also drains the events of the setup
+        for folder in (site / ".data", site / "sub/.deep"):
+            folder.mkdir()
+            (folder / "state.json").write_bytes(b"local data")
+        self.watcher.wait(0.05)
+        self.assertEqual(self.watcher.take_changes(), set())
+        self.assertFalse(self.watcher.topology)
+        self.watcher.rebuild()
+        self.assertNotIn(Path("site/.data"), self.watcher.paths.values())
+        self.assertNotIn(Path("site/sub/.deep"), self.watcher.paths.values())
+        (site / "sub/.htaccess").write_bytes(b"a hidden file is synced")
+        self.watcher.wait(0.05)
+        self.assertEqual(self.watcher.take_changes(), {"site"})
+
     def test_excluded_data_directory_is_not_recursively_watched(self):
         private = self.config.source / "_data"
         private.mkdir()

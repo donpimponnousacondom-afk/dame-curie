@@ -39,16 +39,16 @@ image with a publishable suffix exists.
 
 | Local | Remote | Deletion |
 | --- | --- | --- |
-| `<root>/<site>/**` | `site_root/<site>/**` | `rsync --delete-delay`, ownership marker and top-level hidden folders protected |
+| `<root>/<site>/**` | `site_root/<site>/**` | `rsync --delete-delay`, ownership marker and hidden folders protected |
 | `<root>/_images/*.{png,jpg,jpeg,gif,webp,svg}` and matching `.txt` | `image_root/*` (flat) | **never deleted** |
 
 Only **first-level directories** of the authoring root become sites. A loose file at the
 top level is skipped entirely.
 
 Never published: loose top-level files, first-level dotfiles, `_data`, `_build`, `.env`,
-`.git`, the ownership marker, `.publisher-link`, and anything under a configured
-`private_paths` entry. A dotfile *inside* a site directory **is** published - only
-first-level dotfiles are excluded. That is how a per-site `.htaccess` can be shipped.
+`.git`, the ownership marker, `.publisher-link`, hidden folders at any depth, and anything
+under a configured `private_paths` entry. A dotfile in a normal folder of a site **is**
+published - only first-level dotfiles are excluded. That is how a per-site `.htaccess` can be shipped.
 
 Publisher file contents are transported unchanged, without credential-pattern inspection
 or content-based publication refusal. Root removed that filter on 2026-09-30 after an
@@ -62,18 +62,15 @@ SSH and remote-ownership protections remain in force.
    next sync. An operator-installed file survives only if it also exists in the local
    source tree. Files the publisher does not own - other site directories, and anything
    in `site_root` itself - are left alone.
-   **Exception: top-level hidden folders.** A hidden folder is a folder whose name starts
-   with a dot (for example `.data`). Root decided on 1 November 2026 that folders a
-   server script (PHP, Perl) creates on the remote to keep data persist. The publisher
-   implements this by name for every hidden folder at the top of a site. Root has not
-   confirmed this wider scope. A sync never deletes that folder or its files
-   (`--filter "P /.*/***"`).
-   The remote inventory does not audit it. A local file in that folder is uploaded and
-   replaces the remote file with the same name. Deleting the local file or folder does
-   not delete the remote copy. The rule uses only the name, so it also keeps a hidden
-   folder that the model made locally and then deleted. Hidden files (for example
-   `.htaccess`) and deeper hidden folders follow the local tree. Deleting the whole site
-   locally deletes the remote site folder, and its hidden folders with it.
+   **Exception: hidden folders, at any depth.** A hidden folder is a folder whose name
+   starts with a dot (for example `.data`). Root decided on 23 November 2026 that it
+   belongs to the remote: server scripts keep persistent data there. The publisher does not
+   scan, watch, upload, replace, audit or delete it (`--filter "-p .*/"`). A local hidden
+   folder has no effect on the remote. Hidden files (for example `.htaccess`) in a normal
+   folder are synced like other files. When a normal folder or the whole site is deleted
+   locally, the remote copy is deleted with the hidden folders inside it. The model creates
+   and manages hidden folders with its own server scripts. This replaces the rule of
+   1 November 2026, which uploaded local files into top-level hidden folders.
 2. **The image archive never deletes.** Removing a local image does not remove the
    archived remote copy. Over time the archive accumulates; pruning it is a manual,
    explicit operation.
@@ -224,8 +221,7 @@ Root, 23 November 2026: the model may query the sync. It can never force it or w
   change and confirmed the remote. A job without a transfer confirms nothing. A site with a
   queued repair or retry is not synced, and no site is while the last check failed or the
   publisher is silent. Any other site is "syncing in progress", with its URL.
-- A remote check does not read the top-level hidden folders of a site. The answer says so,
-  and names what is never published. A failed transfer stays visible until a transfer
+- The answer names what is never synced, hidden folders included. A failed transfer stays visible until a transfer
   succeeds. A restart of the publisher forgets it.
 - The answer also names a failed sync, a failed remote check, and a publisher that has not
   reported for 30 minutes. An unreadable status file is named, and the URL is still given.
