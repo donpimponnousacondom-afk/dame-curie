@@ -93,3 +93,12 @@ def test_protocol_tells_him_to_pick_his_own_chess_moves():
     assert "more_tools(group='games') first" in text
     assert "you play your own moves" in text
     assert "nothing plays for you" in text
+
+
+def test_protocol_says_late_publication_is_not_hers_to_repair():
+    text = TOOL_PROTOCOL.lower()
+    assert "you cannot see, restart or repair the publisher" in text
+    assert "check a new url at most twice" in text
+    assert "publication is late" in text
+    assert "then stop until the user asks" in text
+    assert "deleting a whole site deletes it on the remote" in text

@@ -4,6 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event
 
 from .common import RemoteFailure, ScanIncomplete
+from .heartbeat import local_time, notify
 from .mirror import Mirror
 from .watch import Watcher
 
@@ -49,6 +50,8 @@ class Publisher:
         self.audit_pending = False
         self.audit_due = 0.0
         self.audit_reported = False
+        self.audit_success = "none since start"
+        self.audit_status = "no remote check finished since start"
         self.background_turn = True
         self.force: set[str] = set()
         self.retry: set[str] = set()
@@ -74,6 +77,7 @@ class Publisher:
             self.next_rescan = time.monotonic() + self.mirror.config.rescan_seconds
             if isinstance(error, (RemoteFailure, ScanIncomplete)):
                 print(f"publisher: remote check failed: {error}; retry on next scan", file=sys.stderr)
+                self.audit_status = f"remote check FAILED at {local_time()}; last success: {self.audit_success}"
             else:
                 repairs = active.result()
                 self.force.update(repairs | self.retry)
@@ -86,11 +90,19 @@ class Publisher:
                           f"content_checked={self.mirror.inventory_hashed} repairs={len(repairs)}; "
                           "unchanged checks are quiet", file=sys.stderr)
                 self.audit_reported = True
+                self.audit_success = local_time()
+                self.audit_status = (f"last successful remote check: {self.audit_success}, "
+                                     f"sites={self.mirror.inventory_count} "
+                                     f"local_errors={len(self.mirror.inventory_errors)}")
         elif isinstance(error, (RemoteFailure, ScanIncomplete)):
             self.retry.add(name)
             print(f"publisher: site={name!r}: {error}; retry on next scan", file=sys.stderr)
         elif active.result():
             print(f"publisher: site={name!r}: changes synchronized", file=sys.stderr)
+        # The only watchdog report. It needs the main loop, the worker and the scheduler:
+        # when one of them hangs, no job ends and systemd restarts the service. A failed
+        # job counts, because its cause is in the journal and it is retried.
+        notify(f"WATCHDOG=1\nSTATUS={self.audit_status}")
 
     def run(self) -> None:
         while not self.stopped.is_set() and not self.watcher.rebuild(self.mirror.state.source_identity or self.watcher.root_identity):

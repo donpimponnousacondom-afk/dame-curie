@@ -12,6 +12,11 @@ WorkingDirectory=/opt/dame-curie
 ExecStart=/opt/dame-curie/.venv/bin/python -B -m scripts.publisher --config /srv/dame-curie/publisher/config/publisher.toml
 Restart=on-failure
 RestartSec=30
+# scripts/publisher/service.py reports after each job. One job has at most 4 remote calls,
+# each limited to timeout_seconds (production: 300), plus local work. Keep WatchdogSec
+# larger than that. On expiry systemd sends SIGABRT, and Restart=on-failure restarts it.
+WatchdogSec=30min
+NotifyAccess=main
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict

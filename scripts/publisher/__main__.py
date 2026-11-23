@@ -1,4 +1,5 @@
 import argparse
+import faulthandler
 import sys
 from contextlib import ExitStack
 from pathlib import Path
@@ -46,4 +47,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # The watchdog stops a hung publisher with SIGABRT. This prints the stack of every
+    # thread to the journal first, so that the cause of the hang stays visible.
+    faulthandler.enable()
     sys.exit(main())

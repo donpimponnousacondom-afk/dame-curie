@@ -176,6 +176,35 @@ completion; they do not retain partial progress after a timeout. The live 31-tar
 observation is not a 50,000-site benchmark. Very large cold inventories need measured
 capacity and possibly bounded/resumable batches before such a deployment.
 
+## Watchdog
+
+On 23 November 2026 the publisher had published nothing since 10 to 12 November, and
+systemd showed it as active. Root restarted it, and publication continued. The cause of
+the hang is unknown: no error was logged, and the restart ended the process.
+
+- The publisher reports to systemd (`WATCHDOG=1`) each time a job ends. A job is one
+  remote check or one site sync. A failed job counts: its cause is in the journal, and it
+  is retried. `scripts/publisher/heartbeat.py` sends the report.
+- The report needs the main loop, the worker and the scheduler. When one of them hangs, no
+  job ends. After `WatchdogSec` (30 minutes) systemd sends SIGABRT to the service, and
+  `Restart=on-failure` starts it again after 30 seconds.
+- On SIGABRT the publisher prints the stack of every thread to the journal
+  (`faulthandler`). Read it before you change anything: it names the line that hung.
+- One sync job can make 4 remote calls (probe, remove, claim, transfer), each limited to
+  `timeout_seconds`. With 300 seconds that is 20 minutes plus local work. `WatchdogSec`
+  must stay larger. A larger `timeout_seconds` needs a larger `WatchdogSec`.
+- `systemctl status` shows the last remote check on its `Status:` line, with its time. It
+  says `FAILED` when the last check failed, with the time of the last success.
+- The watchdog finds a publisher that does not work. It does not restart a publisher that
+  works and fails: read the `Status:` line and the journal for a remote failure.
+- A failed report to systemd stops the publisher with its cause.
+- The installed unit is a copy. After a change of
+  `scripts/publisher/dame-curie-publisher.service`, install it: see
+  [OPERATIONS.md](OPERATIONS.md), Deploy, step 8.
+
+The prompt tells the model that it cannot repair the publisher: it reports late
+publication once and stops.
+
 ## Verifying a publication - separate grant required
 
 These examples read service state or the remote host; they need a publisher grant. Local checks:
@@ -226,6 +255,8 @@ sudo journalctl -u dame-curie-publisher.service -f -n 50
 | `hardlinked source refused` | A source file has `st_nlink != 1`. |
 | `source root replacement refused` | The authoring root was moved or replaced under the running publisher. |
 | `<action> '<site>': <program> exit=<code>: ...` | Specific remote guard failure or recognized SSH/rsync error. The affected site retries on a later scan. |
+| `systemd notification failed: <errno>` | The publisher could not report to systemd. It stops, and systemd restarts it. |
+| `Fatal Python error: Aborted` with thread stacks | The watchdog stopped a hung publisher, or an operator sent SIGABRT. The stacks name the line that hung. |
 | `publisher: configuration or filesystem operation failed` | Startup failure before the watcher began. |
 
 ## PHP, Perl and CGI
