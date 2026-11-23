@@ -33,7 +33,7 @@ Root names the members. Use these exact targets, at high effort:
 
 ## Brief
 
-Give each member the same text. Do not give it your verdict or another member's report.
+Give each member the same text (one exception: the strict text for Sol, below). Do not give it your verdict or another member's report.
 
 > Independently review the pinned Dame Curie pull request. You are read-only: no edits, commits, checkouts, pushes, merges, runtime actions, provider calls, private-state reads or GitHub comments. No `pkill`, `killall` or other kill by pattern. Do the review yourself; start no agents.
 >
@@ -43,9 +43,9 @@ Give each member the same text. Do not give it your verdict or another member's 
 >
 > Trace changed behaviour and its failure paths: permissions and state isolation, ordering, configuration parameters on the wire, data correctness. Check the hard rules in `AGENTS.md`: configuration is sacred, failures stay visible, no word triggers, container time zone. A green check and this summary do not prove correctness.
 >
-> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and it breaks one of these: the acceptance, a rule of `AGENTS.md`, a permission or isolation boundary, or behaviour that worked before this diff.
+> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and it breaks one of these: the acceptance, a rule of `AGENTS.md` (wording and style are polish), a permission or isolation boundary, or behaviour that worked before this diff.
 >
-> These cases are out of scope, also when they touch an acceptance item in general words. The exceptions: the acceptance names the case, the changed code breaks a rule (for example it hides the failure), or the case crosses a permission or isolation boundary.
+> These cases are out of scope, also when they touch an acceptance item in general words. The exceptions: the acceptance names the case, the changed code breaks a rule (for example it hides the failure), the case crosses a permission or isolation boundary, or the diff breaks the case where it worked before.
 >
 > - A file system, disk, mount or kernel that fails.
 > - A name, file or collision that the model or a user causes and that harms only their own work.
@@ -75,7 +75,7 @@ For a later round, add the earlier findings, what changed, and your objections w
 GPT Sol 6.2 leaves the scope: it reports new edge cases in each round that it did not report in its first two passes over the same code. On PR #53 it found real defects in the first rounds. Then its findings became smaller in each round, and root ruled the last three out of scope.
 
 - The scope paragraph in the brief applies to all members from round 1.
-- From round 3 on, compare each Sol finding with the earlier heads. When Sol reports a finding in code that it reviewed before and did not report in round 1 or 2, put this text at the top of the next brief for Sol. It is the only exception to the rule that all members get the same text:
+- From round 3 on, compare each Sol finding with the earlier heads. When Sol reports a finding in code that it reviewed before and did not report in its first two passes over that code, put this text at the top of the next brief for Sol. It is the only exception to the rule that all members get the same text:
 
 > You reviewed this code in rounds [numbers] and did not report these findings: [list]. That costs a full round for each small case. Your scope is the diff and the acceptance list below, and nothing else. Review that scope thoroughly, once, and report everything in it now. Do not consider the whole world of things that could go wrong. For each finding, name the acceptance item, rule, boundary or earlier behaviour that it breaks, and a trigger that can happen in the described deployment. Without both, it is not a finding and it is not a reason for NOT READY.
 
