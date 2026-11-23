@@ -186,15 +186,20 @@ the hang is unknown: no error was logged, and the restart ended the process.
   remote check or one site sync. A failed job counts: its cause is in the journal, and it
   is retried. `scripts/publisher/heartbeat.py` sends the report.
 - The report needs the main loop, the worker and the scheduler. When one of them hangs, no
-  job ends. After `WatchdogSec` (30 minutes) systemd sends SIGABRT to the service, and
-  `Restart=on-failure` starts it again after 30 seconds.
+  job ends. `WatchdogSec` (30 minutes) after the last report, systemd sends SIGABRT to the
+  main process. `Restart=on-failure` starts the service 30 seconds after it ended. A process
+  that does not end gets SIGKILL after `TimeoutAbortSec` (90 seconds).
+- `KillMode=mixed` signals only the main process first. `ssh` and `rsync` get SIGKILL after
+  it ended. A signal to `ssh` could release the hung worker before the stack is printed.
 - On SIGABRT the publisher prints the stack of every thread to the journal
   (`faulthandler`). Read it before you change anything: it names the line that hung.
-- One sync job can make 4 remote calls (probe, remove, claim, transfer), each limited to
-  `timeout_seconds`. With 300 seconds that is 20 minutes plus local work. `WatchdogSec`
-  must stay larger. A larger `timeout_seconds` needs a larger `WatchdogSec`.
+- The longest healthy time between two reports is `rescan_seconds`, plus 4 remote calls
+  (probe, remove, claim, transfer) of `timeout_seconds` each, plus 5 minutes for local work.
+  With 30 and 300 seconds that is 25.5 minutes. The publisher does not start with a smaller
+  `WatchdogSec`; the error names the values.
 - `systemctl status` shows the last remote check on its `Status:` line, with its time. It
-  says `FAILED` when the last check failed, with the time of the last success.
+  says `FAILED` when the last check failed, with the time of the last success. The line is
+  absent until the first job of the process ends.
 - The watchdog finds a publisher that does not work. It does not restart a publisher that
   works and fails: read the `Status:` line and the journal for a remote failure.
 - A failed report to systemd stops the publisher with its cause.
@@ -255,6 +260,7 @@ sudo journalctl -u dame-curie-publisher.service -f -n 50
 | `hardlinked source refused` | A source file has `st_nlink != 1`. |
 | `source root replacement refused` | The authoring root was moved or replaced under the running publisher. |
 | `<action> '<site>': <program> exit=<code>: ...` | Specific remote guard failure or recognized SSH/rsync error. The affected site retries on a later scan. |
+| `WatchdogSec <n>s is less than the <m>s that ...` | `rescan_seconds` or `timeout_seconds` is too large for the installed unit. The publisher does not start. |
 | `systemd notification failed: <errno>` | The publisher could not report to systemd. It stops, and systemd restarts it. |
 | `Fatal Python error: Aborted` with thread stacks | The watchdog stopped a hung publisher, or an operator sent SIGABRT. The stacks name the line that hung. |
 | `publisher: configuration or filesystem operation failed` | Startup failure before the watcher began. |

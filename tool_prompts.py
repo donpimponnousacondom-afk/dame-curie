@@ -97,7 +97,7 @@ TOOL_PROTOCOL = (
     "tell the user that the file is ready, that publication is late, and that the operator "
     "must check the publisher if it stays late. Then stop until the user asks: do not "
     "rebuild the site, write probe files or keep testing the URL. "
-    "The file appears by itself when the publisher runs again. "
+    "Publication resumes by itself when the publisher works again. "
     "Real line breaks or <br> in visible HTML; "
     "never literal \\n text. Full visual freedom - invent a new look each time; "
     "no house style unless the user asked.\n"

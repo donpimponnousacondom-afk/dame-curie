@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from scripts.publisher.common import PublisherError
 from scripts.publisher.config import Config
-from scripts.publisher.heartbeat import notify
+from scripts.publisher.heartbeat import check_watchdog, notify
 from scripts.publisher.mirror import Mirror
 from scripts.publisher.service import Publisher
 from scripts.publisher.state import State
@@ -113,6 +113,8 @@ class HeartbeatTests(unittest.TestCase):
         self.addCleanup(executor.shutdown, wait=True)
         self.addCleanup(publisher.stopped.set)
         self.addCleanup(transport.release.set)
+        # A closed receiver releases a publisher that waits in a full notify queue.
+        self.addCleanup(self.receiver.close)
         self.task = executor.submit(publisher.run)
         return publisher, transport
 
@@ -192,62 +194,78 @@ class HeartbeatTests(unittest.TestCase):
         self.assertEqual(self.receive(0.1), "")
 
 
-class HangEvidenceTests(unittest.TestCase):
+class ProcessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        for name in ("public", "stage", "state"):
+            (self.root / name).mkdir(mode=0o700)
+        for name in ("key", "known_hosts"):
+            (self.root / name).touch(mode=0o600)
+        (self.root / "bin").mkdir()
+        self.started = self.root / "started"
+        ssh = self.root / "bin/ssh"
+        ssh.write_text(f"#!/bin/sh\n: > '{self.started}'\nexec sleep 60\n")
+        ssh.chmod(0o700)
+        self.config = self.root / "publisher.toml"
+        values = {name: str(self.root / name) for name in ("key", "known_hosts")}
+        values |= {
+            "source": str(self.root / "public"),
+            "staging": str(self.root / "stage"),
+            "state": str(self.root / "state"),
+            "host": "synthetic.invalid",
+            "user": "publisher",
+            "site_root": "/synthetic/sites",
+            "image_root": "/synthetic/images",
+        }
+        self.config.write_text(
+            "\n".join(f"{key} = {json.dumps(value)}" for key, value in values.items())
+        )
+        self.config.chmod(0o600)
+
+    def start(self, **environment: str) -> subprocess.Popen:
+        """Start the real entry point with a synthetic ssh that never answers."""
+        return subprocess.Popen(
+            [sys.executable, "-B", "-m", "scripts.publisher", "--config", self.config],
+            cwd=REPO,
+            env={"PATH": f"{self.root / 'bin'}:{os.environ['PATH']}", **environment},
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+
     def test_the_watchdog_signal_prints_the_stack_of_the_hung_worker(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for name in ("public", "stage", "state"):
-                (root / name).mkdir(mode=0o700)
-            for name in ("key", "known_hosts"):
-                (root / name).touch(mode=0o600)
-            binaries = root / "bin"
-            binaries.mkdir()
-            started = root / "started"
-            ssh = binaries / "ssh"
-            ssh.write_text(f"#!/bin/sh\n: > '{started}'\nexec sleep 60\n")
-            ssh.chmod(0o700)
-            config = root / "publisher.toml"
-            values = {name: str(root / name) for name in ("key", "known_hosts")}
-            values |= {
-                "source": str(root / "public"),
-                "staging": str(root / "stage"),
-                "state": str(root / "state"),
-                "host": "synthetic.invalid",
-                "user": "publisher",
-                "site_root": "/synthetic/sites",
-                "image_root": "/synthetic/images",
-            }
-            config.write_text(
-                "\n".join(
-                    f"{key} = {json.dumps(value)}" for key, value in values.items()
-                )
-            )
-            config.chmod(0o600)
-            environment = {"PATH": f"{binaries}:{os.environ['PATH']}"}
-            process = subprocess.Popen(
-                [sys.executable, "-B", "-m", "scripts.publisher", "--config", config],
-                cwd=REPO,
-                env=environment,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            try:
-                deadline = time.monotonic() + 20
-                while not started.exists() and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                self.assertTrue(started.exists(), "the publisher made no remote call")
-                # systemd signals the whole control group, so ssh also receives it.
-                os.killpg(process.pid, signal.SIGABRT)
-                _, stderr = process.communicate(timeout=20)
-            finally:
-                if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.communicate()
+        process = self.start()
+        try:
+            deadline = time.monotonic() + 20
+            while not self.started.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(self.started.exists(), "the publisher made no remote call")
+            # KillMode=mixed: the main process first, then the rest of its group.
+            os.kill(process.pid, signal.SIGABRT)
+            process.wait(timeout=20)
+        finally:
+            os.killpg(process.pid, signal.SIGKILL)
+            _, stderr = process.communicate(timeout=20)
         self.assertEqual(process.returncode, -signal.SIGABRT)
         self.assertIn("Fatal Python error: Aborted", stderr)
         self.assertRegex(stderr, r'transport\.py", line \d+ in execute')
         self.assertRegex(stderr, r'service\.py", line \d+ in run')
+
+    def test_a_limit_that_is_too_small_stops_the_start_with_its_cause(self) -> None:
+        process = self.start(WATCHDOG_USEC="60000000")
+        try:
+            _, stderr = process.communicate(timeout=20)
+        finally:
+            process.kill()
+        self.assertEqual(process.returncode, 1)
+        self.assertEqual(
+            stderr,
+            "publisher: WatchdogSec 60s is less than the 840s that rescan_seconds=60 "
+            "and timeout_seconds=120 need\n",
+        )
+        self.assertFalse(self.started.exists())
 
 
 class UnitTests(unittest.TestCase):
@@ -259,7 +277,37 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(service["WatchdogSec"], "30min")
         self.assertEqual(service["NotifyAccess"], "main")
         self.assertEqual(service["Restart"], "on-failure")
+        self.assertEqual(service["KillMode"], "mixed")
         self.assertNotIn("WatchdogSignal", service)
+
+    def test_a_limit_that_a_healthy_publisher_can_reach_is_refused(self) -> None:
+        def config(rescan: float, timeout: int) -> Config:
+            path = Path("/synthetic")
+            return Config(
+                source=path,
+                staging=path,
+                state=path,
+                key=path,
+                known_hosts=path,
+                host="synthetic.invalid",
+                user="publisher",
+                site_root="/synthetic/sites",
+                image_root="/synthetic/images",
+                rescan_seconds=rescan,
+                timeout_seconds=timeout,
+            )
+
+        with patch.dict(os.environ, {"WATCHDOG_USEC": "1800000000"}):
+            check_watchdog(config(30, 300))
+            check_watchdog(config(300, 300))
+            for rescan, timeout in ((301, 300), (1800, 120), (30, 600)):
+                with self.assertRaisesRegex(
+                    PublisherError, "WatchdogSec 1800s is less"
+                ):
+                    check_watchdog(config(rescan, timeout))
+        with patch.dict(os.environ):
+            os.environ.pop("WATCHDOG_USEC", None)
+            check_watchdog(config(1800, 600))
 
 
 if __name__ == "__main__":
