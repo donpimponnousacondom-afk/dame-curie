@@ -27,6 +27,8 @@ How to revert one change:
      `dame-curie-publisher.service`.
    - #4, #7, #27 and #28 changed `compose.yaml`. Install the reverted file as the
      deployed copy.
+   - #52 changed the publisher unit file. Reinstall the reverted unit: see
+     [OPERATIONS.md](OPERATIONS.md), Deploy, step 8.
    - The deployed copy is `/opt/dame-curie/compose.yaml`, next to the
      deployed `scripts/instance.py`. `scripts/deploy.sh` installs both.
    - #7 renamed `DAME_CURIE_PUBLIC_BASE_URL` to
@@ -80,6 +82,7 @@ How to revert one change:
 | #49 | `git log --grep '(#49)'` (the squash commit does not exist before the merge) | Review protocol, root, 6 November 2026, for now. The `council` skill (Claude Opus 5.5, GPT Sol 6.1, Muse Wonder Full 1.0, through T3 Code) reviews each PR head. The `babysit-pr` skill runs a Haiku agent with `pr-wait` for checks and comments. Both are adapted from t3dotgg/tstack. Sonnet and Haiku no longer give review verdicts, and `pr-review` is removed. |
 | #50 | `git log --grep '(#50)'` (the squash commit does not exist before the merge) | Root, 6 November 2026. One `send_message` is now the normal default, and a request for several messages overrides it. The protocol says that an unlisted tool name does not exist. A tool call refused as unavailable writes a log line; before, only the traces recorded it. The runbook says that `up` does not apply a `bot.env` edit. GPT Image 2.6 is parked. |
 | #51 | `git log --grep '(#51)'` (the squash commit does not exist before the merge) | Root, 22 November 2026. The council's GPT Sol member is now `gpt-6.2-sol` at high effort, in place of `gpt-6.1-sol`. Claude Opus 5.5 and Muse Wonder Full 1.0 stay. No runtime change. |
+| #52 | `git log --grep '(#52)'` (the squash commit does not exist before the merge) | Root, 23 November 2026. The publisher hung silently for at least 11 days. It now reports each finished job to a systemd watchdog (30 minutes). A hang prints the stack of every thread and the service restarts. `systemctl status` shows the last remote check. The prompt tells her that publication is not her task: she gives the URL, says that the site is syncing, and does not wait for the remote. | `Watchdog timeout` and `Fatal Python error: Aborted` in the publisher journal. A revert must also reinstall the old unit file: the new unit restarts the old code every 30 minutes. |
 
 ### Known open items
 

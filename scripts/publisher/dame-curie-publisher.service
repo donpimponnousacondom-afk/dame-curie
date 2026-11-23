@@ -12,6 +12,14 @@ WorkingDirectory=/opt/dame-curie
 ExecStart=/opt/dame-curie/.venv/bin/python -B -m scripts.publisher --config /srv/dame-curie/publisher/config/publisher.toml
 Restart=on-failure
 RestartSec=30
+# scripts/publisher/service.py reports after each job. On expiry systemd sends SIGABRT, and
+# Restart=on-failure restarts the service. The publisher refuses a WatchdogSec that is too
+# small for its rescan_seconds and timeout_seconds.
+WatchdogSec=30min
+NotifyAccess=main
+# SIGABRT goes to the main process only. If ssh or rsync died first, a worker that waits for
+# it would continue, and the stack would not show the line that hung.
+KillMode=mixed
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
