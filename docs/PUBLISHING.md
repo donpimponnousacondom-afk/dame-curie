@@ -283,6 +283,7 @@ sudo journalctl -u dame-curie-publisher.service -f -n 50
 | `<action> '<site>': <program> exit=<code>: ...` | Specific remote guard failure or recognized SSH/rsync error. The affected site retries on a later scan. |
 | `WatchdogSec <n>s is less than the <m>s that ...` | `rescan_seconds` or `timeout_seconds` is too large for the installed unit. The publisher does not start. |
 | `status file not written: <errno>` | The `status` folder is missing, full or not writable. The publisher stops, and systemd restarts it. |
+| `main loop stopped: <error>; the exit waits for the running job: <job>` | The main loop failed while a job ran. The stack follows. If the job hangs, the watchdog ends the process. |
 | `systemd notification failed: <errno>` | The publisher could not report to systemd. It stops, and systemd restarts it. |
 | `Fatal Python error: Aborted` with thread stacks | The watchdog stopped a hung publisher, or an operator sent SIGABRT. The stacks name the line that hung. |
 | `publisher: configuration or filesystem operation failed` | Startup failure before the watcher began. |
