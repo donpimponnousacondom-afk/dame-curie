@@ -149,34 +149,47 @@ class PublisherRemoteTests(unittest.TestCase):
                 self.assertEqual(marker.read_bytes(), original_bytes)
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
                 (marker.parent / f".{other_namespace}-publisher-owner").unlink()
-                # Root, 1 November 2026: a hidden folder that a server script
-                # creates on the remote persists; a remote-only hidden file follows
-                # the local tree and is deleted.
+                # Root, 23 November 2026: a hidden folder, at any depth, belongs to the
+                # remote. A remote-only hidden file follows the local tree.
                 remote_data = self.sites / "my site/.data"
+                remote_deep = self.sites / "my site/sub/.deep"
                 remote_data.mkdir()
-                (remote_data / "state.json").write_bytes(b"server data")
+                self.put("my site/sub/page.html", b"sub page")
+                self.put("my site/sub/.htaccess", b"sub rules")
+                mirror.reconcile()
+                remote_deep.mkdir()
+                for folder in (remote_data, remote_deep):
+                    (folder / "state.json").write_bytes(b"server data")
                 self.assertNotIn("my site", mirror.inventory())
                 (self.sites / "my site/.stray").write_bytes(b"remote only")
                 self.assertIn("my site", mirror.inventory())
-                # A local file in the same hidden folder is uploaded and the
-                # remote-only file beside it stays.
-                self.put("my site/.data/keep", b"local data")
+                # A local hidden folder has no effect on the remote.
+                for folder in (".data", "sub/.deep", "sub/.local-only"):
+                    self.put(f"my site/{folder}/state.json", b"local data")
                 removed.unlink()
                 page.write_bytes(b"two")
                 mirror.reconcile()
                 self.assertEqual((self.sites / "my site/index.html").read_bytes(), b"two")
+                self.assertEqual((self.sites / "my site/sub/.htaccess").read_bytes(), b"sub rules")
                 self.assertFalse((self.sites / "my site/old.js").exists())
-                self.assertEqual((remote_data / "state.json").read_bytes(), b"server data")
-                self.assertEqual((remote_data / "keep").read_bytes(), b"local data")
-                # The local hidden folder is skipped in the manifest too, so the
-                # remote inventory reports no drift.
+                self.assertFalse((self.sites / "my site/sub/.local-only").exists())
+                for folder in (remote_data, remote_deep):
+                    self.assertEqual((folder / "state.json").read_bytes(), b"server data")
                 self.assertNotIn("my site", mirror.inventory())
                 self.assertFalse((self.sites / "my site/.stray").exists())
-                # Deleting the local hidden folder does not delete the remote copy.
+                # A deleted local hidden folder has no effect either.
                 shutil.rmtree(self.config.source / "my site/.data")
+                shutil.rmtree(self.config.source / "my site/sub/.deep")
                 mirror.reconcile()
+                for folder in (remote_data, remote_deep):
+                    self.assertEqual((folder / "state.json").read_bytes(), b"server data")
+                self.assertNotIn("my site", mirror.inventory())
+                # A deleted normal folder is deleted with the hidden folder inside it.
+                shutil.rmtree(self.config.source / "my site/sub")
+                self.assertIn("my site", mirror.inventory())
+                mirror.reconcile()
+                self.assertFalse((self.sites / "my site/sub").exists())
                 self.assertEqual((remote_data / "state.json").read_bytes(), b"server data")
-                self.assertEqual((remote_data / "keep").read_bytes(), b"local data")
                 self.assertNotIn("my site", mirror.inventory())
                 self.assertEqual(marker.read_bytes(), original_bytes)
                 self.assertEqual(marker.stat().st_ino, original_stat.st_ino)
@@ -184,7 +197,7 @@ class PublisherRemoteTests(unittest.TestCase):
                 command = next(command for command in transport.commands if command[0] == "rsync")
                 self.assertIn(f"P /{marker.name}", command)
                 self.assertIn(f"H /{marker.name}", command)
-                self.assertIn("P /.*/***", command)
+                self.assertIn("-p .*/", command)
                 shutil.rmtree(page.parent)
                 mirror.reconcile()
                 self.assertFalse((self.sites / "my site").exists())
@@ -323,6 +336,29 @@ class PublisherRemoteTests(unittest.TestCase):
         self.assertEqual((self.sites / "site/index.html").read_bytes(), b"after partial write")
         self.assertIn(token.encode(), (self.sites / "site/.curie-publisher-owner").read_bytes())
         self.assertFalse(any(path.name.startswith((".dame-curie-publisher-claim-", ".curie-publisher-claim-")) for path in self.sites.iterdir()))
+
+    def test_a_deleted_site_is_deleted_with_its_hidden_folders(self):
+        self.put("gone/index.html")
+        self.put("kept/index.html")
+        self.mirror.reconcile()
+        for name in ("gone/.data", "gone/.deep/.deeper", "kept/.data"):
+            (self.sites / name).mkdir(parents=True)
+            (self.sites / name / "state.json").write_bytes(b"server data")
+        shutil.rmtree(self.config.source / "gone")
+        self.mirror.reconcile()
+        self.assertFalse((self.sites / "gone").exists())
+        self.assertEqual((self.sites / "kept/.data/state.json").read_bytes(), b"server data")
+
+    def test_a_replaced_remote_hidden_folder_is_no_drift(self):
+        self.put("site/index.html")
+        self.mirror.reconcile()
+        data = self.sites / "site/.data"
+        data.mkdir()
+        self.assertEqual(self.mirror.inventory(), set())
+        (data / "state.json").write_bytes(b"one")
+        shutil.rmtree(data)
+        (self.sites / "site/.other").mkdir()
+        self.assertEqual(self.mirror.inventory(), set())
 
     def test_removed_source_cleans_partial_claim_and_replacement_canonical(self):
         page = self.put("site/index.html")

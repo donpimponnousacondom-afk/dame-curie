@@ -106,4 +106,6 @@ def test_protocol_says_publication_is_not_her_task():
     assert "you cannot start, restart or repair the publisher" in text
     assert "if it is, say that it waits for the publisher" in text
     assert "if it is not, put it there" in text
-    assert "deleting a whole site deletes it on the remote" in text
+    assert "use hidden folders to keep persistent data on the remote" in text
+    assert "nothing in a hidden folder is ever synced, neither upstream nor downstream" in text
+    assert "deleting a normal folder or a whole site deletes it on the remote" in text

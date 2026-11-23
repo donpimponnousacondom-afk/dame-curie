@@ -118,8 +118,7 @@ class Publisher:
         """Record which sites a finished remote check verified.
 
         `force` holds each repair and retry that has not started, also from earlier checks.
-        Such a site is not verified: the check does not read the top-level hidden folders,
-        so it cannot end their failure.
+        Such a site is not verified: only its own transfer ends its failure.
         """
         self.status.check_error = ""
         for name in self.status.sites.keys() - self.mirror.expected.keys():

@@ -74,10 +74,12 @@ class PublisherScanTests(unittest.TestCase):
             self.scanner.marker_namespace = namespace
             expected = {Path("site/index.html")}
             excluded = {*files, *directories, "blocked", "outside", "link", "linkdir", "pipe"}
+            # A claim is a folder, so it is also a hidden folder in every namespace.
+            excluded.update({".curie-publisher-claim-synthetic", "legacy-child"})
             if namespace == "dame-curie":
-                expected.update(legacy_files)
+                expected.add(Path("site/.curie-publisher-owner"))
             else:
-                excluded.update({".curie-publisher-owner", ".curie-publisher-claim-synthetic", "legacy-child"})
+                excluded.add(".curie-publisher-owner")
             with self.subTest(namespace=namespace), patch("scripts.publisher.scan.os.open", wraps=os.open) as opened:
                 self.assertEqual(set(self.scanner.scan().files), expected)
                 self.assertTrue(excluded.isdisjoint(Path(call.args[0]).name for call in opened.call_args_list))
@@ -114,20 +116,24 @@ class PublisherScanTests(unittest.TestCase):
             "downloads/public.key": b"public key-shaped download",
             "downloads/certificate.pem": b"public certificate download",
             "public.env": b"THEME=dark\n",
-            ".well-known/example.json": b'{"public":true}',
-            ".assets/module.js": b"export default 1;",
+            "assets/.htaccess": b"Options -Indexes\n",
+            ".htaccess": b"Options -Indexes\n",
             ".gitignore": b"*.tmp\n",
             ".env.example": b"THEME=dark\n",
         }
         for name, content in files.items():
             self.put("site/" + name, content)
         self.put(".not-a-site/index.html", b"top-level hidden artifact")
+        # Root, 23 November 2026: a hidden folder, at any depth, is never published.
+        for name in (".well-known/example.json", ".assets/module.js", "assets/.deep/x"):
+            self.put("site/" + name, b"belongs to the remote")
         snapshot = self.scanner.scan()
         self.staging.materialize(snapshot)
         self.assertEqual(snapshot.sites, {"site"})
         self.assertEqual(set(snapshot.files), {Path("site") / name for name in files})
         for name, content in files.items():
             self.assertEqual((self.staging.tree / "site" / name).read_bytes(), content)
+        self.assertFalse((self.staging.tree / "site/.assets").exists())
 
     def test_explicit_private_subtree_never_recurses(self):
         self.put("site/index.html")

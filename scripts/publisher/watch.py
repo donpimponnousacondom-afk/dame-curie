@@ -72,7 +72,7 @@ class Watcher:
             if not self.scanner.allowed(child_path):
                 continue
             value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            if not stat.S_ISDIR(value.st_mode):
+            if not stat.S_ISDIR(value.st_mode) or name.startswith("."):
                 continue
             child = os.open(name, DIRECTORY_FLAGS, dir_fd=directory_fd)
             try:
@@ -136,7 +136,7 @@ class Watcher:
             relative = path / name if name else path
             if relative == Path("."):
                 self.overflow = self.topology = True
-            elif self.scanner.allowed(relative):
+            elif self.scanner.allowed(relative) and not (mask & IN_ISDIR and name.startswith(".")):
                 self.changes.add(relative.parts[0])
                 self.topology = self.topology or bool(mask & (IN_ISDIR | IN_DELETE_SELF | IN_MOVE_SELF | IN_IGNORED))
         if mask & IN_IGNORED:
