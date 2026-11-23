@@ -228,6 +228,45 @@ class PublisherServiceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'synthetic worker defect'):
                     task.result(timeout=2)
 
+    def test_the_cause_of_a_stop_is_printed_while_a_job_hangs(self):
+        for failure, expected, hidden in (
+            (ScanIncomplete('source root replacement refused'),
+             'ScanIncomplete: source root replacement refused;', None),
+            (OSError(errno.EIO, 'SYNTHETIC PRIVATE PAYLOAD'), 'OSError: EIO;', 'SYNTHETIC PRIVATE PAYLOAD'),
+        ):
+            with self.subTest(failure=failure):
+                self.put('a-blocked/index.html', repr(failure).encode())
+                self.transport.block_name = 'a-blocked'
+                self.transport.blocked.clear()
+                self.transport.release.clear()
+                publisher = Publisher(self.mirror, self.watcher)
+                reported = io.StringIO()
+                with contextlib.redirect_stderr(reported):
+                    task = self.executor.submit(publisher.run)
+                    self.assertTrue(self.transport.blocked.wait(5))
+                    with patch.object(publisher, 'observe', side_effect=failure):
+                        deadline = time.monotonic() + 2
+                        while 'main loop stopped' not in reported.getvalue() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                    self.assertFalse(task.done(), 'the exit must still wait for the hung job')
+                    text = reported.getvalue()
+                    self.transport.release.set()
+                    with self.assertRaises(type(failure)):
+                        task.result(timeout=5)
+                self.assertIn(f"publisher: main loop stopped: {expected} "
+                              "the exit waits for the running job: site='a-blocked'", text)
+                self.assertRegex(text, r'service\.py", line \d+, in run')
+                if hidden:
+                    self.assertNotIn(hidden, text)
+
+    def test_a_stop_without_a_running_job_is_not_reported_twice(self):
+        reported = io.StringIO()
+        with contextlib.redirect_stderr(reported):
+            with patch.object(self.publisher, 'observe', side_effect=ScanIncomplete('synthetic stop')):
+                with self.assertRaisesRegex(ScanIncomplete, 'synthetic stop'):
+                    self.publisher.run()
+        self.assertNotIn('main loop stopped', reported.getvalue())
+
     def test_root_replacement_fails_closed_with_worker_active(self):
         self.put('a-blocked/index.html')
         self.transport.block_name = 'a-blocked'

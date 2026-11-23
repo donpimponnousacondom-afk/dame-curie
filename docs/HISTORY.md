@@ -47,4 +47,5 @@ One-off host scripts of 1 and 2 November 2026 (`deploy-r33-embed.sh`, `deploy-r3
 - C09: `config.py` loads dotenv at import time with `override=True`. Accepted. No lazy-loading project is pending.
 - P08/I05: historical bytecode provenance is permanently unattributable and quarantined. No cache investigation is pending.
 - Voice, replicas, sustained load and publisher remote-deletion recovery are unverified.
+- Publisher, accepted by root on 23 November 2026: the 5 minutes for local work in the watchdog limit are not enforced, and `test_a_settling_site_delays_the_check_by_at_most_one_more_period` can fail on an overloaded machine. An overloaded machine must break visibly.
 - Held by root: reasoning-only terminal responses stay terminal; the mandatory tool `explanation` argument; same-UID shell trust; the four filters listed in `TODO.md`.

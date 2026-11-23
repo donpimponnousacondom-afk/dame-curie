@@ -1,9 +1,11 @@
+import errno
 import sys
 import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event
 
-from .common import RemoteFailure, ScanIncomplete
+from .common import PublisherError, RemoteFailure, ScanIncomplete
 from .heartbeat import local_time, notify
 from .mirror import Mirror
 from .status import StatusFile
@@ -130,6 +132,22 @@ class Publisher:
         for name, failure in self.mirror.inventory_errors.items():
             self.status.failed(name, failure)
 
+    def report_stop(self, error: BaseException, name: str | None) -> None:
+        """Print why the main loop stopped, before the exit waits for the running job.
+
+        A job that hangs would hide the cause. Another message than that of a
+        PublisherError can hold private paths or content, so it is not printed.
+        """
+        cause = ""
+        if isinstance(error, PublisherError):
+            cause = f": {error}"
+        elif isinstance(error, OSError):
+            cause = f": {errno.errorcode.get(error.errno, 'UNKNOWN')}"
+        job = "remote check" if name is None else f"site={name!r}"
+        print(f"publisher: main loop stopped: {type(error).__name__}{cause}; "
+              f"the exit waits for the running job: {job}", file=sys.stderr)
+        print("".join(traceback.format_tb(error.__traceback__)), end="", file=sys.stderr)
+
     def run(self) -> None:
         while not self.stopped.is_set() and not self.watcher.rebuild(self.mirror.state.source_identity or self.watcher.root_identity):
             self.watcher.wait(0.05)
@@ -142,26 +160,31 @@ class Publisher:
         active: Future | None = None
         active_name: str | None = None
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="publisher-transfer") as worker:
-            while not self.stopped.is_set():
-                self.observe()
-                if active is not None and active.done():
-                    self.complete(active, active_name)
-                    active = None
-                if active is None:
-                    overdue = time.monotonic() - self.audit_due >= self.mirror.config.rescan_seconds
-                    if self.audit_pending and (not self.pending.dirty or overdue):
-                        self.audit_pending = False
-                        active_name = None
-                        self.job_started = time.time()
-                        active = worker.submit(self.mirror.inventory)
-                    else:
-                        name = self.pending.take(time.monotonic(), prefer_background=self.background_turn)
-                        if name is not None:
-                            self.background_turn = not self.background_turn
-                            active_name = name
+            try:
+                while not self.stopped.is_set():
+                    self.observe()
+                    if active is not None and active.done():
+                        self.complete(active, active_name)
+                        active = None
+                    if active is None:
+                        overdue = time.monotonic() - self.audit_due >= self.mirror.config.rescan_seconds
+                        if self.audit_pending and (not self.pending.dirty or overdue):
+                            self.audit_pending = False
+                            active_name = None
                             self.job_started = time.time()
-                            force = name in self.force
-                            self.force.discard(name)
-                            active = worker.submit(self.mirror.reconcile_site, name, force=force)
+                            active = worker.submit(self.mirror.inventory)
+                        else:
+                            name = self.pending.take(time.monotonic(), prefer_background=self.background_turn)
+                            if name is not None:
+                                self.background_turn = not self.background_turn
+                                active_name = name
+                                self.job_started = time.time()
+                                force = name in self.force
+                                self.force.discard(name)
+                                active = worker.submit(self.mirror.reconcile_site, name, force=force)
+            finally:
+                error = sys.exception()
+                if error is not None and active is not None and not active.done():
+                    self.report_stop(error, active_name)
             if active is not None:
                 self.complete(active, active_name)
