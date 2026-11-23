@@ -25,6 +25,7 @@ gh pr merge <number> --squash --match-head-commit <full 40-character sha>
 - Keep their reviews independent. Do not share one member's report with another inside a round.
 - Members are read-only. They do not edit the checkout, run the application, read private state or post to GitHub.
 - Each round is new delegates on the current head. A new commit invalidates the old verdicts.
+- Keep the members in scope, Sol first (root, 23 November 2026). The brief states what is out of scope. From round 3 on, a Sol finding that its first two passes missed in the same code gets the strict text of the `council` skill. Do not fix out-of-scope findings to get a verdict; bring them to root.
 - Each member returns a score out of 10 and READY or NOT READY. The scores go in the PR description, not in a comment.
 
 ## Babysitter
