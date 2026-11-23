@@ -26,7 +26,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadOnlyPaths=/opt/dame-curie /srv/dame-curie/sites
-ReadWritePaths=/srv/dame-curie/publisher/staging /srv/dame-curie/publisher/state /srv/dame-curie/publisher-status
+ReadWritePaths=/srv/dame-curie/publisher/staging /srv/dame-curie/publisher/state -/srv/dame-curie/publisher-status
 InaccessiblePaths=-/srv/dame-curie/data -/srv/dame-curie/config -/srv/dame-curie/logs -/srv/dame-curie/shell
 
 [Install]

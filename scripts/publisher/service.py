@@ -84,10 +84,11 @@ class Publisher:
                 self.audit_status = f"remote check FAILED at {local_time()}; last success: {self.audit_success}"
             else:
                 repairs = active.result()
-                self.force.update(repairs | self.retry)
-                self.pending.rescan(repairs | self.retry)
+                queued = repairs | self.retry
+                self.force.update(queued)
+                self.pending.rescan(queued)
                 self.retry.clear()
-                self.record_check(repairs)
+                self.record_check(queued)
                 for site, failure in self.mirror.inventory_errors.items():
                     print(f"publisher: site={site!r}: local scan: {failure}; retry on next scan", file=sys.stderr)
                 if not self.audit_reported or repairs or self.mirror.inventory_hashed:
@@ -103,9 +104,8 @@ class Publisher:
             self.retry.add(name)
             self.status.failed(name, str(error))
             print(f"publisher: site={name!r}: {error}; retry on next scan", file=sys.stderr)
-        else:
-            if active.result():
-                print(f"publisher: site={name!r}: changes synchronized", file=sys.stderr)
+        elif active.result():
+            print(f"publisher: site={name!r}: changes synchronized", file=sys.stderr)
             self.status.synced(name, self.job_started)
         self.status.write()
         # The only watchdog report. It needs the main loop, the worker and the scheduler:
@@ -113,14 +113,18 @@ class Publisher:
         # job counts, because its cause is in the journal and it is retried.
         notify(f"WATCHDOG=1\nSTATUS={self.audit_status}")
 
-    def record_check(self, repairs: set[str]) -> None:
-        """Record which sites a finished remote check verified."""
-        self.status.checked, self.status.check_error = self.job_started, ""
+    def record_check(self, queued: set[str]) -> None:
+        """Record which sites a finished remote check verified.
+
+        A site that still has a repair or a retry in the queue is not verified. The check
+        does not read the top-level hidden folders, so it cannot end their failure.
+        """
+        self.status.check_error = ""
         for name in self.status.sites.keys() - self.mirror.expected.keys():
             del self.status.sites[name]
-        for name in self.mirror.expected.keys() - repairs - self.mirror.inventory_errors.keys():
+        for name in self.mirror.expected.keys() - queued - self.mirror.inventory_errors.keys():
             self.status.synced(name, self.job_started)
-        for name in repairs:
+        for name in queued:
             self.status.different(name)
         for name, failure in self.mirror.inventory_errors.items():
             self.status.failed(name, failure)

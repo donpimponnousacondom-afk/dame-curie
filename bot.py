@@ -2341,7 +2341,7 @@ class DameCurieBot(commands.Bot):
         self.tools["more_tools"] = MoreToolsTool(self)
         if self.config.ENABLE_SHELL:
             self.tools["shell"] = ShellTool(self)
-            self.tools["site_status"] = SiteStatusTool(self)
+        self.tools["site_status"] = SiteStatusTool(self)
         if self.config.ENABLE_FETCH_URL:
             self.tools["fetch_url"] = FetchUrlTool(self)
         self.tools["see_image"] = SeeImageTool(self)

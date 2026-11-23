@@ -107,7 +107,7 @@ by the process user, mode 0600, link count 1; a symlink or hardlink is refused.
 | `key`, `known_hosts` | Mode 0600, regular files, `st_nlink == 1`, owned by the running user. A symlink or hardlink is refused. |
 | `host`, `user`, `port` | Remote endpoint. `StrictHostKeyChecking=yes` is unconditional; the host key must already be in `known_hosts`. |
 | `site_root`, `image_root` | Remote destinations, disjoint from each other in both directions. Neither may be `/`. |
-| `status` | Private folder, mode 0700, owned by the running user, for `status.json`. Optional. Without it no status is written. It must also be in `ReadWritePaths` of the unit. |
+| `status` | Private folder, mode 0700, owned by the running user, for `status.json`. Optional. Without it no status is written. It must also be in `ReadWritePaths` of the unit. When you remove the key, delete `status.json`: the tool would report a silent publisher. |
 | `private_paths` | Local subtrees to never publish. Optional. |
 | `marker_namespace` | `"dame-curie"` by default; only explicit `"curie"` selects V1 owner/claim names. Pinned in ownership state. |
 | `rescan_seconds`, `settle_seconds`, `timeout_seconds` | Watch cadence and transfer timeout. Optional. |
@@ -220,8 +220,13 @@ Root, 23 November 2026: the model may query the sync. It can never force it or w
   `DAME_CURIE_PUBLISHER_STATUS`.
 - The tool `site_status(site)` (`site_status.py`) reads that file and the local file times.
   It makes no request, starts nothing and answers within 5 seconds.
-- A site is synced when a finished job started after its newest local change and confirmed
-  the remote. Any other site is "syncing in progress", with its URL.
+- A site is synced when a finished transfer or remote check started after its newest local
+  change and confirmed the remote. A job without a transfer confirms nothing. A site with a
+  queued repair or retry is not synced. Any other site is "syncing in progress", with its
+  URL.
+- A remote check does not read the top-level hidden folders of a site. The answer names
+  them as not part of the check. A failed transfer of one stays visible until a transfer
+  succeeds.
 - The answer also names a failed sync, a failed remote check, and a publisher that has not
   reported for 30 minutes. An unreadable status file is named, and the URL is still given.
 - A failed write of the status file stops the publisher with its cause.

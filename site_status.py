@@ -11,6 +11,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from discord import Message
 
@@ -22,6 +23,8 @@ READ_TIMEOUT_SECONDS = 5
 SILENT_PUBLISHER_SECONDS = 30 * 60
 # The kernel stamps files with a coarse clock that can lag the clock of the publisher.
 CLOCK_MARGIN_SECONDS = 0.05
+# Folders of the authoring root that are not sites: images and the publisher exclusions.
+UNPUBLISHED_NAMES = frozenset({"_images", "_data", "_build"})
 
 
 def local_time(seconds: float) -> str:
@@ -31,19 +34,46 @@ def local_time(seconds: float) -> str:
     )
 
 
-def newest_change(folder: Path) -> float:
+def hidden_folders(folder: Path) -> list[str]:
+    """Return the top-level hidden folders. The remote keeps them and no check reads them."""
+    return sorted(
+        entry.name
+        for entry in os.scandir(folder)
+        if entry.name.startswith(".") and entry.is_dir(follow_symlinks=False)
+    )
+
+
+def newest_change(folder: Path, deadline: float) -> float:
     """Return the time of the newest change in a site, deletions included.
 
     A file that disappears during the walk is a change that happens now.
     """
     try:
         newest = folder.stat().st_ctime
+        skipped = hidden_folders(folder)
         for parent, directories, files in os.walk(folder):
+            if time.monotonic() > deadline:
+                raise TimeoutError
+            if Path(parent) == folder:
+                directories[:] = [name for name in directories if name not in skipped]
             for name in (*directories, *files):
                 newest = max(newest, os.lstat(os.path.join(parent, name)).st_ctime)
     except FileNotFoundError:
         return time.time()
     return newest
+
+
+def read_status(status_file: str) -> dict:
+    """Return the content of the status file. A wrong shape is an error with its cause."""
+    status = json.loads(Path(status_file).read_text(encoding="utf-8"))
+    if not isinstance(status, dict) or not (
+        isinstance(status.get("sites"), dict)
+        and isinstance(status.get("written"), int | float)
+        and isinstance(status.get("check_error"), str)
+        and all(isinstance(site, dict) for site in status["sites"].values())
+    ):
+        raise ValueError("the status file has an unexpected shape")
+    return status
 
 
 def publisher_notes(status: dict, site: dict) -> list[str]:
@@ -68,32 +98,35 @@ def publisher_notes(status: dict, site: dict) -> list[str]:
     return notes
 
 
-def site_report(name: str, root: Path, url: str, status_file: str) -> str:
-    """Return the sync state of one site as text for the model."""
-    folder = root / name
-    if not folder.is_dir():
-        return f"Error: there is no folder {name!r} in the authoring root {root}."
-    link = f"URL: {url}" if url else "URL: the operator configured no public site base."
-    waiting = (
+def waiting_text(name: str, link: str) -> str:
+    """Return the answer for every site that is not known to be synced."""
+    return (
         f"{name}: syncing in progress. The site is created. Give the user the URL now. "
-        "It goes live by itself. Do not wait for it, test it or ask again. " + link
+        f"It goes live by itself. Do not wait for it, test it or ask again. {link}"
     )
+
+
+def site_report(name: str, root: Path, link: str, status_file: str) -> str:
+    """Return the sync state of one site as text for the model."""
+    deadline = time.monotonic() + READ_TIMEOUT_SECONDS
+    folder = root / name
+    if folder.is_symlink() or not folder.is_dir():
+        return f"Error: there is no folder {name!r} in the authoring root {root}."
+    waiting = waiting_text(name, link)
     if not status_file:
         return f"{waiting}\nThe sync state is unknown: DAME_CURIE_PUBLISHER_STATUS is not set."
     try:
-        status = json.loads(Path(status_file).read_text(encoding="utf-8"))
+        status = read_status(status_file)
     except (OSError, ValueError) as error:
         return f"{waiting}\nThe sync state is unknown: {error}."
     site = status["sites"].get(name, {})
     synced = site.get("synced")
-    if synced is not None and newest_change(folder) < synced - CLOCK_MARGIN_SECONDS:
-        return "\n".join(
-            [
-                f"{name}: synced at {local_time(synced)}. {link}",
-                *publisher_notes(status, {}),
-            ]
-        )
-    return "\n".join([waiting, *publisher_notes(status, site)])
+    lines = [waiting]
+    if synced and newest_change(folder, deadline) < synced - CLOCK_MARGIN_SECONDS:
+        lines = [f"{name}: synced at {local_time(synced)}. {link}"]
+        if hidden := hidden_folders(folder):
+            lines.append(f"Not part of this check: {', '.join(hidden)}.")
+    return "\n".join([*lines, *publisher_notes(status, site)])
 
 
 class SiteStatusTool(Tool):
@@ -111,24 +144,35 @@ class SiteStatusTool(Tool):
     async def execute(self, message: Message, site: str = "", **kwargs: object) -> str:
         """Return the sync state of the site at once."""
         name = str(site or "").strip().strip("/")
-        if not name or Path(name).name != name or name.startswith((".", "_")):
-            return "Error: site must be the name of one folder in the authoring root."
+        if (
+            not name
+            or Path(name).name != name
+            or name.startswith(".")
+            or name in UNPUBLISHED_NAMES
+        ):
+            return (
+                "Error: site must be the name of one site folder in the authoring root."
+            )
         config = self.bot.config
         base = config.DAME_CURIE_SITE_PUBLIC_BASE_URL.rstrip("/")
-        url = f"{base}/{name}/" if base else ""
+        link = (
+            f"URL: {base}/{quote(name)}/"
+            if base
+            else "URL: the operator configured no public site base."
+        )
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(
                     site_report,
                     name,
                     Path(config.DAME_CURIE_SITE_DIR),
-                    url,
+                    link,
                     config.DAME_CURIE_PUBLISHER_STATUS,
                 ),
                 READ_TIMEOUT_SECONDS,
             )
         except TimeoutError:
             return (
-                f"{name}: syncing in progress. Give the user the URL now: {url} "
-                f"The sync state was not read in {READ_TIMEOUT_SECONDS} seconds."
+                f"{waiting_text(name, link)}\nThe sync state is unknown: the local files "
+                f"were not read in {READ_TIMEOUT_SECONDS} seconds."
             )

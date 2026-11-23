@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import os
+import shutil
 import time
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -71,7 +72,7 @@ class Harness:
         path.write_text(content)
         return path
 
-    def job(self, name: str | None = None) -> None:
+    def job(self, name: str | None = None, force: bool = True) -> None:
         """Run one job of the publisher to its end. No name means a remote check."""
         time.sleep(0.1)
         self.publisher.job_started = time.time()
@@ -80,7 +81,7 @@ class Harness:
             if name is None:
                 future.set_result(self.mirror.inventory())
             else:
-                future.set_result(self.mirror.reconcile_site(name, force=True))
+                future.set_result(self.mirror.reconcile_site(name, force=force))
         except PublisherError as error:
             future.set_exception(error)
         with redirect_stderr(io.StringIO()):
@@ -194,6 +195,64 @@ def test_a_failed_sync_names_its_cause_and_does_not_hide_the_url(
     assert "failed" not in harness.ask("page")
 
 
+def test_a_failed_hidden_folder_is_not_synced_by_a_clean_check(
+    harness: Harness,
+) -> None:
+    """The check skips top-level hidden folders, so only a transfer ends the failure."""
+    harness.put("page/index.html")
+    harness.job("page")
+    harness.put("page/.data/x")
+    harness.transport.fail_action = "site"
+    harness.job("page")
+    for _ in range(2):
+        harness.job()
+        text = harness.ask("page")
+        assert text.startswith("page: syncing in progress.")
+        assert "synthetic remote interruption" in text
+        harness.job("page")
+    harness.transport.fail_action = ""
+    harness.job("page")
+    text = harness.ask("page")
+    assert text.startswith("page: synced at ")
+    assert "Not part of this check: .data." in text
+
+
+def test_a_job_without_a_transfer_is_not_a_confirmation(harness: Harness) -> None:
+    page = harness.put("page/index.html")
+    harness.job("page")
+    time.sleep(0.1)
+    page.touch()
+    harness.job("page", force=False)
+    assert harness.ask("page").startswith("page: syncing in progress.")
+    harness.job()
+    assert harness.ask("page").startswith("page: synced at ")
+
+
+def test_a_symlink_is_not_a_site(harness: Harness) -> None:
+    harness.put("page/index.html")
+    harness.job("page")
+    (harness.sites / "latest").symlink_to("page")
+    harness.job("latest", force=False)
+    assert harness.ask("latest").startswith("Error: there is no folder 'latest'")
+    shutil.rmtree(harness.sites / "page")
+    harness.put("older/index.html")
+    (harness.sites / "page").symlink_to("older")
+    assert harness.ask("page").startswith("Error: there is no folder 'page'")
+
+
+def test_the_url_is_quoted_and_a_leading_underscore_is_a_site(harness: Harness) -> None:
+    harness.put("demo#2/index.html")
+    harness.put("_demo/index.html")
+    assert f"URL: {BASE}/demo%232/" in harness.ask("demo#2")
+    assert f"URL: {BASE}/_demo/" in harness.ask("_demo")
+
+
+def test_a_large_tree_stops_its_own_walk(harness: Harness) -> None:
+    harness.put("page/index.html")
+    with pytest.raises(TimeoutError):
+        site_status.newest_change(harness.sites / "page", time.monotonic() - 1)
+
+
 def test_a_refused_local_file_names_its_cause(harness: Harness) -> None:
     page = harness.put("page/index.html")
     os.link(page, harness.sites / "page/link.html")
@@ -238,22 +297,23 @@ def test_a_removed_site_leaves_the_status(harness: Harness) -> None:
     assert harness.ask("page").startswith("Error: there is no folder 'page'")
 
 
-@pytest.mark.parametrize("missing", ["unset", "absent", "invalid"])
+@pytest.mark.parametrize("missing", ["unset", "absent", "invalid", "shape", "list"])
 def test_an_unreadable_status_still_gives_the_url_and_names_the_cause(
     harness: Harness, missing: str
 ) -> None:
     harness.put("page/index.html")
     if missing == "unset":
         harness.config.DAME_CURIE_PUBLISHER_STATUS = ""
-    elif missing == "invalid":
-        harness.file.write_text("{")
+    elif missing != "absent":
+        content = {"invalid": "{", "shape": "{}", "list": "[]"}[missing]
+        harness.file.write_text(content)
     text = harness.ask("page")
     assert text.startswith("page: syncing in progress.")
     assert f"URL: {BASE}/page/" in text
     assert "The sync state is unknown: " in text
 
 
-@pytest.mark.parametrize("name", ["", "  ", "..", ".hidden", "_images", "a/b"])
+@pytest.mark.parametrize("name", ["", "  ", "..", ".hidden", "_images", "_data", "a/b"])
 def test_only_one_site_folder_is_accepted(harness: Harness, name: str) -> None:
     text = harness.ask(name)
     assert text.startswith("Error: ")
@@ -270,14 +330,18 @@ def test_a_slow_read_does_not_hold_the_reply(harness: Harness) -> None:
 
     with (
         patch.object(site_status, "READ_TIMEOUT_SECONDS", 0.1),
-        patch.object(site_status, "newest_change", side_effect=lambda _: time.sleep(1)),
+        patch.object(
+            site_status, "newest_change", side_effect=lambda *_: time.sleep(1)
+        ),
     ):
         loop = asyncio.new_event_loop()
         text, elapsed = loop.run_until_complete(ask())
         loop.run_until_complete(loop.shutdown_default_executor())
         loop.close()
     assert elapsed < 0.8
-    assert text.startswith("page: syncing in progress. Give the user the URL now")
+    assert text.startswith("page: syncing in progress.")
+    assert f"URL: {BASE}/page/" in text
+    assert "the local files were not read in 0.1 seconds" in text
 
 
 def test_the_tool_changes_no_file_and_makes_no_request(harness: Harness) -> None:
@@ -346,6 +410,18 @@ def test_the_tool_is_registered_and_returns_its_result() -> None:
     description = SiteStatusTool(SimpleNamespace()).get_description()
     assert "cannot start, speed up or repair a sync" in description
     assert "Never poll it" in description
+
+
+def test_the_tool_does_not_depend_on_the_shell() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "bot.py").read_text()
+    assert '\n        self.tools["site_status"] = SiteStatusTool(self)\n' in source
+
+
+def test_the_unit_starts_without_the_optional_folder() -> None:
+    root = Path(__file__).resolve().parents[1]
+    unit = (root / "scripts/publisher/dame-curie-publisher.service").read_text()
+    assert " -/srv/dame-curie/publisher-status\n" in unit
 
 
 def test_the_image_ships_the_module() -> None:

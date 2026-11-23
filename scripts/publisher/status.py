@@ -16,7 +16,6 @@ class StatusFile:
 
     def __init__(self, path: Path | None):
         self.path = path
-        self.checked: float | None = None
         self.check_error = ""
         self.sites: dict[str, dict[str, float | str]] = {}
 
@@ -25,7 +24,7 @@ class StatusFile:
         self.sites[name] = {"synced": started}
 
     def different(self, name: str) -> None:
-        """Record that the remote differs. The cause of an earlier failure stays."""
+        """Record that a site waits for a sync. The cause of a failure stays."""
         if name in self.sites:
             self.sites[name].pop("synced", None)
 
@@ -39,7 +38,6 @@ class StatusFile:
             return
         data = {
             "written": time.time(),
-            "checked": self.checked,
             "check_error": self.check_error,
             "sites": self.sites,
         }
