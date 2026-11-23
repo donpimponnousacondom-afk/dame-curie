@@ -207,8 +207,9 @@ the hang is unknown: no error was logged, and the restart ended the process.
   `scripts/publisher/dame-curie-publisher.service`, install it: see
   [OPERATIONS.md](OPERATIONS.md), Deploy, step 8.
 
-The prompt tells the model that it cannot repair the publisher: it reports late
-publication once and stops.
+The prompt tells the model that publication is not its task. It gives the URL when the
+files are in the authoring root, says that the site is syncing, and does not wait for the
+remote (root, 23 November 2026).
 
 ## Verifying a publication - separate grant required
 
