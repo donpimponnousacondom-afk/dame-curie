@@ -25,6 +25,7 @@ class Config:
     settle_seconds: float = 0.3
     timeout_seconds: int = 120
     marker_namespace: str = "dame-curie"
+    status: Path | None = None
 
     def target(self) -> list[str | int]:
         return [self.host, self.user, self.port, self.site_root, self.image_root]
@@ -44,6 +45,8 @@ def validate(config: Config, config_path: Path) -> None:
     if config.marker_namespace not in ("dame-curie", "curie"):
         raise PublisherError("publisher marker namespace refused")
     roots = [config.source, config.staging, config.state]
+    if config.status is not None:
+        roots.append(config.status)
     files = [config.key, config.known_hosts, config_path]
     for index, first in enumerate(roots):
         for second in roots[index + 1:]:
@@ -53,7 +56,7 @@ def validate(config: Config, config_path: Path) -> None:
         raise PublisherError("private configuration overlaps managed roots")
     if any(config.source.is_relative_to(private) for private in config.private_paths):
         raise PublisherError("public source is inside a configured private path")
-    for root in (config.staging, config.state):
+    for root in roots[1:]:
         private_directory(root)
     for file in files:
         private_file(file)
@@ -90,6 +93,8 @@ def load_config(path: Path) -> Config:
         "source", "staging", "state", "key", "known_hosts",
     )}
     private_paths = tuple(absolute_path(item) for item in data.pop("private_paths", []))
+    if "status" in data:
+        paths["status"] = absolute_path(data.pop("status"))
     config = Config(**paths, private_paths=private_paths, **data)
     validate(config, path)
     return config

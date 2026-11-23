@@ -1559,7 +1559,7 @@ class ImageGeneratorTool(Tool):
             result += (
                 f"\nPermanent URL: {perm_url} "
                 "(never expires - use this directly in HTML <img> tags. The publisher "
-                "mirrors it in 5 to 10 seconds; until then it returns 404. "
+                "mirrors it by itself; use it at once, do not test it. "
                 "see_image and image_generator read it from disk at once.)"
             )
         if local_path:

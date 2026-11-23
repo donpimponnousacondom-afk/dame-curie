@@ -447,6 +447,7 @@ class Config:
     DAME_CURIE_SITE_DIR = os.getenv("DAME_CURIE_SITE_DIR", "public/bot")
     DAME_CURIE_IMAGE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_IMAGE_PUBLIC_BASE_URL", "").strip()
     DAME_CURIE_SITE_PUBLIC_BASE_URL = os.getenv("DAME_CURIE_SITE_PUBLIC_BASE_URL", "").strip()
+    DAME_CURIE_PUBLISHER_STATUS = os.getenv("DAME_CURIE_PUBLISHER_STATUS", "").strip()
 
     # Owner allowlist. Re-exported here so Config is the single
     # source of truth; bot_tools.refresh_owner_ids() still does a runtime

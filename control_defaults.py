@@ -356,6 +356,7 @@ KNOWN_TOOLS = [
     "web_search",
     "no_response",
     "shell",
+    "site_status",
     "fetch_url",
     "see_image",
     "see_video",

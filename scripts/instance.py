@@ -16,10 +16,10 @@ from pathlib import Path
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 ROOTS = ("config", "data", "sites", "shell")
-# compose.yaml also binds these for the smoke harness. up, start and restart
-# require them. They are not backup roots, so an archive made before the
-# harness existed still restores.
-SMOKE_ROOTS = ("smoke", "smoke-status")
+# compose.yaml also binds these for the smoke harness and the publisher status. up,
+# start and restart require them. They are not backup roots, so an archive made before
+# they existed still restores.
+BIND_ROOTS = ("smoke", "smoke-status", "publisher-status")
 SETTINGS = {"INSTANCE_ID", "INSTANCE_DIR", "ENGINE_SOCKET", "APP_IMAGE"}
 OPTIONAL_SETTINGS = {"DAME_CURIE_STAGING", "DAME_CURIE_EMBED_MODE"}
 RETIRED_SETTINGS = {"WEB_IMAGE", "WEB_PORT"}
@@ -186,14 +186,14 @@ class Instance:
             if directory.is_symlink() or not directory.is_dir():
                 raise ValueError(f"missing or redirected state directory: {root}")
 
-    def require_smoke_roots(self) -> None:
-        """Refuse to create the bot container without the smoke bind sources."""
-        for root in SMOKE_ROOTS:
+    def require_bind_roots(self) -> None:
+        """Refuse to create the bot container without its other bind sources."""
+        for root in BIND_ROOTS:
             directory = self.path / root
             if directory.is_symlink() or not directory.is_dir():
                 raise ValueError(
-                    f"missing or redirected smoke directory: {root}; compose.yaml binds it "
-                    "(see docs/OPERATIONS.md, smoke harness on canonical Dame Curie)"
+                    f"missing or redirected directory: {root}; compose.yaml binds it "
+                    "(see docs/OPERATIONS.md, identity and paths)"
                 )
 
     def docker(self, *args: str) -> str:
@@ -426,7 +426,7 @@ def main() -> None:
         account = service_account(args.instance)
     instance = Instance(args.instance, account)
     if args.action in {"up", "start", "restart"}:
-        instance.require_smoke_roots()
+        instance.require_bind_roots()
     if args.action == "logs":
         lifecycle(instance, args.action, log_format=args.log_format or "auto", no_keys=args.no_keys)
         return

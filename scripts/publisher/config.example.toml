@@ -1,6 +1,7 @@
 source = "/srv/dame-curie/sites"
 staging = "/srv/dame-curie/publisher/staging"
 state = "/srv/dame-curie/publisher/state"
+status = "/srv/dame-curie/publisher-status"
 key = "/srv/dame-curie/publisher/config/publisher_key"
 known_hosts = "/srv/dame-curie/publisher/config/publisher_known_hosts"
 private_paths = ["/srv/dame-curie/sites/operator-private"]

@@ -35,6 +35,7 @@
 !response_guard.py
 !response_observability.py
 !smoke_protocol.py
+!site_status.py
 !smoke_runtime.py
 !tool_policy.py
 !tool_progress.py
