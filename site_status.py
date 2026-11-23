@@ -49,7 +49,7 @@ def newest_change(folder: Path, deadline: float) -> float:
 
     The top-level hidden folders are not read: no remote check reads them either.
     """
-    newest = folder.stat().st_ctime
+    newest = 0.0
     for parent, directories, files in os.walk(folder, onerror=raise_error):
         top = Path(parent) == folder
         directories[:] = [
@@ -57,10 +57,12 @@ def newest_change(folder: Path, deadline: float) -> float:
             for name in directories
             if name not in NEVER_PUBLISHED and not (top and name.startswith("."))
         ]
-        for name in (*directories, *files):
+        # "." is read after the listing, so a deletion before the listing is seen.
+        for name in (".", *directories, *files):
             if time.monotonic() > deadline:
                 raise TimeoutError(f"no answer in {READ_TIMEOUT_SECONDS} seconds")
-            newest = max(newest, os.lstat(os.path.join(parent, name)).st_ctime)
+            if name not in NEVER_PUBLISHED:
+                newest = max(newest, os.lstat(os.path.join(parent, name)).st_ctime)
     return newest
 
 
@@ -108,7 +110,7 @@ def site_report(
         is_site = stat.S_ISDIR(folder.lstat().st_mode)
     except FileNotFoundError:
         is_site = False
-    except OSError as error:
+    except (OSError, ValueError) as error:
         return unknown_text(name, link, f"{type(error).__name__}: {error}")
     if not is_site:
         return f"Error: there is no folder {name!r} in the authoring root {root}."
@@ -120,7 +122,8 @@ def site_report(
         site = status["sites"].get(name, {})
         notes = publisher_notes(status, site)
         synced = site.get("synced", 0.0)
-        if synced and newest_change(folder, deadline) < synced - CLOCK_MARGIN_SECONDS:
+        changed = newest_change(folder, deadline)
+        if not notes and changed < synced - CLOCK_MARGIN_SECONDS:
             lines = [
                 f"Site {name}: synced at {local_time(synced)}. {link}",
                 NOT_CHECKED,

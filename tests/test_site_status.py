@@ -278,9 +278,11 @@ def test_a_symlink_is_not_a_site(harness: Harness) -> None:
 
 def test_an_excluded_folder_does_not_hold_a_site(harness: Harness) -> None:
     harness.put("page/assets/_data/a.txt")
+    harness.put("page/assets/.env")
     harness.job("page")
     time.sleep(0.1)
     harness.put("page/assets/_data/a.txt", "changed and never published")
+    harness.put("page/assets/.env", "changed and never published")
     text = harness.ask("page")
     assert text.startswith("Site page: synced at ")
     assert "_build, _data." in text
@@ -293,6 +295,30 @@ def test_the_exclusions_are_those_of_the_publisher() -> None:
 def test_no_site_name_makes_an_answer_look_like_an_error(harness: Harness) -> None:
     harness.put("ErrorPages/index.html")
     assert harness.ask("ErrorPages").startswith("Site ErrorPages: syncing in progress.")
+
+
+def test_a_deletion_before_the_listing_is_seen(harness: Harness) -> None:
+    page = harness.put("page/index.html")
+    harness.job("page")
+    time.sleep(0.1)
+    original = os.scandir
+
+    def scandir(path: object) -> object:
+        page.unlink(missing_ok=True)
+        return original(path)
+
+    with patch.object(os, "scandir", side_effect=scandir):
+        assert harness.ask("page").startswith("Site page: syncing in progress.")
+
+
+def test_an_unreadable_new_site_names_its_cause(harness: Harness) -> None:
+    harness.put("page/index.html")
+    harness.job("page")
+    harness.put("new/index.html")
+    with patch.object(os, "scandir", side_effect=PermissionError(13, "synthetic")):
+        text = harness.ask("new")
+    assert text.startswith("Site new: syncing in progress.")
+    assert "The sync state is unknown: PermissionError" in text
 
 
 def test_an_unreadable_root_is_not_a_missing_site(harness: Harness) -> None:
@@ -361,12 +387,18 @@ def test_a_failed_remote_check_is_named(harness: Harness) -> None:
     )
     harness.transport.fail_action = ""
     harness.job()
-    assert "check of the remote failed" not in harness.ask("page")
+    harness.job("page")
+    assert harness.ask("page").startswith("Site page: synced at ")
+    harness.transport.fail_action = "inventory"
+    harness.job()
+    text = harness.ask("page")
+    assert text.startswith("Site page: syncing in progress.")
+    assert "The last check of the remote failed" in text
 
 
 def test_a_silent_publisher_is_named(harness: Harness) -> None:
     harness.put("page/index.html")
-    harness.job()
+    harness.job("page")
     data = json.loads(harness.file.read_text())
     data["written"] -= 31 * 60
     harness.file.write_text(json.dumps(data))
@@ -388,7 +420,7 @@ def test_a_removed_site_leaves_the_status(harness: Harness) -> None:
 
 @pytest.mark.parametrize(
     "missing",
-    ["unset", "absent", "invalid", "shape", "list", "text", "no-time", "huge"],
+    ["unset", "absent", "invalid", "shape", "list", "text", "no-time", "huge", "null"],
 )
 def test_an_unreadable_status_still_gives_the_url_and_names_the_cause(
     harness: Harness, missing: str
@@ -401,6 +433,7 @@ def test_an_unreadable_status_still_gives_the_url_and_names_the_cause(
             "text": {"synced": "x"},
             "no-time": {"error": "x"},
             "huge": {"synced": 1e999},
+            "null": {"synced": None},
         }.get(missing)
         status = {"written": time.time(), "check_error": "", "sites": {"page": page}}
         content = {"invalid": "{", "shape": "{}", "list": "[]"}.get(missing)

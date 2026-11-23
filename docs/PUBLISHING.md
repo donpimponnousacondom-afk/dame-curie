@@ -222,8 +222,8 @@ Root, 23 November 2026: the model may query the sync. It can never force it or w
   It makes no request, starts nothing and answers within 5 seconds.
 - A site is synced when a finished transfer or remote check started after its newest local
   change and confirmed the remote. A job without a transfer confirms nothing. A site with a
-  queued repair or retry is not synced. Any other site is "syncing in progress", with its
-  URL.
+  queued repair or retry is not synced, and no site is while the last check failed or the
+  publisher is silent. Any other site is "syncing in progress", with its URL.
 - A remote check does not read the top-level hidden folders of a site. The answer says so,
   and names what is never published. A failed transfer stays visible until a transfer
   succeeds.
