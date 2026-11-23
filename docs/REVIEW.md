@@ -20,7 +20,7 @@ gh pr merge <number> --squash --match-head-commit <full 40-character sha>
 
 - Three models from three providers review every PR head through T3 Code: Claude Opus 5.5, GPT Sol 6.2 and Muse Wonder Full 1.0, at high effort. The exact targets are in the `council` skill. The exact Muse model is `muse-wonder-full-1.0`, not `muse-wonder-1.0`.
 - Do not substitute a member. If one is unavailable, report it to root, and do not merge without root's go.
-- Give all three the same brief: intent, acceptance criteria, non-goals, changed paths, base and head SHA, measured test evidence and its limits. Do not prime them with a verdict.
+- Give all three the same brief, with one exception, the strict text for Sol below: intent, acceptance criteria, non-goals, changed paths, base and head SHA, measured test evidence and its limits. Do not prime them with a verdict.
 - Tell reviewers up front that new tests are allowed and wanted.
 - Keep their reviews independent. Do not share one member's report with another inside a round.
 - Members are read-only. They do not edit the checkout, run the application, read private state or post to GitHub.

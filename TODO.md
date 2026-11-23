@@ -32,7 +32,7 @@ Root, 6 November 2026: she stays on 2.5 Sunburst as the only image model, becaus
 
 ## Publisher, from #52 and #53
 
-- [ ] The cause of the hang of 10 to 12 November 2026 is unknown. When the watchdog fires, read the thread stacks in the journal before any change.
+- [ ] The cause of the hang that began between 10 and 12 November 2026, and that root ended on 23 November, is unknown. When the watchdog fires, read the thread stacks in the journal before any change.
 - [ ] A change in a top-level hidden folder can stay local: when the publisher restarts, or a check runs, before its transfer, `mirror.py` counts it as published. It is uploaded with the next change of that site.
 - [ ] An exception of the main loop is not printed while the worker hangs, because the executor waits for the worker.
 - [ ] The 5 minutes for local work in the watchdog limit are not enforced.

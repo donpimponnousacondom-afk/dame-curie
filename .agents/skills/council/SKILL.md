@@ -43,7 +43,7 @@ Give each member the same text. Do not give it your verdict or another member's 
 >
 > Trace changed behaviour and its failure paths: permissions and state isolation, ordering, configuration parameters on the wire, data correctness. Check the hard rules in `AGENTS.md`: configuration is sacred, failures stay visible, no word triggers, container time zone. A green check and this summary do not prove correctness.
 >
-> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and its consequence breaks the acceptance or a hard rule of `AGENTS.md`. These are out of scope unless the acceptance names them: a file system, disk, mount or kernel that fails; names or files that the model or a user chooses badly; a collision that the model or a user causes; the time that an operation takes; corrupt files that only our own code writes; races that need a change inside the milliseconds of one call. Review your scope to the end in this pass and report everything in it now. Do not consider the whole world of things that could go wrong.
+> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and its consequence breaks the acceptance or a hard rule of `AGENTS.md`. These are out of scope unless the acceptance names them, the changed code breaks a hard rule (for example it hides the failure), or the case crosses a permission or isolation boundary: a file system, disk, mount or kernel that fails; a name, file or collision that the model or a user causes and that harms only their own work; the time that an operation takes; corrupt files that only our own code writes; races that need a change inside the milliseconds of one call. Review your scope to the end in this pass and report everything in it now. Do not consider the whole world of things that could go wrong.
 >
 > Report each actionable regression with severity, file and line, a reachable trigger, the consequence and the evidence. Separate pre-existing issues, optional polish and uncertainty. A clean review is valid; there is no finding quota.
 >
@@ -69,7 +69,7 @@ GPT Sol 6.2 leaves the scope: it reports new edge cases in each round that it di
 
 > You reviewed this code in rounds [numbers] and did not report these findings: [list]. That costs a full round for each small case. Your scope is the diff and the acceptance list below, and nothing else. Review that scope thoroughly, once, and report everything in it now. Do not consider the whole world of things that could go wrong. For each finding, name the acceptance item or hard rule that it breaks and a trigger that can happen in the described deployment. Without both, it is not a finding and it is not a reason for NOT READY.
 
-- A real defect inside the scope stays a finding in any round. Verify it as always.
+- A real defect inside the scope or a hard rule violation stays a finding in any round. Verify it as always.
 - Do not fix an out-of-scope finding to get a verdict. When the other two say READY and only such findings remain, stop and bring them to root, one line each. Root decides.
 
 ## Results
