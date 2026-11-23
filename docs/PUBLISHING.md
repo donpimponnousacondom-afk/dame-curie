@@ -107,6 +107,7 @@ by the process user, mode 0600, link count 1; a symlink or hardlink is refused.
 | `key`, `known_hosts` | Mode 0600, regular files, `st_nlink == 1`, owned by the running user. A symlink or hardlink is refused. |
 | `host`, `user`, `port` | Remote endpoint. `StrictHostKeyChecking=yes` is unconditional; the host key must already be in `known_hosts`. |
 | `site_root`, `image_root` | Remote destinations, disjoint from each other in both directions. Neither may be `/`. |
+| `status` | Private folder, mode 0700, owned by the running user, for `status.json`. Optional. Without it no status is written. It must also be in `ReadWritePaths` of the unit. |
 | `private_paths` | Local subtrees to never publish. Optional. |
 | `marker_namespace` | `"dame-curie"` by default; only explicit `"curie"` selects V1 owner/claim names. Pinned in ownership state. |
 | `rescan_seconds`, `settle_seconds`, `timeout_seconds` | Watch cadence and transfer timeout. Optional. |
@@ -197,8 +198,8 @@ the hang is unknown: no error was logged, and the restart ended the process.
 - The longest healthy time between two reports is 2 times `rescan_seconds`, plus 4 remote
   calls (probe, remove, claim, transfer) of `timeout_seconds` each, plus 5 minutes for local
   work. A site that changes just before a check is due can delay it by a second
-  `rescan_seconds`. With 30 and 300 seconds the sum is 26 minutes. The publisher does not start with a smaller
-  `WatchdogSec`; the error names the values.
+  `rescan_seconds`. With 30 and 300 seconds the sum is 26 minutes. The publisher does not
+  start with a smaller `WatchdogSec`; the error names the values.
 - `systemctl status` shows the last remote check on its `Status:` line, with its time. It
   says `FAILED` when the last check failed, with the time of the last success. The line is
   absent until the first job of the process ends.
@@ -209,9 +210,25 @@ the hang is unknown: no error was logged, and the restart ended the process.
   `scripts/publisher/dame-curie-publisher.service`, install it: see
   [OPERATIONS.md](OPERATIONS.md), Deploy, step 8.
 
+## Sync status for the model
+
+Root, 23 November 2026: the model may query the sync. It can never force it or wait for it.
+
+- With the optional `status` key, the publisher replaces `status.json` in that folder after
+  each job. Nothing reads the file back into the publisher.
+- The bot container mounts the folder read-only at `/publisher-status`. `compose.yaml` sets
+  `DAME_CURIE_PUBLISHER_STATUS`.
+- The tool `site_status(site)` (`site_status.py`) reads that file and the local file times.
+  It makes no request, starts nothing and answers within 5 seconds.
+- A site is synced when a finished job started after its newest local change and confirmed
+  the remote. Any other site is "syncing in progress", with its URL.
+- The answer also names a failed sync, a failed remote check, and a publisher that has not
+  reported for 30 minutes. An unreadable status file is named, and the URL is still given.
+- A failed write of the status file stops the publisher with its cause.
+
 The prompt tells the model that publication is not its task. It gives the URL when the
 files are in the authoring root, says that the site is syncing, and does not wait for the
-remote (root, 23 November 2026).
+remote.
 
 ## Verifying a publication - separate grant required
 
@@ -264,6 +281,7 @@ sudo journalctl -u dame-curie-publisher.service -f -n 50
 | `source root replacement refused` | The authoring root was moved or replaced under the running publisher. |
 | `<action> '<site>': <program> exit=<code>: ...` | Specific remote guard failure or recognized SSH/rsync error. The affected site retries on a later scan. |
 | `WatchdogSec <n>s is less than the <m>s that ...` | `rescan_seconds` or `timeout_seconds` is too large for the installed unit. The publisher does not start. |
+| `status file not written: <errno>` | The `status` folder is missing, full or not writable. The publisher stops, and systemd restarts it. |
 | `systemd notification failed: <errno>` | The publisher could not report to systemd. It stops, and systemd restarts it. |
 | `Fatal Python error: Aborted` with thread stacks | The watchdog stopped a hung publisher, or an operator sent SIGABRT. The stacks name the line that hung. |
 | `publisher: configuration or filesystem operation failed` | Startup failure before the watcher began. |

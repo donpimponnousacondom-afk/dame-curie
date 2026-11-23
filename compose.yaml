@@ -143,6 +143,8 @@ services:
       # directories and config.json are required; instance.py refuses to start
       # without the directories. config.json "enabled": false keeps the worker off.
       DAME_CURIE_SMOKE_CONFIG: /smoke/config.json
+      # The publisher writes this file on the host. The bot only reads it.
+      DAME_CURIE_PUBLISHER_STATUS: /publisher-status/status.json
     volumes:
       - *host-timezone
       - type: bind
@@ -180,6 +182,12 @@ services:
       - type: bind
         source: ${INSTANCE_DIR}/smoke-status
         target: /smoke-status
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${INSTANCE_DIR}/publisher-status
+        target: /publisher-status
+        read_only: true
         bind:
           create_host_path: false
     tmpfs:

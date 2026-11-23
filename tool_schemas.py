@@ -55,7 +55,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "send_message", "react", "search_messages", "lookup_user", "web_search",
         "fetch_url", "shell", "image_generator", "see_image", "see_video",
-        "youtube", "send_file", "wait", "no_response", "more_tools",
+        "youtube", "send_file", "wait", "no_response", "more_tools", "site_status",
     }
 )
 TOOL_DISCOVERY_GROUPS: dict[str, frozenset[str]] = {
@@ -568,6 +568,9 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         },
     ),
     "vc_status": _obj({}),
+    "site_status": _obj(
+        {"site": _str("Folder name of the site in the authoring root")}, ["site"]
+    ),
     "vc_where": _obj(
         {"user_id": _str("Numeric user ID or @mention")},
         ["user_id"],
@@ -671,6 +674,7 @@ RESULT_TOOL_NAMES: frozenset[str] = frozenset(
         "see_video",
         "youtube",
         "shell",
+        "site_status",
         "list_admin_servers",
         "create_category",
         "create_channel",

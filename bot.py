@@ -370,6 +370,7 @@ from rag_memory import (  # noqa: E402
 from job_routing import JobProvider, create_job_provider, parse_background_request, resolve_job_endpoint  # noqa: E402
 from jobs import BackgroundJobManager, JOB_TURN, SpawnBackgroundTool  # noqa: E402
 from rem import RemStore, load_rem_defaults, run_rem_once  # noqa: E402
+from site_status import SiteStatusTool  # noqa: E402 - same block as the other tools
 from tool_progress import make_progress as _make_tool_progress  # noqa: E402
 from tool_prompts import (  # noqa: E402
     DISCORD_CAPABILITIES,
@@ -2340,6 +2341,7 @@ class DameCurieBot(commands.Bot):
         self.tools["more_tools"] = MoreToolsTool(self)
         if self.config.ENABLE_SHELL:
             self.tools["shell"] = ShellTool(self)
+            self.tools["site_status"] = SiteStatusTool(self)
         if self.config.ENABLE_FETCH_URL:
             self.tools["fetch_url"] = FetchUrlTool(self)
         self.tools["see_image"] = SeeImageTool(self)

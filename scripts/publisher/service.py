@@ -6,6 +6,7 @@ from threading import Event
 from .common import RemoteFailure, ScanIncomplete
 from .heartbeat import local_time, notify
 from .mirror import Mirror
+from .status import StatusFile
 from .watch import Watcher
 
 
@@ -52,6 +53,8 @@ class Publisher:
         self.audit_reported = False
         self.audit_success = "none since start"
         self.audit_status = "no remote check finished since start"
+        self.status = StatusFile(mirror.config.status)
+        self.job_started = 0.0
         self.background_turn = True
         self.force: set[str] = set()
         self.retry: set[str] = set()
@@ -77,12 +80,14 @@ class Publisher:
             self.next_rescan = time.monotonic() + self.mirror.config.rescan_seconds
             if isinstance(error, (RemoteFailure, ScanIncomplete)):
                 print(f"publisher: remote check failed: {error}; retry on next scan", file=sys.stderr)
+                self.status.check_error = str(error)
                 self.audit_status = f"remote check FAILED at {local_time()}; last success: {self.audit_success}"
             else:
                 repairs = active.result()
                 self.force.update(repairs | self.retry)
                 self.pending.rescan(repairs | self.retry)
                 self.retry.clear()
+                self.record_check(repairs)
                 for site, failure in self.mirror.inventory_errors.items():
                     print(f"publisher: site={site!r}: local scan: {failure}; retry on next scan", file=sys.stderr)
                 if not self.audit_reported or repairs or self.mirror.inventory_hashed:
@@ -96,13 +101,29 @@ class Publisher:
                                      f"local_errors={len(self.mirror.inventory_errors)}")
         elif isinstance(error, (RemoteFailure, ScanIncomplete)):
             self.retry.add(name)
+            self.status.failed(name, str(error))
             print(f"publisher: site={name!r}: {error}; retry on next scan", file=sys.stderr)
-        elif active.result():
-            print(f"publisher: site={name!r}: changes synchronized", file=sys.stderr)
+        else:
+            if active.result():
+                print(f"publisher: site={name!r}: changes synchronized", file=sys.stderr)
+            self.status.synced(name, self.job_started)
+        self.status.write()
         # The only watchdog report. It needs the main loop, the worker and the scheduler:
         # when one of them hangs, no job ends and systemd restarts the service. A failed
         # job counts, because its cause is in the journal and it is retried.
         notify(f"WATCHDOG=1\nSTATUS={self.audit_status}")
+
+    def record_check(self, repairs: set[str]) -> None:
+        """Record which sites a finished remote check verified."""
+        self.status.checked, self.status.check_error = self.job_started, ""
+        for name in self.status.sites.keys() - self.mirror.expected.keys():
+            del self.status.sites[name]
+        for name in self.mirror.expected.keys() - repairs - self.mirror.inventory_errors.keys():
+            self.status.synced(name, self.job_started)
+        for name in repairs:
+            self.status.different(name)
+        for name, failure in self.mirror.inventory_errors.items():
+            self.status.failed(name, failure)
 
     def run(self) -> None:
         while not self.stopped.is_set() and not self.watcher.rebuild(self.mirror.state.source_identity or self.watcher.root_identity):
@@ -126,12 +147,14 @@ class Publisher:
                     if self.audit_pending and (not self.pending.dirty or overdue):
                         self.audit_pending = False
                         active_name = None
+                        self.job_started = time.time()
                         active = worker.submit(self.mirror.inventory)
                     else:
                         name = self.pending.take(time.monotonic(), prefer_background=self.background_turn)
                         if name is not None:
                             self.background_turn = not self.background_turn
                             active_name = name
+                            self.job_started = time.time()
                             force = name in self.force
                             self.force.discard(name)
                             active = worker.submit(self.mirror.reconcile_site, name, force=force)

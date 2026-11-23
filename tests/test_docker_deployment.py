@@ -22,6 +22,10 @@ def test_bot_uses_whole_private_state():
         assert mounts["/smoke"]["read_only"] is True
         assert mounts["/smoke-status"]["source"] == "${INSTANCE_DIR}/smoke-status"
         assert "read_only" not in mounts["/smoke-status"]
+        # The publisher writes it on the host. The bot can only read it.
+        assert mounts["/publisher-status"]["source"] == "${INSTANCE_DIR}/publisher-status"
+        assert mounts["/publisher-status"]["read_only"] is True
+        assert service["environment"]["DAME_CURIE_PUBLISHER_STATUS"] == "/publisher-status/status.json"
         assert all(not item["bind"]["create_host_path"] for item in mounts.values())
         assert service["environment"]["DAME_CURIE_ENV_FILE"] == "/config/bot.env"
         assert service["environment"]["DAME_CURIE_SMOKE_CONFIG"] == "/smoke/config.json"
