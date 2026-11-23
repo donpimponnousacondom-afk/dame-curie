@@ -30,6 +30,14 @@ Root, 6 November 2026: she stays on 2.5 Sunburst as the only image model, becaus
 - Cost of plugging back: every stored vector carries the OpenAI backend tag at 1536 dimensions. Search reads only vectors of the configured backend, so recall finds no row until that row has a Qwen vector. If Qwen returns, add its query instruction; see the note in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 - The catch-up pass embeds for at most 60 s every 10 minutes. A manual `rag_maintenance.py backfill` runs without the 10-minute gaps. Its time on Qwen: not measured. On OpenAI, 6,247 row attempts took 24.5 minutes (#42).
 
+## Publisher, from #52 and #53
+
+- [ ] The cause of the hang that began between 10 and 12 November 2026, and that root ended on 23 November, is unknown. When the watchdog fires, read the thread stacks in the journal before any change.
+- [ ] A change in a top-level hidden folder can stay local: when the publisher restarts, or a check runs, before its transfer, `mirror.py` counts it as published. It is uploaded with the next change of that site.
+- [ ] An exception of the main loop is not printed while the worker hangs, because the executor waits for the worker.
+- [ ] The 5 minutes for local work in the watchdog limit are not enforced.
+- [ ] `test_a_settling_site_delays_the_check_by_at_most_one_more_period` uses wall-clock bounds and can fail on a starved machine.
+
 ## Behaviour
 
 - [ ] Partial batch results. When one native call in a batch fails, mark the calls that succeeded, so she does not run a live call twice. Dame Curie asked for this on 1 November 2026.

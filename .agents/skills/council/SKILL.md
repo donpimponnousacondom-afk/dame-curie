@@ -33,15 +33,27 @@ Root names the members. Use these exact targets, at high effort:
 
 ## Brief
 
-Give each member the same text. Do not give it your verdict or another member's report.
+Give each member the same text (one exception: the strict text for Sol, below). Do not give it your verdict or another member's report.
 
-> Independently review the pinned Dame Curie pull request. You are read-only: no edits, commits, checkouts, pushes, merges, runtime actions, provider calls, private-state reads or GitHub comments. Do the review yourself; start no agents.
+> Independently review the pinned Dame Curie pull request. You are read-only: no edits, commits, checkouts, pushes, merges, runtime actions, provider calls, private-state reads or GitHub comments. No `pkill`, `killall` or other kill by pattern. Do the review yourself; start no agents.
 >
 > Repository: `/home/codexy/deepseek/dame-curie`. PR [URL], base [full SHA], head [full SHA]. Read `AGENTS.md`, `docs/REVIEW.md`, the full diff (`git diff <base> <head>`, `git show <head>:<path>`), the relevant contracts in `docs/` and the callers of changed code.
 >
 > Intent and acceptance: [requirements]. Non-goals: [scope]. Evidence: [commands, counts, CI links, limits]. New tests are allowed and wanted; do not flag them.
 >
 > Trace changed behaviour and its failure paths: permissions and state isolation, ordering, configuration parameters on the wire, data correctness. Check the hard rules in `AGENTS.md`: configuration is sacred, failures stay visible, no word triggers, container time zone. A green check and this summary do not prove correctness.
+>
+> A finding counts only when this diff causes it, its trigger can happen in the deployment that this brief describes, and it breaks one of these: the acceptance, a rule of `AGENTS.md` (wording and style are polish), a permission or isolation boundary, or behaviour that worked before this diff.
+>
+> These cases are out of scope, also when they touch an acceptance item in general words. The exceptions: the acceptance names the case, the changed code breaks a rule (for example it hides the failure), the case crosses a permission or isolation boundary, or the diff breaks the case where it worked before.
+>
+> - A file system, disk, mount or kernel that fails.
+> - A name, file or collision that the model or a user causes and that harms only their own work.
+> - The time that an operation takes.
+> - Corrupt files that only our own code writes.
+> - A race that needs a change inside the milliseconds of one call.
+>
+> Review your scope to the end in this pass and report everything in it now. Do not consider the whole world of things that could go wrong.
 >
 > Report each actionable regression with severity, file and line, a reachable trigger, the consequence and the evidence. Separate pre-existing issues, optional polish and uncertainty. A clean review is valid; there is no finding quota.
 >
@@ -57,6 +69,18 @@ For a later round, add the earlier findings, what changed, and your objections w
 - Count each full pass as one round. A new commit makes the old verdicts stale.
 - Continue until all three say READY on the current head. If a member still objects after it has seen your evidence, root decides.
 - Fight scope creep. Repeated reviews grow a PR one cheap-looking fix at a time. Decline the rest with a written reason, and list them as follow-ups.
+
+## Scope drift, Sol first (root, 23 November 2026)
+
+GPT Sol 6.2 leaves the scope: it reports new edge cases in each round that it did not report in its first two passes over the same code. On PR #53 it found real defects in the first rounds. Then its findings became smaller in each round, and root ruled the last three out of scope.
+
+- The scope paragraph in the brief applies to all members from round 1.
+- From round 3 on, compare each Sol finding with the earlier heads. When Sol reports a finding in code that it reviewed before and did not report in its first two passes over that code, put this text at the top of the next brief for Sol. It is the only exception to the rule that all members get the same text:
+
+> You reviewed this code in rounds [numbers] and did not report these findings: [list]. That costs a full round for each small case. Your scope is the diff and the acceptance list below, and nothing else. Review that scope thoroughly, once, and report everything in it now. Do not consider the whole world of things that could go wrong. For each finding, name the acceptance item, rule, boundary or earlier behaviour that it breaks, and a trigger that can happen in the described deployment. Without both, it is not a finding and it is not a reason for NOT READY.
+
+- A real defect inside the scope, a regression of earlier behaviour or a rule violation stays a finding in any round. Verify it as always.
+- Do not fix an out-of-scope finding to get a verdict. When the other two say READY and only such findings remain, stop and bring them to root, one line each. Root decides.
 
 ## Results
 
