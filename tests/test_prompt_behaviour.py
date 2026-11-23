@@ -102,4 +102,6 @@ def test_protocol_says_publication_is_not_her_task():
     assert "give the user its url at once and say that it is syncing" in text
     assert "do not request the remote url, wait for it, write probe files" in text
     assert "you cannot start, restart or repair the publisher" in text
+    assert "if it is, say that it waits for the publisher" in text
+    assert "if it is not, put it there" in text
     assert "deleting a whole site deletes it on the remote" in text
