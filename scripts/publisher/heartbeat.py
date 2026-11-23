@@ -14,12 +14,13 @@ LOCAL_WORK_SECONDS = 300
 def check_watchdog(config: Config) -> None:
     """Refuse a watchdog limit that a healthy publisher can reach.
 
-    The longest healthy time between two reports is one idle period and one full job.
+    The longest healthy time between two reports is two rescan periods and one full job:
+    a site that changes just before a check is due can delay it by a second period.
     systemd sets WATCHDOG_USEC only when the unit has WatchdogSec.
     """
     limit = int(os.environ.get("WATCHDOG_USEC", "0")) / 1_000_000
     needed = (
-        config.rescan_seconds
+        2 * config.rescan_seconds
         + REMOTE_CALLS_PER_JOB * config.timeout_seconds
         + LOCAL_WORK_SECONDS
     )

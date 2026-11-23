@@ -85,7 +85,9 @@ class HeartbeatTests(unittest.TestCase):
             self.receive(0.2)
         self.assertEqual(self.receive(1), "")
 
-    def publisher(self) -> tuple[Publisher, HangingSSH]:
+    def publisher(
+        self, settle_seconds: float = 0.02, rescan_seconds: float = 0.1
+    ) -> tuple[Publisher, HangingSSH]:
         """Build a publisher with a synthetic remote and a short check interval."""
         for name in ("public", "stage", "state", "remote", "images"):
             (self.root / name).mkdir(mode=0o700)
@@ -99,8 +101,8 @@ class HeartbeatTests(unittest.TestCase):
             user="publisher",
             site_root=str(self.root / "remote"),
             image_root=str(self.root / "images"),
-            settle_seconds=0.02,
-            rescan_seconds=0.1,
+            settle_seconds=settle_seconds,
+            rescan_seconds=rescan_seconds,
         )
         state = State(config)
         self.addCleanup(state.close)
@@ -161,6 +163,18 @@ class HeartbeatTests(unittest.TestCase):
         with patch.object(publisher, "inventory"):
             self.assert_reports_stop()
             self.assertFalse(self.task.done())
+
+    def test_a_settling_site_delays_the_check_by_at_most_one_more_period(self) -> None:
+        """check_watchdog counts two rescan periods; this is the second one."""
+        self.publisher(settle_seconds=1.0, rescan_seconds=1.0)
+        self.assertTrue(self.receive(5))
+        started = time.monotonic()
+        time.sleep(0.8)
+        (self.root / "public/site").mkdir()
+        self.assertIn("WATCHDOG=1", self.receive(5))
+        elapsed = time.monotonic() - started
+        self.assertGreater(elapsed, 1.5)
+        self.assertLess(elapsed, 2 * 1.0 + 1.0)
 
     def test_a_failed_check_reports_the_failure_and_the_last_success(self) -> None:
         _, transport = self.publisher()
@@ -262,7 +276,7 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(process.returncode, 1)
         self.assertEqual(
             stderr,
-            "publisher: WatchdogSec 60s is less than the 840s that rescan_seconds=60 "
+            "publisher: WatchdogSec 60s is less than the 900s that rescan_seconds=60 "
             "and timeout_seconds=120 need\n",
         )
         self.assertFalse(self.started.exists())
@@ -299,8 +313,8 @@ class UnitTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"WATCHDOG_USEC": "1800000000"}):
             check_watchdog(config(30, 300))
-            check_watchdog(config(300, 300))
-            for rescan, timeout in ((301, 300), (1800, 120), (30, 600)):
+            check_watchdog(config(150, 300))
+            for rescan, timeout in ((151, 300), (1000, 120), (1800, 1), (30, 600)):
                 with self.assertRaisesRegex(
                     PublisherError, "WatchdogSec 1800s is less"
                 ):

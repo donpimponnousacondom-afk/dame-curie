@@ -188,14 +188,16 @@ the hang is unknown: no error was logged, and the restart ended the process.
 - The report needs the main loop, the worker and the scheduler. When one of them hangs, no
   job ends. `WatchdogSec` (30 minutes) after the last report, systemd sends SIGABRT to the
   main process. `Restart=on-failure` starts the service 30 seconds after it ended. A process
-  that does not end gets SIGKILL after `TimeoutAbortSec` (90 seconds).
+  that does not end gets SIGKILL after `TimeoutAbortSec` (manager default; 90 seconds on
+  this host on 23 November 2026).
 - `KillMode=mixed` signals only the main process first. `ssh` and `rsync` get SIGKILL after
   it ended. A signal to `ssh` could release the hung worker before the stack is printed.
 - On SIGABRT the publisher prints the stack of every thread to the journal
   (`faulthandler`). Read it before you change anything: it names the line that hung.
-- The longest healthy time between two reports is `rescan_seconds`, plus 4 remote calls
-  (probe, remove, claim, transfer) of `timeout_seconds` each, plus 5 minutes for local work.
-  With 30 and 300 seconds that is 25.5 minutes. The publisher does not start with a smaller
+- The longest healthy time between two reports is 2 times `rescan_seconds`, plus 4 remote
+  calls (probe, remove, claim, transfer) of `timeout_seconds` each, plus 5 minutes for local
+  work. A site that changes just before a check is due can delay it by a second
+  `rescan_seconds`. With 30 and 300 seconds the sum is 26 minutes. The publisher does not start with a smaller
   `WatchdogSec`; the error names the values.
 - `systemctl status` shows the last remote check on its `Status:` line, with its time. It
   says `FAILED` when the last check failed, with the time of the last success. The line is
